@@ -47,6 +47,20 @@
 //  GATHERED SET, so it is computed by the composer over many projections
 //  and can never be self-declared by one domain.
 //
+//  ── WHY THE PER-DOMAIN MAPPINGS ARE NOT IN THE READS ─────────────────
+//  They were, first. `tests/gate_funding_boundary.js` refused it, and it
+//  was right: it asserts that equity, insurance, tax and debt's economic
+//  derivation reads IMPORT NOTHING — "it cannot reach funding by any
+//  path." A read that imports nothing provably cannot reach the funding
+//  side of Tax and Insurance, which is the boundary CLAUDE.md names as
+//  never bypassable.
+//
+//  Adding `require("../shared/standing_projection.js")` to those four
+//  broke that invariant for the sake of tidiness. A boundary gate is not
+//  weakened to fit a refactor, so the mapping moved OUT to
+//  `domain_standing_projections.js`, which may import freely because it
+//  authors nothing. The reads stayed import-free.
+//
 //  ── §18 CLASSIFICATION — CLASS 1 ─────────────────────────────────────
 //  A permanent product primitive. It owns no domain truth; it owns the
 //  SHAPE in which domain truth is said, which is why §7 lets it exist
@@ -119,6 +133,13 @@ function readFailed(domain, { as_of = null, timed_out = false, detail = null } =
 
 function freeze(o) { return Object.freeze(o); }
 
+/*  The read happened NOW, even when it found nothing. "Nothing is
+    established" is still a claim with a date on it (§40.4), so a domain
+    with no reading to take as_of from uses this rather than null — a
+    dateless fact cannot be compared against a later one, which is how a
+    stale blank outlives the thing it described. */
+function today() { return new Date().toISOString().slice(0, 10); }
+
 /**
  * Refuse a projection that breaks the contract. Returns an array of
  * problems — empty means valid. Used by the gate, and callable by any
@@ -185,5 +206,5 @@ function compositeSilence(projections, { required = [] } = {}) {
 
 module.exports = {
   READ_STATES, TRUTH_STATES, FIELDS,
-  established, notEstablished, readFailed, validate, compositeSilence,
+  established, notEstablished, readFailed, validate, compositeSilence, today,
 };

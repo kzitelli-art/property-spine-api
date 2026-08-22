@@ -143,23 +143,35 @@ function ok(name, cond, detail = "") {
      "the two gates would be asserting different things while appearing to agree");
   L("");
 
-  L("SHAPE — does each domain expose a contract-valid standing projection?");
+  L("SHAPE — does every discovered domain map into the contract?");
   L("-".repeat(70));
-  const missing = [];
-  for (const [domain, files] of [...domains].sort()) {
-    const mods = files.map(exportsOf);
-    const withProjection = mods.find((m) => typeof m.standingProjection === "function");
-    if (!withProjection) {
-      missing.push(domain);
-      L(`  ● RED  ${domain.padEnd(20)} no standingProjection() in ${files.map((f) => path.basename(f)).join(", ")}`);
-    } else {
-      L(`  ·      ${domain.padEnd(20)} has standingProjection()`);
-    }
-  }
+  L("  The mapping lives in domain_standing_projections.js, NOT in the reads.");
+  L("  It was in the reads first; gate_funding_boundary.js refused it, because");
+  L("  equity, insurance, tax and debt's derivation reads must import nothing —");
+  L("  that is how the funding boundary is guaranteed structurally. A boundary");
+  L("  gate is not weakened to fit a refactor.");
   L("");
-  ok(`every discovered domain exposes standingProjection()`,
-     missing.length === 0,
-     `missing in ${missing.length}: ${missing.join(", ")}`);
+  const adapter = require(path.join(ROOT, "src/shared/domain_standing_projections.js"));
+  const bad = [];
+  for (const domain of [...domains.keys()].sort()) {
+    if (!adapter.MAPPERS[domain]) {
+      bad.push(domain);
+      L(`  ● RED  ${domain.padEnd(20)} discovered on disk, no mapping`);
+      continue;
+    }
+    let problems;
+    try { problems = sp.validate(adapter.project(domain, null)); }
+    catch (e) { problems = ["threw: " + e.message]; }
+    if (problems.length) { bad.push(domain); L(`  ● RED  ${domain.padEnd(20)} ${problems.join("; ")}`); }
+    else L(`  ·      ${domain.padEnd(20)} contract-valid`);
+  }
+  const orphans = adapter.DOMAINS.filter((d) => !domains.has(d));
+  L("");
+  ok("every domain discovered on disk has a contract mapping",
+     bad.length === 0, `${bad.length} do not: ${bad.join(", ")}`);
+  ok("and no mapping exists for a domain that is not on disk",
+     orphans.length === 0,
+     `${orphans.join(", ")} — a mapping outliving its domain is stale debt the gate should name`);
   L("");
 
   L("COST — measured, not inferred. See gate_standing_projection_cost.js");
@@ -195,6 +207,53 @@ function ok(name, cond, detail = "") {
      "      Deleting the router is Build 4; making that possible is this build.");
   L("");
 
+  L("THE ESTABLISHED BRANCH — proven on representative readings");
+  L("-".repeat(70));
+  L("  The cost gate maps every domain against a real database, but that");
+  L("  property is EMPTY, so all eight take the NOT_ESTABLISHED branch. These");
+  L("  are the ESTABLISHED shapes, drawn from each read's documented return.");
+  L("");
+  const ESTABLISHED = {
+    insurance: { established: true, period: "2026-08", coverages: [{}, {}],
+      annual_cost_cents: 120000, period_accrual_cents: 10000, currency_code: "USD", mixed_currency: true },
+    tax: { as_of: "2026-08-22", overall: "current", overall_why: "all filed",
+      obligation_count: 2, next_due_label: "BRT appeal", schedule_disagreements: [{}],
+      rows: [{ applicability: "not_established", label: "Use & Occupancy" }] },
+    utility: { setup_state: "established", as_of: "2026-08-22",
+      unresolved_count: 2, unresolved: [{ why: "no provider" }, "meter unread"],
+      next_due_statement: "2026-09-01" },
+    contracted_service: { setup_state: "partially_established", as_of: "2026-08-22",
+      unresolved_count: 1, unresolved: [{ label: "elevator scope" }], next_milestone: "2026-10-01" },
+    compliance: { as_of: "2026-08-22", coverage: { state: "unknown", meaning: "no census" },
+      items: [{ attention: true, unresolved: ["no certificate"], next: { date: "2026-09-30", action: "renew" } },
+              { attention: false, unresolved: [], next: { date: "2026-12-01", action: "inspect" } }] },
+    tenancy: { as_of: "2026-08-22", standing: { truth_state: "PARTIALLY_ESTABLISHED", why: "some" },
+      position: { units: 10, occupied: 8 },
+      unknowns: { occupied_positions_with_no_recorded_rent: 3, positions_with_overlapping_lease_claims: 0 },
+      next_milestone: { on: "2026-09-01", what: "renewals" } },
+    debt: { as_of: "2026-08-22", current_position: { payoff: 1 },
+      important_unknowns: ["rate reset date"], next_milestone: "maturity" },
+  };
+  for (const [domain, reading] of Object.entries(ESTABLISHED)) {
+    const p = adapter.project(domain, reading);
+    const probs = sp.validate(p);
+    ok(`${domain} ESTABLISHED maps to a contract-valid projection`,
+       probs.length === 0 && p.truth_state === "ESTABLISHED", probs.join("; ") || `truth_state=${p.truth_state}`);
+  }
+  //  equity's mapper takes (rich, reading) — the one two-argument case
+  {
+    const rich = { position_count: 3, named_holder_count: 1, coverage_gap_count: 2,
+      open_conflict_count: 1, next_milestone: "resolve gap" };
+    const p = adapter.project("equity", rich, { as_of: "2026-08-22", positions: [{}, {}, {}] });
+    const probs = sp.validate(p);
+    ok("equity ESTABLISHED maps to a contract-valid projection",
+       probs.length === 0 && p.truth_state === "ESTABLISHED" && p.important_unknowns.length === 3,
+       probs.join("; ") || JSON.stringify(p.important_unknowns));
+  }
+  ok("an unknown domain THROWS rather than returning something answer-shaped",
+     (() => { try { adapter.project("not_a_domain", {}); return false; } catch { return true; } })());
+  L("");
+
   L("THE CONTRACT ITSELF — validate() must refuse what §40.7 forbids");
   L("-".repeat(70));
   const good = sp.established("x", { as_of: "2026-08-22", current_position: { a: 1 }, next_milestone: "y" });
@@ -204,8 +263,15 @@ function ok(name, cond, detail = "") {
               return p.read_state === "OK" && p.truth_state === "NOT_ESTABLISHED" && sp.validate(p).length === 0; })());
   ok("notEstablished REFUSES an unexplained blank (§5)",
      (() => { try { sp.notEstablished("x", { as_of: "2026-08-22" }); return false; } catch { return true; } })());
-  ok("a failed read may NOT assert truth_state (§40.7)",
+  ok("validate() REFUSES a failed read that asserts truth_state (§40.7)",
      sp.validate({ ...sp.readFailed("x"), truth_state: "NOT_ESTABLISHED" }).some((m) => /may NOT assert truth_state/.test(m)));
+  /*  The assertion above builds the bad object by hand, so it proves
+      validate() catches it and NOTHING about readFailed(). Deleting
+      readFailed's `truth_state: null` left this suite green — the third
+      false green of this build. This is the one that covers it. */
+  ok("readFailed() itself produces a contract-valid projection",
+     sp.validate(sp.readFailed("x")).length === 0 && sp.readFailed("x").truth_state === null,
+     JSON.stringify(sp.validate(sp.readFailed("x"))));
   ok("READ_TIMED_OUT stays distinct from READ_FAILED",
      sp.readFailed("x", { timed_out: true }).read_state === "READ_TIMED_OUT" &&
      sp.readFailed("x").read_state === "READ_FAILED");

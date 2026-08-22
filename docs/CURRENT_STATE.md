@@ -475,6 +475,62 @@ oldest. That improvement holds either way.
 
 ---
 
+## Standing projections — one shape, eight domains — `src/shared/`
+
+Appended 2026-08-22 (Build 2). Product code changed; no migration, no database write.
+
+| Capability | Rung | Files / note |
+|---|---|---|
+| The §40.6 standing-projection contract | `LOCALLY_EXERCISED` | `src/shared/standing_projection.js`. **Class 1.** `read_state` (about Spine) and `truth_state` (about the property) are separate axes; `validate()` refuses conflating them. QUIET is not a field — `compositeSilence()` is the only place it is decided (§40.7) |
+| Eight domains mapped into it | `LOCALLY_EXERCISED` | `src/shared/domain_standing_projections.js`. **Class 1.** Authors no truth; restates each read's own output |
+| Its gates | `LOCALLY_EXERCISED` | `tests/gate_standing_projection_contract.js` (shape, discovery-driven) · `tests/gate_standing_projection_cost.js` (cost, **measured against real Postgres**) |
+
+**The build framing said "normalise against `equity_position_read.js`". There was no
+reference to normalise against.** Two domains had a `standingProjection()` and they
+disagree: debt carries §40.6's triple (`current_position` · `important_unknowns` ·
+`next_milestone` · `as_of`); equity carries counts and `next_milestone` and neither
+`as_of` nor unknowns. **Debt is the closer match to doctrine, not equity.** The other six
+had none. Eight vocabularies existed for the same three ideas — `as_of`/`period`/`term`,
+and `next_milestone`/`next`/`next_due`/`next_due_statement`/`next_renewal`.
+
+**Also: seven is right only across both directories** — six in `src/asset` plus
+`tenancy_position_read.js`. The gate discovers **eight** domains; compliance arrives via
+`compliance_read.js`.
+
+**COST, MEASURED — this is the finding.** On an **empty** property, so it is a floor:
+
+```text
+42 queries to gather all eight domains ONCE
+8 of 8 issue at least one unbounded read
+```
+
+§40.6 requires the projection be answerable *"without walking its full payment,
+amendment or event history"*, and says why: so many domains can be gathered per question,
+*"which is what lets Ask Spine answer cross-domain questions WITHOUT a classifier or an
+intent router."* `ask_spine_answer.js` **has** that router — `questionSubject()`, a regex
+bank, with 16 `if (subject === …)` guards gating every gather. **Build 4's "delete the
+regex router" is blocked on this cost.** Build 2 measures the tension; it does not
+resolve it, and resolving it needs schema (§40.6: *"This constrains schema, not just
+reads"*), which the frozen ledger forbids.
+
+**Where the mapping lives, and why it is not in the reads.** It was in the reads first.
+`tests/gate_funding_boundary.js` refused it and was right: equity, insurance, tax and
+debt's derivation reads must **import nothing** — that is how the Tax/Insurance funding
+boundary is guaranteed structurally rather than by review. A boundary gate is not
+weakened to fit a refactor, so the shaping moved out and the reads stayed import-free.
+
+**Not established:** whether these projections are cheap enough in production — no
+production read was made. And the ESTABLISHED branch is proven on representative
+readings, not on a populated database; the real-database run took the NOT_ESTABLISHED
+branch for all eight because the measurement property is empty.
+
+**Adjacent, recorded not fixed:** `READ_TIMED_OUT` is distinguished for only 3 of 8
+domains; the other five collapse a timeout into `READ_FAILED`, which §40.7 forbids.
+Compliance is worse — its failure path leaves `facts.compliance` undefined with no
+`read_state` at all. That is Build 3.
+
+---
+
 ## NOT YET SURVEYED — do not read absence as absence
 
 Wave 2 (2026-08-20) closed every area listed here as of the prior version of

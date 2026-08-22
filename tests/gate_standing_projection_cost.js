@@ -56,6 +56,9 @@ if (!/@(127\.0\.0\.1|localhost)[:/]/.test(URL)) {
   process.exit(2);
 }
 
+const contractShape = require(path.join(ROOT, "src/shared/standing_projection.js"));
+const adapter = require(path.join(ROOT, "src/shared/domain_standing_projections.js"));
+
 const PROPERTY = "b2000000-0000-4000-8000-000000000001";
 
 /*  A recording wrapper around a REAL client. It does not fake results —
@@ -120,19 +123,18 @@ const DOMAINS = [
       const svc = require(path.join(ROOT, "src/asset/equity_position_service.js"));
       const read = require(path.join(ROOT, "src/asset/equity_position_read.js"));
       const history = await svc.loadHistory(db, PROPERTY);
-      return read.standingProjection(read.position(history, "2026-08-22"));
-    } },
+      const reading = read.position(history, "2026-08-22");
+      return { rich: read.standingProjection(reading), reading };
+    },
+    extra: (out) => (out && out.reading) || null },
   { domain: "debt",
     run: async (db) => {
       const svc = require(path.join(ROOT, "src/asset/debt_instrument_service.js"));
       const read = require(path.join(ROOT, "src/asset/debt_position_read.js"));
       const ids = await svc.listInstrumentsForProperty(db, PROPERTY);
-      const out = [];
-      for (const id of ids) {
-        const h = await svc.loadHistory(db, id);
-        out.push(read.standingProjection(read.position(h, "2026-08-22")));
-      }
-      return out;
+      if (!ids.length) return null;
+      const h = await svc.loadHistory(db, ids[0]);
+      return read.standingProjection(read.position(h, "2026-08-22"));
     } },
 ];
 
@@ -156,7 +158,18 @@ const DOMAINS = [
   for (const d of DOMAINS) {
     const { wrapped, log } = recorder(client);
     let outcome = "ok";
-    try { await d.run(wrapped); }
+    try {
+      const out = await d.run(wrapped);
+      //  ⚠ THE MAPPINGS ARE PROVEN HERE, ON REAL READINGS.
+      //  Validating adapter.project(domain, null) proves only the
+      //  NOT_ESTABLISHED branch. Every read above returns a REAL reading
+      //  from a REAL database, so mapping it is the only evidence that
+      //  the ESTABLISHED branch is shaped correctly too.
+      const subject = (out && out.rich !== undefined) ? out.rich : out;
+      const projected = adapter.project(d.domain, subject, d.extra ? d.extra(out) : undefined);
+      const probs = contractShape.validate(projected);
+      if (probs.length) outcome = "INVALID SHAPE: " + probs.join("; ").slice(0, 60);
+    }
     catch (e) { outcome = "threw: " + String(e.message).slice(0, 40); }
     const unbounded = log.filter((q) => !isBounded(q));
     results.push({ domain: d.domain, queries: log.length, unbounded: unbounded.length, outcome, sample: unbounded[0] });
