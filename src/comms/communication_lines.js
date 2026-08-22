@@ -6,9 +6,10 @@
    authority ceiling. The sender's identity may LOWER what is appropriate.
    It may never RAISE the ceiling the line established.
 
-   This module is the only thing that reads line storage. Per doctrine
-   Ruling 3 nothing else may: callers ask it to resolve an inbound line,
-   resolve an outbound line for a purpose, or state a line's authority.
+   This module is the only thing that reads or activates line storage. Per
+   doctrine Ruling 3 nothing else may: callers ask it to resolve an inbound
+   line, resolve an outbound line for a purpose, state a line's authority,
+   or perform the one governed first activation of an operations line.
 
    ── THE BOUNDARY THIS MODULE EXISTS TO HOLD ─────────────────────────
 
@@ -77,6 +78,15 @@ const LINE_COLUMNS = `
  *  that cannot exist. This vocabulary must stay identical to the check
  *  constraint's; if either changes, both change in the same commit. */
 const OUTBOUND_POLICIES = ["disabled", "reply_only", "proactive"];
+
+function activationRefusal(httpStatus, reason, receipt, detail = {}) {
+  const error = new Error(receipt);
+  error.httpStatus = httpStatus;
+  error.refusalReason = reason;
+  error.publicMessage = receipt;
+  error.detail = detail;
+  return error;
+}
 
 /*  lineAuthority — pure. What this line permits, stated from the line
  *  itself and from nothing else. Never consults the sender. */
@@ -181,6 +191,134 @@ async function resolveOutboundLine(
     return { line: null, refusal: "reply_only_requires_inbound", policy };
   }
   return { line, refusal: null, policy };
+}
+
+/*  readOperationsLineForOrganization — display uses the same line owner as
+ *  routing and activation. Zero, one and many stay explicit; a screen never
+ *  gets permission to choose one row from an ambiguous configuration. */
+async function readOperationsLineForOrganization(q, organizationId) {
+  if (!organizationId) return { outcome: "not_connected", line: null, candidates: [] };
+  const { rows } = await q.query(
+    `select ${LINE_COLUMNS}, created_at
+       from communication_lines
+      where organization_id = $1 and line_type = 'operations' and status = $2
+      order by created_at, id`,
+    [organizationId, ACTIVE]
+  );
+  if (rows.length === 1) return { outcome: "connected", line: rows[0], candidates: rows };
+  if (rows.length > 1) return { outcome: "ambiguous", line: null, candidates: rows };
+  return { outcome: "not_connected", line: null, candidates: [] };
+}
+
+/*  activateOperationsLine — the one governed first write.
+ *
+ *  This deliberately cannot replace, transfer, suspend or retire a line. Those
+ *  are different operating events with different history and consent questions.
+ *  The narrow command makes only the posture the database already permits:
+ *
+ *      organization-owned · operational · staff · inbound · reply_only
+ *
+ *  The actor is re-read inside the transaction. The super-admin HTTP boundary
+ *  is not treated as a permanent fact after it has run once. */
+async function activateOperationsLine(pool, {
+  organizationId = null, phoneNumber = null, actorUserId = null,
+} = {}) {
+  if (!organizationId) {
+    throw activationRefusal(400, "organization_required", "Organization is required.");
+  }
+  if (!actorUserId) {
+    throw activationRefusal(401, "actor_required", "A live super-admin actor is required.");
+  }
+  const e164 = normalizePropertyLine(phoneNumber);
+  if (!e164) {
+    throw activationRefusal(400, "invalid_staff_line",
+      "Enter a valid US phone number for the staff text line.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+
+    const actor = (await client.query(
+      `select id, platform_role, status from users where id = $1 for share`,
+      [actorUserId])).rows[0];
+    if (!actor || actor.status !== "active" || actor.platform_role !== "super_admin") {
+      throw activationRefusal(403, "super_admin_required",
+        "Only an active super admin can connect a staff text line.");
+    }
+
+    const organization = (await client.query(
+      `select o.id, o.name, o.status,
+              exists(select 1 from properties p where p.organization_id = o.id) as has_property
+         from organizations o
+        where o.id = $1
+        for update`, [organizationId])).rows[0];
+    if (!organization) {
+      throw activationRefusal(404, "organization_not_found", "Organization not found.");
+    }
+    if (organization.status !== "active") {
+      throw activationRefusal(409, "organization_not_active",
+        "Staff texting can only be connected for an active organization.");
+    }
+    if (!organization.has_property) {
+      throw activationRefusal(409, "organization_has_no_property",
+        "Assign at least one property before connecting staff texting.");
+    }
+
+    const existing = (await client.query(
+      `select ${LINE_COLUMNS}, created_at
+         from communication_lines
+        where organization_id = $1 and line_type = 'operations' and status = $2
+        for update`, [organizationId, ACTIVE])).rows;
+    if (existing.length > 1) {
+      throw activationRefusal(409, "ambiguous_operations_line",
+        "More than one active staff line exists. Nothing changed.");
+    }
+    if (existing.length === 1) {
+      if (existing[0].e164 === e164) {
+        await client.query("rollback");
+        return Object.freeze({ line: existing[0], already: true,
+          receipt: `${organization.name} staff texting is already connected.` });
+      }
+      throw activationRefusal(409, "operations_line_already_active",
+        "This organization already has a staff text line. Replacement requires a separate governed change.",
+        { active_line_id: existing[0].id });
+    }
+
+    const collision = (await client.query(
+      `select id, line_type, property_id, organization_id
+         from communication_lines
+        where e164 = $1 and status = $2
+        for update`, [e164, ACTIVE])).rows[0];
+    if (collision) {
+      throw activationRefusal(409, "phone_number_already_active",
+        "That phone number already belongs to an active communication line. Nothing changed.",
+        { active_line_id: collision.id, active_line_type: collision.line_type });
+    }
+
+    const note = `Activated by ${actor.id}; authority=platform_role:super_admin`;
+    const line = (await client.query(
+      `insert into communication_lines
+         (e164, line_type, organization_id, authority_ceiling, permitted_audience,
+          inbound_enabled, outbound_enabled, outbound_policy, status, notes)
+       values ($1, 'operations', $2, 'operational', 'staff', true, true,
+               'reply_only', 'active', $3)
+       returning ${LINE_COLUMNS}, created_at`,
+      [e164, organizationId, note])).rows[0];
+
+    await client.query("commit");
+    return Object.freeze({ line, already: false,
+      receipt: `${organization.name} staff texting is connected.` });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error && error.code === "23505") {
+      throw activationRefusal(409, "communication_line_collision",
+        "That staff line conflicts with an active communication line. Nothing changed.");
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 /*  resolveStaffSenderForOrganization — is this sender staff of THIS
@@ -332,6 +470,8 @@ function clarificationFor(context) {
 module.exports = {
   resolveInboundLine,
   resolveOutboundLine,
+  readOperationsLineForOrganization,
+  activateOperationsLine,
   lineAuthority,
   resolveStaffSenderForOrganization,
   resolvePropertyContextForStaff,

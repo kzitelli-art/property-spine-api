@@ -8,6 +8,7 @@
 //   PATCH /admin/organizations/:id         update org metadata (name, plan, status, notes)
 //   POST /admin/organizations/:id/properties      assign an existing property to an org
 //   POST /admin/organizations/:id/properties/new  create a NEW property tied to an org (wizard)
+//   POST /admin/organizations/:id/operations-line activate the first staff text line
 //   POST /admin/organizations/:orgId/invite   create/invite the first admin user for an org
 //
 //   GET  /admin/users                      list all users platform-wide
@@ -27,6 +28,7 @@ const express = require("express");
 const staffSessions = require("./staff_session_service.js");
 const propertyCreation = require("./property_creation_service.js"); // Build 1A-1: THE property write
 const propertyHierarchy = require("./property_hierarchy_service.js");  // Build 1A-2: adoption yes, reparenting no
+const communicationLines = require("../comms/communication_lines.js");
 
 function slugify(name) {
   return name
@@ -136,7 +138,7 @@ module.exports = function superAdminModule({ pool }) {
       const org = (await pool.query(`select * from organizations where id = $1`, [req.params.id])).rows[0];
       if (!org) return res.status(404).json({ error: "Organization not found." });
 
-      const [properties, users] = await Promise.all([
+      const [properties, users, operationsLine] = await Promise.all([
         pool.query(
           `select id, coalesce(display_name, name) as name, address, city, state,
                   sms_number, created_at
@@ -151,12 +153,44 @@ module.exports = function superAdminModule({ pool }) {
             order by u.created_at`,
           [org.id]
         ),
+        communicationLines.readOperationsLineForOrganization(pool, org.id),
       ]);
 
-      res.json({ ...org, properties: properties.rows, users: users.rows });
+      res.json({ ...org, properties: properties.rows, users: users.rows,
+                 operations_line: operationsLine.line,
+                 operations_line_outcome: operationsLine.outcome });
     } catch (e) {
       console.error("admin/organizations get error", e);
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── POST /admin/organizations/:id/operations-line ───────────────────────
+  // First activation only. Replacement, retirement and transfer are separate
+  // operating events and cannot hide behind this friendly setup command.
+  router.post("/admin/organizations/:id/operations-line", requireSuperAdmin, async (req, res) => {
+    try {
+      const out = await communicationLines.activateOperationsLine(pool, {
+        organizationId: req.params.id,
+        phoneNumber: (req.body || {}).phone_number,
+        actorUserId: req.operator.id,
+      });
+      res.status(out.already ? 200 : 201).json({
+        status: "connected",
+        already: out.already,
+        receipt: out.receipt,
+        line: out.line,
+      });
+    } catch (e) {
+      if (e.httpStatus) {
+        return res.status(e.httpStatus).json({
+          error: e.publicMessage || e.message,
+          reason: e.refusalReason || "operations_line_refused",
+          ...(e.detail || {}),
+        });
+      }
+      console.error("admin/organization operations line error", e);
+      res.status(500).json({ error: "Staff texting could not be connected." });
     }
   });
 
