@@ -209,6 +209,8 @@ function createConversionClosureAuthority() {
       `select * from leasing_conversion_obligations where id=$1 for update`, [link.id])).rows[0];
     if (!fresh) throw httpErr(404, "closure authority: link vanished.");
     if (fresh.outcome == null) throw httpErr(409, "task is already open — nothing to reopen.");
+    const nextEligibilityState = owner_eligibility_state
+      || (next_owner_user_id ? "eligible_assignment" : "unassigned");
 
     let snapPerson = null, snapAssignment = null, snapIdBasis = "unbridged";
     if (by_user_id) {
@@ -225,7 +227,7 @@ function createConversionClosureAuthority() {
       identity_resolution_basis: snapIdBasis,
       prior_status: fresh.resolution === "missed" ? "missed" : "complete", next_status: "open",
       prior_owner_user_id: fresh.owner_user_id, next_owner_user_id,
-      owner_eligibility_state,
+      owner_eligibility_state: nextEligibilityState,
       resolution_code: fresh.resolution, resolution_basis: fresh.resolution_basis,
       reason, prior_due_at: fresh.due_by, next_due_at: new_due_at, idempotency_key,
     });
@@ -238,11 +240,14 @@ function createConversionClosureAuthority() {
               resolution_basis=null, owner_user_id=$2, due_by=$3
         where id=$1`, [fresh.id, next_owner_user_id, new_due_at]);
     await client.query(
-      `update obligations set status='open', completed_at=null, due_at=$2, updated_at=now() where id=$1`,
-      [fresh.obligation_id, new_due_at]);
+      `update obligations
+          set status='open', completed_at=null, due_at=$2,
+              assigned_user_id=$3, owner_eligibility_state=$4, updated_at=now()
+        where id=$1`,
+      [fresh.obligation_id, new_due_at, next_owner_user_id, nextEligibilityState]);
 
     return { reopened: true, event_id: evId, owner_user_id: next_owner_user_id,
-             owner_eligibility_state, new_due_at };
+             owner_eligibility_state: nextEligibilityState, new_due_at };
   }
 
   return Object.freeze({ closeLinkedConversionObligation, reopenLinkedConversionObligation, appendEvent });

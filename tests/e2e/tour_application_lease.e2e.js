@@ -9,6 +9,7 @@ module.paths.unshift(require("path").join(__dirname, "..", "..", "node_modules")
 const fs = require("fs");
 const { Pool } = require("pg");
 const staffSessions = require("../../src/identity/staff_session_service");
+const buildStaffBridge = require("../../src/identity/staffbridge");
 
 if (process.env.E2E_DISPOSABLE_DATABASE !== "true") {
   console.error("FATAL: E2E_DISPOSABLE_DATABASE=true is required.");
@@ -25,6 +26,7 @@ if (!CONN || !SMS_LOG) {
 
 const pool = new Pool({ connectionString: CONN, ssl: { rejectUnauthorized: false } });
 const q = (sql, params) => pool.query(sql, params);
+const staffBridge = buildStaffBridge({ pool })._service;
 let passed = 0;
 function pass(message, detail) {
   passed++;
@@ -98,7 +100,9 @@ async function waitForApplicationText() {
   await q("delete from executed_lease_records where property_id=$1", [propertyId]);
   await q("delete from leases where property_id=$1", [propertyId]);
 
-  const mike = (await q("select id from users where name='Mike Grivna' and is_active=true limit 1")).rows[0];
+  const mike = (await q(
+    "select id,person_id from users where name='Mike Grivna' and is_active=true limit 1"
+  )).rows[0];
   expect(!!mike, "Mike Grivna fixture user exists");
   await q(`insert into property_team_assignments
              (user_id,property_id,role_title,allowed_modules,active,can_manage_roles)
@@ -109,6 +113,53 @@ async function waitForApplicationText() {
   let staffToken;
   try {
     await client.query("begin");
+    await staffBridge.classifyAccount(client, {
+      user_id: mike.id, account_kind: "human_staff", performed_by_user_id: mike.id,
+    });
+    let staffPersonId = mike.person_id;
+    if (!staffPersonId) {
+      const existingPerson = (await client.query(
+        `select id from persons
+          where name='Mike Grivna' and record_status='active'
+          order by created_at asc limit 1`
+      )).rows[0];
+      const linked = await staffBridge.linkBridge(client, {
+        user_id: mike.id,
+        person_id: existingPerson ? existingPerson.id : null,
+        create_staff_person: existingPerson ? null : {
+          name: "Mike Grivna", property_id: propertyId,
+        },
+        context_property_id: propertyId,
+        reason_code: "staff_invite_acceptance",
+        reason_detail: "Disposable accepted-staff launch fixture",
+        evidence_type: "operator_attestation",
+        evidence_reference: "tour-application-lease-e2e",
+        request_id: `tour-application-lease:${propertyId}:${mike.id}`,
+        performed_by_user_id: mike.id,
+      });
+      staffPersonId = linked.person_id;
+    } else {
+      await staffBridge.establishStaffContext(client, {
+        person_id: staffPersonId, property_id: propertyId, performed_by_user_id: mike.id,
+      });
+    }
+    await client.query(
+      `insert into assignments (person_id,property_id,role,scope,is_active,provenance)
+       values ($1,$2,'leasing','leasing',true,$3::jsonb)
+       on conflict (person_id,property_id,role) where is_active=true
+       do update set scope=excluded.scope,
+                     provenance=coalesce(assignments.provenance,'{}'::jsonb) || excluded.provenance`,
+      [staffPersonId, propertyId, JSON.stringify({
+        source: "team_invite", role_key: "leasing_agent", fixture: true,
+      })]
+    );
+    await client.query(
+      `update property_team_assignments
+          set role_key='leasing_agent', role_title='Leasing Agent',
+              primary_for_modules='{leasing}', updated_at=now()
+        where property_id=$1 and user_id=$2`,
+      [propertyId, mike.id]
+    );
     const issued = await staffSessions.issueStaffSession(client, {
       userId: mike.id, propertyId, purpose: "bootstrap_invite",
     });
@@ -122,6 +173,23 @@ async function waitForApplicationText() {
   }
   const me = requireOk(await api("GET", "/operator/me", { token: staffToken }), "operator session");
   expect(me.property_id === propertyId, "staff session is bound to the fixture property");
+  const fixtureIdentity = (await q(
+    `select u.person_id, pta.primary_for_modules,
+            exists(select 1 from person_contexts pc
+                    where pc.person_id=u.person_id and pc.property_id=pta.property_id
+                      and pc.context_type='staff' and pc.active_to is null) as has_staff_context,
+            exists(select 1 from assignments a
+                    where a.person_id=u.person_id and a.property_id=pta.property_id
+                      and a.role='leasing' and a.is_active=true) as has_leasing_assignment
+       from users u
+       join property_team_assignments pta on pta.user_id=u.id and pta.property_id=$2
+      where u.id=$1`,
+    [mike.id, propertyId]
+  )).rows[0];
+  expect(fixtureIdentity && fixtureIdentity.person_id && fixtureIdentity.has_staff_context
+      && fixtureIdentity.has_leasing_assignment
+      && fixtureIdentity.primary_for_modules.includes("leasing"),
+    "the fixture matches accepted leasing staff identity and module ownership");
 
   await q("delete from communication_lines where property_id=$1", [propertyId]);
   await q(`insert into communication_lines
@@ -181,6 +249,23 @@ async function waitForApplicationText() {
   )).rows[0];
   expect(captureEvent && captureEvent.metadata.standing === "ready_to_apply",
     "the agent's ready-to-apply judgment was recorded as truth");
+  const followupOwner = (await q(
+    `select lco.owner_user_id, o.assigned_user_id
+       from leasing_conversion_obligations lco
+       join obligations o on o.id=lco.obligation_id
+      where lco.conversion_id=$1 and lco.rung='tour_followup' and lco.outcome is null`,
+    [completed.conversion_id]
+  )).rows[0];
+  expect(followupOwner && followupOwner.owner_user_id === mike.id
+      && followupOwner.assigned_user_id === mike.id,
+    "post-tour follow-up reaches Mike through the canonical obligations queue");
+  const personalAttention = requireOk(await api("POST", "/operator/ask-spine/ask", {
+    token: staffToken, body: { question: "What should I do today?" },
+  }), "personal Ask Spine read after the tour");
+  expect(personalAttention.outcome === "answered"
+      && personalAttention.grounded_on.attention_scope === "personal"
+      && personalAttention.answer.includes(name),
+    "Mike's Ask Spine answer includes the recorded post-tour follow-up");
 
   const targets = requireOk(await api("GET", "/operator/leasing/leaseable-units", {
     token: staffToken,

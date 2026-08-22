@@ -8,7 +8,7 @@ const receipt = require("./_run_receipt");
 const askSpineAnswer = require("../src/agent/ask_spine_answer");
 const obligationRead = require("../src/obligations/operator_obligations_service");
 
-const EXPECTED = 25;
+const EXPECTED = 28;
 let passed = 0;
 let failed = 0;
 function ok(label, condition, detail = "") {
@@ -113,12 +113,20 @@ receipt.begin(__filename, { expected: EXPECTED });
   const root = path.join(__dirname, "..");
   const route = fs.readFileSync(path.join(root, "src", "agent", "ask_spine.js"), "utf8");
   const sms = fs.readFileSync(path.join(root, "src", "comms", "staff_governed_read.js"), "utf8");
+  const leasingRail = fs.readFileSync(path.join(root, "src", "leasing", "leasingconversion.js"), "utf8");
+  const closure = fs.readFileSync(path.join(root, "src", "leasing", "conversion_obligation_closure.js"), "utf8");
   ok("the dashboard passes its live user and module ownership",
     /operator_user_id: req\.operator\.id/.test(route)
       && /primary_for_modules: req\.operator\.primary_for_modules/.test(route));
   ok("staff SMS passes the same identity inputs",
     /operator_user_id: userId/.test(sms)
       && /primary_for_modules: propertyContext\.primaryForModules/.test(sms));
+  ok("a new leasing rung stamps its eligible owner on the canonical obligation",
+    /assigned_user_id: owner_user_id \|\| null/.test(leasingRail));
+  ok("an explicit conversation handoff moves the link and canonical obligation together",
+    /with moved as \([\s\S]*update leasing_conversion_obligations[\s\S]*returning obligation_id[\s\S]*update obligations o[\s\S]*assigned_user_id=\$1/.test(leasingRail));
+  ok("a reopened rung restores the same owner on the canonical obligation",
+    /update obligations[\s\S]*status='open'[\s\S]*assigned_user_id=\$3[\s\S]*owner_eligibility_state=\$4/.test(closure));
 
   process.exitCode = receipt.complete({
     harness: __filename, passed, failed, expectedAtLeast: EXPECTED,
