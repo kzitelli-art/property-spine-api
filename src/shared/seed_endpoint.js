@@ -36,7 +36,7 @@ const staffSessions = require("../identity/staff_session_service.js");
 //  Build 1A-2 (ruling): authentication answers WHO may call this; the
 //  perimeter answers WHERE synthetic data may land.
 const { syntheticTargetAllowed, syntheticRefusal } = require("./synthetic_data_perimeter.js");
-const { resolvePropertyForImport } = require("../identity/property_resolution_service.js");
+const { resolvePropertyIdentity } = require("../identity/property_resolution_service.js");
 
 module.exports = function seedEndpoint(deps){
   const express = require("express");
@@ -56,7 +56,7 @@ module.exports = function seedEndpoint(deps){
   //  silent pick would send a rent roll to whichever was created first.
   //  Exact name, and more than one is a refusal rather than a choice.
   async function resolveDemoPropertyId(){
-    const res = await resolvePropertyForImport(pool, { name_exact: DEMO_PROP_NAME });
+    const res = await resolvePropertyIdentity(pool, { name_exact: DEMO_PROP_NAME });
     return res.status === "resolved" ? res.property_id : null;
   }
 
@@ -66,7 +66,7 @@ module.exports = function seedEndpoint(deps){
   async function resolveSeedTargetId(k){
     const cfg = legacy.DATASETS[k];
     if (!cfg) return null;
-    const res = await resolvePropertyForImport(pool, {
+    const res = await resolvePropertyIdentity(pool, {
       canonical_key: cfg.property_key || null,
       match_tokens: cfg.property_match || [],
     });

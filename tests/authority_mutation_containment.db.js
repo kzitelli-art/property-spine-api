@@ -413,34 +413,34 @@ function request(port, method, path, { body, headers = {} } = {}) {
     name: TAG + " Uno on Chestnut", address: `${N + 4125} Chestnut Street`,
     source: "super_admin_wizard" })).property;
 
-  const s1 = await resolution.resolvePropertyForImport(pool, { canonical_key: solo.canonical_key });
+  const s1 = await resolution.resolvePropertyIdentity(pool, { canonical_key: solo.canonical_key });
   ok("S1  a canonical key resolves", s1.status === "resolved" && s1.property_id === solo.id && s1.via === "canonical_key");
 
-  const s2 = await resolution.resolvePropertyForImport(pool, { match_tokens: [TAG + " solo roll"] });
+  const s2 = await resolution.resolvePropertyIdentity(pool, { match_tokens: [TAG + " solo roll"] });
   ok("S2  a registered alias resolves", s2.status === "resolved" && s2.property_id === solo.id && s2.via === "registry_alias");
 
   //  ONE text match. The old resolver would have returned it silently.
-  const s3 = await resolution.resolvePropertyForImport(pool, { match_tokens: [TAG + " Solo on"] });
+  const s3 = await resolution.resolvePropertyIdentity(pool, { match_tokens: [TAG + " Solo on"] });
   ok("S3  ONE text match is PROPOSED, not resolved",
     s3.status === "proposed" && s3.property_id === null && s3.candidates.length === 1
       && s3.candidates[0].property_id === solo.id,
     JSON.stringify(s3));
 
   //  The real collision: "Chestnut" means both buildings.
-  const s4 = await resolution.resolvePropertyForImport(pool, { match_tokens: ["Chestnut"] });
+  const s4 = await resolution.resolvePropertyIdentity(pool, { match_tokens: ["Chestnut"] });
   const ids = s4.candidates.map((c) => String(c.property_id));
   ok("S4  several text matches are ambiguous, and ALL of them are named",
     s4.status === "ambiguous" && s4.property_id === null
       && ids.includes(String(solo.id)) && ids.includes(String(uno.id)),
     JSON.stringify({ status: s4.status, n: s4.candidates.length }));
 
-  const s5 = await resolution.resolvePropertyForImport(pool, { match_tokens: [TAG + " nothing like this"] });
+  const s5 = await resolution.resolvePropertyIdentity(pool, { match_tokens: [TAG + " nothing like this"] });
   ok("S5  nothing matching is unresolved", s5.status === "unresolved" && s5.candidates.length === 0);
 
   const dupName = TAG + " Twin Towers";
   await pool.query(`insert into properties (name, canonical_key) values ($1,$2),($1,$3)`,
     [dupName, TAG + "-TWIN-A", TAG + "-TWIN-B"]);
-  const s6 = await resolution.resolvePropertyForImport(pool, { name_exact: dupName });
+  const s6 = await resolution.resolvePropertyIdentity(pool, { name_exact: dupName });
   ok("S6  two properties sharing an exact name are ambiguous, not 'the oldest'",
     s6.status === "ambiguous" && s6.property_id === null && s6.candidates.length === 2, JSON.stringify(s6.status));
 

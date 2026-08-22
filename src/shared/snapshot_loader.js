@@ -19,7 +19,7 @@
 const staffSessions = require("../identity/staff_session_service.js");
 //  Build 1A-2: the ONE contained property resolver. Recognition proposes;
 //  ambiguity refuses and names its candidates.
-const { resolvePropertyForImport, resolutionError } = require("../identity/property_resolution_service.js");
+const { resolvePropertyIdentity, resolutionError } = require("../identity/property_resolution_service.js");
 //  Build 1A-2 (ruling): the fixture doors below inject synthetic rent
 //  rolls from a CONFIG KEY. Authentication is not the question — where
 //  synthetic data may land is. The canonical signed-in importer
@@ -332,7 +332,7 @@ async function refuseIfSourceOnlyMatchesRetiredInventory(client, propertyId, row
 }
 
 async function resolveProperty(client, cfg) {
-  return resolvePropertyForImport(client, {
+  return resolvePropertyIdentity(client, {
     canonical_key: cfg.property_key || null,
     match_tokens: cfg.property_match || [],
   });
@@ -342,7 +342,7 @@ async function resolveProperty(client, cfg) {
 //  was anything less than clean. Null is refused by the perimeter, so a
 //  proposal or an ambiguity can never become a write target.
 async function resolveConfiguredTarget(db, cfg) {
-  const res = await resolvePropertyForImport(db, {
+  const res = await resolvePropertyIdentity(db, {
     canonical_key: cfg.property_key || null,
     match_tokens: cfg.property_match || [],
   });

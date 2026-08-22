@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════════════
-//  property_resolution_service.js — WHICH PROPERTY IS THIS, FOR AN IMPORT
+//  property_resolution_service.js — WHICH PROPERTY IS THIS?
 //
 //  Build 0 found two fuzzy resolvers running beside the registry with the
 //  opposite doctrine to it:
@@ -37,6 +37,19 @@
 //  string through the registry. Both are cheap; a misattributed rent roll
 //  is not.
 //
+//  ── WHY THE NAME CHANGED ─────────────────────────────────────────────
+//  This was `resolvePropertyForImport`. The name was scoped to imports;
+//  the contract never was. Every branch below answers "which property is
+//  this, and am I certain" — a question a demo path, a reset, a preflight
+//  and an AUTHORIZATION WALL all ask. A guard routed through a function
+//  named "for import" reads as a borrowed convenience rather than the
+//  identity contract it is, and the next person moves it.
+//
+//  `resolveProperty` was not available: snapshot_loader.js and
+//  seed_snapshot.js still define local wrappers by that name, and an
+//  import colliding with a local function is how the wrong one gets
+//  called. `Identity` is also the doctrine — name is not identity.
+//
 //  CLASSIFICATION: Class 1 permanent primitive.
 // ════════════════════════════════════════════════════════════════════
 
@@ -53,7 +66,7 @@
  *   receipt: string                // sayable to a human as-is
  * }
  */
-async function resolvePropertyForImport(db, spec = {}) {
+async function resolvePropertyIdentity(db, spec = {}) {
   const { canonical_key = null, match_tokens = [], name_exact = null } = spec;
 
   // ── 1. canonical key. Identity, not a guess. ──────────────────────
@@ -163,4 +176,4 @@ function resolutionError(res) {
   };
 }
 
-module.exports = { resolvePropertyForImport, resolutionError };
+module.exports = { resolvePropertyIdentity, resolutionError };

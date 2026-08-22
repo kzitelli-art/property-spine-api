@@ -142,11 +142,11 @@ function statementFrom(site) {
 
     line("CONTROLS — these must be GREEN. The resolver is not the defect.");
     line("-".repeat(68));
-    const { resolvePropertyForImport } =
+    const { resolvePropertyIdentity } =
       require(path.join(ROOT, "src/identity/property_resolution_service.js"));
 
-    const res = await resolvePropertyForImport(c, { name_exact: NAME });
-    ok("resolvePropertyForImport(name_exact) → status 'ambiguous'",
+    const res = await resolvePropertyIdentity(c, { name_exact: NAME });
+    ok("resolvePropertyIdentity(name_exact) → status 'ambiguous'",
        res.status === "ambiguous", `saw "${res.status}"`);
     ok("…and returns all three candidates rather than choosing",
        Array.isArray(res.candidates) && res.candidates.length === 3,
