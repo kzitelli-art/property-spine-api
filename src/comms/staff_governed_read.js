@@ -66,6 +66,8 @@ function makeStaffGovernedRead({ askSpineAnswer = defaultAskSpineAnswer } = {}) 
       read = await askSpineAnswer.answer(pool, anthropic, {
         property_id: propertyContext.propertyId,
         allowed_modules: propertyContext.allowedModules || [],
+        operator_user_id: userId,
+        primary_for_modules: propertyContext.primaryForModules || [],
         question: body,
         ...askOptions,
       });

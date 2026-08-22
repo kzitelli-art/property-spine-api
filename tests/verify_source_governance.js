@@ -142,6 +142,10 @@ const GATES = [
     what: "Ask Spine: answers only from reads, names them, and an outage never reads as good news" },
   { file: "ask_spine_contract_proof.js",
     what: "Ask Spine attention: one canonical obligations reader, scoped ranking, no conversational SQL copy" },
+  { file: "staff_sms_router.test.js",
+    what: "staff SMS: governed reads converge on Ask Spine while actions and one-work-order turns remain operational" },
+  { file: "personal_attention_convergence.test.js",
+    what: "personal attention: dashboard and SMS share one person-scoped read using recorded accountability only" },
   { file: "gate_ask_spine_readers.js",
     what: "Ask Spine: every canonical standing domain is registered, pending, or explicitly waived" },
   //  The gate above is the §40.2 enforcement, so it is the one gate whose

@@ -404,7 +404,7 @@ async function resolvePropertyContextForStaff(
 
   //  2. The sender's own active assignments, inside this organization.
   const { rows } = await q.query(
-    `select distinct p.id as property_id, p.name, pta.allowed_modules
+    `select distinct p.id as property_id, p.name, pta.allowed_modules, pta.primary_for_modules
        from property_team_assignments pta
        join properties p
          on p.id = pta.property_id and p.organization_id = $2
@@ -429,6 +429,7 @@ async function resolvePropertyContextForStaff(
         outcome: "one",
         propertyId: named[0].property_id,
         allowedModules: named[0].allowed_modules || [],
+        primaryForModules: named[0].primary_for_modules || [],
         candidates: rows,
         source: "message_property_name",
       };
@@ -439,6 +440,7 @@ async function resolvePropertyContextForStaff(
     outcome: "one",
     propertyId: rows[0].property_id,
     allowedModules: rows[0].allowed_modules || [],
+    primaryForModules: rows[0].primary_for_modules || [],
     candidates: rows,
     source: "assignment",
   };

@@ -6,7 +6,7 @@ const { routeStaffSmsTurn } = require("../src/conversation/staff_sms_router");
 const technicianIntent = require("../src/conversation/technician_intent");
 const { operatingReceipt } = require("../src/conversation/receipt");
 
-const EXPECTED = 30;
+const EXPECTED = 35;
 let passed = 0;
 let failed = 0;
 const ok = (label, condition, detail = "") => {
@@ -36,6 +36,12 @@ for (const [text, subject] of [
     routed && routed.subject);
 }
 
+for (const text of ["What should I do today?", "What work is assigned to me?"]) {
+  const routed = routesTo("ask_spine", text);
+  ok(`${JSON.stringify(text)} uses the shared personal Ask Spine read`, !!routed);
+  ok("...as a work question", routed && routed.subject === "work");
+}
+
 console.log("\n-- WORK ALWAYS WINS ------------------------------------------");
 for (const text of [
   "accept 1042",
@@ -43,6 +49,7 @@ for (const text of [
   "the valve is corroded and needs replacing",
   "anything else open here?",
   "should I replace the valve?",
+  "What should I do about work order 1042?",
 ]) {
   ok(`${JSON.stringify(text)} stays on the technician path`,
     !!routesTo("technician", text));

@@ -68,6 +68,19 @@ function reasonFor(row) {
 //  be given one from a request body or query string.
 async function attention(db, { property_id, allowed_modules }) {
   const out = await obligationRead.attention(db, { property_id, allowed_modules });
+  return projectAttention(out);
+}
+
+async function personalAttention(db, {
+  property_id, allowed_modules, operator_user_id, primary_for_modules,
+}) {
+  const out = await obligationRead.personalAttention(db, {
+    property_id, allowed_modules, operator_user_id, primary_for_modules,
+  });
+  return projectAttention(out);
+}
+
+function projectAttention(out) {
   const items = out.items.map((row) => {
     const isUnassigned = row.assigned_user_id == null;
     return {
@@ -79,6 +92,7 @@ async function attention(db, { property_id, allowed_modules }) {
       is_overdue: row.is_overdue,
       is_unassigned: isUnassigned,
       reason: reasonFor({ ...row, is_unassigned: isUnassigned }),
+      personal_basis: row.personal_basis || null,
       person_id: row.person_id,
       //  Context only. There is no unit opener in the app, so this is never
       //  turned into a link.
@@ -92,4 +106,4 @@ async function attention(db, { property_id, allowed_modules }) {
   return { items, total_open: out.total, scope_note: out.scope_note };
 }
 
-module.exports = { attention, MAX_ITEMS, MODULE_TO_DESK };
+module.exports = { attention, personalAttention, MAX_ITEMS, MODULE_TO_DESK };

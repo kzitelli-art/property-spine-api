@@ -108,6 +108,8 @@ module.exports = function askSpine(deps) {
       const out = await askSpineAnswer.answer(pool, options.anthropic, {
         property_id: req.operator.property_id,
         allowed_modules: req.operator.allowed_modules,
+        operator_user_id: req.operator.id,
+        primary_for_modules: req.operator.primary_for_modules,
         question: (req.body && req.body.question) || "",
         mintComplianceReference: complianceReferences.mintReference,
         //  Late-bound: this module mounts above the applications module in

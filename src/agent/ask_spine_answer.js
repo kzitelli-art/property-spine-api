@@ -251,6 +251,23 @@ const TOUR_SCHEDULE_TERMS =
   /\b(tours? (?:times?|schedule|availability|openings?|slots?|hosts?|coverage)|(?:hosting|covering) tours?|book(?:ing)? (?:a )?tour|schedule (?:a )?tour|when can (?:we|i|someone) tour)\b/i;
 const ECONOMICS_MODULES = new Set(["leasing", "management", "asset_management"]);
 
+//  One person-scoped operating question. This is shared by the dashboard and
+//  staff SMS router so neither surface gets to decide independently that "my"
+//  means the property queue or a technician command.
+const PERSONAL_ATTENTION_TERMS = [
+  /^\s*what should i (?:do|work on)(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  /^\s*what do i (?:need|have) to do(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  /^\s*what(?:'s| is) (?:on )?my (?:list|plate|queue|agenda)(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  /^\s*what(?:'s| is) (?:open|assigned) for me(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  /^\s*what (?:work|tasks?|jobs?) (?:is|are) assigned to me(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  /^\s*(?:show|give) me my (?:work|tasks?|jobs?|priorities|queue)(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+];
+
+function isPersonalAttentionQuestion(question) {
+  const text = String(question || "").trim();
+  return PERSONAL_ATTENTION_TERMS.some((pattern) => pattern.test(text));
+}
+
 function canReadEconomics(modules) {
   return (modules || []).some((module) => ECONOMICS_MODULES.has(module));
 }
@@ -1015,6 +1032,46 @@ function systemPrompt(subject = "work") {
   ].join("\n");
 }
 
+function personalAttentionResponse(out) {
+  const items = Array.isArray(out && out.items) ? out.items : [];
+  const total = Number(out && out.total_open) || items.length;
+  let text;
+  if (out && out.scope_note === "no_module_entitlement") {
+    text = "Your current access does not include a work module at this property.";
+  } else if (items.length === 0) {
+    text = "I don't see any recorded open work routed to you at this property right now.";
+  } else {
+    const list = items.map((item, index) => {
+      const label = String(item.label || item.type || "Open item").trim();
+      return `${index + 1}. ${label}${item.is_overdue ? " (overdue)" : ""}`;
+    }).join(" ");
+    const shown = items.length < total ? ` Showing the first ${items.length}.` : "";
+    text = `${total} recorded open ${total === 1 ? "item is" : "items are"} routed to you. ${list}${shown}`;
+  }
+  return {
+    outcome: "answered",
+    answer: text,
+    model: null,
+    references: items.filter((item) => item.open && item.open.kind && item.open.id)
+      .map((item) => ({
+        label: item.label,
+        module: item.module,
+        due_at: item.due_at,
+        is_overdue: !!item.is_overdue,
+        personal_basis: item.personal_basis,
+        open: { kind: item.open.kind, id: item.open.id },
+      })),
+    grounded_on: {
+      open_items: total,
+      personal_open_items: total,
+      attention_scope: "personal",
+      work_orders: null,
+      reads_that_failed: [],
+      gathered_at: new Date().toISOString(),
+    },
+  };
+}
+
 /**
  * Answer a typed question about one property.
  *
@@ -1025,6 +1082,7 @@ async function answer(db, anthropic, {
   property_id, allowed_modules, question, mintComplianceReference, complianceReader,
   utilityReader, contractedServiceReader, debtService, debtRead, equityService, equityRead,
   tenancyReader, economicReader, tourScheduleReader, applicationsService,
+  operator_user_id, primary_for_modules,
 }) {
   if (!property_id) throw new Error("ask_spine.answer requires a server-derived property_id");
 
@@ -1103,6 +1161,24 @@ async function answer(db, anthropic, {
       grounded_on: null,
       references: [],
     };
+  }
+
+  if (subject === "work" && isPersonalAttentionQuestion(q)) {
+    if (!operator_user_id) {
+      return {
+        outcome: "not_authorized",
+        answer: "I can't identify whose work to read in this session.",
+        grounded_on: null,
+        references: [],
+      };
+    }
+    const personal = await askSpineService.personalAttention(db, {
+      property_id,
+      allowed_modules: modules,
+      operator_user_id,
+      primary_for_modules: Array.isArray(primary_for_modules) ? primary_for_modules : [],
+    });
+    return personalAttentionResponse(personal);
   }
 
   //  NO KEY IS NOT AN EMPTY ANSWER. Without this the operator would ask a
@@ -1255,5 +1331,6 @@ async function answer(db, anthropic, {
 }
 
 module.exports = {
-  answer, gatherFacts, questionSubject, systemPrompt, MODEL, SUPPORTED_SCOPE, OUT_OF_SCOPE_ANSWER,
+  answer, gatherFacts, questionSubject, isPersonalAttentionQuestion, personalAttentionResponse,
+  systemPrompt, MODEL, SUPPORTED_SCOPE, OUT_OF_SCOPE_ANSWER,
 };

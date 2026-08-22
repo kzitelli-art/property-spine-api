@@ -20,16 +20,27 @@ const ACTION_REQUEST_RX = new RegExp(
 
 function routeStaffSmsTurn({ text, attachments = [] } = {}) {
   const technician = technicianIntent.readTurn({ text, attachments });
+  const personalAttention = askSpineAnswer.isPersonalAttentionQuestion(text);
 
-  // Work actions, work-list questions, field findings and all media stay on
-  // the technician path. The read path can never intercept a proven action.
-  if (technician.intent !== "unclear" || technicianIntent.hasAttachments(attachments)) {
+  // Media and action requests always remain technician turns. A personal work
+  // question is checked before the technician's legacy list_work shorthand so
+  // dashboard and SMS can share the same person-scoped Ask Spine read.
+  if (technicianIntent.hasAttachments(attachments) || ACTION_REQUEST_RX.test(String(text || ""))) {
+    return Object.freeze({ destination: "technician", technician, subject: null });
+  }
+
+  if (personalAttention) {
+    return Object.freeze({ destination: "ask_spine", technician, subject: "work" });
+  }
+
+  // Other work actions, work-list questions and field findings stay on the
+  // technician path. The read path can never intercept a proven action.
+  if (technician.intent !== "unclear") {
     return Object.freeze({ destination: "technician", technician, subject: null });
   }
 
   const subject = askSpineAnswer.questionSubject(text);
-  if (ACTION_REQUEST_RX.test(String(text || ""))
-      || !technicianIntent.looksLikeQuestion(text) || subject === "work") {
+  if (!technicianIntent.looksLikeQuestion(text) || subject === "work") {
     return Object.freeze({ destination: "technician", technician, subject: null });
   }
 

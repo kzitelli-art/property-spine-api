@@ -45,9 +45,13 @@ function normalizeStatus(requested) {
 
 async function scopedRead(db, {
   property_id, allowed_modules, status = null, attention = false,
+  operator_user_id = null, primary_for_modules = [], personal = false,
 } = {}) {
   if (!property_id) {
     throw new Error("operator_obligations read requires a server-derived property_id");
+  }
+  if (personal && !operator_user_id) {
+    throw new Error("personal obligation attention requires a server-derived operator_user_id");
   }
 
   const modules = Array.isArray(allowed_modules) ? allowed_modules.filter(Boolean) : [];
@@ -64,6 +68,26 @@ async function scopedRead(db, {
   let statusPredicate = "";
   if (wantStatus) { vals.push(wantStatus); statusPredicate = ` and o.status = $${vals.length}`; }
 
+  let personalProjection = "";
+  let personalPredicate = "";
+  if (personal) {
+    const primary = Array.isArray(primary_for_modules)
+      ? primary_for_modules.filter((module) => modules.includes(module)) : [];
+    vals.push(operator_user_id, primary);
+    const userParam = `$${vals.length - 1}`;
+    const primaryParam = `$${vals.length}`;
+    personalProjection = `,
+           case
+             when o.assigned_user_id = ${userParam} then 'assigned_to_you'
+             when o.escalates_to_user_id = ${userParam} then 'escalated_to_you'
+             else 'unassigned_in_your_module'
+           end as personal_basis`;
+    personalPredicate = `
+       and (o.assigned_user_id = ${userParam}
+            or o.escalates_to_user_id = ${userParam}
+            or (o.assigned_user_id is null and o.module = any(${primaryParam}::text[])))`;
+  }
+
   const order = attention
     ? `case
          when o.due_at is not null and o.due_at < now() and o.assigned_user_id is null then 1
@@ -78,10 +102,10 @@ async function scopedRead(db, {
   const sql = `
     select ${FIELDS.split(", ").map((f) => "o." + f).join(", ")},
            (o.due_at is not null and o.due_at < now()) as is_overdue,
-           count(*) over()::int as total_open
+           count(*) over()::int as total_open${personalProjection}
       from obligations o
      where o.property_id = $1
-       and o.module = any($2::text[])${statusPredicate}
+       and o.module = any($2::text[])${statusPredicate}${personalPredicate}
      order by ${order}${attention ? `\n     limit ${ATTENTION_LIMIT}` : ""}`;
 
   const r = await db.query(sql, vals);
@@ -120,6 +144,20 @@ async function attention(db, { property_id, allowed_modules } = {}) {
   });
 }
 
+//  The compact answer to "What should I do today?" It is narrower than the
+//  property attention board and uses only recorded accountability fields:
+//  direct assignment, explicit escalation, or unassigned work in a module the
+//  current property assignment says this user owns. Role/title inference is
+//  deliberately absent.
+async function personalAttention(db, {
+  property_id, allowed_modules, operator_user_id, primary_for_modules,
+} = {}) {
+  return scopedRead(db, {
+    property_id, allowed_modules, operator_user_id, primary_for_modules,
+    status: "open", attention: true, personal: true,
+  });
+}
+
 module.exports = {
-  list, attention, FIELDS, STATUS_WHITELIST, ATTENTION_LIMIT,
+  list, attention, personalAttention, FIELDS, STATUS_WHITELIST, ATTENTION_LIMIT,
 };
