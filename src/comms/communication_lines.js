@@ -6,10 +6,10 @@
    authority ceiling. The sender's identity may LOWER what is appropriate.
    It may never RAISE the ceiling the line established.
 
-   This module is the only thing that reads or activates line storage. Per
+   This runtime module is the only thing that reads or changes line storage. Per
    doctrine Ruling 3 nothing else may: callers ask it to resolve an inbound
    line, resolve an outbound line for a purpose, state a line's authority,
-   or perform the one governed first activation of an operations line.
+   or perform governed activation and transfer of an operations line.
 
    ── THE BOUNDARY THIS MODULE EXISTS TO HOLD ─────────────────────────
 
@@ -321,6 +321,166 @@ async function activateOperationsLine(pool, {
   }
 }
 
+/*  transferOperationsLine — one number changes organization ownership.
+ *
+ *  The old row is retired and the new row is activated in one transaction.
+ *  Historical comm_events keep their original line identity; new inbound
+ *  resolution sees only the target organization's row. A retry naming the
+ *  retired source returns the already-created target row instead of creating
+ *  another line. */
+async function transferOperationsLine(pool, {
+  sourceLineId = null, targetOrganizationId = null, actorUserId = null,
+} = {}) {
+  if (!sourceLineId) {
+    throw activationRefusal(400, "source_line_required", "The current staff line is required.");
+  }
+  if (!targetOrganizationId) {
+    throw activationRefusal(400, "organization_required", "The target organization is required.");
+  }
+  if (!actorUserId) {
+    throw activationRefusal(401, "actor_required", "A live super-admin actor is required.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+
+    const actor = (await client.query(
+      `select id, platform_role, status from users where id = $1 for share`,
+      [actorUserId])).rows[0];
+    if (!actor || actor.status !== "active" || actor.platform_role !== "super_admin") {
+      throw activationRefusal(403, "super_admin_required",
+        "Only an active super admin can transfer a staff text line.");
+    }
+
+    const target = (await client.query(
+      `select o.id, o.name, o.status,
+              exists(select 1 from properties p where p.organization_id = o.id) as has_property
+         from organizations o
+        where o.id = $1
+        for update`, [targetOrganizationId])).rows[0];
+    if (!target) {
+      throw activationRefusal(404, "organization_not_found", "Target organization not found.");
+    }
+    if (target.status !== "active") {
+      throw activationRefusal(409, "organization_not_active",
+        "Staff texting can only be transferred to an active organization.");
+    }
+    if (!target.has_property) {
+      throw activationRefusal(409, "organization_has_no_property",
+        "Assign at least one property before transferring staff texting.");
+    }
+
+    const source = (await client.query(
+      `select ${LINE_COLUMNS}, notes, created_at, superseded_at
+         from communication_lines
+        where id = $1
+        for update`, [sourceLineId])).rows[0];
+    if (!source) {
+      throw activationRefusal(404, "source_line_not_found", "Current staff line not found.");
+    }
+    if (source.line_type !== "operations") {
+      throw activationRefusal(409, "source_line_not_operations",
+        "Only an operations line can be transferred.");
+    }
+
+    const activeForNumber = (await client.query(
+      `select ${LINE_COLUMNS}, created_at
+         from communication_lines
+        where e164 = $1 and status = $2
+        order by created_at, id
+        for update`, [source.e164, ACTIVE])).rows;
+
+    if (source.status !== ACTIVE) {
+      const current = activeForNumber.length === 1 ? activeForNumber[0] : null;
+      if (current && current.organization_id === targetOrganizationId) {
+        await client.query("rollback");
+        return Object.freeze({
+          line: current,
+          retiredLineId: source.id,
+          already: true,
+          receipt: `${target.name} staff texting already owns this number.`,
+        });
+      }
+      throw activationRefusal(409, "source_line_not_active",
+        "The named source line is not active, and no completed transfer to this organization was found.");
+    }
+
+    if (source.organization_id === targetOrganizationId) {
+      await client.query("rollback");
+      return Object.freeze({
+        line: source,
+        retiredLineId: null,
+        already: true,
+        receipt: `${target.name} staff texting already owns this number.`,
+      });
+    }
+
+    const targetLines = (await client.query(
+      `select ${LINE_COLUMNS}, created_at
+         from communication_lines
+        where organization_id = $1 and line_type = 'operations' and status = $2
+        order by created_at, id
+        for update`, [targetOrganizationId, ACTIVE])).rows;
+    if (targetLines.length) {
+      throw activationRefusal(409, "target_operations_line_already_active",
+        "The target organization already has a staff text line. Nothing changed.",
+        { active_line_ids: targetLines.map((line) => line.id) });
+    }
+    if (activeForNumber.length !== 1 || activeForNumber[0].id !== source.id) {
+      throw activationRefusal(409, "source_number_ambiguous",
+        "The source number does not resolve only to the named line. Nothing changed.");
+    }
+
+    const transferNote = `Transferred by ${actor.id} to organization ${target.id}; source_line=${source.id}`;
+    const retired = (await client.query(
+      `update communication_lines
+          set status = 'retired', superseded_at = now(), updated_at = now(),
+              notes = concat_ws(E'\n', nullif(notes, ''), $2::text)
+        where id = $1 and status = $3
+        returning id, status, superseded_at`,
+      [source.id, transferNote, ACTIVE])).rows[0];
+    if (!retired || retired.status !== "retired" || !retired.superseded_at) {
+      throw new Error("operations-line transfer failed to retire the source row");
+    }
+
+    const line = (await client.query(
+      `insert into communication_lines
+         (e164, line_type, organization_id, authority_ceiling, permitted_audience,
+          inbound_enabled, outbound_enabled, outbound_policy, status, notes)
+       values ($1, 'operations', $2, 'operational', 'staff', true, true,
+               'reply_only', 'active', $3)
+       returning ${LINE_COLUMNS}, created_at`,
+      [source.e164, target.id, transferNote])).rows[0];
+
+    const inbound = await resolveInboundLine(client, source.e164);
+    const targetStanding = await readOperationsLineForOrganization(client, target.id);
+    const sourceStanding = await readOperationsLineForOrganization(client, source.organization_id);
+    if (inbound.outcome !== "one" || !inbound.line || inbound.line.id !== line.id
+        || targetStanding.outcome !== "connected" || targetStanding.line.id !== line.id
+        || sourceStanding.outcome !== "not_connected") {
+      throw new Error("operations-line transfer could not prove the new routing owner");
+    }
+
+    await client.query("commit");
+    return Object.freeze({
+      line,
+      retiredLineId: source.id,
+      already: false,
+      receipt: `${target.name} staff texting now owns ${source.e164}.`,
+    });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error && error.code === "23505") {
+      throw activationRefusal(409, "communication_line_collision",
+        "The transfer conflicted with another active communication line. Nothing changed.");
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 /*  resolveStaffSenderForOrganization — is this sender staff of THIS
  *  organization?
  *
@@ -474,6 +634,7 @@ module.exports = {
   resolveOutboundLine,
   readOperationsLineForOrganization,
   activateOperationsLine,
+  transferOperationsLine,
   lineAuthority,
   resolveStaffSenderForOrganization,
   resolvePropertyContextForStaff,

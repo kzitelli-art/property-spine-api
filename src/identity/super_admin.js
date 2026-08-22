@@ -194,6 +194,33 @@ module.exports = function superAdminModule({ pool }) {
     }
   });
 
+  router.post("/admin/organizations/:id/operations-line/transfer", requireSuperAdmin, async (req, res) => {
+    try {
+      const out = await communicationLines.transferOperationsLine(pool, {
+        sourceLineId: (req.body || {}).source_line_id,
+        targetOrganizationId: req.params.id,
+        actorUserId: req.operator.id,
+      });
+      res.status(out.already ? 200 : 201).json({
+        status: "connected",
+        already: out.already,
+        receipt: out.receipt,
+        retired_line_id: out.retiredLineId,
+        line: out.line,
+      });
+    } catch (e) {
+      if (e.httpStatus) {
+        return res.status(e.httpStatus).json({
+          error: e.publicMessage || e.message,
+          reason: e.refusalReason || "operations_line_transfer_refused",
+          ...(e.detail || {}),
+        });
+      }
+      console.error("admin/organization operations line transfer error", e);
+      res.status(500).json({ error: "Staff texting could not be transferred." });
+    }
+  });
+
   // ── PATCH /admin/organizations/:id ───────────────────────────────────────
   router.patch("/admin/organizations/:id", requireSuperAdmin, async (req, res) => {
     try {

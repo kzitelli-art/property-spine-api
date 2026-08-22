@@ -6,12 +6,13 @@ const { Pool } = require("pg");
 const receipt = require("./_run_receipt");
 const {
   activateOperationsLine,
+  transferOperationsLine,
   resolveInboundLine,
   resolveOutboundLine,
 } = require("../src/comms/communication_lines");
 
 const HARNESS = __filename;
-const EXPECTED = 26;
+const EXPECTED = 40;
 const URL = receipt.harnessConnectionString();
 const pool = new Pool({ connectionString: URL, max: 4 });
 const tag = `OPS_LINE_${process.pid}_${Date.now()}`;
@@ -62,6 +63,10 @@ async function unusedHarnessNumber() {
   let memberId = null;
   let propertyId = null;
   let lineId = null;
+  let targetOrganizationId = null;
+  let targetPropertyId = null;
+  let targetLineId = null;
+  let historyEventId = null;
 
   try {
     organizationId = (await pool.query(
@@ -155,8 +160,80 @@ async function unusedHarnessNumber() {
     ok("the activation command cannot replace a line", replacement && replacement.httpStatus === 409);
     ok("the replacement refusal is explicit",
       replacement && replacement.refusalReason === "operations_line_already_active");
+
+    targetOrganizationId = (await pool.query(
+      `insert into organizations (name, slug)
+       values ($1, $2) returning id`,
+      [`${tag} Target Org`, `${tag.toLowerCase().replace(/_/g, "-")}-target`]
+    )).rows[0].id;
+    targetPropertyId = (await pool.query(
+      `insert into properties (name, canonical_key, organization_id)
+       values ($1, $2, $3) returning id`,
+      [`${tag} Target Property`, `${tag}-TARGET-PROPERTY`, targetOrganizationId]
+    )).rows[0].id;
+    historyEventId = (await pool.query(
+      `insert into comm_events
+         (channel,direction,body,communication_line_id)
+       values ('sms','inbound',$1,$2) returning id`,
+      [`${tag} historical staff text`, lineId]
+    )).rows[0].id;
+
+    const transferred = await transferOperationsLine(pool, {
+      sourceLineId: lineId,
+      targetOrganizationId,
+      actorUserId: actorId,
+    });
+    targetLineId = transferred.line.id;
+    ok("the transfer reports a new target line", transferred.already === false);
+    ok("the receipt names the retired source row", transferred.retiredLineId === lineId);
+    ok("the target line preserves the exact phone number", transferred.line.e164 === e164);
+    ok("the target line belongs to the target organization",
+      transferred.line.organization_id === targetOrganizationId);
+    const retired = (await pool.query(
+      `select status,superseded_at from communication_lines where id=$1`, [lineId]
+    )).rows[0];
+    ok("the source line is retired", retired && retired.status === "retired");
+    ok("the source retirement carries its clock", retired && !!retired.superseded_at);
+    const history = (await pool.query(
+      `select communication_line_id from comm_events where id=$1`, [historyEventId]
+    )).rows[0];
+    ok("historical staff SMS stays attached to the retired source row",
+      history && history.communication_line_id === lineId);
+    const transferredInbound = await resolveInboundLine(pool, e164);
+    ok("the transferred number still resolves exactly once", transferredInbound.outcome === "one");
+    ok("new inbound resolves only to the target row",
+      transferredInbound.line && transferredInbound.line.id === targetLineId);
+    const sourceOutbound = await resolveOutboundLine(pool, {
+      organizationId,
+      replyToCommEventId: historyEventId,
+    });
+    ok("the source organization no longer resolves the staff line",
+      sourceOutbound.refusal === "no_property_line");
+    const targetOutbound = await resolveOutboundLine(pool, {
+      organizationId: targetOrganizationId,
+      replyToCommEventId: historyEventId,
+    });
+    ok("reply-bound target routing returns the transferred line",
+      targetOutbound.line && targetOutbound.line.id === targetLineId);
+    const repeatedTransfer = await transferOperationsLine(pool, {
+      sourceLineId: lineId,
+      targetOrganizationId,
+      actorUserId: actorId,
+    });
+    ok("repeating the completed transfer is idempotent", repeatedTransfer.already === true);
+    ok("the idempotent receipt returns the same target row",
+      repeatedTransfer.line.id === targetLineId);
+    const activeCount = (await pool.query(
+      `select count(*)::int n from communication_lines where e164=$1 and status='active'`,
+      [e164]
+    )).rows[0].n;
+    ok("the phone number has exactly one active owner after retry", activeCount === 1);
   } finally {
+    if (historyEventId) await pool.query(`delete from comm_events where id = $1`, [historyEventId]).catch(() => {});
+    if (targetLineId) await pool.query(`delete from communication_lines where id = $1`, [targetLineId]).catch(() => {});
     if (lineId) await pool.query(`delete from communication_lines where id = $1`, [lineId]).catch(() => {});
+    if (targetPropertyId) await pool.query(`delete from properties where id = $1`, [targetPropertyId]).catch(() => {});
+    if (targetOrganizationId) await pool.query(`delete from organizations where id = $1`, [targetOrganizationId]).catch(() => {});
     if (propertyId) await pool.query(`delete from properties where id = $1`, [propertyId]).catch(() => {});
     if (memberId) await pool.query(`delete from users where id = $1`, [memberId]).catch(() => {});
     if (actorId) await pool.query(`delete from users where id = $1`, [actorId]).catch(() => {});
