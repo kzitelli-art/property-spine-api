@@ -353,7 +353,10 @@ suspected. Full detail in `05_WAVE2_RESULTS.md`.
 
 ## Property identity — the evidence base — `tools/identity/`
 
-Added 2026-08-22 (CC_BUILD1, slices 1-4). Read-only. Full deliverable:
+Added 2026-08-22 (CC_BUILD1, slices 1-4). Read-only. **§18 class: 3** — inventory /
+evidence infrastructure, outside the operator workflow. **Removal condition: none,
+deliberately** (not Class 4): the ruling is one-time and this is the record of how it was
+made. Full deliverable:
 `docs/PROPERTY_IDENTITY_INVENTORY.md`, ending in a three-option ruling brief with
 **no recommendation** — the direction is an owner ruling.
 
@@ -393,6 +396,23 @@ and no FK to properties (polymorphic scope pair, migration 153), so it appears i
 of the graph. Its binding is immutable: **no rebinding path exists** and the database
 refuses to change `scope_id`. Nothing anywhere validates a document's *contents* against
 the property it is filed under.
+
+**Name resolution — the fix already exists and five callers bypass it.**
+`src/identity/property_resolution_service.js` returns `ambiguous` with every candidate on
+a multi-row exact-name match — *"One row resolves; more than one is ambiguous rather than
+'the oldest'"* — and is live in the import/seed path (`snapshot_loader.js`,
+`seed_endpoint.js`, `seed_snapshot.js`). Five sites do what it forbids:
+`operator.js:195`, `demo_reset.js:80`, `leasingleads.js:900`, `leasingleads.js:1051`
+(**no limit at all** — a booking authorization wall taking `rows[0]`), and
+`demo_preflight.js:106`. Three rows share the name, so "oldest wins" is a coin flip.
+Per §41 the missing piece is routing, not new code. Caveat: the export is named
+`resolvePropertyForImport` and one new caller is an authorization wall, so the name is
+scoped narrower than the callers — rename or extract a sibling. **Not fixed here.**
+
+**Counts, stated exactly:** 154 FK references are *declared*; **152 are live** (two are on
+`scheduled_charges`, dropped by 059). Live: 75 CASCADE + 71 BLOCKS + 6 SET NULL = 152.
+An independent grep and the parser were **re-run after** the rename fix and agree on
+154/77/42/6.
 
 **Not established, and not guessed at:** every row count. No production database was
 contacted. The census answers those, and a human runs it.

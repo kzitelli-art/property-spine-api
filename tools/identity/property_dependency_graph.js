@@ -33,6 +33,17 @@
    is Slice 2's census script, and it is generated here and run
    elsewhere by a human.
 
+   ── §18 COMPONENT CLASS ─────────────────────────────────────────────
+   CLASS 3 — inventory / evidence infrastructure. It sits outside the
+   signed-in operator workflow, ships to no user, and makes no product
+   decision.
+
+   REMOVAL CONDITION: none. This is deliberate and is NOT Class 4. The
+   property identity ruling is a one-time decision, and this tooling is
+   the record of how it was made — the evidence has to outlive the
+   ruling or the ruling cannot be re-examined. It is removed only if
+   `properties` stops being a table.
+
    ── WHY MIGRATION SOURCE AND NOT information_schema ─────────────────
    Deliberate, and it is the point rather than a limitation. Reading the
    live catalog requires a database connection, and the only database

@@ -9,6 +9,17 @@
    shown capable of going red is evidence of nothing more than a green
    run." This file is the going-red.
 
+   ── §18 COMPONENT CLASS ─────────────────────────────────────────────
+   CLASS 3 — inventory / evidence infrastructure. It sits outside the
+   signed-in operator workflow, ships to no user, and makes no product
+   decision.
+
+   REMOVAL CONDITION: none. This is deliberate and is NOT Class 4. The
+   property identity ruling is a one-time decision, and this tooling is
+   the record of how it was made — the evidence has to outlive the
+   ruling or the ruling cannot be re-examined. It is removed only if
+   `properties` stops being a table.
+
    Each case below is fed to the same parser the graph uses. Two kinds:
 
      MUST FIND    a real FK form — if the parser misses it, the graph's

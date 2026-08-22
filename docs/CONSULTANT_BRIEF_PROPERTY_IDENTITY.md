@@ -2,6 +2,8 @@
 
 **Subject:** four database rows compete for one property's identity. We need a ruling.
 **Date:** 22 Aug 2026 · **Status:** evidence gathered, decision blocked on you.
+**Rev 2** — Q5 answered (fix exists, five callers bypass it), Q4 re-prioritised, arithmetic
+and proof-rung vocabulary corrected. Changes credited to review, marked *(revised)* inline.
 **Full detail:** `docs/PROPERTY_IDENTITY_INVENTORY.md` (branch `claude/github-docs-review-5hr4jt`)
 
 ---
@@ -29,21 +31,35 @@ questions, and the things we think are weak.
 ## 2 · What we established (and how confident we are)
 
 All of this was derived from the source code and from a **throwaway local database** we
-built, used, and destroyed. **We did not touch production.** Confidence is marked per
-item.
+built, used, and destroyed. **We did not touch production.**
+
+Each item is marked with this project's proof ladder rather than a loose confidence word,
+because they are different claims. `LOCALLY_EXERCISED` means *reproduced on a real
+Postgres that is not production* — it deliberately does **not** assert that production's
+schema or data match. Nothing in this brief reaches `HTTP_PROVEN`, `BROWSER_VERIFIED`,
+`DEPLOYED`, or `PRODUCTION_PROVEN`, and nothing here should be quoted as if it does.
 
 ### 2a · The blast radius is large and uneven
 
-**154 foreign keys point at the `properties` table.** If you delete one property row:
+**154 foreign keys are DECLARED against `properties`. 152 are LIVE** — the other two are
+on `scheduled_charges`, a table dropped by migration 059. An earlier draft of this brief
+used 154 as the headline over a table of live counts; the two numbers are now labelled.
+
+If you delete one property row, the **152 live** relationships behave as:
 
 | Behaviour | Count | What it means |
 |---|---|---|
 | CASCADE | 75 | child rows are destroyed silently |
 | RESTRICT / NO ACTION | 71 | the delete is refused while any row exists |
 | SET NULL | 6 | the row survives, its property pointer is silently blanked |
+| **total** | **152** | |
 
-*Confidence: high.* Derived from the migration files by a parser with 24 falsification
-tests, cross-checked by an independent method that produced identical totals.
+*Rung: `LOCALLY_EXERCISED`.* Derived from the migration files by a parser with 24
+falsification tests. **Cross-check re-run after the parser bug in W7 was fixed**, because
+a check run before a fix proves nothing about the code after it: a crude independent grep
+and the parser now both return 154 declared / 77 cascade / 42 restrict / 6 set null. The
+rename fix could not have changed these counts — it renames tables, it does not add or
+remove relationships — but that is now demonstrated rather than asserted.
 
 **The practical read:** a naive `DELETE` almost certainly gets refused rather than
 destroying anything, because 71 walls have to be empty first. That is reassuring. The
@@ -69,7 +85,9 @@ Two consequences we proved on the throwaway database:
   evidence, and it is one of the very few things in this system that has been verified
   working in real production. It carries a delete-refusal trigger and is destroyed anyway.
 
-*Confidence: high — reproduced experimentally, not inferred.*
+*Rung: `LOCALLY_EXERCISED` — reproduced experimentally on a throwaway database, not
+inferred. That rung is the point: it does **not** cover production, where neither the
+schema nor the data has been checked.*
 
 ### 2c · Two records make a property delete outright impossible
 
@@ -80,7 +98,7 @@ throws an error and aborts.
 
 **Why this matters to you:** any cost estimate built by reading the foreign keys alone
 will classify these two as "would be destroyed." They are the exact opposite — absolute
-walls. *Confidence: high — reproduced experimentally.*
+walls. *Rung: `LOCALLY_EXERCISED` — reproduced experimentally.*
 
 ### 2d · Merging two rows is governed by uniqueness, not by delete rules
 
@@ -96,7 +114,7 @@ collides with certainty — no coincidence required:
 - the current deal membership
 
 **A merge fails part-way through**, and there is no transaction boundary defined anywhere
-for this operation. Half-migrated is a real possible outcome. *Confidence: high.*
+for this operation. Half-migrated is a real possible outcome. *Rung: `LOCALLY_EXERCISED`.*
 
 ### 2e · Documents cannot be moved at all
 
@@ -104,7 +122,7 @@ Uploaded source documents (rent rolls, loan docs, invoices) are stored in a tabl
 has **no property column and no foreign key to properties** — it uses a generic
 "scope type + scope id" pair. Three consequences:
 
-1. It is **invisible** to the 154-relationship analysis above. Any estimate derived from
+1. It is **invisible** to the relationship analysis above. Any estimate derived from
    that analysis omits documents entirely.
 2. The database **actively refuses** to change a document's binding. There is no
    rebinding path anywhere in the codebase, for any level of admin. The designed remedy
@@ -112,7 +130,7 @@ has **no property column and no foreign key to properties** — it uses a generi
 3. **Nothing validates a document's contents against the property it is filed under.** A
    document is bound to whichever property the uploader's session was pointed at.
 
-*Confidence: high.*
+*Rung: `LOCALLY_EXERCISED` (source-read; no data queried).*
 
 Point 3 explains a separate observation — a "4125 Otis" document appearing under the
 displayed Solo property. **That needs no identity confusion to explain it.** We
@@ -151,20 +169,60 @@ permanently, (b) re-upload everything and re-establish, or (c) change the immuta
 rule — which was a deliberate design decision we would not reverse without you.
 **Which?**
 
-### Q4 — Do you want the two "silently bypassable" immutability holes fixed first?
+### Q4 — The immutability holes are more urgent than we first framed them *(revised)*
 
 Published pricing and Release 0 completion evidence can both be destroyed by a property
-delete despite carrying guards that say otherwise. This is **independent of the identity
-question** — it is true today. Fixing it is a schema-level change, so it needs a ruling.
-**Fix before, fix after, or accept and document?**
+delete despite carrying guards that say otherwise (§2b). Our first draft asked "fix
+before or after the ruling?", reasoning that nobody is planning a property delete, so it
+could wait.
 
-### Q5 — There is a security check that resolves a property by name. Priority?
+**That reasoning was wrong, and the correction came from review.** Cross the two findings:
 
-One booking-authorization check deliberately re-verifies the target property **by name**,
-specifically to stop a tampered ID — against a name that three rows share, and without
-limiting to one result. It is the highest-risk single item we found. It is arguably a
-symptom of the identity problem and arguably its own bug. **Fix now or fold into the
-ruling?**
+```
+W5  a test harness inserts the production property's exact UUID under a
+    different name — its own comment acknowledges this
+2b  four delete guards are silently bypassable on cascade, destroying
+    published pricing and Release 0 evidence
+```
+
+**Nobody has to plan a property delete. A harness that owns that UUID is the delete
+path.** The right question is therefore not "before or after the ruling" but **"before
+anyone next runs that harness."**
+
+**Do you want the guards fixed, the harness neutralised, or both — and on what timeline?**
+This is a schema-level change, which is why it is your call and not ours.
+
+### Q5 — ANSWERED, and it is not part of the ruling *(revised)*
+
+An earlier draft asked whether to fold the name-resolution problem into the ruling. That
+was wrong, and the correction came from review. **The fix already exists in this codebase
+and five callers bypass it.**
+
+`src/identity/property_resolution_service.js` does exactly the right thing: on an exact
+name match it returns `ambiguous` with every candidate rather than choosing one. Its own
+comment states the doctrine — *"One row resolves; more than one is ambiguous rather than
+'the oldest'."* It is not theoretical and not dormant: the import and seed paths
+(`snapshot_loader.js`, `seed_endpoint.js`, `seed_snapshot.js`) already route through it.
+
+Five call sites do the thing it forbids, verified line by line:
+
+```
+src/identity/operator.js:195     order by created_at asc limit 1
+src/leasing/demo_reset.js:80     order by created_at asc limit 1
+src/leasing/leasingleads.js:900  order by created_at asc limit 1
+src/leasing/leasingleads.js:1051 no limit at all — takes rows[0]
+src/leasing/demo_preflight.js:106 order by created_at asc limit 1
+```
+
+Three rows share that name, so *"oldest wins"* is a coin flip wearing a `limit 1`. The
+missing piece is not new code — it is routing five callers through a service that already
+refuses correctly. **This is cheap, independent of the ruling, and can be done now.**
+
+**One engineering caveat before anyone starts:** the exported function is named
+`resolvePropertyForImport`, and `leasingleads.js:1051` is a booking authorization wall,
+not an import. Either the function is renamed to reflect a broader contract or a sibling
+is extracted for the authorization case — the doctrine is right, the name is scoped
+narrower than the five new callers. **Which do you want?**
 
 ### Q6 — We need two UUIDs that only exist in production.
 
@@ -181,7 +239,7 @@ fixed, because fixing them was out of scope for an evidence-gathering pass.
 
 | # | Weak spot | Why it matters |
 |---|---|---|
-| **W1** | **A security boundary is enforced on a property *name* that three rows share**, with no "limit 1" — so it takes whichever row the database returns first. The same codebase tells its AI model the opposite rule: *"the ADDRESS is the stable identity of a property — NOT its name."* | Highest-risk item found. A booking could be aimed at the wrong property. |
+| **W1** | **Five call sites resolve a property by a *name* three rows share**, four with `order by created_at asc limit 1` and one — a booking authorization wall — with no limit at all. **A correct resolver already exists** (`property_resolution_service.js`) and is live in the import path; these five bypass it. The same codebase tells its AI model the opposite rule: *"the ADDRESS is the stable identity of a property — NOT its name."* | Highest-risk item found, **and the cheapest to fix** — see Q5. It is five call sites, not one, and the fix is routing rather than new code. |
 | **W2** | **The one irreplaceable record in the system — a real completed customer tour from 5 July 2026 — is protected only indirectly.** It has exactly two mentions in the entire codebase, one of which is a *comment*. Nothing is keyed to the record itself; it survives only because its parent property is on a do-not-delete list, and that list guards *deletion*, not *moves*. | Option B would move this record with nothing in the code protecting it by name. |
 | **W3** | **Release 0 completion evidence is destroyable** (see §2b) despite carrying a guard, and it is one of the few things verified working in real production. | Silent data loss with no error. |
 | **W4** | **Two of the system's domains (Debt and Equity) cite source documents with no check that the document belongs to that property**, unlike five sibling domains that all check. One offline tool matches documents by file hash with no property filter at all. | A financial position could be established from another property's document. |
@@ -239,11 +297,32 @@ Stated explicitly so nobody reads silence as zero:
 
 ---
 
+## 6b · Process compliance — stated, because review asked
+
+- **The `CURRENT_STATE.md` closeout ritual ran.** The row is at
+  `docs/CURRENT_STATE.md:354` and was committed with the work. This brief did not
+  mention it, which is why it read as missing — the ritual happened, the reporting of it
+  did not.
+- **§18 component classification: now stamped, and it was genuinely absent before.**
+  All three tools carry **Class 3 — inventory / evidence infrastructure**, outside the
+  signed-in operator workflow, shipping to no user, making no product decision.
+  **Removal condition: none, deliberately — this is not Class 4.** The ruling is a
+  one-time decision and this tooling is the record of how it was made; the evidence has
+  to outlive the ruling or the ruling cannot be re-examined.
+- **Rungs, not confidence words.** Corrected throughout §2. Everything here is
+  `LOCALLY_EXERCISED` and nothing is above it.
+
+---
+
 ## 7 · Suggested next step
 
+0. **Q5 needs no ruling and can start immediately** — route five call sites through the
+   resolver that already refuses ambiguity. Tell us which way you want the naming caveat
+   resolved and it is a contained change.
 1. Someone with Neon access runs `tools/identity/property_census.sql` and returns the
-   output — 10 minutes, read-only.
-2. You answer **Q1** (which row) and **Q4** (fix the immutability holes before or after).
+   output — 10 minutes, read-only. **We cannot run this**: this session has no production
+   credentials, and that is the design, not an obstacle to route around.
+2. You answer **Q1** (which row) and **Q4** (the guards / the harness, and by when).
 3. We turn the chosen option into a costed, reversible migration plan with an explicit
    transaction boundary — as a plan, not an execution.
 
