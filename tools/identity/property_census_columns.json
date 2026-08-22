@@ -1,0 +1,610 @@
+{
+  "activations": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "agent_facts": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "agent_tour_offers": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "ai_leasing_operating_rules": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "application_intents": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "application_invitations": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "application_proposed_terms_confirmations": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "assignments": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "bank_accounts": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "bids": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "capital_stack_conflicts": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "capital_stack_positions": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "comm_events": {
+    "missing": false,
+    "ts": "occurred_at"
+  },
+  "common_equity_class_terms": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "communication_lines": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "compliance_items": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "concession_authority_grants": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "concession_incidents": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "concession_policies": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "contracted_service_coverage_reviews": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "contracted_service_decision_links": {
+    "missing": false,
+    "ts": null
+  },
+  "contracted_service_documents": {
+    "missing": false,
+    "ts": null
+  },
+  "contracted_service_engagements": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "contracted_service_financial_observations": {
+    "missing": false,
+    "ts": null
+  },
+  "contracted_service_locations": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "contracted_service_price_components": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "contracted_service_requirements": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "contracted_service_scopes": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "contracted_service_terms": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "conversations": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "deal_intake_files": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "deal_intake_properties": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "debt_instrument_properties": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "decision_cases": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "demo_runs": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "deposit_claims": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "documents": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "events": {
+    "missing": false,
+    "ts": "occurred_at"
+  },
+  "executed_lease_records": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "governed_charge_rulings": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "import_batches": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "ingest_candidates": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "ingest_runs": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "insurance_coverage_properties": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "insurance_funding_arrangements": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "insurance_property_allocations": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "inventory": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "inventory_retirements": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "lead_takeover_queue": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "lease_applications": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "lease_economic_schedules": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "lease_move_in_charge_sets": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "lease_offers": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "lease_packets": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "leases": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "leasing_conversions": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "leasing_coverage_exceptions": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "leasing_lead_lifecycle_events": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "leasing_leads": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "leasing_tours": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "ledger_claims": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "legal_entity_properties": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "meeting_evidence_meetings": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "meeting_property_bindings": {
+    "missing": false,
+    "ts": null
+  },
+  "money_events": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "obligations": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "onboarding_runs": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "opening_tenancy_positions": {
+    "missing": false,
+    "ts": null
+  },
+  "operator_session_invites": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "payments": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "person_attributes": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "person_contexts": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "person_identity_conflicts": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "person_intent_tasks": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "person_property_classifications": {
+    "missing": false,
+    "ts": null
+  },
+  "plaid_item": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "pricing_review_receipts": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "property_ai_leasing_strategy_deployments": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "property_aliases": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "property_channel_capabilities": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "property_controls": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "property_creation_events": {
+    "missing": false,
+    "ts": "occurred_at"
+  },
+  "property_governed_charges": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "property_leasing_cycles": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "property_noi_goals": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "property_operating_timezone_changes": {
+    "missing": false,
+    "ts": null
+  },
+  "property_organization_events": {
+    "missing": false,
+    "ts": "occurred_at"
+  },
+  "property_pricing_versions": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "property_team_assignments": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "property_unit_types": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "proposed_records": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "reclean_rulings": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "recovery_variants": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "renewal_cases": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "report_imports": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "scheduled_tour_source_links": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "scheduled_tour_sources": {
+    "missing": false,
+    "ts": null
+  },
+  "scheduled_tours": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "scheduling_source_mappings": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "staff_agent_messages": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "staff_agent_proposals": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "staff_agent_threads": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "staff_sessions": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "supply_requests": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "tax_clearances": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "tax_funding_arrangements": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "tax_obligation_applicability": {
+    "missing": false,
+    "ts": null
+  },
+  "tax_obligation_properties": {
+    "missing": false,
+    "ts": null
+  },
+  "tax_obligations": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "team_invites": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "tenant_invites": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "tenant_sessions": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "tour_availability": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "tour_availability_commands": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "tour_availability_events": {
+    "missing": false,
+    "ts": null
+  },
+  "tour_booking_links": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "tour_schedule_policies": {
+    "missing": false,
+    "ts": null
+  },
+  "turnovers": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "unit_events": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "unit_observations": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "unit_readiness_certifications": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "unit_readiness_walks": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "unit_triage_confirmations": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "unit_triage_findings": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "unit_triage_required_work": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "unit_turn_appliances": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "unit_turn_scopes": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "units": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "utility_account_meters": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "utility_account_service_points": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "utility_account_services": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "utility_arrangements": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "utility_meter_service_points": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "utility_meters": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "utility_provider_accounts": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "utility_service_declarations": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "utility_service_points": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "utility_service_providers": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "utility_services": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "utility_statement_usage": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "utility_statements": {
+    "missing": false,
+    "ts": "recorded_at"
+  },
+  "variance_explanations": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "vendor_aliases": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "vendor_property_categories": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "work_acceptances": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "work_completion_claims": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "work_order_billback_decisions": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "work_order_progress": {
+    "missing": false,
+    "ts": "occurred_at"
+  },
+  "work_order_proof_attachments": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "work_orders": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "work_proof_attachments": {
+    "missing": false,
+    "ts": "created_at"
+  },
+  "work_reopenings": {
+    "missing": false,
+    "ts": "created_at"
+  }
+}

@@ -146,6 +146,30 @@ const CASES = [
   { name: "a unique NOT involving property_id is ignored", expect: "ignore",
     sql: `create table s (id uuid primary key, property_id uuid references properties(id), code text, unique (code));`,
     check: (g) => !g.uniques.some((u) => u.table === "s") },
+
+  /* ── Renames. The graph reported `opening_positions`, a table that has
+        not existed since migration 159. Caught only by building the same
+        chain into a disposable local database and comparing. ────────── */
+  { name: "ALTER TABLE … RENAME TO moves the edge to the new name", expect: "find",
+    sql: `create table old_name (id uuid primary key, property_id uuid references properties(id) on delete cascade);
+          alter table old_name rename to new_name;`,
+    check: (g) => g.edges.some((e) => e.table === "new_name" && e.declaredAs === "old_name") &&
+                  !g.edges.some((e) => e.table === "old_name") },
+
+  { name: "a rename inside a DO $$ block is still seen", expect: "find",
+    sql: `create table do_old (id uuid primary key, property_id uuid references properties(id) on delete cascade);
+          do $$ begin
+            if exists (select 1 from information_schema.tables where table_name = 'do_old') then
+              alter table do_old rename to do_new;
+            end if;
+          end $$;`,
+    check: (g) => g.edges.some((e) => e.table === "do_new") && !g.edges.some((e) => e.table === "do_old") },
+
+  { name: "a rename also moves the table's unique constraints", expect: "find",
+    sql: `create table uq_old (id uuid primary key, property_id uuid references properties(id), unique (property_id));
+          alter table uq_old rename to uq_new;`,
+    check: (g) => g.uniques.some((u) => u.table === "uq_new" && u.klass === "SINGLETON") &&
+                  !g.uniques.some((u) => u.table === "uq_old") },
 ];
 
 let pass = 0, fail = 0;

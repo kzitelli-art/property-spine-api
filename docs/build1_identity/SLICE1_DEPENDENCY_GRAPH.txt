@@ -63,7 +63,7 @@ BLOCKING — any single existing child row refuses the whole delete
   meeting_property_bindings.property_id                    RESTRICT   175_meeting_evidence_provider_inbox.sql:130
   money_events.property_id                                 NO ACTION  005_money_events.sql:22
   onboarding_runs.property_id                              NO ACTION  009_onboarding.sql:29
-  opening_positions.property_id                            NO ACTION  157_opening_positions.sql:43
+  opening_tenancy_positions.property_id                    NO ACTION  157_opening_positions.sql:43
   person_contexts.property_id                              NO ACTION  067_staff_identity_bridge.sql:107
   person_property_classifications.property_id              RESTRICT   076_person_property_classifications.sql:42
   plaid_item.property_id                                   NO ACTION  031_plaid_items.sql:47
@@ -201,7 +201,7 @@ WHAT A REBIND WOULD COLLIDE WITH — the constraint that actually decides
     deal_intake_properties     — one per property —
                                WHERE status = 'current'
                                155_deal_membership_currency.sql:81
-    opening_positions          — one per property —
+    opening_tenancy_positions  — one per property —
                                WHERE status = 'established'
                                157_opening_positions.sql:144
     property_pricing_versions  — one per property —

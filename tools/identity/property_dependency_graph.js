@@ -146,11 +146,36 @@ function topLevelParts(body) {
 
 const REF_PROPERTIES = /references\s+(?:public\s*\.\s*)?"?properties"?\s*(?:\(\s*"?([a-z_]+)"?\s*\))?/i;
 
-function parseMigration(file, rawSql, edges, drops, unparsed) {
+function parseMigration(file, rawSql, edges, drops, unparsed, renames) {
   const sql = stripComments(rawSql);
+
+  /* ── ALTER TABLE … RENAME TO ─────────────────────────────────────────
+     Scanned over text with DO $$ bodies PRESERVED, because that is where
+     they actually live. Migration 159 renames `opening_positions` to
+     `opening_tenancy_positions` inside a DO block; the ordinary
+     statement walk blanks dollar-quoted bodies and never sees it, so the
+     graph reported a table name that no longer exists.
+
+     A disposable local database built from the same migration chain is
+     what surfaced the disagreement — which is precisely why source and
+     catalog are cross-checked rather than trusted separately.           */
+  const renameScan = /\balter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(?:public\s*\.\s*)?"?([a-z0-9_]+)"?\s+rename\s+to\s+"?([a-z0-9_]+)"?/gi;
+  const preserved = stripCommentsKeepStrings(rawSql);
+  let rn;
+  while ((rn = renameScan.exec(preserved))) {
+    renames.push({ from: norm(rn[1]), to: norm(rn[2]), file, line: lineOf(preserved, rn.index) });
+  }
+
   for (const st of statements(sql)) {
     const text = st.text;
 
+    /* ALTER TABLE … RENAME TO — the edge follows the table.
+       Found the hard way: migration 159 renames `opening_positions` to
+       `opening_tenancy_positions`, and without this the graph reports a
+       table name that no longer exists. A disposable local database
+       built from the same chain is what surfaced the disagreement —
+       which is the whole reason source and catalog are cross-checked
+       rather than trusted separately. */
     /* DROP TABLE — removes every edge that table declared. */
     const dropTable = /^\s*drop\s+table\s+(?:if\s+exists\s+)?([a-z0-9_.," ]+)/i.exec(text);
     if (dropTable) {
@@ -355,19 +380,29 @@ function classifyUnique(u) {
 
 function build() {
   const files = fs.readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith(".sql")).sort();
-  const edges = [], drops = [], unparsed = [], uniques = [];
+  const edges = [], drops = [], unparsed = [], uniques = [], renames = [];
   for (const f of files) {
     const raw = fs.readFileSync(path.join(MIGRATIONS_DIR, f), "utf8");
-    parseMigration(f, raw, edges, drops, unparsed);
+    parseMigration(f, raw, edges, drops, unparsed, renames);
     parseUniques(f, raw, uniques);
   }
+  /* Apply renames in chain order so every name is the CURRENT one. */
+  const applyRenames = (name) => {
+    let n = name;
+    for (const r of renames) if (r.from === n) n = r.to;
+    return n;
+  };
+  for (const e of edges) { e.declaredAs = e.table; e.table = applyRenames(e.table); }
+  for (const u of uniques) { u.declaredAs = u.table; u.table = applyRenames(u.table); }
+  for (const d of drops) d.table = applyRenames(d.table);
+
   const droppedTables = new Set(drops.filter((d) => d.kind === "drop_table").map((d) => d.table));
   const live = edges.filter((e) => !droppedTables.has(e.table));
   const dropped = edges.filter((e) => droppedTables.has(e.table));
   const liveUniques = uniques
     .filter((u) => !droppedTables.has(u.table))
     .map((u) => ({ ...u, ...classifyUnique(u) }));
-  return { files, edges: live, droppedEdges: dropped, droppedTables: [...droppedTables], unparsed, uniques: liveUniques };
+  return { files, edges: live, droppedEdges: dropped, droppedTables: [...droppedTables], unparsed, uniques: liveUniques, renames };
 }
 
 function report(g) {
