@@ -22,6 +22,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT" || exit 1
 export E2E_DATABASE_URL="${E2E_DATABASE_URL:-postgres://postgres:spineproof@127.0.0.1:5432/spine_verify}"
+export E2E_SMS_LOG="${E2E_SMS_LOG:-/tmp/property_spine_e2e_sms.log}"
 ADMIN="${E2E_DATABASE_URL%/*}/postgres"
 
 FAILED=0; SKIPPED=""
@@ -96,6 +97,7 @@ else
     echo "── browser: resident signs            SKIPPED (no Chromium)"
     SKIPPED="browser rung"
   fi
+  step "invite-to-guarantor lease"  env E2E_DISPOSABLE_DATABASE=true node tests/e2e/tour_application_lease.e2e.js
   kill "$SERVER_PID" 2>/dev/null
 fi
 fi

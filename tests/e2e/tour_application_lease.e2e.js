@@ -1,15 +1,16 @@
 /* Full real-server proof of the tenant leasing path:
-   native slot -> booked tour -> post-tour capture -> exact-bed application
-   SMS -> public application -> resident lease execution -> company execution
-   -> exact-bed tenancy. The server runs with fake_sms_preload.js, so no real
-   SMS can leave the process. */
+   staff invite + OTP acceptance -> native slot -> booked tour -> post-tour
+   capture -> exact-bed application SMS -> public application -> separate
+   resident/guarantor execution -> authorized company execution -> exact-bed
+   tenancy. Dashboard and staff SMS read the same personal Ask Spine answer.
+   The E2E launcher forces fake_sms_preload.js, so no real SMS can leave. */
 "use strict";
 
 module.paths.unshift(require("path").join(__dirname, "..", "..", "node_modules"));
 const fs = require("fs");
 const { Pool } = require("pg");
+const { databaseSsl } = require("../../src/shared/database_ssl");
 const staffSessions = require("../../src/identity/staff_session_service");
-const buildStaffBridge = require("../../src/identity/staffbridge");
 
 if (process.env.E2E_DISPOSABLE_DATABASE !== "true") {
   console.error("FATAL: E2E_DISPOSABLE_DATABASE=true is required.");
@@ -24,10 +25,10 @@ if (!CONN || !SMS_LOG) {
   process.exit(1);
 }
 
-const pool = new Pool({ connectionString: CONN, ssl: { rejectUnauthorized: false } });
+const pool = new Pool({ connectionString: CONN, ssl: databaseSsl(CONN) });
 const q = (sql, params) => pool.query(sql, params);
-const staffBridge = buildStaffBridge({ pool })._service;
 let passed = 0;
+let smsCursor = 0;
 function pass(message, detail) {
   passed++;
   console.log(`  PASS ${String(passed).padStart(2, "0")}  ${message}${detail ? " | " + detail : ""}`);
@@ -52,6 +53,26 @@ function requireOk(result, label) {
   }
   return result.body;
 }
+async function completeLeaseSigner({ token, name, initials, sessionId }) {
+  const packet = requireOk(await api("GET", `/t/lease/${token}/data`, { key: false }),
+    `${name} lease packet read`);
+  const requiredFields = ((packet.packet && packet.packet.fields) || [])
+    .filter((field) => field.required);
+  for (const field of requiredFields) {
+    requireOk(await api("POST", `/t/lease/${token}/fields/${field.id}/complete`, {
+      key: false,
+      body: {
+        value: field.field_type === "signature" ? name : initials,
+        consent: field.field_type === "signature",
+        session_id: sessionId,
+      },
+    }), `${name} field ${field.field_key}`);
+  }
+  const submitted = requireOk(await api("POST", `/t/lease/${token}/submit`, {
+    key: false, body: { session_id: sessionId },
+  }), `${name} lease submission`);
+  return { packet, requiredFields, submitted };
+}
 function futureLeaseDates() {
   const start = new Date();
   start.setUTCDate(start.getUTCDate() + 30);
@@ -60,17 +81,23 @@ function futureLeaseDates() {
   end.setUTCDate(end.getUTCDate() - 1);
   return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
 }
-async function waitForApplicationText() {
+function smsMessages() {
+  if (!fs.existsSync(SMS_LOG)) return [];
+  return fs.readFileSync(SMS_LOG, "utf8").trim().split(/\r?\n/).filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+async function waitForSms(predicate, label) {
   for (let attempt = 0; attempt < 40; attempt++) {
-    const lines = fs.existsSync(SMS_LOG)
-      ? fs.readFileSync(SMS_LOG, "utf8").trim().split(/\r?\n/).filter(Boolean)
-      : [];
-    const messages = lines.map((line) => JSON.parse(line));
-    const found = messages.reverse().find((message) => /\/t\/application\//.test(message.body || ""));
-    if (found) return found;
+    const messages = smsMessages();
+    for (let index = smsCursor; index < messages.length; index++) {
+      if (predicate(messages[index])) {
+        smsCursor = index + 1;
+        return messages[index];
+      }
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error("the fake transport did not record an application text");
+  throw new Error(`the fake transport did not record ${label}`);
 }
 async function sendStaffSms({ from, to, body, sid }) {
   const payload = new URLSearchParams({
@@ -146,100 +173,13 @@ async function waitForStaffReply(providerMessageId) {
   await q("delete from executed_lease_records where property_id=$1", [propertyId]);
   await q("delete from leases where property_id=$1", [propertyId]);
 
-  const mike = (await q(
+  const companySigner = (await q(
     "select id,person_id from users where name='Mike Grivna' and is_active=true limit 1"
   )).rows[0];
-  expect(!!mike, "Mike Grivna fixture user exists");
-  const mikePhone = "+12125550171";
+  expect(!!companySigner, "configured company signer fixture exists");
+  const suffix = String(Date.now()).slice(-7);
+  const mikePhone = "+1312" + suffix;
   const operationsLine = "+12125550172";
-  await q("update users set phone=$2 where id=$1", [mike.id, mikePhone]);
-  await q(`insert into property_team_assignments
-             (user_id,property_id,role_title,allowed_modules,active,can_manage_roles)
-           values ($1,$2,'property_manager','{leasing,management,maintenance}',true,true)
-           on conflict do nothing`, [mike.id, propertyId]);
-
-  const client = await pool.connect();
-  let staffToken;
-  try {
-    await client.query("begin");
-    await staffBridge.classifyAccount(client, {
-      user_id: mike.id, account_kind: "human_staff", performed_by_user_id: mike.id,
-    });
-    let staffPersonId = mike.person_id;
-    if (!staffPersonId) {
-      const existingPerson = (await client.query(
-        `select id from persons
-          where name='Mike Grivna' and record_status='active'
-          order by created_at asc limit 1`
-      )).rows[0];
-      const linked = await staffBridge.linkBridge(client, {
-        user_id: mike.id,
-        person_id: existingPerson ? existingPerson.id : null,
-        create_staff_person: existingPerson ? null : {
-          name: "Mike Grivna", property_id: propertyId,
-        },
-        context_property_id: propertyId,
-        reason_code: "staff_invite_acceptance",
-        reason_detail: "Disposable accepted-staff launch fixture",
-        evidence_type: "operator_attestation",
-        evidence_reference: "tour-application-lease-e2e",
-        request_id: `tour-application-lease:${propertyId}:${mike.id}`,
-        performed_by_user_id: mike.id,
-      });
-      staffPersonId = linked.person_id;
-    } else {
-      await staffBridge.establishStaffContext(client, {
-        person_id: staffPersonId, property_id: propertyId, performed_by_user_id: mike.id,
-      });
-    }
-    await client.query(
-      `insert into assignments (person_id,property_id,role,scope,is_active,provenance)
-       values ($1,$2,'leasing','leasing',true,$3::jsonb)
-       on conflict (person_id,property_id,role) where is_active=true
-       do update set scope=excluded.scope,
-                     provenance=coalesce(assignments.provenance,'{}'::jsonb) || excluded.provenance`,
-      [staffPersonId, propertyId, JSON.stringify({
-        source: "team_invite", role_key: "leasing_agent", fixture: true,
-      })]
-    );
-    await client.query(
-      `update property_team_assignments
-          set role_key='leasing_agent', role_title='Leasing Agent',
-              primary_for_modules='{leasing}', updated_at=now()
-        where property_id=$1 and user_id=$2`,
-      [propertyId, mike.id]
-    );
-    const issued = await staffSessions.issueStaffSession(client, {
-      userId: mike.id, propertyId, purpose: "bootstrap_invite",
-    });
-    staffToken = issued.session_token || issued.token;
-    await client.query("commit");
-  } catch (error) {
-    await client.query("rollback").catch(() => {});
-    throw error;
-  } finally {
-    client.release();
-  }
-  const me = requireOk(await api("GET", "/operator/me", { token: staffToken }), "operator session");
-  expect(me.property_id === propertyId, "staff session is bound to the fixture property");
-  const fixtureIdentity = (await q(
-    `select u.person_id, pta.primary_for_modules,
-            exists(select 1 from person_contexts pc
-                    where pc.person_id=u.person_id and pc.property_id=pta.property_id
-                      and pc.context_type='staff' and pc.active_to is null) as has_staff_context,
-            exists(select 1 from assignments a
-                    where a.person_id=u.person_id and a.property_id=pta.property_id
-                      and a.role='leasing' and a.is_active=true) as has_leasing_assignment
-       from users u
-       join property_team_assignments pta on pta.user_id=u.id and pta.property_id=$2
-      where u.id=$1`,
-    [mike.id, propertyId]
-  )).rows[0];
-  expect(fixtureIdentity && fixtureIdentity.person_id && fixtureIdentity.has_staff_context
-      && fixtureIdentity.has_leasing_assignment
-      && fixtureIdentity.primary_for_modules.includes("leasing"),
-    "the fixture matches accepted leasing staff identity and module ownership");
-
   await q("delete from communication_lines where property_id=$1", [propertyId]);
   await q(`insert into communication_lines
              (e164,line_type,property_id,authority_ceiling,permitted_audience,
@@ -257,7 +197,83 @@ async function waitForStaffReply(providerMessageId) {
            values ($1,'operations',$2,'operational','staff',true,true,'reply_only','active')`,
     [operationsLine, property.organization_id]);
 
-  const suffix = String(Date.now()).slice(-7);
+  smsCursor = smsMessages().length;
+  const sessionClient = await pool.connect();
+  let companyToken;
+  try {
+    await sessionClient.query("begin");
+    const issued = await staffSessions.issueStaffSession(sessionClient, {
+      userId: companySigner.id, propertyId, purpose: "bootstrap_invite",
+    });
+    companyToken = issued.session_token || issued.token;
+    await sessionClient.query("commit");
+  } catch (error) {
+    await sessionClient.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    sessionClient.release();
+  }
+
+  const mikePerson = (await q(
+    `insert into persons (name,phone,primary_phone_e164,lifecycle_status,source)
+     values ('Mike Grivna',$1,$1,'lead','team_invite_fixture') returning id`,
+    [mikePhone]
+  )).rows[0];
+  const invited = requireOk(await api("POST", `/properties/${propertyId}/team-invites`, {
+    token: companyToken,
+    body: {
+      invited_name: "Mike Grivna", phone_number: mikePhone,
+      role_key: "leasing_agent", scope_type: "property", person_id: mikePerson.id,
+    },
+  }), "Mike staff invite");
+  expect(invited.delivery === "sms_sent" && invited.person_id === mikePerson.id,
+    "the governed invite texts the manager-confirmed Person");
+  const inviteToken = String(invited.link || "").split("/join/")[1];
+  const inviteText = await waitForSms(
+    (message) => message.to === mikePhone && /\/join\//.test(message.body || ""),
+    "the staff invitation"
+  );
+  expect(!!inviteToken && inviteText.to === mikePhone,
+    "the fake carrier records the exact invite without reaching a phone");
+
+  const otpStarted = requireOk(await api("POST", "/auth/sms/start", {
+    body: { token: inviteToken },
+  }), "Mike invite OTP start");
+  expect(otpStarted.delivery === "sms_sent" && otpStarted.flow === "invite_accept",
+    "the invite uses the shared phone-verification door");
+  const otpText = await waitForSms(
+    (message) => message.to === mikePhone && /access code is \d{6}/.test(message.body || ""),
+    "the staff access code"
+  );
+  const otpCode = String(otpText.body || "").match(/access code is (\d{6})/)[1];
+  const accepted = requireOk(await api("POST", "/auth/sms/verify", {
+    body: { token: inviteToken, code: otpCode },
+  }), "Mike invite acceptance");
+  const staffToken = accepted.session_token;
+  const mike = { id: accepted.user.id, person_id: accepted.person_id };
+  expect(accepted.person_id === mikePerson.id && accepted.role_key === "leasing_agent",
+    "one acceptance returns Mike's confirmed identity and canonical leasing role");
+
+  const me = requireOk(await api("GET", "/operator/me", { token: staffToken }), "operator session");
+  expect(me.property_id === propertyId, "accepted staff session is bound to the fixture property");
+  const acceptedIdentity = (await q(
+    `select u.person_id, pta.primary_for_modules,
+            exists(select 1 from person_contexts pc
+                    where pc.person_id=u.person_id and pc.property_id=pta.property_id
+                      and pc.context_type='staff' and pc.active_to is null) as has_staff_context,
+            exists(select 1 from assignments a
+                    where a.person_id=u.person_id and a.property_id=pta.property_id
+                      and a.role='leasing' and a.is_active=true) as has_leasing_assignment
+       from users u
+       join property_team_assignments pta on pta.user_id=u.id and pta.property_id=$2
+      where u.id=$1`,
+    [mike.id, propertyId]
+  )).rows[0];
+  expect(acceptedIdentity && acceptedIdentity.person_id === mikePerson.id
+      && acceptedIdentity.has_staff_context && acceptedIdentity.has_leasing_assignment
+      && acceptedIdentity.primary_for_modules.includes("leasing"),
+    "acceptance creates Mike's bridge, staff context, access, and work assignment together");
+
   const name = `Skyline Journey ${suffix}`;
   const phone = "+1215" + suffix;
   const intake = requireOk(await api("POST", "/leasing/intake", { body: {
@@ -352,8 +368,19 @@ async function waitForStaffReply(providerMessageId) {
   }), "personal Ask Spine read after the tour");
   expect(personalAttention.outcome === "answered"
       && personalAttention.grounded_on.attention_scope === "personal"
-      && personalAttention.answer.includes(name),
-    "Mike's Ask Spine answer includes the recorded post-tour follow-up");
+      && personalAttention.grounded_on.personal_open_items >= 1,
+    "Mike's Ask Spine answer is grounded in his canonical personal queue");
+  const attentionSid = `SM_E2E_ATTENTION_${suffix}`;
+  await sendStaffSms({
+    from: mikePhone,
+    to: operationsLine,
+    sid: attentionSid,
+    body: "What should I do today?",
+  });
+  const smsAttention = await waitForStaffReply(attentionSid);
+  expect(smsAttention.reply_reason === "governed_read"
+      && smsAttention.body === personalAttention.answer,
+    "dashboard and staff SMS return the same personal Ask Spine answer");
 
   const targets = requireOk(await api("GET", "/operator/leasing/leaseable-units", {
     token: staffToken,
@@ -386,7 +413,10 @@ async function waitForStaffReply(providerMessageId) {
     "the staff-text application invitation persists exact Bed B");
   expect(invitation.status === "provider_dispatched",
     "the provider acceptance is recorded separately from Ask Spine's reply to Mike");
-  const sms = await waitForApplicationText();
+  const sms = await waitForSms(
+    (message) => message.to === phone && /\/t\/application\//.test(message.body || ""),
+    "the application text"
+  );
   expect(sms.to === phone, "the application text was addressed to the prospect in the fake transport");
   const tokenMatch = String(sms.body).match(/\/t\/application\/([A-Za-z0-9_-]+)/);
   expect(!!tokenMatch, "the captured text contains the public application token");
@@ -397,6 +427,8 @@ async function waitForStaffReply(providerMessageId) {
   }), "public application context");
   expect(context.state === "open" && /Bed B/.test(context.unit_label || ""),
     "the tenant sees the exact home attached to the invitation");
+  const guarantorName = `Skyline Guarantor ${suffix}`;
+  const guarantorPhone = "+1412" + suffix;
   const captured = {
     application_form_version: "tenant_v3",
     date_of_birth: "1995-04-12", email: `skyline-${suffix}@example.com`, phone,
@@ -406,12 +438,19 @@ async function waitForStaffReply(providerMessageId) {
     income_amount: 72000, income_frequency: "annual", income_notes: "",
     desired_move_in: futureLeaseDates().start, move_flexibility: "plus_minus_7",
     occupants: 1, household_names: "", has_pets: "no", pets: "None",
-    guarantor_needed: "no", additional_notes: "",
+    guarantor_needed: "yes",
+    guarantor_contact: {
+      name: guarantorName,
+      phone: guarantorPhone,
+      email: `guarantor-${suffix}@example.com`,
+    },
+    additional_notes: "",
     applicant_accuracy_certified: true,
     electronic_delivery_consent: true,
   };
   const submitted = requireOk(await api("POST", "/applications/submit-public", {
-    key: false, body: { token: applicationToken, applicant_name: name, captured },
+    key: false,
+    body: { token: applicationToken, applicant_name: name, guarantor_name: guarantorName, captured },
   }), "public application submit");
   const appId = submitted.application && submitted.application.id;
   const appRow = (await q(
@@ -422,13 +461,21 @@ async function waitForStaffReply(providerMessageId) {
     "the tenant application remains attached to the post-tour conversion");
   expect(appRow.unit_id === unit.id && appRow.space_id === bedB.id,
     "the tenant application persists exact Bed B");
+  expect((await q("select guarantor_name from lease_applications where id=$1", [appId])).rows[0].guarantor_name
+      === guarantorName,
+    "the application carries the named guarantor into lease preparation");
 
-  requireOk(await api("POST", `/operator/leasing/applications/${appId}/approve`, {
+  const mikeApproval = await api("POST", `/operator/leasing/applications/${appId}/approve`, {
     token: staffToken, body: {},
-  }), "application approval");
+  });
+  expect(mikeApproval.status === 403,
+    "Mike's leasing role cannot approve the application it helped collect");
+  requireOk(await api("POST", `/operator/leasing/applications/${appId}/approve`, {
+    token: companyToken, body: {},
+  }), "authorized application approval");
   const dates = futureLeaseDates();
   requireOk(await api("POST", `/operator/leasing/applications/${appId}/proposed-terms`, {
-    token: staffToken, body: {
+    token: companyToken, body: {
       rent: 1025, security_deposit: 1025,
       lease_start_date: dates.start, lease_end_date: dates.end,
       concession_status: "none", idempotency_key: `journey-terms-${suffix}`,
@@ -436,45 +483,85 @@ async function waitForStaffReply(providerMessageId) {
   }), "proposed terms confirmation");
   const generated = requireOk(await api(
     "POST", `/operator/leasing/applications/${appId}/lease-packet`, {
-      token: staffToken, body: {},
+      token: companyToken, body: {},
     }
   ), "lease packet generation");
   const packetId = generated.packet && generated.packet.id;
   expect(!!packetId, "governing lease packet was generated from confirmed terms");
   const issued = requireOk(await api("POST", `/operator/leasing/lease-packets/${packetId}/send`, {
-    token: staffToken, body: { idempotency_key: `journey-lease-${suffix}` },
-  }), "resident lease link issue");
-  const leaseToken = String(issued.tenant_url || "").split("/t/lease/")[1];
-  expect(!!leaseToken, "resident lease link returns its raw token once");
+    token: companyToken, body: { idempotency_key: `journey-lease-${suffix}` },
+  }), "resident and guarantor lease-link issue");
+  const signingLinks = Object.fromEntries((issued.signing_links || [])
+    .map((link) => [link.signer_role, link]));
+  const leaseToken = String(signingLinks.tenant && signingLinks.tenant.url || "")
+    .split("/t/lease/")[1];
+  const guarantorToken = String(signingLinks.guarantor && signingLinks.guarantor.url || "")
+    .split("/t/lease/")[1];
+  expect(!!leaseToken && !!guarantorToken && leaseToken !== guarantorToken,
+    "one package issues separate resident and guarantor secrets");
 
-  const packet = requireOk(await api("GET", `/t/lease/${leaseToken}/data`, { key: false }),
-    "resident lease packet read");
-  const requiredFields = ((packet.packet && packet.packet.fields) || []).filter((field) => field.required);
-  expect(requiredFields.length > 0, "resident packet contains required acknowledgments and signature");
-  for (const field of requiredFields) {
-    requireOk(await api("POST", `/t/lease/${leaseToken}/fields/${field.id}/complete`, {
-      key: false,
-      body: { value: field.field_type === "signature" ? name : "SJ",
-              consent: field.field_type === "signature", session_id: `resident-${suffix}` },
-    }), `resident field ${field.field_key}`);
-  }
-  requireOk(await api("POST", `/t/lease/${leaseToken}/submit`, { key: false, body: {} }),
-    "resident lease submission");
+  const residentSigning = await completeLeaseSigner({
+    token: leaseToken, name, initials: "SJ", sessionId: `resident-${suffix}`,
+  });
+  expect(residentSigning.requiredFields.length > 0
+      && residentSigning.requiredFields.every((field) => field.signer_role === "tenant"),
+    "the resident sees and completes only resident controls");
+  expect(residentSigning.submitted.packet.status === "tenant_in_progress",
+    "resident submission waits for the required guarantor");
+
+  const waitingReview = requireOk(await api(
+    "GET", `/operator/leasing/application-review?application_id=${appId}`, { token: staffToken }
+  ), "application review while guarantor is outstanding");
+  expect(waitingReview.execution_primary_action
+      && waitingReview.execution_primary_action.action === "await_resident_execution"
+      && waitingReview.execution_primary_action.reason.includes(guarantorName),
+    "Application Records names the outstanding guarantor instead of offering company signature");
+  const prematureCompany = await api(
+    "POST", `/operator/leasing/lease-packets/${packetId}/company-sign`, {
+      token: companyToken, body: {},
+    }
+  );
+  expect(prematureCompany.status === 409,
+    "the authorized company signer is blocked while the guarantor is outstanding");
+
+  const guarantorSigning = await completeLeaseSigner({
+    token: guarantorToken, name: guarantorName, initials: "SG",
+    sessionId: `guarantor-${suffix}`,
+  });
+  expect(guarantorSigning.requiredFields.length > 0
+      && guarantorSigning.requiredFields.every((field) => field.signer_role === "guarantor"),
+    "the guarantor sees and completes only guarantor controls");
   const residentPacket = (await q(
     "select status,resident_executed_at from lease_packets where id=$1", [packetId]
   )).rows[0];
-  expect(residentPacket.status === "resident_executed" && !!residentPacket.resident_executed_at,
-    "resident execution is recorded on the governing instrument");
+  expect(guarantorSigning.submitted.packet.status === "resident_executed"
+      && residentPacket.status === "resident_executed" && !!residentPacket.resident_executed_at,
+    "the package becomes company-signable only after both submissions");
+  const signerState = (await q(
+    `select signer_role,submitted_at from lease_packet_signers
+      where lease_packet_id=$1 order by signer_role`, [packetId]
+  )).rows;
+  expect(signerState.length === 2 && signerState.every((signer) => !!signer.submitted_at),
+    "both resident-side submissions are recorded on the same packet");
+  expect((await q("select count(*)::int n from persons where name=$1", [guarantorName])).rows[0].n === 0,
+    "the guarantor remains packet-scoped instead of becoming a fabricated Person");
 
   const review = requireOk(await api(
     "GET", `/operator/leasing/application-review?application_id=${appId}`, { token: staffToken }
-  ), "application review after resident signature");
+  ), "application review after resident and guarantor signatures");
   expect(review.execution_primary_action && review.execution_primary_action.action === "company_execute_lease",
-    "the review surface asks for company execution, not outside-lease verification");
+    "the review surface now asks the authorized company signer to finish");
+  const unauthorizedCompany = await api(
+    "POST", `/operator/leasing/lease-packets/${packetId}/company-sign`, {
+      token: staffToken, body: {},
+    }
+  );
+  expect(unauthorizedCompany.status === 403,
+    "Mike's leasing access cannot substitute for company signing authority");
 
   const executed = requireOk(await api(
     "POST", `/operator/leasing/lease-packets/${packetId}/company-sign`, {
-      token: staffToken, body: {},
+      token: companyToken, body: {},
     }
   ), "company lease execution");
   const leaseId = executed.tenancy && executed.tenancy.lease_id;

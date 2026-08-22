@@ -44,8 +44,9 @@ const bad = (n, d) => { fail++; console.log(`  ✗ ${n}  — ${d}`); };
   const shows = (s) => seen.includes(s);
   if (shows("1025") || shows("1,025")) ok("the rent is visible to the resident"); else bad("rent visible", "no rent in the rendered text");
   if (/Bed B|3B/.test(seen)) ok("the space is visible", /Bed B/.test(seen) ? "Bed B" : "Unit 3B"); else bad("space visible", "neither unit nor bed rendered");
-  if (/not the complete lease|does not replace|demonstration/i.test(seen)) ok("the not-the-lease statement is visible");
-  else bad("not-the-lease statement", "the disclaimer did not render");
+  if (/Official lease package/i.test(seen) && /Governing lease form/i.test(seen))
+    ok("the governing package and retained lease form are visible");
+  else bad("governing package visible", "the official-package identity or retained form did not render");
 
   // ── the resident acts, in the browser ───────────────────────────
   const controls = await page.$$('button, [role="button"], input[type="checkbox"]');
@@ -62,13 +63,22 @@ const bad = (n, d) => { fail++; console.log(`  ✗ ${n}  — ${d}`); };
     let acted = false;
     for (const el of els) {
       const t = ((await el.innerText().catch(() => "")) || "").trim();
-      if (/^(acknowledge|sign)$/i.test(t)) {
+      if (/^acknowledge$/i.test(t)) {
         try { await el.click({ timeout: 2000 }); clicked++; acted = true; await page.waitForTimeout(600); } catch (_) {}
         break;
       }
     }
     if (!acted) break;
   }
+  const signer = (await q(
+    `select display_name from lease_packet_signers
+      where lease_packet_id=$1 and signer_role='tenant'`, [P.packetId]
+  )).rows[0];
+  try {
+    await page.fill('input[aria-label="Full legal name"]', signer.display_name);
+    await page.click('button:has-text("Sign")');
+    clicked++;
+  } catch (e) { errors.push("signature: " + e.message.slice(0, 90)); }
   await page.waitForTimeout(800);
   const after = (await q(`select count(*)::int n from lease_packet_fields
                            where lease_packet_id=$1 and completed=true`, [P.packetId])).rows[0].n;

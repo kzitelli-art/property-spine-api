@@ -410,11 +410,6 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridg
         return res.status(429).json({ receipt: "A code was just sent. Wait a moment before requesting another." });
       }
 
-      // resend floor
-      if (inviteRow.otp_sent_at && (Date.now() - new Date(inviteRow.otp_sent_at).getTime()) < RESEND_FLOOR_SEC * 1000) {
-        return res.status(429).json({ receipt: "A code was just sent. Wait a moment before requesting another." });
-      }
-
       const code = newOtp();
       await pool.query(
         `update team_invites
