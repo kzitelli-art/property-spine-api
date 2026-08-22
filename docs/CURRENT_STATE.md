@@ -29,9 +29,17 @@ CURRENT SOURCE / RUNTIME  →  CURRENT_STATE.md  →  PHILOSOPHY  →  THREAD_HA
 ```
 
 > ### ⚠ ABSENCE FROM THIS MAP IS NOT ABSENCE FROM THE PRODUCT
-> Roughly 60% of the codebase is surveyed. If something is not listed, its state
-> has **not yet been established here** — that is not evidence it does not exist.
-> **Search the source before concluding anything is missing**, and add what you find.
+> **The survey is complete as of 2026-08-20** — three waves plus four completeness
+> critics covered every `src/` directory, all 176 migrations, all 292 test files, CI,
+> the app repo, `server.js`'s inline routes, and `tools/`. That means gaps here are now
+> *depth*, not *breadth*: ~350 capabilities are recorded, but only the decision-changing
+> ones are promoted into the index below. Full detail lives in
+> `docs/current-state-build/03_`, `05_` and `06_WAVE3_RESULTS.md`.
+>
+> **Still: if something is not listed, its state has not been established here — that is
+> not evidence it does not exist.** Search the source before concluding anything is
+> missing, and add what you find. Four waves each found things the previous ones missed,
+> including a full CI pipeline nobody had recorded.
 
 ---
 
@@ -48,6 +56,9 @@ Surveyed / verified     2026-08-19 (wave 1) · 2026-08-20 (Codex PR review, AM
                         teams/access, management door, onboarding intake,
                         money/pricing, app repo, server.js inline, tools/)
                         · 2026-08-20 (pricing fix deployed, PR #128, live)
+                        · 2026-08-20 (wave 3 FINAL: migrations 001-119,
+                        src/shared + governance, all 292 tests, CI reality —
+                        58 findings, survey now complete)
 ```
 
 ✔ **RESOLVED 2026-08-20: production now runs `main`'s lineage.** Was: the
@@ -85,10 +96,15 @@ git diff --name-only 77f93f5..HEAD -- src/ migrations/ server.js
 Never write *done*, *built*, *working*, *live*, *mostly done*. Those blend intent
 with evidence — which is the failure this file exists to end.
 
-**Two traps this repo has actually hit:**
-- A file named `*.db.js` proves nothing. **Open it.** Several pass a hand-built fake
-  pool to a real router (`utility_http.test.js`, `contracted_service_http.test.js`).
+**Three traps this repo has actually hit:**
+- A file named `*.db.js` proves nothing. **Open it.** **Ten** files pass a hand-built
+  fake pool to a real router — not the three previously named. See defect #19.
 - A browser proof can run against a simulated database. **Check for `fakePool()`.**
+- **A rung earned once is not a rung held.** Most `HTTP_PROVEN` and `BROWSER_VERIFIED`
+  rungs in this file rest on the 68 `.db.js` proofs and 94 `*_proof.js` files — **none
+  of which any automation runs** (defect #17). They passed when a human ran them. Nothing
+  re-runs them, so nothing would notice if they broke. Read every rung below as *"was
+  demonstrated at least once,"* not *"is continuously verified."*
 
 ---
 
@@ -97,7 +113,7 @@ with evidence — which is the failure this file exists to end.
 | # | Defect | Evidence |
 |---|---|---|
 | 1 | **DEPLOYED, 2026-08-20 — NOT YET `PRODUCTION_PROVEN`.** ~~The leasing agent quotes `units.market_rent` directly to prospects~~ — fixed (PR #128), and now live in production at commit `bcd3089` (main's head at deploy time), deployed manually from the Render dashboard, confirmed live by the owner directly. **Deploying is not proving** — nobody has yet asked the live agent a price question and observed a governed answer or an honest handoff. That single observation is what moves this row to `PRODUCTION_PROVEN`; until then it stays at the rung the e2e proof earned. | `git show origin/main:src/agent/agent.js`; deploy confirmed by owner |
-| 2 | **`docs/deployment.md` instructs incorrectly about the one mechanism protecting production.** Says startup *"runs any unapplied migrations."* It does not — it verifies and **refuses to start**. | `docs/deployment.md:51` vs `migrations/migrate.js` |
+| 2 | **PARTLY FIXED — and this row was itself stale, corrected 2026-08-20.** `docs/deployment.md:51` **now reads correctly**: *"prestart: node migrations/migrate.js (VERIFIES the schema — applies nothing)"*, with line 58 explicitly recording the correction. Somebody fixed it and this file didn't notice — exactly the decay this file exists to prevent, caught by wave 3's critic. **The falsehood survives elsewhere**: `migrations/README.md:36` still says migrate.js *"runs whatever hasn't run yet. Safe to run as many times as you want"* — a migration-001-era document still instructing hand-run production migrations. Fix that file, not `deployment.md`. | `migrations/README.md:36` (still wrong); `docs/deployment.md:51,58` (fixed) |
 | 3 | **An operator screen calls routes that 404.** A whole activation flow written, never mounted. | `src/identity/activation.js`; `grep -c "identity/activation" server.js` = **0** |
 | 4 | **A test defaults to hitting PRODUCTION**, with no run receipt anywhere. | `tests/full_lifecycle_arc.js:47` |
 | 5 | **Ask Spine has two obligation readers** (§7 violation). Its own header: *"Its QUERY LOGIC is sound and is re-expressed here."* | `src/agent/ask_spine_service.js` |
@@ -113,6 +129,16 @@ with evidence — which is the failure this file exists to end.
 | 14b | **A THIRD OPTION FOR #14, FOUND WHILE VERIFYING THE DEPLOY: the menu already exists.** `effective_pricing.js:399` — when no term is supplied it does not just refuse, it returns `published_terms`, the sorted list of every term actually on the sheet, specifically so a caller can present the choice instead of guessing. Its own comment: *"With no term supplied the answer is the published menu."* This means a third ruling option for #14 beyond "refuse" or "add a primary-term data field": **have the agent present the published menu and ask which term the prospect wants** — reusing data that already exists, no schema change. Still the owner's call, but the cheapest option to build. | `src/money/effective_pricing.js:399` |
 | 15 | **RESOLVED, 2026-08-20 — a real privilege-escalation path is now closed.** `orgchart.js` could previously create `owner`/`asset_manager` roles — pricing authority (see #14) among them — through a route gated only by the shared `x-operator-key`, with **no person-level check and no actor recorded**. Landed in the same deploy as defect #1's fix (45 commits, 9 runtime files, zero migrations). Measured on a disposable DB by the reporting thread; not yet independently re-verified against production by me. Kept as a record, not deleted, per this file's own rule. | `src/surfaces/orgchart.js`, `src/identity/authority_resolution.js` — `ASSIGNABLE_ROLES = new Set(["owner", "asset_manager"])` confirmed on `main` |
 | 16 | **RESOLVED, 2026-08-20.** ~~A live production database credential was pasted into a chat session during this work~~ — rotated (Neon → Roles → `neondb_owner` → Reset) and `DATABASE_URL` updated in Render. Owner-confirmed directly; not independently verified — no thread working this file has Neon or Render dashboard access to check. If anything else in either repo still references the old credential (a cached env file, a CI secret, a local `.env`), it would now be stale rather than dangerous — worth a quick sweep if one hasn't happened, not urgent. | Reported and resolved directly by the owner, 2026-08-20 |
+| 17 | **⚠ THE SINGLE MOST IMPORTANT ROW IN THIS FILE — what CI does and does not cover.** Stated in both directions, because two wave-3 agents contradicted each other and **both were partly right**. ✅ **A real CI pipeline exists and is genuinely strong**: `.github/workflows/verify.yml` runs on every push, provisions a real PostgreSQL 16 container, drops and rebuilds the database from the migration chain, boots the real `server.js`, installs real Chromium, and runs `tests/e2e/verify_all.sh` — 12 e2e proofs plus a browser rung plus 37 source-governance gates. It passed **17/17 on current `main`**. No survey wave before this one had recorded that it exists, which is its own finding. ❌ **But it covers a narrow slice**: it runs **48 of 313** test files. **All 68 `.db.js` real-Postgres proofs are never run** — they require `HARNESS_DATABASE_URL`, which `verify.yml` never sets, so they would refuse rather than run even if invoked. **All 94 `*_proof.js` files are never run.** Those two populations are the evidentiary basis for nearly every `HTTP_PROVEN` rung in this document. **255 of 292 top-level test files are invoked by nothing.** | `.github/workflows/verify.yml:108-109`; `tests/e2e/verify_all.sh:43-98`; `tests/verify_source_governance.js` GATES array (37 entries); `ls tests/*.db.js` = 68, zero referenced by any runner |
+| 18 | **`main` is not branch-protected — a red CI does not block a merge.** The failure path itself is sound (`verify_all.sh` sets `FAILED=1` on any non-zero child and exits with it; the workflow step has no `continue-on-error`; a skipped browser rung prints *"⚠ NOT RUN — this is not a pass"* rather than passing). Nothing makes that check required. Every branch sampled via the GitHub API returns `"protected": false`. | GitHub branches API; `tests/e2e/verify_all.sh:31-34,104,107` |
+| 19 | **The fake-pool population is 10 files, not 3.** Seven were previously unnamed. Definition: a real Express router on a real socket driven by real `fetch`, with a hand-built object passed as `pool` and no `require("pg")` in the file. All ten opened and confirmed individually. Includes `ask_spine_http_proof.js:61` (`const pool = { async query(...) }` mounted at `:99` against *"the REAL router"*). Any rung resting on one of these is `LOCALLY_EXERCISED`, not `HTTP_PROVEN`. | wave 3 census; `docs/current-state-build/06_WAVE3_RESULTS.md` |
+| 20 | **47 test files are pinned to a hardcoded demo property UUID; 42 never create it, and no migration inserts it.** `a50fbdd0-3642-431e-b532-0dcd6ab8a4fe` ("Property Spine Demo Building"). The migration chain only references or `UPDATE`s it — never inserts. So 42 files must find a row that nothing in the repo guarantees exists. **This supersedes defect #13's "four dead tests"** — that was the visible tip; the real number is 47 pinned, 42 unguaranteed. | `src/surfaces/owner.js:171`; `src/leasing/demo_preflight.js:20`; migrations 073/087/123 reference-only |
+| 21 | **PROVEN DEAD BY EXECUTION — two test files can never pass again.** `tests/pricing_guards_proof.js` asserts a guard is ABSENT at `git show HEAD:` — valid only while the fix sat uncommitted; the fix is now at HEAD, so four assertions are permanently false. `tests/operator_language_proof.js` bounds a diff against pinned SHA `62b25e8` and asserts *"exactly one migration file added"* — 61 have landed since. Both are database-free and were **re-executed verbatim at `b7720b2`** to confirm, not inferred. | `tests/pricing_guards_proof.js:33,47`; `tests/operator_language_proof.js:428,439-443` |
+| 22 | **The documented from-scratch schema build does not work.** `migrations/migrate.js --apply` — the exact command the tool's own refusal message tells you to run — cannot build the schema from an empty database. It stops at `083_terms_review_and_packet_versioning.sql`. This is the documented disaster-recovery path. | wave 3 critic; `migrations/migrate.js`, `migrations/083_*.sql` |
+| 23 | **The app repository has no CI at all.** No `.github` directory, no workflow files. Its **23 browser proofs and 34 test harnesses run only when a human runs them** — including every browser proof backing a `BROWSER_VERIFIED` rung in this file. | `main-app/` — no `.github`; `ls *.browser.js` = 23 |
+| 24 | **`property_controls` — a complete compliance/licensing schema built in migration 001 that the Compliance domain built again in migration 168 never mentions.** Zero references in `src/` or `server.js`. Three sibling tables from `001_baseline.sql` are also fully orphaned: `bids`, `documents`, `inventory`. **This is the exact "rebuilt what already existed" failure this whole document was created to stop — found in the schema, 167 migrations apart.** | `migrations/001_baseline.sql` vs `migrations/168_compliance_canonical_truth.sql` |
+| 25 | **51 of the 65 environment variables the code actually reads are documented nowhere.** `.env.example` documents 15. Several already known to change real behavior (`EXECUTED_LEASE_INTAKE_ENABLED`, `COMMITMENT_LEDGER_MODE`, `DEMO_MODE`). Which properties have which capability enabled is knowable only by reading the live Render dashboard against seven separate source files. | `grep -o "process\.env\.[A-Z_]*"` across `src/`, `server.js`, `migrations/` = 65 distinct; `.env.example` = 15 |
+| 26 | **`DEMO_MODE` boot hook writes durable rent-roll data while bypassing the synthetic-data perimeter its own sibling routes enforce.** In `src/shared/`, beside a fixture-injection door wired to a button in the signed-in operator UI. Directly contradicts the non-negotiable *"Demo data may exist. Demo paths may not."* | `src/shared/` — see `06_WAVE3_RESULTS.md`; `src/shared/synthetic_data_perimeter.js` |
 
 **Correction, not a new defect — the exclusion wall is better than earlier feared, for one route.** `tests/phase_zero_property_boundary.db.js` genuinely proves, with real Postgres and real HTTP, that a second real user without a property assignment is refused by the property-switcher (`GET/POST /operator/properties[/select]`). The earlier "only tested from inside" concern was wrong for *that* route — but confirmed true, and worse than described, for the roster route above (defect #9): not "only tested from inside," not tested at all, and structurally missing the check its own sibling routes have.
 
