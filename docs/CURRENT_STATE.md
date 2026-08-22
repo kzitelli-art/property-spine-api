@@ -414,6 +414,15 @@ scoped narrower than the callers — rename or extract a sibling. **Not fixed he
 An independent grep and the parser were **re-run after** the rename fix and agree on
 154/77/42/6.
 
+**Correction, recorded because it was published before it was checked:** an earlier
+revision raised the urgency of the bypassable delete guards on the reasoning that
+`tools/scale/seed_b_qa_identity.sql` carries the production property UUID and so *is* a
+delete path. **It is not.** `activation_proof.js:36` reads `SCALE_DATABASE_URL` with no
+`DATABASE_URL` fallback, `setup_baseline.sh:60` overwrites `DATABASE_URL` with localhost,
+and `assert_isolated_environment.sql` refuses unless `current_database() = 'r0scale'`.
+The inserts are `on conflict do nothing` and the harness deletes only its own fixture
+tables. The §2b guard defect stands on its own; the urgency framing does not.
+
 **Not established, and not guessed at:** every row count. No production database was
 contacted. The census answers those, and a human runs it.
 

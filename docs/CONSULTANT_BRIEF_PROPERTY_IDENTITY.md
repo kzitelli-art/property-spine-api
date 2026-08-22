@@ -169,28 +169,46 @@ permanently, (b) re-upload everything and re-establish, or (c) change the immuta
 rule — which was a deliberate design decision we would not reverse without you.
 **Which?**
 
-### Q4 — The immutability holes are more urgent than we first framed them *(revised)*
+### Q4 — The immutability holes are real. The urgency framing was wrong. *(revised twice)*
 
 Published pricing and Release 0 completion evidence can both be destroyed by a property
-delete despite carrying guards that say otherwise (§2b). Our first draft asked "fix
-before or after the ruling?", reasoning that nobody is planning a property delete, so it
-could wait.
+delete despite carrying guards that say otherwise (§2b). **That finding stands, proven.**
 
-**That reasoning was wrong, and the correction came from review.** Cross the two findings:
+Rev 2 of this brief raised the urgency on review's synthesis — *W5's harness owns the
+production UUID, so nobody needs to plan a delete; the harness is the delete path.* It is
+a good inference. **We then checked the harness, and it does not hold.** Correcting it
+here rather than letting it circulate:
 
 ```
-W5  a test harness inserts the production property's exact UUID under a
-    different name — its own comment acknowledges this
-2b  four delete guards are silently bypassable on cascade, destroying
-    published pricing and Release 0 evidence
+tools/scale/activation_proof.js:36   reads SCALE_DATABASE_URL, defaulting to
+                                     localhost:5433 — and has NO fallback to
+                                     DATABASE_URL, so a production URL in the
+                                     environment cannot be picked up
+tools/scale/setup_baseline.sh:60     OVERWRITES DATABASE_URL with a hardcoded
+                                     localhost URL before any seed runs
+assert_isolated_environment.sql      refuses unless current_database() = 'r0scale',
+                                     plus a sentinel-table check
 ```
 
-**Nobody has to plan a property delete. A harness that owns that UUID is the delete
-path.** The right question is therefore not "before or after the ruling" but **"before
-anyone next runs that harness."**
+The scale harness is, in fact, one of the better-guarded things in this repository. Two
+further corrections to W5 as first written: the inserts are `on conflict (id) do nothing`,
+so they **cannot rename or overwrite** an existing row, and the harness does not delete
+properties at all — its deletes are scoped to its own Release 0 fixture tables.
 
-**Do you want the guards fixed, the harness neutralised, or both — and on what timeline?**
-This is a schema-level change, which is why it is your call and not ours.
+**What remains true about W5, and it is smaller:** the production UUID is present in a
+`.sql` file, and its own comment says so. The residual risk is a human copying that
+`INSERT` out of the file, or running the `.sql` by hand against a non-isolated database
+with `psql` — which bypasses all three guards, since they live in the runner rather than
+in the file.
+
+**So Q4 returns to its original shape, with better evidence:** the guards in §2b are worth
+fixing on their own merits, no clock attached. It is a schema-level change, so it is your
+call. **Fix before the ruling, after it, or accept and document?**
+
+**Method note, because it cost us:** we adopted the harness synthesis from review without
+opening the harness. It was a well-reasoned inference from two true findings, and it was
+still wrong. Nothing in this brief should be treated as verified unless it names the file
+that was read.
 
 ### Q5 — ANSWERED, and it is not part of the ruling *(revised)*
 
