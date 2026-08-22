@@ -236,12 +236,12 @@ acceptance. The acceptance transaction remains unexercised until Mike verifies.
 Staff SMS uses the same Ask Spine answer service as the dashboard, but a separate
 governed transport. It deliberately enters through an organization-owned
 `operations` number limited to staff and replies, while Skyline's property-facing
-number remains limited to residents and prospects. Skyline currently has no
-`organization_id`, so it cannot resolve an operations line. Production's one
-active operations line belongs to `Demo ORG` and has historic real provider
-traffic. Do not silently attach Skyline to that demo identity: first name the
-real operating organization, then explicitly retain/rebind/provision its staff
-number.
+number remains limited to residents and prospects. Production now has one active
+`OneFive Management` organization and Skyline belongs to it. The governed
+adoption receipt is `ec4cd2b5-468b-4b8f-9156-f0fd1681e563`, with authority basis
+`platform_role:super_admin`. OneFive has no operations line yet. Production's
+existing operations line remains with `Demo ORG`, which still has active assigned
+users and historic real provider traffic; it was not silently moved.
 
 ### Activation sequence
 
@@ -260,9 +260,11 @@ number.
    slot, tour, lead state, offer receipt, and event attribution.
 6. Only after that proof, exercise one owner-approved real SMS booking. No
    external calendar or scheduler becomes an authority anywhere in the path.
-7. Before the first staff SMS proof, establish Skyline's real organization and
-   its reply-only operations line. Then have Mike ask the same supported question
-   in the dashboard and by text and compare the governed answer receipts.
+7. **Partial.** `OneFive Management` is active and Skyline was adopted into it
+   through the governed hierarchy command. Retain or provision a dedicated
+   OneFive staff number and create its reply-only operations line. Then have Mike
+   ask the same supported question in the dashboard and by text and compare the
+   governed answer receipts.
 
 ---
 
