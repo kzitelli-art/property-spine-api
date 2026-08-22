@@ -208,11 +208,11 @@ service 23/23, weekly-policy/callout service 25/25, real session + HTTP 20/20,
 canonical booking 33/33, and cross-turn agent offer/confirm 12/12. Ask Spine's
 schedule contract is 8/8, staff SMS routing is 30/30, and the existing real-HTTP
 Skyline-shaped lead-to-lease path is green through all 21 steps. All 43 API
-source-governance gates and all 1,466 app assertions pass.
+source-governance gates and all 1,467 app assertions pass.
 
-**Deployed 2026-08-21:** API `3b72469`, app `567d15f`, and migrations 188-189 are
+**Deployed 2026-08-21:** API `da0ee64`, app `d45344d`, and migrations 188-189 are
 live. The production ledger is verified at 189, all three native scheduler
-tables exist, and the deployed API health receipt identifies `3b72469`.
+tables exist, and the deployed API health receipt identifies `da0ee64`.
 Skyline's operating timezone was set through the governed command to
 `America/New_York`; change receipt `289f0937-e1d5-4d67-81d0-cf44ec1f588c`.
 
@@ -241,7 +241,11 @@ number remains limited to residents and prospects. Production now has one active
 adoption receipt is `ec4cd2b5-468b-4b8f-9156-f0fd1681e563`, with authority basis
 `platform_role:super_admin`. OneFive has no operations line yet. Production's
 existing operations line remains with `Demo ORG`, which still has active assigned
-users and historic real provider traffic; it was not silently moved.
+users and historic real provider traffic; it was not silently moved. Team Admin
+now reads that standing through the canonical communication-line service and has
+one governed first-activation control. It cannot replace, transfer, retire, or
+silently repurpose a line. Production re-read after deployment still showed zero
+OneFive operations lines.
 
 ### Activation sequence
 
@@ -260,11 +264,12 @@ users and historic real provider traffic; it was not silently moved.
    slot, tour, lead state, offer receipt, and event attribution.
 6. Only after that proof, exercise one owner-approved real SMS booking. No
    external calendar or scheduler becomes an authority anywhere in the path.
-7. **Partial.** `OneFive Management` is active and Skyline was adopted into it
-   through the governed hierarchy command. Retain or provision a dedicated
-   OneFive staff number and create its reply-only operations line. Then have Mike
-   ask the same supported question in the dashboard and by text and compare the
-   governed answer receipts.
+7. **Partial.** `OneFive Management` is active, Skyline was adopted into it, and
+   the governed Team Admin activation control is deployed. Connect a dedicated
+   OneFive staff number there; the command fixes the line to staff-only,
+   reply-only operations posture and refuses replacement or collision. Then have
+   Mike ask the same supported question in the dashboard and by text and compare
+   the governed answer receipts.
 
 ---
 
