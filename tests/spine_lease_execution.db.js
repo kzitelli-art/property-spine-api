@@ -122,7 +122,7 @@ async function refused(label, fn, expectCode) {
                                   instrument_source_artifact_id, instrument_terms_sha256,
                                   instrument_package_sha256, instrument_manifest, terms_json,
                                   resident_executed_at, company_executed_at)
-       values ($1,$2,$3,$4,'submitted',$5,$6,'SKYLINE_RESIDENTIAL',$7,$8,$9,$10::jsonb,$11,now(),now()) returning id`,
+       values ($1,$2,$3,$4,'draft',$5,$6,'SKYLINE_RESIDENTIAL',$7,$8,$9,$10::jsonb,$11,null,null) returning id`,
       [prop, application, unit, version, placeholder, hash, source, TERMS_HASH, PACKAGE_HASH,
        JSON.stringify({ source_sha256: HASH, terms_sha256: TERMS_HASH }), JSON.stringify(termsJson)])).rows[0].id;
     if (residentSig) await q(
@@ -131,7 +131,12 @@ async function refused(label, fn, expectCode) {
     if (companySig) await q(
       `insert into lease_packet_fields (lease_packet_id, field_key, section_key, label, field_type, signer_role, completed, completed_at, signed_by_user_id, ip_address, session_id)
        values ($1,'c','execution','Company','signature','company',true,now(),$2,'203.0.113.9','sess-c')`, [p, companyUser]);
-    if (status !== "submitted") await q("update lease_packets set status=$2 where id=$1", [p, status]);
+    if (status === "executed") {
+      await q("update lease_packets set status='resident_executed',resident_executed_at=now() where id=$1", [p]);
+      await q("update lease_packets set status='executed',company_executed_at=now() where id=$1", [p]);
+    } else if (status !== "draft") {
+      await q("update lease_packets set status=$2 where id=$1", [p, status]);
+    }
     return p;
   }
   const run = (packet, user = signer) => executeSpineLease(pool, {
@@ -144,10 +149,13 @@ async function refused(label, fn, expectCode) {
     const p = await makePacket({ version: 2 });
     return executeSpineLease(pool, { lease_packet_id: p }, { executedLease, confirmTerm: confirmTermStub, spawnObligationFromEvent });
   }, "company_signer_required");
-  await refused("a packet with no resident signature", async () =>
-    run(await makePacket({ version: 3, residentSig: false })), "resident_signature_missing");
-  await refused("a packet with no company signature", async () =>
-    run(await makePacket({ version: 4, companySig: false })), "company_signature_missing");
+  // Migration 192 now prevents these malformed states from existing at all.
+  // The adapter retains its own checks, but the stronger proof is that the
+  // fixture cannot manufacture an executed packet without either signature.
+  await refused("the database refuses execution with no resident signature", async () =>
+    makePacket({ version: 3, residentSig: false }), "23514");
+  await refused("the database refuses execution with no company signature", async () =>
+    makePacket({ version: 4, companySig: false }), "23514");
   await refused("a DIFFERENT user recording someone else's signature", async () =>
     run(await makePacket({ version: 5 }), other), "company_signer_mismatch");
   await refused("an instrument with no hash", async () => {

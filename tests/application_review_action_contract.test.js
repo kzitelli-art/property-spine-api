@@ -43,10 +43,22 @@ out=sandbox.executionPrimaryAction(app,{present:true,activation_status:'admitted
 ok('admitted authors confirm POST',out.action==='confirm_term'&&out.method==='POST');
 ok('confirm endpoint exact application',out.endpoint==='/operator/leasing/applications/app-1/confirm-term');
 ok('legacy countersign copy removed',!src.includes('regenerate before countersign'));
-ok('detail calls action composer with application and lease',/executionPrimaryAction\(app, executed_lease(, lease_id)?\)/.test(src));
+ok('detail calls action composer with application, lease, and packet',
+  /executionPrimaryAction\(app, executed_lease, lease_id, packet\)/.test(src));
 // an existing lease is terminal: never re-author a confirm-term the server refuses
 out=sandbox.executionPrimaryAction(app,{present:true,activation_status:'admitted',blockers:[]},'lease-1') || {};
 ok('existing lease yields terminal state',out.action==='term_confirmed');
 ok('terminal state authors no write',out.method===null&&out.endpoint===null);
+const governing={id:'packet-1',status:'draft',instrument_source_artifact_id:'source-1',instrument_terms_sha256:'a'.repeat(64),instrument_package_sha256:'b'.repeat(64),signing_parties:[{signer_role:'tenant',display_name:'Joe Bennett',complete:false},{signer_role:'guarantor',display_name:'Maria Bennett',complete:false}]};
+out=sandbox.executionPrimaryAction(app,{present:false},null,governing);
+ok('draft package authors no duplicate execution panel',out===null);
+governing.status='sent';
+out=sandbox.executionPrimaryAction(app,{present:false},null,governing) || {};
+ok('issued package waits for resident-side signatures',out.action==='await_resident_execution'&&out.method===null);
+ok('waiting reason names the exact outstanding signers',/Joe Bennett and Maria Bennett/.test(out.reason||''));
+governing.status='resident_executed';
+governing.signing_parties.forEach((signer)=>{signer.complete=true;});
+out=sandbox.executionPrimaryAction(app,{present:false},null,governing) || {};
+ok('resident-side completion authors company countersign',out.action==='company_execute_lease'&&out.method==='POST');
 console.log(`${pass}/${pass+fail}`);
 process.exit(fail?1:0);

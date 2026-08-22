@@ -155,11 +155,13 @@ async function executeSpineLease(client, { lease_packet_id, company_signer_user_
   //  fields (034's mechanism, widened by 184 to admit a company role).
   const sigs = (await client.query(
     `select f.signer_role, f.completed, f.completed_at, f.signed_by_user_id, f.signed_by_person_id,
+            f.signed_by_packet_signer_id,
             f.session_id, f.ip_address, f.user_agent, f.clause_hash,
-            p.name person_name, u.name user_name
+            p.name person_name, u.name user_name, ps.display_name packet_signer_name
        from lease_packet_fields f
        left join persons p on p.id = f.signed_by_person_id
        left join users   u on u.id = f.signed_by_user_id
+       left join lease_packet_signers ps on ps.id = f.signed_by_packet_signer_id
       where f.lease_packet_id = $1 and f.field_type = 'signature' and f.completed = true
       order by f.completed_at`, [lease_packet_id]
   )).rows;
@@ -209,10 +211,11 @@ async function executeSpineLease(client, { lease_packet_id, company_signer_user_
   };
   const signers = [
     ...residentSigs.map((s) => ({
-      name: named(s, s.person_name),
+      name: named(s, s.person_name || s.packet_signer_name),
       capacity: CAPACITY[s.signer_role] || s.signer_role,
       role: s.signer_role,
       person_id: s.signed_by_person_id || null,
+      packet_signer_id: s.signed_by_packet_signer_id || null,
       signed_at: s.completed_at,
       session_id: s.session_id || null,
       ip_address: s.ip_address || null,

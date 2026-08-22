@@ -223,19 +223,22 @@
     function render(){
       const snap = packet.rendered_snapshot||{}, terms = packet.terms||{};
       const S = snap.summary||{};
+      const signer = packet.current_signer||{};
+      const signerRole = signer.signer_role==='guarantor' ? 'Guarantor' : 'Resident';
+      const signerName = signer.display_name||S.resident_names||terms.resident_names||'';
       const propName = terms.property_name || snap.title || 'Proposed Terms';
       const addr = snap.subtitle || terms.property_address || '';
       const governing = packet.is_governing_lease_package === true;
 
-      document.title = governing ? 'Sign Lease Package' : 'Lease Terms Review';
+      document.title = governing ? `Sign Lease as ${signerRole}` : 'Lease Terms Review';
       document.getElementById('phBar').innerHTML = governing
-        ? '<div class="inner"><b>Official lease package.</b> The retained property lease and the exact deal terms below are one package. Your signature applies to both; the company must countersign before activation.</div>'
+        ? `<div class="inner"><b>Official lease package.</b> You are signing as ${esc(signerRole.toLowerCase())}${signerName ? `, ${esc(signerName)}` : ''}. The retained lease and exact deal terms below are one package.</div>`
         : '<div class="inner"><b>Demonstration summary.</b> Proposed lease terms for review — not the complete lease. Acknowledging does not create or activate a tenancy; the complete lease and required addenda govern.</div>';
       document.getElementById('lede').innerHTML = governing
-        ? 'Review the home, dates, and charges, then read the official lease below. Type your full legal name where requested and sign the <span class="em">complete package</span>.'
+        ? `Review the home, dates, and charges, then read the official lease below. Type your full legal name and sign as the <span class="em">${esc(signerRole.toLowerCase())}</span>.`
         : 'Review each numbered term and acknowledge it below. This records your review only — <span class="em">it is not a signature on the lease</span>, and a tenancy begins only when the owner executes the complete lease.';
-      document.getElementById('progressLabel').textContent = governing ? 'Required before signing' : 'To acknowledge';
-      document.getElementById('submitBtn').textContent = governing ? 'Sign Lease Package' : 'Acknowledge Demonstration Terms';
+      document.getElementById('progressLabel').textContent = governing ? `${signerRole} requirements` : 'To acknowledge';
+      document.getElementById('submitBtn').textContent = governing ? `Submit ${signerRole} Signature` : 'Acknowledge Demonstration Terms';
 
       // masthead
       document.getElementById('mhTitle').textContent = propName;
@@ -244,6 +247,7 @@
         ['Premises', esc(addr || (S.unit ? 'Unit '+S.unit : '—'))],
         ['Owner', esc(S.landlord_entity||'—')],
         ['Resident', esc(S.resident_names||terms.resident_names||'—')],
+        ...(governing ? [['Signing as', esc(`${signerName||'—'} · ${signerRole}`)]] : []),
         ['Term', esc(term)],
       ];
       document.getElementById('mhMeta').innerHTML = metaItems.map(
@@ -332,14 +336,14 @@
       // in 'resident_executed' (184), not 'submitted'. Reading only the old
       // name left the button live on a packet the resident had already
       // signed, inviting a second submit. Found in a browser, not in source.
-      const submitted = packet.status==='submitted'
+      const submitted = !!packet.current_signer?.submitted_at || packet.status==='submitted'
         || packet.status==='resident_executed' || packet.status==='executed';
       document.getElementById('submitBtn').disabled = done.length!==req.length || submitted;
       if(submitted) showSubmitted();
     }
 
     function initials(){
-      const n=packet.terms?.resident_names||'';
+      const n=packet.current_signer?.display_name||packet.terms?.resident_names||'';
       const i=n.split(/[\s,]+/).filter(Boolean).map(x=>x[0]).join('').slice(0,4).toUpperCase();
       return i||'ACK';
     }
@@ -364,8 +368,12 @@
 
     function showSubmitted(){
       const el=document.getElementById('notice');
+      const outstanding=(packet?.signing_parties||[]).filter(s=>!s.complete);
+      const waiting=outstanding.map(s=>esc(s.display_name||(s.signer_role==='guarantor'?'the guarantor':'the resident'))).join(' and ');
       el.innerHTML=packet?.is_governing_lease_package
-        ? '<b>Signed.</b> Your signature on the complete lease package is recorded. The authorized company signer must countersign before the tenancy is activated.'
+        ? waiting
+          ? `<b>Signed.</b> Your signature on the complete lease package is recorded. The package is still waiting for ${waiting}.`
+          : '<b>Resident-side signing is complete.</b> The authorized company signer must countersign this same package before the tenancy is activated.'
         : '<b>Acknowledged.</b> Your review of the demonstration terms is recorded. This does <b>not</b> activate a lease — a tenancy begins only when the owner executes the complete lease and required addenda through the normal process.';
       el.style.display='block';
     }

@@ -112,6 +112,27 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
       where application_id=$1 and superseded_at is null
       order by version desc limit 1`, [app.id])).rows[0] || null, notes) : null;
 
+  const signingParties = packet ? await attempt("lease_packet_signers", async () => (await db.query(
+    `select s.signer_role, s.display_name, s.link_issued_at,
+            s.token_expires_at, s.submitted_at,
+            sf.completed_at as signature_completed_at
+       from lease_packet_signers s
+       left join lease_packet_fields sf
+         on sf.lease_packet_id=s.lease_packet_id
+        and sf.signer_role=s.signer_role
+        and sf.field_type='signature'
+      where s.lease_packet_id=$1
+      order by case s.signer_role when 'tenant' then 1 else 2 end`,
+    [packet.id])).rows.map((s) => ({
+      signer_role: s.signer_role,
+      display_name: s.display_name,
+      link_issued_at: s.link_issued_at || null,
+      token_expires_at: s.token_expires_at || null,
+      submitted_at: s.submitted_at || null,
+      signature_completed_at: s.signature_completed_at || null,
+      complete: !!(s.submitted_at && s.signature_completed_at),
+    })), notes) : [];
+
   const executed = app ? await attempt("executed_lease", async () => (await db.query(
     //  admission_blockers is read, not re-derived. The admission evaluator
     //  authored those codes; naming a generic "activation_blocked" beside
@@ -270,6 +291,7 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
     instrument_package_sha256: packet.instrument_package_sha256 || null,
     resident_executed_at: packet.resident_executed_at || null,
     company_executed_at: packet.company_executed_at || null,
+    signing_parties: signingParties || [],
     executed_lease: executed ? {
       present: true,
       record_id: executed.id,

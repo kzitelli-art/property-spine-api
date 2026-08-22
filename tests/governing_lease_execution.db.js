@@ -78,7 +78,7 @@ async function accepts(label, sql, params) {
                                 instrument_body_sha256, instrument_form_code,
                                 instrument_source_artifact_id, instrument_terms_sha256,
                                 instrument_package_sha256, instrument_manifest)
-     values ($1,$2,$3,$4,'submitted',$5,$6,$7,$8,$9,$10,$11::jsonb) returning id`,
+     values ($1,$2,$3,$4,'draft',$5,$6,$7,$8,$9,$10,$11::jsonb) returning id`,
     [prop, appId, unit, version, placeholder, completePackage ? sourceHash : null,
      completePackage ? "SKYLINE_RESIDENTIAL" : null, completePackage ? source : null,
      completePackage ? "b".repeat(64) : null, completePackage ? "c".repeat(64) : null,
@@ -86,6 +86,7 @@ async function accepts(label, sql, params) {
 
   console.log("\n── 1 · A PLACEHOLDER CANNOT BE EXECUTED ───────────────────────");
   const ph = await mkPacket(1, true, null);
+  await q("update lease_packets set status='sent' where id=$1", [ph]);
   const m1 = await refuses("a placeholder cannot reach resident_executed",
     "update lease_packets set status='resident_executed', resident_executed_at=now() where id=$1", [ph]);
   ok("…and the refusal says why", /placeholder/i.test(m1 || ""), m1);
@@ -96,19 +97,42 @@ async function accepts(label, sql, params) {
 
   console.log("\n── 2 · A SIGNATURE IS A SIGNATURE *ON* SOMETHING ──────────────");
   const noHash = await mkPacket(2, false, null);
+  await q("update lease_packets set status='sent' where id=$1", [noHash]);
   const m2 = await refuses("a real body with no instrument hash cannot be executed",
     "update lease_packets set status='resident_executed', resident_executed_at=now() where id=$1", [noHash]);
   ok("…named as an incomplete retained lease package", /complete retained lease package/i.test(m2 || ""), m2);
 
   console.log("\n── 3 · THE RESIDENT SIGNS FIRST ───────────────────────────────");
   const real = await mkPacket(3, false, true);
+  const packetSigner = (await q(
+    `insert into lease_packet_signers (lease_packet_id,signer_role,display_name,person_id)
+     values ($1,'tenant','Jane Smith',$2) returning id`, [real, person])).rows[0].id;
+  await q(
+    `insert into lease_packet_fields
+       (lease_packet_id,field_key,section_key,label,field_type,signer_role,required,completed)
+     values ($1,'tenant_sig','execution','Resident signature','signature','tenant',true,false),
+            ($1,'company_sig','execution','Company signature','signature','company',false,false)`,
+    [real]);
+  await q("update lease_packets set status='sent' where id=$1", [real]);
   const m3 = await refuses("the company cannot sign before the resident",
     "update lease_packets set status='executed', company_executed_at=now() where id=$1", [real]);
   ok("…and the refusal names the order", /resident/i.test(m3 || ""), m3);
 
   console.log("\n── 4 · A REAL INSTRUMENT EXECUTES, IN ORDER ───────────────────");
+  await accepts("the tenant signature field accepts one-way evidence",
+    `update lease_packet_fields
+        set completed=true,completed_at=now(),signed_by_person_id=$2,
+            signed_by_packet_signer_id=$3,field_value='Jane Smith'
+      where lease_packet_id=$1 and field_key='tenant_sig'`, [real, person, packetSigner]);
+  await accepts("the resident's final submission is recorded",
+    "update lease_packet_signers set submitted_at=now(),updated_at=now() where id=$1",
+    [packetSigner]);
   await accepts("resident executes the governing instrument",
     "update lease_packets set status='resident_executed', resident_executed_at=now() where id=$1", [real]);
+  await accepts("the COMPANY signature field now completes",
+    `update lease_packet_fields
+        set completed=true, completed_at=now(), signed_by_user_id=$2
+      where lease_packet_id=$1 and field_key='company_sig'`, [real, signer]);
   await accepts("then the company executes it",
     "update lease_packets set status='executed', company_executed_at=now() where id=$1", [real]);
   const done = (await q("select status, resident_executed_at, company_executed_at from lease_packets where id=$1", [real])).rows[0];
@@ -116,15 +140,10 @@ async function accepts(label, sql, params) {
      !!done.resident_executed_at && !!done.company_executed_at && done.status === "executed");
 
   console.log("\n── 5 · A COMPANY SIGNER CAN EXIST AT ALL (034 forbade it) ─────");
-  await accepts("a tenant signature field still inserts",
-    `insert into lease_packet_fields (lease_packet_id, field_key, section_key, label, field_type, signer_role, completed, signed_by_person_id)
-     values ($1,'tenant_sig','execution','Resident signature','signature','tenant',true,$2)`, [real, person]);
-  await accepts("a COMPANY signature field now inserts",
-    `insert into lease_packet_fields (lease_packet_id, field_key, section_key, label, field_type, signer_role, completed, signed_by_user_id)
-     values ($1,'company_sig','execution','Company signature','signature','company',true,$2)`, [real, signer]);
+  const roleProbe = await mkPacket(4, false, true);
   await refuses("an unknown signer role is still refused",
     `insert into lease_packet_fields (lease_packet_id, field_key, section_key, label, field_type, signer_role)
-     values ($1,'other_sig','execution','Somebody','signature','notary')`, [real]);
+     values ($1,'other_sig','execution','Somebody','signature','notary')`, [roleProbe]);
   const who = (await q(
     "select signer_role, signed_by_user_id, signed_by_person_id from lease_packet_fields where lease_packet_id=$1 order by field_key", [real])).rows;
   ok("the company signature names a durable user, not a typed name",

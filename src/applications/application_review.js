@@ -119,7 +119,30 @@ async function latestPacket(client, applicationId) {
         and superseded_at is null
       order by version desc
       limit 1`, [applicationId]);
-  return q.rows[0] || null;
+  const packet = q.rows[0] || null;
+  if (!packet) return null;
+  const signerRows = await client.query(
+    `select s.signer_role, s.display_name, s.link_issued_at,
+            s.token_expires_at, s.submitted_at,
+            sf.completed_at as signature_completed_at
+       from lease_packet_signers s
+       left join lease_packet_fields sf
+         on sf.lease_packet_id=s.lease_packet_id
+        and sf.signer_role=s.signer_role
+        and sf.field_type='signature'
+      where s.lease_packet_id=$1
+      order by case s.signer_role when 'tenant' then 1 else 2 end`,
+    [packet.id]);
+  packet.signing_parties = signerRows.rows.map((s) => ({
+    signer_role: s.signer_role,
+    display_name: s.display_name,
+    link_issued_at: s.link_issued_at || null,
+    token_expires_at: s.token_expires_at || null,
+    submitted_at: s.submitted_at || null,
+    signature_completed_at: s.signature_completed_at || null,
+    complete: !!(s.submitted_at && s.signature_completed_at),
+  }));
+  return packet;
 }
 
 // The proposed-terms confirmation the application currently points at.
@@ -245,13 +268,25 @@ function executionPrimaryAction(app, exec, leaseId, packet) {
       method: "POST",
       endpoint: `/operator/leasing/lease-packets/${packet.id}/company-sign` };
   }
+  // A draft package has not reached a signer. The canonical application
+  // action already offers issuance, so a second execution panel would falsely
+  // describe signing as underway before any secure link exists.
+  if (!leaseId && packet && packet.status === "draft"
+      && packet.instrument_source_artifact_id
+      && packet.instrument_terms_sha256 && packet.instrument_package_sha256) {
+    return null;
+  }
   //  Awaiting the resident on an instrument Spine holds — nothing for the
   //  company to do yet, and nothing to attest to.
   if (!leaseId && packet && packet.instrument_source_artifact_id
       && packet.instrument_terms_sha256 && packet.instrument_package_sha256
-      && ["sent", "in_progress", "tenant_in_progress", "draft"].includes(packet.status)) {
-    return { action: "await_resident_execution", label: "Awaiting the Resident",
-      reason: "The resident has not yet executed the governing instrument.",
+      && ["sent", "in_progress", "tenant_in_progress"].includes(packet.status)) {
+    const waiting = (packet.signing_parties || []).filter((s) => !s.complete);
+    const names = waiting.map((s) => s.display_name ||
+      (s.signer_role === "guarantor" ? "the guarantor" : "the resident"));
+    const waitingLabel = names.length ? names.join(" and ") : "the resident";
+    return { action: "await_resident_execution", label: "Signing in Progress",
+      reason: `The governing instrument is waiting for ${waitingLabel}.`,
       method: null, endpoint: null };
   }
   // A lease already exists for this application: confirm-term has run and the
@@ -411,6 +446,7 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
       sent_at: packet ? (packet.sent_at || null) : null,
       tenant_token_expires_at: packet ? (packet.tenant_token_expires_at || null) : null,
       tenant_submitted_at: packet ? (packet.tenant_submitted_at || null) : null,
+      signing_parties: packet ? (packet.signing_parties || []) : [],
       //  WHO HAS EXECUTED THE INSTRUMENT. 184 records both acts on the
       //  packet and this read already loads them; not projecting them meant
       //  the operator's review screen could not say whether the resident had
