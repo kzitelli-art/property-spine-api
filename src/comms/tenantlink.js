@@ -77,6 +77,7 @@ const { operatingReceipt, deliveryReceipt, composeReceipt } = require("../conver
 const technicianConversation = require("../technician/conversation");
 const { routeStaffSmsTurn } = require("../conversation/staff_sms_router");
 const { makeStaffGovernedRead } = require("./staff_governed_read");
+const { makeStaffLeasingAction } = require("../leasing/staff_sms_action");
 const defaultAskSpineAnswer = require("../agent/ask_spine_answer");
 const { createComplianceReferenceService } = require("../asset/compliance_references");
 
@@ -84,12 +85,20 @@ module.exports = function tenantLinkModule({
   pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService,
   askSpineAnswer = defaultAskSpineAnswer, complianceReferenceService = null,
   applicationsService = null,
+  getLeasingTourService = null,
+  getConversionService = null,
+  getApplicationInvitations = null,
 }) {
   const router = express.Router();
   const complianceReferences = complianceReferenceService || createComplianceReferenceService({
     secret: process.env.COMPLIANCE_REFERENCE_SECRET,
   });
   const staffGovernedRead = makeStaffGovernedRead({ askSpineAnswer });
+  const staffLeasingAction = makeStaffLeasingAction({
+    getLeasingTourService,
+    getConversionService,
+    getApplicationInvitations,
+  });
 
   // ── DEPENDENCY ASSERTION (symmetric with maintenance.js) ──────────────
   //  POST /tenant/maintenance and /tenant/maintenance/:id/add delegate every
@@ -1296,6 +1305,26 @@ module.exports = function tenantLinkModule({
                 return;
               }
               console.error("inbound-sms: operations read failed - inbound preserved, no reply sent:", e.message);
+              return;
+            }
+          } else if (route.destination === "leasing") {
+            try {
+              turn = await staffLeasingAction.run(pool, {
+                organizationId: ctx.organizationId,
+                userId: ctx.staffUserId,
+                lineId: ctx.lineId,
+                body: body || "",
+                providerMessageId: MessageSid,
+                propertyContext: ctx.propertyContext,
+                clarification: ctx.clarification,
+                intent: route.leasing,
+              });
+            } catch (e) {
+              if (e.code === "23505") {
+                console.error(`inbound-sms: operations leasing turn already answered (${MessageSid}) - duplicate suppressed.`);
+                return;
+              }
+              console.error("inbound-sms: operations leasing turn failed - inbound preserved for human follow-up:", e.message);
               return;
             }
           } else {

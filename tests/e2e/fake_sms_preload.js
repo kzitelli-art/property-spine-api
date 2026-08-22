@@ -17,7 +17,7 @@ Module._load = function loadWithFakeSms(request, parent, isMain) {
     return function fakeSmsTransport() {
       return {
         enabled: () => true,
-        validateWebhook: () => false,
+        validateWebhook: () => true,
         fetchMedia: async () => ({ ok: false, reason: "e2e_transport_has_no_media" }),
         sendSms: async ({ to, from, body }) => {
           const file = process.env.E2E_SMS_LOG;

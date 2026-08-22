@@ -8,6 +8,21 @@
    ==================================================================== */
 "use strict";
 
+async function inTransaction(pool, work) {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const result = await work(client);
+    await client.query("commit");
+    return result;
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function threadFor(client, { organizationId, userId }) {
   const result = await client.query(
     `insert into staff_threads (organization_id, user_id) values ($1,$2)
@@ -56,4 +71,4 @@ async function recordReply(client, {
   return outbound;
 }
 
-module.exports = { threadFor, recordInbound, recordReply };
+module.exports = { inTransaction, threadFor, recordInbound, recordReply };

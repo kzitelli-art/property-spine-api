@@ -65,6 +65,10 @@ const OPERATING_OUTCOMES = [
   "work_reference_needed",   // which work they meant is not established
   "authorization_refused",   // they asked for something that is not theirs
   "governed_read",           // Ask Spine read; no operating fact was written
+  //  ── staff leasing / operations line ──
+  "leasing_clarification",   // no write; a missing person/standing/target is named
+  "tour_outcome_recorded",   // canonical tour completion + conversion rail committed
+  "application_invitation_prepared", // canonical invitation state committed; dispatch is explicit
 ];
 
 /*  Outcomes that ASSERT a durable object exists. Without its id the
@@ -222,6 +226,10 @@ function operatingReceipt({ outcome, result = null, context = null } = {}) {
     });
   }
 
+  if (LEASING_OUTCOMES.includes(outcome)) {
+    return leasingReceipt({ outcome, result });
+  }
+
   //  ── TECHNICIAN OUTCOMES ─────────────────────────────────────────
   //
   //  THE PRODUCT BAR. Every reply closes the loop:
@@ -279,6 +287,81 @@ function operatingReceipt({ outcome, result = null, context = null } = {}) {
     serviceOutcome: result.deduped ? "deduped" : "created",
     requiresHuman: diverged ? true : null,
     divergedFromDecision: diverged,
+    refusal: null,
+  });
+}
+
+const LEASING_OUTCOMES = [
+  "leasing_clarification",
+  "tour_outcome_recorded",
+  "application_invitation_prepared",
+];
+
+function leasingReceipt({ outcome, result }) {
+  const r = result || {};
+
+  if (outcome === "leasing_clarification") {
+    assertKeys(r, ["answer", "reasonCode", "isQuestion"], "result");
+    const text = String(r.answer || "").trim();
+    if (!text) return refusal(outcome, "no_clarification");
+    return Object.freeze({
+      kind: "operating_receipt",
+      outcome,
+      committed: false,
+      object: null,
+      text,
+      isClarificationQuestion: r.isQuestion !== false,
+      serviceOutcome: r.reasonCode || null,
+      requiresHuman: null,
+      divergedFromDecision: false,
+      refusal: null,
+    });
+  }
+
+  if (outcome === "tour_outcome_recorded") {
+    assertKeys(r, ["tourId", "conversionId", "prospectName", "standingLabel", "nextPrompt"], "result");
+    if (!r.tourId || !r.conversionId) return refusal(outcome, "no_committed_object");
+    const name = String(r.prospectName || "the prospect").trim();
+    const standing = String(r.standingLabel || "the recorded outcome").trim();
+    const next = String(r.nextPrompt || "").trim();
+    return Object.freeze({
+      kind: "operating_receipt",
+      outcome,
+      committed: true,
+      object: Object.freeze({ type: "leasing_conversion", id: r.conversionId }),
+      text: `Recorded ${name}'s tour as ${standing}.${next ? ` ${next}` : ""}`,
+      isClarificationQuestion: !!next,
+      serviceOutcome: "recorded",
+      requiresHuman: null,
+      divergedFromDecision: false,
+      refusal: null,
+    });
+  }
+
+  assertKeys(r, ["invitationId", "prospectName", "targetLabel", "dispatched", "capture"], "result");
+  if (!r.invitationId) return refusal(outcome, "no_committed_object");
+  if (r.capture != null) {
+    assertKeys(r.capture, ["tourId", "standingLabel"], "result.capture");
+    if (!r.capture.tourId) return refusal(outcome, "capture_without_tour");
+  }
+  const name = String(r.prospectName || "the prospect").trim();
+  const target = String(r.targetLabel || "the selected home").trim();
+  const capturePrefix = r.capture
+    ? `Recorded the tour as ${String(r.capture.standingLabel || "Ready to Apply").trim()}. `
+    : "";
+  const text = r.dispatched
+    ? `${capturePrefix}Application sent to ${name} for ${target}.`
+    : `${capturePrefix}Application prepared for ${name} at ${target}, but the tenant text did not send. The invitation is recorded for retry.`;
+  return Object.freeze({
+    kind: "operating_receipt",
+    outcome,
+    committed: true,
+    object: Object.freeze({ type: "application_invitation", id: r.invitationId }),
+    text,
+    isClarificationQuestion: false,
+    serviceOutcome: r.dispatched ? "provider_dispatched" : "prepared_not_dispatched",
+    requiresHuman: r.dispatched ? null : true,
+    divergedFromDecision: false,
     refusal: null,
   });
 }

@@ -61,9 +61,10 @@ ok("a vague question stays on the technician path",
 ok("a statement about pricing is not mistaken for a question",
   !!routesTo("technician", "Pricing changed yesterday"));
 ok("an application-send request is not mistaken for an application-status read",
-  !!routesTo("technician", "Can you send Maria an application?"));
-ok("a polite application-send request still stays on the action path",
-  !!routesTo("technician", "Please can you send Maria an application?"));
+  !!routesTo("leasing", "Can you send Maria an application?"));
+const leasingAction = routesTo("leasing", "Please can you send Maria an application?");
+ok("a polite application-send request reaches the leasing action adapter",
+  leasingAction && leasingAction.leasing.intent === "send_application");
 ok("a proposed fee waiver stays on the action path",
   !!routesTo("technician", "Can we waive Maria's fee?"));
 

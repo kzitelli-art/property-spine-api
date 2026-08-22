@@ -40,6 +40,7 @@ const proposedTerms = require("../applications/proposed_terms_service"); // Part
 const lifecycleRead = require("../applications/application_lifecycle_read");
 const applicationSendCommand = require("../applications/application_send_command"); // composite Send-application command (intent→prepare→dispatch)
 const applicationTargetAuthority = require("../applications/application_target_authority"); // Slice 9 Commit A: the ONE application-target resolver
+const applicationTargetRead = require("../applications/application_target_read");
 
 module.exports = function operatorModule(deps) {
   const {
@@ -4252,65 +4253,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     res.set("Cache-Control", "no-store");
     try {
       const property_id = req.operator.property_id;         // SERVER-DERIVED, never the query string
-
-      // Space grain per unit. The count travels with each exact space so the
-      // response can label whether the server derived the sole space or the
-      // operator must deliberately choose among siblings.
-      const shapes = (await pool.query(
-        `select u.id as unit_id, u.unit_number,
-                s.id as space_id, coalesce(s.space_label, '(whole unit)') as space_label,
-                count(s.id) over (partition by u.id)::int as space_count
-           from units u
-           join spaces s on s.unit_id = u.id
-          where u.property_id = $1
-          order by u.unit_number asc, s.space_label asc nulls first, s.id asc`,
-        [property_id]
-      )).rows;
-
-      // ONE canonical availability read for the whole property. The authority's
-      // OWN policy function is then applied per row — resolveApplicationTarget
-      // per unit would re-read availability for the entire property once per
-      // unit, which is quadratic. Same rule, evaluated once per position.
-      const avail = await availabilityRead(pool, { property_id });
-      const bySpace = new Map(avail.rows.map((r) => [String(r.space_id), r]));
-
-      const eligible_targets = [];
-      const eligible_units = [];
-
-      for (const target of shapes) {
-        const row = bySpace.get(String(target.space_id));
-        if (!row) continue;                  // classified by nobody: not evidence of availability
-        const verdict = applicationTargetAuthority.evaluateOfferability(row);
-        if (!verdict.offerable) continue;    // ordinary not-offerable, not a grain refusal
-
-        const item = {
-          unit_id: row.unit_id,
-          unit_number: row.unit_number,
-          space_id: row.space_id,
-          resolved_space_id: row.space_id,   // compatibility alias; both name the exact target
-          rentable_space_count: target.space_count,
-          position_kind: row.position_kind,
-          space_label: row.space_label,
-          marketing_state: row.marketing_state,
-          available_from: row.available_from,
-          availability_confidence: row.availability_confidence,
-          resolution_basis: target.space_count === 1 ? "sole_space_unit" : "chosen_space",
-        };
-        eligible_targets.push(item);
-        if (target.space_count === 1) eligible_units.push(item);
-      }
-
-      return res.json({
-        property_id,
-        eligible_target_count: eligible_targets.length,
-        eligible_count: eligible_units.length,
-        eligible_targets,
-        // Rolling-deploy compatibility: pre-cutover apps understand only
-        // sole-space units and must continue to fail closed for by-bed stock.
-        eligible_units,
-        unsupported_count: 0,
-        unsupported_multi_space_units: [],
-      });
+      return res.json(await applicationTargetRead.leaseableApplicationTargets(
+        pool,
+        { property_id }
+      ));
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.message || "leaseable-units read failed" });
     }

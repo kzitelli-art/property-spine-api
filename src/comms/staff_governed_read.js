@@ -12,21 +12,6 @@ const defaultAskSpineAnswer = require("../agent/ask_spine_answer");
 const staffThread = require("./staff_thread");
 const { operatingReceipt } = require("../conversation/receipt");
 
-async function inTransaction(pool, work) {
-  const client = await pool.connect();
-  try {
-    await client.query("begin");
-    const result = await work(client);
-    await client.query("commit");
-    return result;
-  } catch (error) {
-    await client.query("rollback").catch(() => {});
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
 function propertyContextAnswer(propertyContext, clarification) {
   if (propertyContext && propertyContext.outcome === "many") {
     const names = (clarification && clarification.options || [])
@@ -55,7 +40,7 @@ function makeStaffGovernedRead({ askSpineAnswer = defaultAskSpineAnswer } = {}) 
     propertyContext, clarification = null, askOptions = {},
   }) {
     // Phase 1: preserve the inbound before any model or governed read runs.
-    const recorded = await inTransaction(pool, (client) => staffThread.recordInbound(client, {
+    const recorded = await staffThread.inTransaction(pool, (client) => staffThread.recordInbound(client, {
       organizationId, userId, lineId, body, providerMessageId,
     }));
 
@@ -88,7 +73,7 @@ function makeStaffGovernedRead({ askSpineAnswer = defaultAskSpineAnswer } = {}) 
 
     // Phase 2: bind the answer to the already-durable inbound. A failure
     // leaves that inbound needs_human=true instead of silently losing it.
-    const outbound = await inTransaction(pool, (client) => staffThread.recordReply(client, {
+    const outbound = await staffThread.inTransaction(pool, (client) => staffThread.recordReply(client, {
       threadId: recorded.threadId,
       inboundId: recorded.inbound.id,
       userId,

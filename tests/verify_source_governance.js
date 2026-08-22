@@ -144,6 +144,8 @@ const GATES = [
     what: "Ask Spine attention: one canonical obligations reader, scoped ranking, no conversational SQL copy" },
   { file: "staff_sms_router.test.js",
     what: "staff SMS: governed reads converge on Ask Spine while actions and one-work-order turns remain operational" },
+  { file: "staff_sms_leasing_action.test.js",
+    what: "staff SMS leasing: explicit standing, exact target, canonical capture/send services, honest receipts" },
   { file: "personal_attention_convergence.test.js",
     what: "personal attention: dashboard and SMS share one person-scoped read using recorded accountability only" },
   { file: "gate_ask_spine_readers.js",

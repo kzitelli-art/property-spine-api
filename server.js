@@ -3369,6 +3369,9 @@ app.use("/", tenantLinkModule({
   pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService,
   getAgentService: () => agentApp._service,
   applicationsService: () => __applications && __applications._service,
+  getLeasingTourService: () => __leasingLeads && __leasingLeads._service,
+  getConversionService: () => __leasingConversion && __leasingConversion._service,
+  getApplicationInvitations: () => __applicationSubmission && __applicationSubmission._service,
 }));
 //  A2P 10DLC legal pages — /legal/privacy and /legal/sms-terms, plus .txt
 //  fallbacks. Public and unauthenticated by requirement: a carrier reviewer

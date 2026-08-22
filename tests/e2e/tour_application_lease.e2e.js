@@ -72,14 +72,60 @@ async function waitForApplicationText() {
   }
   throw new Error("the fake transport did not record an application text");
 }
+async function sendStaffSms({ from, to, body, sid }) {
+  const payload = new URLSearchParams({
+    MessageSid: sid,
+    From: from,
+    To: to,
+    Body: body,
+  });
+  const response = await fetch(BASE + "/communications/inbound-sms", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: payload.toString(),
+  });
+  const text = await response.text();
+  if (response.status >= 400) {
+    throw new Error(`staff SMS returned HTTP ${response.status}: ${text}`);
+  }
+  return { status: response.status, body: text };
+}
+async function waitForStaffReply(providerMessageId) {
+  for (let attempt = 0; attempt < 80; attempt++) {
+    const reply = (await q(
+      `select inbound.id as inbound_id, inbound.needs_human, inbound.classification,
+              outbound.id as outbound_id, outbound.body, outbound.reply_reason,
+              outbound.sms_status, outbound.sms_sid
+        from comm_events inbound
+         left join comm_events outbound on outbound.in_reply_to_comm_event_id = inbound.id
+        where inbound.sms_sid = $1
+        order by outbound.id desc nulls last
+        limit 1`,
+      [providerMessageId]
+    )).rows[0];
+    if (reply && reply.outbound_id) return reply;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Ask Spine did not record a reply for ${providerMessageId}`);
+}
 
 (async () => {
   console.log("\n== tour to exact-bed lease ==");
   const property = (await q(
-    "select id from properties where name='Skyline E2E' order by created_at desc limit 1"
+    "select id,organization_id from properties where name='Skyline E2E' order by created_at desc limit 1"
   )).rows[0];
   expect(!!property, "Skyline-shaped disposable fixture exists");
   const propertyId = property.id;
+  if (!property.organization_id) {
+    const organization = (await q(
+      `insert into organizations (name,slug)
+       values ('Skyline E2E Organization','skyline-e2e-organization')
+       on conflict (slug) do update set name=excluded.name
+       returning id`
+    )).rows[0];
+    await q("update properties set organization_id=$2 where id=$1", [propertyId, organization.id]);
+    property.organization_id = organization.id;
+  }
   const unit = (await q(
     "select id, unit_number from units where property_id=$1 and unit_number='3B' limit 1",
     [propertyId]
@@ -104,6 +150,9 @@ async function waitForApplicationText() {
     "select id,person_id from users where name='Mike Grivna' and is_active=true limit 1"
   )).rows[0];
   expect(!!mike, "Mike Grivna fixture user exists");
+  const mikePhone = "+12125550171";
+  const operationsLine = "+12125550172";
+  await q("update users set phone=$2 where id=$1", [mike.id, mikePhone]);
   await q(`insert into property_team_assignments
              (user_id,property_id,role_title,allowed_modules,active,can_manage_roles)
            values ($1,$2,'property_manager','{leasing,management,maintenance}',true,true)
@@ -197,6 +246,16 @@ async function waitForApplicationText() {
               inbound_enabled,outbound_enabled,outbound_policy,status)
            values ('+12155559999','property_facing',$1,'external','residents_and_prospects',
                    true,true,'proactive','active')`, [propertyId]);
+  await q(`update communication_lines
+              set status='retired', inbound_enabled=false,
+                  outbound_policy='disabled', outbound_enabled=false
+            where (organization_id=$1 and line_type='operations') or e164=$2`,
+    [property.organization_id, operationsLine]);
+  await q(`insert into communication_lines
+             (e164,line_type,organization_id,authority_ceiling,permitted_audience,
+              inbound_enabled,outbound_enabled,outbound_policy,status)
+           values ($1,'operations',$2,'operational','staff',true,true,'reply_only','active')`,
+    [operationsLine, property.organization_id]);
 
   const suffix = String(Date.now()).slice(-7);
   const name = `Skyline Journey ${suffix}`;
@@ -228,21 +287,50 @@ async function waitForApplicationText() {
   }), "book native tour slot");
   expect(!!booked.tour_id && booked.slot_id === opened.slot.id, "prospect booked onto that exact slot");
 
-  const completed = requireOk(await api(
-    "POST", `/operator/leasing/tours/${booked.tour_id}/complete`, { token: staffToken, body: {
-      idempotency_key: `journey-capture-${suffix}`,
-      actual_tour_host_user_id: mike.id,
-      follow_up_owner_user_id: mike.id,
-      units_shown: [unit.id], preferred_unit_id: unit.id,
-      feedback: {
-        tour_given: true, standing: "ready_to_apply",
-        disposition: "start_application", interest_level: "start_application",
-        what_landed: ["unit_fit"], next_move: "send_application",
-        next_moves: ["send_application"], notes: "Ready to apply for Bed B.",
-      },
-    } }
-  ), "post-tour capture");
-  expect(!!completed.conversion_id, "post-tour capture opened the application conversion");
+  requireOk(await api("POST", `/leasing/tours/${booked.tour_id}/check-in`, {
+    body: { actor_id: mike.id },
+  }), "tour check-in");
+
+  const vagueSid = `SM_E2E_VAGUE_${suffix}`;
+  const vagueAck = await sendStaffSms({
+    from: mikePhone,
+    to: operationsLine,
+    sid: vagueSid,
+    body: `${name}'s Skyline E2E tour went really well. Send the application.`,
+  });
+  expect(vagueAck.status === 200 && /<Response><\/Response>/.test(vagueAck.body),
+    "the real operations webhook acknowledges Mike's first text");
+  const vagueReply = await waitForStaffReply(vagueSid);
+  expect(vagueReply.reply_reason === "clarification"
+      && /Ready to Apply, Hot Lead, Possible, or Not Moving Forward/.test(vagueReply.body),
+    "Ask Spine asks for the canonical standing instead of guessing from 'went well'");
+  const stillOpen = (await q(
+    "select status,completed_at from leasing_tours where id=$1", [booked.tour_id]
+  )).rows[0];
+  expect(stillOpen.status !== "completed" && !stillOpen.completed_at,
+    "the vague text records no tour outcome");
+
+  const captureSid = `SM_E2E_CAPTURE_${suffix}`;
+  await sendStaffSms({
+    from: mikePhone,
+    to: operationsLine,
+    sid: captureSid,
+    body: `${name}'s Skyline E2E tour is done. They are Ready to Apply. Send the application.`,
+  });
+  const captureReply = await waitForStaffReply(captureSid);
+  expect(captureReply.reply_reason === "execution_receipt"
+      && /Recorded .* tour as Ready to Apply/.test(captureReply.body),
+    "Mike's second text records the explicit post-tour standing through Ask Spine");
+  expect(/Unit 3B/.test(captureReply.body) && /Unit 3B, Bed B/.test(captureReply.body),
+    "Ask Spine returns the exact-bed menu instead of choosing for Mike");
+
+  const completed = (await q(
+    `select id as conversion_id from leasing_conversions
+      where origin_tour_id=$1 and property_id=$2`,
+    [booked.tour_id, propertyId]
+  )).rows[0];
+  expect(!!completed && !!completed.conversion_id,
+    "the staff text opened the canonical application conversion");
   const captureEvent = (await q(
     `select metadata from tour_events where tour_id=$1 and event_type='completed' order by event_at desc limit 1`,
     [booked.tour_id]
@@ -276,14 +364,28 @@ async function waitForApplicationText() {
   expect(!!chosen && chosen.resolution_basis === "chosen_space",
     "the application selector offers exact Bed B instead of guessing");
 
-  const sent = requireOk(await api(
-    "POST", `/operator/leasing/conversions/${completed.conversion_id}/send-application`, {
-      token: staffToken,
-      body: { unit_id: unit.id, space_id: bedB.id, idempotency_key: `journey-app-${suffix}` },
-    }
-  ), "send application from conversion");
-  expect(sent.sent === true && sent.space_id === bedB.id,
-    "provider acceptance receipt preserves exact Bed B");
+  const targetSid = `SM_E2E_TARGET_${suffix}`;
+  await sendStaffSms({
+    from: mikePhone,
+    to: operationsLine,
+    sid: targetSid,
+    body: `Skyline E2E: send ${name} the application for Unit 3B, Bed B.`,
+  });
+  const targetReply = await waitForStaffReply(targetSid);
+  expect(targetReply.reply_reason === "execution_receipt"
+      && /Application sent to .* for Unit 3B, Bed B/.test(targetReply.body),
+    "Mike's exact-bed reply invokes the canonical application send command");
+  const invitation = (await q(
+    `select id,conversion_id,unit_id,space_id,status
+       from application_invitations
+      where conversion_id=$1
+      order by created_at desc limit 1`,
+    [completed.conversion_id]
+  )).rows[0];
+  expect(invitation && invitation.unit_id === unit.id && invitation.space_id === bedB.id,
+    "the staff-text application invitation persists exact Bed B");
+  expect(invitation.status === "provider_dispatched",
+    "the provider acceptance is recorded separately from Ask Spine's reply to Mike");
   const sms = await waitForApplicationText();
   expect(sms.to === phone, "the application text was addressed to the prospect in the fake transport");
   const tokenMatch = String(sms.body).match(/\/t\/application\/([A-Za-z0-9_-]+)/);
