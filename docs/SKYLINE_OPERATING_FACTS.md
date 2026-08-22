@@ -208,21 +208,20 @@ service 23/23, weekly-policy/callout service 25/25, real session + HTTP 20/20,
 canonical booking 33/33, and cross-turn agent offer/confirm 12/12. Ask Spine's
 schedule contract is 8/8, staff SMS routing is 30/30, and the existing real-HTTP
 Skyline-shaped lead-to-lease path is green through all 21 steps. All 43 API
-source-governance gates and all 1,457 app assertions pass.
+source-governance gates and all 1,466 app assertions pass.
 
-**Deployed 2026-08-21:** API `7bbb23e`, app `f1ea001`, and migrations 188-189 are
+**Deployed 2026-08-21:** API `3b72469`, app `567d15f`, and migrations 188-189 are
 live. The production ledger is verified at 189, all three native scheduler
-tables exist, and the deployed API health receipt identifies `7bbb23e`.
+tables exist, and the deployed API health receipt identifies `3b72469`.
 Skyline's operating timezone was set through the governed command to
 `America/New_York`; change receipt `289f0937-e1d5-4d67-81d0-cf44ec1f588c`.
 
-Skyline is not active yet. The Mike Grivna person exists in production, but no
-user/login, active staff context, Skyline assignment, or usable invite is linked
-to him, so he correctly cannot be selected as an eligible tour host. One legacy
-August 18 invite remains labeled `active`, but it is expired and carries no
-canonical role or person link; the next invite will supersede it. No schedule
-policy or availability row has been published, and Skyline is not in the
-agent-booking allowlist.
+Skyline is not active yet. One canonical Leasing invite is linked to the Mike
+Grivna person in production and the live Team receipt records `sms_sent`. It
+superseded both stale invites. Mike has not verified it yet, so no linked user,
+active staff context, Skyline assignment, or eligible tour host exists yet. No
+schedule policy or availability row has been published, and Skyline is not in
+the agent-booking allowlist.
 
 Migration 189 closes the old onboarding split. The signed-in Team form now asks
 for one canonical job, name, and phone. If that phone matches an existing person,
@@ -231,16 +230,27 @@ When the invitee verifies, one transaction establishes login, the audited
 user-to-person bridge, Skyline staff context, person-keyed work eligibility, and
 property-team access. This was proven 50/50 through real HTTP and Postgres on a
 disposable production clone, with the identity bridge regression green 44/44.
-It is deployed but has not been exercised with Mike; no SMS was sent.
+Production has now exercised the path through invite creation and provider
+acceptance. The acceptance transaction remains unexercised until Mike verifies.
+
+Staff SMS uses the same Ask Spine answer service as the dashboard, but a separate
+governed transport. It deliberately enters through an organization-owned
+`operations` number limited to staff and replies, while Skyline's property-facing
+number remains limited to residents and prospects. Skyline currently has no
+`organization_id`, so it cannot resolve an operations line. Production's one
+active operations line belongs to `Demo ORG` and has historic real provider
+traffic. Do not silently attach Skyline to that demo identity: first name the
+real operating organization, then explicitly retain/rebind/provision its staff
+number.
 
 ### Activation sequence
 
 1. **Complete.** Deploy migrations 188-189 and the API/app changes through the
    normal release gate.
-2. **Partial.** Skyline's operating timezone is `America/New_York`, and the
-   unified onboarding path is deployed. Send Mike one Leasing invite and let him
-   verify it; that one acceptance should establish the bridge, staff context,
-   Skyline leasing assignment, and property access together. Re-read all four.
+2. **Partial.** Skyline's operating timezone is `America/New_York`; one canonical
+   Mike Grivna Leasing invite is active and provider-accepted. Mike must verify
+   it; that one acceptance should establish the bridge, staff context, Skyline
+   leasing assignment, and property access together. Re-read all four.
 3. Publish the owner-confirmed weekly policy and its first 45 days of times;
    verify the session-scoped read returns the same slots and event receipts.
 4. Add Skyline's property ID to the governed agent-booking allowlist and deploy
@@ -250,6 +260,9 @@ It is deployed but has not been exercised with Mike; no SMS was sent.
    slot, tour, lead state, offer receipt, and event attribution.
 6. Only after that proof, exercise one owner-approved real SMS booking. No
    external calendar or scheduler becomes an authority anywhere in the path.
+7. Before the first staff SMS proof, establish Skyline's real organization and
+   its reply-only operations line. Then have Mike ask the same supported question
+   in the dashboard and by text and compare the governed answer receipts.
 
 ---
 
