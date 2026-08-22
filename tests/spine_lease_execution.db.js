@@ -83,7 +83,10 @@ async function refused(label, fn, expectCode) {
 
 (async () => {
   const q = (s, p) => pool.query(s, p);
-  const HASH = "b".repeat(64);
+  const sourceBytes = Buffer.from("%PDF-1.7\nspine execution retained lease source");
+  const HASH = require("crypto").createHash("sha256").update(sourceBytes).digest("hex");
+  const TERMS_HASH = "b".repeat(64);
+  const PACKAGE_HASH = "c".repeat(64);
 
   // ── a world: property, bed, resident, signer, application, packet ──
   const prop = (await q("insert into properties (name) values ('Spine Exec Proof') returning id")).rows[0].id;
@@ -92,6 +95,12 @@ async function refused(label, fn, expectCode) {
   const person = (await q("insert into persons (name) values ('Jane Smith') returning id")).rows[0].id;
   const signer = (await q("insert into users (name, role) values ('Authorised Signer','property_manager') returning id")).rows[0].id;
   const other = (await q("insert into users (name, role) values ('Someone Else','property_manager') returning id")).rows[0].id;
+  const source = (await q(
+    `insert into source_artifacts
+       (scope_type,scope_id,original_filename,mime_type,artifact_kind,byte_size,sha256,
+        content,stored_at,uploaded_by_user_id,uploaded_by_basis)
+     values ('property',$1,'lease.pdf','application/pdf','lease_template',$2,$3,$4,now(),$5,'proof')
+     returning id`, [prop, sourceBytes.length, HASH, sourceBytes, signer])).rows[0].id;
   const appId = (await q(
     `insert into lease_applications (property_id, unit_id, space_id, person_id, applicant_name, status)
      values ($1,$2,$3,$4,'Jane Smith','lease_ready') returning id`, [prop, unit, bed, person])).rows[0].id;
@@ -101,7 +110,7 @@ async function refused(label, fn, expectCode) {
   process.env.EXECUTED_LEASE_PROPERTY_IDS = prop;
 
   const terms = {
-    space_id: bed, rent: 1025, security_deposit: 1025,
+    space_id: bed, monthly_rent: 1025, security_deposit: 1025,
     lease_start_date: "2026-09-01", lease_end_date: "2027-08-31", concession_status: "none",
   };
   async function makePacket({ version, status = "executed", placeholder = false, hash = HASH,
@@ -109,10 +118,13 @@ async function refused(label, fn, expectCode) {
                               termsJson = terms, application = appId }) {
     const p = (await q(
       `insert into lease_packets (property_id, application_id, unit_id, version, status, is_placeholder,
-                                  instrument_body_sha256, instrument_form_code, terms_json,
+                                  instrument_body_sha256, instrument_form_code,
+                                  instrument_source_artifact_id, instrument_terms_sha256,
+                                  instrument_package_sha256, instrument_manifest, terms_json,
                                   resident_executed_at, company_executed_at)
-       values ($1,$2,$3,$4,'submitted',$5,$6,'SKYLINE_RESIDENTIAL',$7,now(),now()) returning id`,
-      [prop, application, unit, version, placeholder, hash, JSON.stringify(termsJson)])).rows[0].id;
+       values ($1,$2,$3,$4,'submitted',$5,$6,'SKYLINE_RESIDENTIAL',$7,$8,$9,$10::jsonb,$11,now(),now()) returning id`,
+      [prop, application, unit, version, placeholder, hash, source, TERMS_HASH, PACKAGE_HASH,
+       JSON.stringify({ source_sha256: HASH, terms_sha256: TERMS_HASH }), JSON.stringify(termsJson)])).rows[0].id;
     if (residentSig) await q(
       `insert into lease_packet_fields (lease_packet_id, field_key, section_key, label, field_type, signer_role, completed, completed_at, signed_by_person_id, ip_address, session_id)
        values ($1,'r','execution','Resident','signature','tenant',true,now(),$2,'203.0.113.7','sess-r')`, [p, person]);
@@ -162,9 +174,9 @@ async function refused(label, fn, expectCode) {
         lease_start_date, lease_end_date, concession_status, source, authority_basis,
         idempotency_key, payload_hash)
      values ($1,$2,$3,$4,$5,$6,$7,$8,'none','operator_proposed_terms','role_authority',$9,$10)`,
-    [appId, prop, signer, ptEv, terms.rent, terms.security_deposit,
+     [appId, prop, signer, ptEv, terms.monthly_rent, terms.security_deposit,
      terms.lease_start_date, terms.lease_end_date, "ptc-" + appId,
-     normalizeAndHash({ rent: terms.rent, security_deposit: terms.security_deposit,
+      normalizeAndHash({ rent: terms.monthly_rent, security_deposit: terms.security_deposit,
        lease_start_date: terms.lease_start_date, lease_end_date: terms.lease_end_date,
        concession_status: "none" }).payload_hash]);
   const good = await makePacket({ version: 10 });
@@ -177,7 +189,10 @@ async function refused(label, fn, expectCode) {
   ok("…basis is spine_instrument, not an attestation", rec.verification_basis === "spine_instrument", rec.verification_basis);
   ok("…channel is spine_esign, not hidden under 'other'", rec.execution_channel === "spine_esign", rec.execution_channel);
   ok("…lineage points at the packet that was executed", String(rec.source_lease_packet_id) === String(good));
-  ok("…document_sha256 EQUALS the packet's instrument hash", rec.document_sha256 === HASH, rec.document_sha256);
+  ok("…document_sha256 EQUALS the complete package hash", rec.document_sha256 === PACKAGE_HASH, rec.document_sha256);
+  await refused("…the database refuses a different hash on that packet", () => q(
+    "update executed_lease_records set document_sha256=$2 where id=$1",
+    [rec.id, "d".repeat(64)]));
   ok("…the verifier is the company SIGNER, a real user", String(rec.verified_by_user_id) === String(signer));
   ok("…the bed came from the packet, not a request body", String(rec.space_id) === String(bed));
   ok("…and the economics are the SIGNED ones", Number(rec.rent) === 1025);

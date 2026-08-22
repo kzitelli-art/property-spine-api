@@ -169,6 +169,8 @@ const GATES = [
   //  (interval_positions.db.js) proves the same states on 160 real beds.
   { file: "application_space_grain.test.js",
     what: "Application space grain (182): the bed is durable from the aim, whole-unit behaviour is unchanged, a bed is never guessed, and the refusal prose stays out of the deployed app's false branch" },
+  { file: "application_future_target.test.js",
+    what: "Future applications: the governed turn-ready date survives invitation, tenant submission, and application birth" },
   { file: "interval_position_hostile.test.js",
     what: "Interval tenancy: closed-interval arithmetic, which rights count, honest refusals, and the line it does not cross" },
   { file: "meeting_evidence_ingress.test.js",

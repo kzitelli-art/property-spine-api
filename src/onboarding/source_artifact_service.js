@@ -50,7 +50,7 @@ const SIGNATURES = Object.freeze([
 ]);
 
 const TEXTUAL_EXT = new Set(["csv", "tsv", "txt"]);
-const BINARY_EXT  = new Set(["xlsx", "xlsm", "xls", "pdf"]);
+const BINARY_EXT  = new Set(["xlsx", "xlsm", "xls", "pdf", "docx"]);
 
 /*  ── WHAT SHAPE IS LEGITIMATE DEPENDS ON WHAT THE ARTIFACT IS ───────
  *  This file's header warns that loan PDFs and contracts "are NOT solved
@@ -124,6 +124,10 @@ const KIND_SHAPES = Object.freeze({
   contracted_service_service_report: CONTRACTED_SERVICE_PDF_SHAPES,
   contracted_service_accounting_report: CONTRACTED_SERVICE_ACCOUNTING_SHAPES,
   contracted_service_other:      OTHER_SHAPES,
+  //  The signed lease rail retains the exact property form. DOCX is the
+  //  issued Skyline source; PDF is also admitted for properties whose form
+  //  of record is already fixed in that shape.
+  lease_template:                Object.freeze(["docx", "pdf"]),
 });
 
 //  Per-kind refusal copy. §5 and the repo's rule that a refusal a user
@@ -212,6 +216,9 @@ const KIND_REFUSAL = Object.freeze({
   contracted_service_other: (filename) =>
     `Spine retains other Contracted Services evidence as a PDF, spreadsheet or text file. ` +
     `"${filename}" is none of those. Upload the source in its original format.`,
+  lease_template: (filename) =>
+    `Spine retains a governing lease form as a .docx or PDF. "${filename}" is neither. ` +
+    `Upload the exact lease template used by the property.`,
 });
 
 function shapesFor(artifact_kind) {
@@ -284,8 +291,11 @@ function validateUpload({ filename, mimetype, buffer, artifact_kind = "rent_roll
       throw refusal("content_does_not_match_extension", ext === "pdf"
         ? `"${filename}" is named like a PDF but its contents are not one. ` +
           `Re-export it from the program that produced it.`
-        : `"${filename}" is named like a spreadsheet but its contents are not one. ` +
-          `Re-export it from the program that produced it.`);
+        : ext === "docx"
+          ? `"${filename}" is named like a Word document but its contents are not one. ` +
+            `Save it as a .docx from Word and upload it again.`
+          : `"${filename}" is named like a spreadsheet but its contents are not one. ` +
+            `Re-export it from the program that produced it.`);
     }
     //  A .pdf holding a workbook, or a .xlsx holding a PDF.
     //
@@ -399,7 +409,7 @@ async function store(db, {
  *  file is, not who may see it. */
 async function read(db, artifactId) {
   const row = (await db.query(
-    `select id, scope_type, scope_id, original_filename, mime_type,
+    `select id, scope_type, scope_id, original_filename, mime_type, artifact_kind,
             byte_size, sha256, content, uploaded_at, source_as_of_date
        from source_artifacts where id = $1`, [artifactId])).rows[0];
   return row || null;

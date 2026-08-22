@@ -7,11 +7,12 @@
    template fills the body", and generation "refuses to pretend
    otherwise". Migration 184 keeps that honesty and gives it teeth — the
    database now refuses to execute a packet that has no governing
-   instrument, instead of relying on a caller to remember.
+   instrument, instead of relying on a caller to remember. Migration 191
+   also requires the retained source and exact terms/package hashes.
 
    ── WHAT IS PROVEN ──────────────────────────────────────────────────
    · a placeholder cannot reach resident_executed or executed;
-   · an instrument with no identifying hash cannot be signed — a
+   · an instrument with no retained source and complete package cannot be signed — a
      signature is a signature ON something, and "the packet" is not
      specific enough when a packet is versioned;
    · the company cannot sign before the resident. That order is the
@@ -27,7 +28,7 @@
    ruling R1 in THREAD_HANDOFF, not answered here.
 
    ISOLATION: HARNESS_DATABASE_URL, refused if it matches DATABASE_URL.
-   Requires migrations 034 and 184.
+   Requires migrations 034, 184, and 191.
 
    Run:
      HARNESS_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/spine_proof \
@@ -60,15 +61,28 @@ async function accepts(label, sql, params) {
   const unit = (await q("insert into units (property_id, unit_number) values ($1,'3B') returning id", [prop])).rows[0].id;
   const person = (await q("insert into persons (name) values ('Jane Smith') returning id")).rows[0].id;
   const signer = (await q("insert into users (name, role) values ('Authorised Signer','property_manager') returning id")).rows[0].id;
+  const sourceBytes = Buffer.from("%PDF-1.7\nretained governing lease proof");
+  const sourceHash = require("crypto").createHash("sha256").update(sourceBytes).digest("hex");
+  const source = (await q(
+    `insert into source_artifacts
+       (scope_type,scope_id,original_filename,mime_type,artifact_kind,byte_size,sha256,
+        content,stored_at,uploaded_by_user_id,uploaded_by_basis)
+     values ('property',$1,'lease.pdf','application/pdf','lease_template',$2,$3,$4,now(),$5,'proof')
+     returning id`, [prop, sourceBytes.length, sourceHash, sourceBytes, signer])).rows[0].id;
   const appId = (await q(
     `insert into lease_applications (property_id, unit_id, person_id, applicant_name, status)
      values ($1,$2,$3,'Jane Smith','lease_ready') returning id`, [prop, unit, person])).rows[0].id;
 
-  const mkPacket = async (version, placeholder, hash) => (await q(
+  const mkPacket = async (version, placeholder, completePackage) => (await q(
     `insert into lease_packets (property_id, application_id, unit_id, version, status, is_placeholder,
-                                instrument_body_sha256, instrument_form_code)
-     values ($1,$2,$3,$4,'submitted',$5,$6,$7) returning id`,
-    [prop, appId, unit, version, placeholder, hash, hash ? "SKYLINE_RESIDENTIAL" : null])).rows[0].id;
+                                instrument_body_sha256, instrument_form_code,
+                                instrument_source_artifact_id, instrument_terms_sha256,
+                                instrument_package_sha256, instrument_manifest)
+     values ($1,$2,$3,$4,'submitted',$5,$6,$7,$8,$9,$10,$11::jsonb) returning id`,
+    [prop, appId, unit, version, placeholder, completePackage ? sourceHash : null,
+     completePackage ? "SKYLINE_RESIDENTIAL" : null, completePackage ? source : null,
+     completePackage ? "b".repeat(64) : null, completePackage ? "c".repeat(64) : null,
+     completePackage ? JSON.stringify({ source_sha256: sourceHash, terms_sha256: "b".repeat(64) }) : null])).rows[0].id;
 
   console.log("\n── 1 · A PLACEHOLDER CANNOT BE EXECUTED ───────────────────────");
   const ph = await mkPacket(1, true, null);
@@ -84,10 +98,10 @@ async function accepts(label, sql, params) {
   const noHash = await mkPacket(2, false, null);
   const m2 = await refuses("a real body with no instrument hash cannot be executed",
     "update lease_packets set status='resident_executed', resident_executed_at=now() where id=$1", [noHash]);
-  ok("…named as missing instrument identity", /instrument/i.test(m2 || ""), m2);
+  ok("…named as an incomplete retained lease package", /complete retained lease package/i.test(m2 || ""), m2);
 
   console.log("\n── 3 · THE RESIDENT SIGNS FIRST ───────────────────────────────");
-  const real = await mkPacket(3, false, "a".repeat(64));
+  const real = await mkPacket(3, false, true);
   const m3 = await refuses("the company cannot sign before the resident",
     "update lease_packets set status='executed', company_executed_at=now() where id=$1", [real]);
   ok("…and the refusal names the order", /resident/i.test(m3 || ""), m3);

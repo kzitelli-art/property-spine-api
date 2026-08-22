@@ -234,6 +234,13 @@ function availableFrom(p, state, asOf) {
     return { available_from: asOf, availability_confidence: "confirmed", blocking_fact: null };
   }
   if (state === "upcoming") {
+    if (p.turnover && p.turnover.expected_ready_date) {
+      return {
+        available_from: ymd(p.turnover.expected_ready_date),
+        availability_confidence: "expected",
+        blocking_fact: "turnover_plan_in_progress",
+      };
+    }
     // Notice gives a governed move-out date. What happens between move-out
     // and marketable is the turn, and its duration is not governed.
     const d = p.available_from || (p.lease ? p.lease.end_date : null);
@@ -244,6 +251,13 @@ function availableFrom(p, state, asOf) {
     };
   }
   if (state === "turnover_required") {
+    if (p.turnover && p.turnover.expected_ready_date) {
+      return {
+        available_from: ymd(p.turnover.expected_ready_date),
+        availability_confidence: "expected",
+        blocking_fact: "turnover_in_progress",
+      };
+    }
     return { available_from: null, availability_confidence: "incomplete", blocking_fact: "turnover_completion_not_scheduled" };
   }
   // Both BUILD 1 states refuse a date, for different honest reasons: one has
@@ -410,11 +424,25 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
   const horizonEnd = new Date(new Date(`${asOf}T00:00:00Z`).getTime() + horizon_days * 86400000)
     .toISOString().slice(0, 10);
 
+  // The active turn plan is the only place a future ready date can be governed.
+  // A lease expiration by itself cannot stand in for this operating commitment.
+  const turnoverByUnit = new Map((await pool.query(
+    `select distinct on (t.unit_id)
+            t.unit_id, t.id as turnover_id, t.ready_date as expected_ready_date,
+            t.outgoing_lease_id, l.end_date as outgoing_lease_end_date
+       from turnovers t
+       left join leases l on l.id = t.outgoing_lease_id
+      where t.property_id = $1 and t.status = 'in_progress' and t.unit_id is not null
+      order by t.unit_id, t.created_at desc, t.id desc`,
+    [property_id]
+  )).rows.map((r) => [String(r.unit_id), r]));
+
   const rows = dp.positions.map((p) => {
     const withOps = {
       ...p,
       operating_use: ops.get(String(p.space_id)) || null,
       triage: triageByUnit.get(String(p.unit_id)) || null,
+      turnover: turnoverByUnit.get(String(p.unit_id)) || null,
     };
     const m = marketingState(withOps, true);
     const dates = availableFrom(withOps, m.state, asOf);
@@ -437,6 +465,12 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       possession_state: p.possession_state,
       physical_readiness: p.physical_readiness,
       turnover_in_progress: p.physical_readiness === "turning",
+      turnover: withOps.turnover ? {
+        turnover_id: withOps.turnover.turnover_id,
+        expected_ready_date: ymd(withOps.turnover.expected_ready_date),
+        outgoing_lease_id: withOps.turnover.outgoing_lease_id || null,
+        outgoing_lease_end_date: ymd(withOps.turnover.outgoing_lease_end_date),
+      } : null,
       operating_use: withOps.operating_use,
 
       // ── WHY, not just THAT (BUILD 1) ──

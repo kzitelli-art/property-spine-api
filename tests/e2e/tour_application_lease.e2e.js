@@ -398,7 +398,7 @@ async function waitForStaffReply(providerMessageId) {
   expect(context.state === "open" && /Bed B/.test(context.unit_label || ""),
     "the tenant sees the exact home attached to the invitation");
   const captured = {
-    application_form_version: "tenant_v2",
+    application_form_version: "tenant_v3",
     date_of_birth: "1995-04-12", email: `skyline-${suffix}@example.com`, phone,
     address: { line1: "100 Test Street", line2: "", city: "Philadelphia", state: "PA", postal_code: "19147" },
     current_since: "2024-01", housing_status: "rent",
@@ -407,6 +407,8 @@ async function waitForStaffReply(providerMessageId) {
     desired_move_in: futureLeaseDates().start, move_flexibility: "plus_minus_7",
     occupants: 1, household_names: "", has_pets: "no", pets: "None",
     guarantor_needed: "no", additional_notes: "",
+    applicant_accuracy_certified: true,
+    electronic_delivery_consent: true,
   };
   const submitted = requireOk(await api("POST", "/applications/submit-public", {
     key: false, body: { token: applicationToken, applicant_name: name, captured },
@@ -452,7 +454,8 @@ async function waitForStaffReply(providerMessageId) {
   for (const field of requiredFields) {
     requireOk(await api("POST", `/t/lease/${leaseToken}/fields/${field.id}/complete`, {
       key: false,
-      body: { value: field.field_type === "signature" ? name : "SJ", session_id: `resident-${suffix}` },
+      body: { value: field.field_type === "signature" ? name : "SJ",
+              consent: field.field_type === "signature", session_id: `resident-${suffix}` },
     }), `resident field ${field.field_key}`);
   }
   requireOk(await api("POST", `/t/lease/${leaseToken}/submit`, { key: false, body: {} }),

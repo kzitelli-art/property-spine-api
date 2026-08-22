@@ -104,6 +104,8 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
     //  reported a blocked next action against the review's available one.
     `select id, version, status, is_placeholder, superseded_at,
             instrument_form_code, instrument_body_sha256,
+            instrument_source_artifact_id, instrument_terms_sha256,
+            instrument_package_sha256,
             resident_executed_at, company_executed_at,
             proposed_terms_confirmation_id
        from lease_packets
@@ -260,8 +262,12 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
     packet_id: packet.id,
     packet_version: packet.version,
     packet_status: packet.status,
-    carries_governing_instrument: !!packet.instrument_body_sha256,
+    carries_governing_instrument: !!(packet.instrument_source_artifact_id
+      && packet.instrument_body_sha256
+      && packet.instrument_terms_sha256
+      && packet.instrument_package_sha256),
     instrument_form_code: packet.instrument_form_code || null,
+    instrument_package_sha256: packet.instrument_package_sha256 || null,
     resident_executed_at: packet.resident_executed_at || null,
     company_executed_at: packet.company_executed_at || null,
     executed_lease: executed ? {

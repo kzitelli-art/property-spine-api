@@ -3,6 +3,15 @@
 const applicationTargetAuthority = require("./application_target_authority");
 const { availabilityRead } = require("../surfaces/availability_read");
 
+const ymd = (value) => value ? String(value).slice(0, 10) : null;
+function dateGapDays(from, to) {
+  if (!from || !to) return null;
+  const a = Date.parse(ymd(from) + "T00:00:00Z");
+  const b = Date.parse(ymd(to) + "T00:00:00Z");
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return Math.round((b - a) / 86400000);
+}
+
 /**
  * One exact application-target menu for every staff surface.
  *
@@ -40,7 +49,12 @@ async function leaseableApplicationTargets(q, { property_id }) {
   for (const target of shapes) {
     const row = bySpace.get(String(target.space_id));
     if (!row) continue;
-    const verdict = applicationTargetAuthority.evaluateOfferability(row);
+    const intendedMoveIn = applicationTargetAuthority.FUTURE_DATED_STATES.has(row.marketing_state)
+      ? ymd(row.available_from)
+      : null;
+    const verdict = applicationTargetAuthority.evaluateOfferability(row, {
+      intended_move_in: intendedMoveIn,
+    });
     if (!verdict.offerable) continue;
 
     const item = {
@@ -53,7 +67,15 @@ async function leaseableApplicationTargets(q, { property_id }) {
       space_label: row.space_label,
       marketing_state: row.marketing_state,
       available_from: row.available_from,
+      intended_move_in: intendedMoveIn,
       availability_confidence: row.availability_confidence,
+      turnover: row.turnover ? {
+        ...row.turnover,
+        turn_gap_days: dateGapDays(
+          row.turnover.outgoing_lease_end_date,
+          intendedMoveIn
+        ),
+      } : null,
       resolution_basis: target.space_count === 1 ? "sole_space_unit" : "chosen_space",
     };
     eligible_targets.push(item);

@@ -111,7 +111,8 @@ async function openApplicationFollowups(q, { propertyId, userId }) {
 function targetLabel(target) {
   const space = String(target.space_label || "").trim();
   const whole = !space || space === "(whole unit)";
-  return whole ? `Unit ${target.unit_number}` : `Unit ${target.unit_number}, ${space}`;
+  const home = whole ? `Unit ${target.unit_number}` : `Unit ${target.unit_number}, ${space}`;
+  return target.intended_move_in ? `${home} (target ${target.intended_move_in})` : home;
 }
 
 function targetMatches(text, target) {
@@ -371,12 +372,14 @@ function makeStaffLeasingAction({
           actorUserId: userId,
           unitId: targetChoice.target.unit_id,
           spaceId: targetChoice.target.space_id,
+          intendedMoveIn: targetChoice.target.intended_move_in,
           idempotencyKey: `staff-sms-application:${providerMessageId || recorded.inbound.id}`,
-          unitOfferable: async (q, { property_id, unit_id, space_id }) =>
+          unitOfferable: async (q, { property_id, unit_id, space_id, intended_move_in }) =>
             applicationTargetAuthority.resolveApplicationTarget(q, {
               property_id,
               unit_id,
               space_id,
+              intended_move_in,
               require_offerable: true,
             }),
         }

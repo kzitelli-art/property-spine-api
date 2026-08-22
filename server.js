@@ -3620,7 +3620,8 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
   // (built once at the movein mount). The operator keys-ready door is the PM
   // action delivery.js anticipated; without this injection it fails closed 503.
   deliveryHelper,
-  leasePacketsService: __leasePackets._service }));
+  leasePacketsService: __leasePackets._service,
+  leaseTemplateUpload: uploadSingle }));
 
 // ── STAFF IDENTITY BRIDGE (067) — the authorized point-and-confirm workflow:
 // classify accounts, suggest candidates (exact verified email only, never

@@ -44,9 +44,9 @@
 //  one place it must not.
 //
 //  ── ONE SIGNED INSTRUMENT, ONE IDENTITY, ONE RECORD ─────────────────
-//      executed_lease_records.document_sha256 = lease_packets.instrument_body_sha256
+//      executed_lease_records.document_sha256 = lease_packets.instrument_package_sha256
 //
-//  Asserted here and enforced by migration 185's check constraint. A
+//  Asserted here and enforced by migration 191's package-identity trigger. A
 //  signature is a signature ON something; if those two ever disagree, the
 //  record describes a document nobody signed.
 //
@@ -138,10 +138,12 @@ async function executeSpineLease(client, { lease_packet_id, company_signer_user_
       receipt: "This packet has no governing instrument and cannot become an executed lease.",
     });
   }
-  if (!pkt.instrument_body_sha256) {
+  if (!pkt.instrument_source_artifact_id || !pkt.instrument_body_sha256
+      || !pkt.instrument_terms_sha256 || !pkt.instrument_package_sha256
+      || !pkt.instrument_manifest) {
     throw svcErr(409, {
-      error: "instrument_identity_missing",
-      receipt: "This packet carries no instrument hash, so there is no document the signatures are on.",
+      error: "instrument_package_identity_missing",
+      receipt: "This packet does not bind retained lease bytes to the exact deal terms, so there is no complete package the signatures are on.",
     });
   }
   if (pkt.voided_at) {
@@ -263,9 +265,11 @@ async function executeSpineLease(client, { lease_packet_id, company_signer_user_
     lease_end_date: need("lease_end_date"),
     concession_status: terms.concession_status || "none",
     //  ONE SIGNED INSTRUMENT, ONE IDENTITY. This is the assertion the whole
-    //  adapter exists to make, and 185 enforces it in the schema too.
-    document_sha256: pkt.instrument_body_sha256,
-    document_reference: pkt.instrument_form_code || null,
+    //  adapter exists to make, and 191 enforces it in the schema too.
+    document_sha256: pkt.instrument_package_sha256,
+    document_reference: pkt.instrument_form_code
+      ? `${pkt.instrument_form_code} / retained source ${pkt.instrument_body_sha256}`
+      : `retained source ${pkt.instrument_body_sha256}`,
     document_version: pkt.version,
     executed_at: pkt.company_executed_at,
     signers,
@@ -310,6 +314,8 @@ async function executeSpineLease(client, { lease_packet_id, company_signer_user_
     verification_basis: "spine_instrument",
     execution_channel: "spine_esign",
     instrument_body_sha256: pkt.instrument_body_sha256,
+    instrument_terms_sha256: pkt.instrument_terms_sha256,
+    instrument_package_sha256: pkt.instrument_package_sha256,
     executed_lease_record_id: verified.record_id,
     idempotent: !!verified.idempotent,
     activation_status: verified.activation_status,

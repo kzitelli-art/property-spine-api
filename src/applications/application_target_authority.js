@@ -72,8 +72,9 @@
 const { availabilityRead } = require("../surfaces/availability_read");
 
 // ── THE OFFERABILITY POLICY — ONE STATE, BOTH BOUNDARIES ─────────────
-//  A targeted application invitation is supported ONLY when the canonical
-//  marketing state is marketable_now.
+//  A targeted invitation is supported when the canonical position is
+//  marketable now, or when an active turn plan supplies an expected-ready date
+//  on or before the intended move-in date.
 //
 //  ── WHY FORWARD TARGETING WAS WITHDRAWN (owner ruling) ──────────────
 //  Preparation previously admitted `upcoming` and `turnover_required` when a
@@ -86,18 +87,16 @@ const { availabilityRead } = require("../surfaces/availability_read");
 //  submission.
 //
 //  Two boundaries applying different standards is the defect, whatever the
-//  shared code path. Closing it truthfully needs the governed date to survive
-//  on the invitation — new durable lineage, therefore a migration, which this
-//  cut forbids. So the promise is withdrawn rather than half-kept:
+//  shared code path. Migration 190 makes the governed intended move-in date
+//  survive on the invitation and application, so both boundaries now reach
+//  the same verdict from durable facts:
 //
 //      A target may not be offered unless BOTH boundaries can independently
 //      reach the same verdict from durable facts alone.
 //
-//  `upcoming` and `turnover_required` REMAIN truthful canonical availability
-//  states. They are not flattened into `unavailable` and nothing about the
-//  availability read changes. They are simply not valid APPLICATION targets
-//  under the present durable application contract — a lineage limitation, not
-//  a statement about the position.
+//  `upcoming` and `turnover_required` remain truthful canonical availability
+//  states. They are targets only when the active turn carries a ready date;
+//  lease expiration alone still cannot manufacture one.
 //
 //  An allowlist rather than a denylist BY CONSTRUCTION: a marketing state
 //  added to availability_read later must be deliberately admitted here.
@@ -132,6 +131,10 @@ const REFUSAL = {
   // perfectly real and coming available on a governed date; what is missing is
   // durable application lineage able to carry a future-dated target.
   FUTURE_NOT_SUPPORTED:   "future_application_target_not_supported",
+  MOVE_IN_DATE_REQUIRED:  "application_move_in_date_required",
+  MOVE_IN_DATE_INVALID:   "application_move_in_date_invalid",
+  MOVE_IN_BEFORE_READY:   "application_move_in_before_expected_ready",
+  READY_DATE_NOT_GOVERNED:"application_ready_date_not_governed",
   // Submission-time only. Distinct from MULTI_SPACE: the unit CHANGED under an
   // open invitation rather than having been an unsupported shape all along.
   BECAME_AMBIGUOUS:       "application_target_became_ambiguous",
@@ -163,6 +166,14 @@ const REFUSAL_TEXT = {
     "Application links for a future availability date are not supported yet. "
     + "This unit is not available today, and an application record cannot yet "
     + "carry a future-dated target through to the lease.",
+  [REFUSAL.MOVE_IN_DATE_REQUIRED]:
+    "Choose the intended move-in date before sending an application for this future availability.",
+  [REFUSAL.MOVE_IN_DATE_INVALID]:
+    "The intended move-in date is invalid. Choose a calendar date.",
+  [REFUSAL.MOVE_IN_BEFORE_READY]:
+    "The intended move-in date is before the current turn plan expects this home to be ready.",
+  [REFUSAL.READY_DATE_NOT_GOVERNED]:
+    "This home is coming available, but no governed turn-ready date is on file yet. Set the turn target before sending an application.",
   [REFUSAL.BECAME_AMBIGUOUS]:     "This unit was changed to hold more than one rentable space after the application link was sent, so the application can no longer be attributed to a single space.",
   [REFUSAL.NO_LONGER_OFFERABLE]:  "This unit is no longer available, so this application link can no longer be used.",
 };
@@ -186,6 +197,14 @@ const ymd = (d) => {
   if (!d) return null;
   if (d instanceof Date) return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
   return String(d).slice(0, 10);
+};
+const isValidYmd = (value) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) return false;
+  const [year, month, day] = String(value).split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
 };
 
 // ── WHICH BED — ISOLATED SO IT CAN BE PROVEN DIRECTLY (182) ──────────
@@ -263,9 +282,16 @@ async function resolveApplicationTarget(q, {
   property_id,
   unit_id = null,
   space_id: chosen_space_id = null,
+  intended_move_in = null,
   require_offerable = true,
 } = {}) {
   if (!property_id) throw new Error("resolveApplicationTarget requires a server-derived property_id");
+  const normalizedIntendedMoveIn = ymd(intended_move_in);
+  if (intended_move_in != null && !isValidYmd(normalizedIntendedMoveIn)) {
+    return refuse(REFUSAL.MOVE_IN_DATE_INVALID, {
+      property_id, unit_id, resolved_space_id: null, httpStatus: 400,
+    });
+  }
 
   // ── A BED IMPLIES ITS UNIT (182) ──────────────────────────────────
   //  The server derives the parent rather than letting a caller assert both
@@ -369,9 +395,11 @@ async function resolveApplicationTarget(q, {
     blocking_reason: row.blocking_reason,
     available_from: ymd(row.available_from),
     availability_confidence: row.availability_confidence,
+    intended_move_in: normalizedIntendedMoveIn,
+    turnover: row.turnover || null,
   };
 
-  const verdict = evaluateOfferability(row);
+  const verdict = evaluateOfferability(row, { intended_move_in: normalizedIntendedMoveIn });
 
   if (!verdict.offerable && require_offerable) {
     return {
@@ -405,15 +433,20 @@ async function resolveApplicationTarget(q, {
 //                      turnover completion date ever lands, this branch starts
 //                      working without a policy rewrite.
 //  everything else     refused, including states this file does not know.
-function evaluateOfferability(row) {
+function evaluateOfferability(row, { intended_move_in = null } = {}) {
   const state = row.marketing_state;
 
   if (state === OFFERABLE_NOW) return { offerable: true, refusal_code: null };
 
-  // A truthful future-dated availability state. The refusal is about what the
-  // application record can carry, NOT about the position.
   if (FUTURE_DATED_STATES.has(state)) {
-    return { offerable: false, refusal_code: REFUSAL.FUTURE_NOT_SUPPORTED };
+    const available = ymd(row.available_from);
+    const target = ymd(intended_move_in);
+    if (!available || !["expected", "confirmed"].includes(row.availability_confidence)) {
+      return { offerable: false, refusal_code: REFUSAL.READY_DATE_NOT_GOVERNED };
+    }
+    if (!target) return { offerable: false, refusal_code: REFUSAL.MOVE_IN_DATE_REQUIRED };
+    if (target < available) return { offerable: false, refusal_code: REFUSAL.MOVE_IN_BEFORE_READY };
+    return { offerable: true, refusal_code: null };
   }
 
   return { offerable: false, refusal_code: REFUSAL.NOT_OFFERABLE };
@@ -443,9 +476,11 @@ function evaluateOfferability(row) {
 //
 //  The refusal is RETAINED for invitations with no bed on them: those are
 //  genuinely ambiguous, and the pre-182 reasoning applies to them unchanged.
-async function resolveSubmissionTarget(q, { property_id, unit_id, space_id = null } = {}) {
+async function resolveSubmissionTarget(q, {
+  property_id, unit_id, space_id = null, intended_move_in = null,
+} = {}) {
   const target = await resolveApplicationTarget(q, {
-    property_id, unit_id, space_id, require_offerable: false,
+    property_id, unit_id, space_id, intended_move_in, require_offerable: false,
   });
 
   if (!target.ok) {
@@ -467,7 +502,8 @@ async function resolveSubmissionTarget(q, { property_id, unit_id, space_id = nul
 
   if (!target.targeted) return target;   // untargeted invitation: nothing to revalidate
 
-  if (target.marketing_state !== OFFERABLE_NOW) {
+  const verdict = evaluateOfferability(target, { intended_move_in });
+  if (!verdict.offerable) {
     // TWO DIFFERENT FACTS, TWO DIFFERENT CODES.
     //
     //  A future-dated state was never a supportable target, so saying it is
@@ -479,7 +515,7 @@ async function resolveSubmissionTarget(q, { property_id, unit_id, space_id = nul
     //  the unit was taken, went down, became contested. That is a genuine
     //  no-longer-offerable.
     const code = FUTURE_DATED_STATES.has(target.marketing_state)
-      ? REFUSAL.FUTURE_NOT_SUPPORTED
+      ? verdict.refusal_code
       : REFUSAL.NO_LONGER_OFFERABLE;
     return {
       ...target,

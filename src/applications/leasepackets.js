@@ -1,30 +1,27 @@
 // =============================================================
-// leasepackets.js — Lease Packet v1, REBUILT as an obligation-input
-// collector (NOT an activation engine).
+// leasepackets.js — Lease review and execution package.
 //
 //   What this module IS:
-//     • the tenant-facing surface: one scrolling terms-review packet, inline
-//       acknowledgments, a final acknowledgment.
-//     • on final tenant submit (v3), it satisfies the SINGLE input
-//       ("terms_acknowledged") on the application's terms_review obligation
-//       — the one applications.js spawned at approve — and completes that
-//       obligation in the SAME transaction (§5b atomicity). Nothing else.
+//     • the tenant-facing surface: one scrolling package with the retained
+//       governing lease, exact deal-term schedule, acknowledgments and the
+//       resident signature when the property has established that source.
+//     • the demonstration-only fallback for properties that have not yet
+//       established a governing source; that path records review only.
+//     • the adapter from resident execution to the existing governed company
+//       countersign and tenancy services.
 //
-//   What this module is NOT, and structurally cannot be:
-//     • it has NO countersign route. Company acceptance is the tenancy
-//       anchor's job, and countersign fails closed until real lease
-//       execution exists (execution_evidence.js — Path B).
-//     • it NEVER writes lease_applications.status. There is no SQL in this
-//       file that touches that column.
-//     • it NEVER satisfies a signature input. reviewed demonstration terms
-//       ≠ signed governing lease — that equivalence is the retired bug.
+//   What this module is NOT:
+//     • it is not a second lease or tenancy writer. Company countersign
+//       delegates to the existing execution and tenancy services.
+//     • it never treats a demonstration acknowledgment as a signature.
+//     • it never executes a package without retained source bytes, an exact
+//       terms schedule, a deterministic package hash and signer identity.
 //
 //   The seam, exactly (v3):
-//     resident acknowledges  →  packet reaches 'submitted'  →
-//     satisfyObligation(terms_acknowledged) + completeObligation, atomically →
-//     application_next = "Executed lease required"  →  FULL STOP.
-//     Lease execution, countersign, tenancy: Path B, behind the execution
-//     seam. This module cannot reach any of it.
+//     demonstration only: resident acknowledges → terms-review obligation
+//       completes → packet stops at submitted.
+//     governing package: resident signs → resident_executed → authorized
+//       company countersign delegates to execution → tenancy/rent-roll truth.
 //
 //   Acknowledgment = review/intent only (Option A). The captured value is
 //   audit evidence, NOT a legally-binding signature on the final lease. It
@@ -45,6 +42,9 @@
 const express = require("express");
 const packetEligibility = require("./lease_packet_eligibility");
 const crypto = require("crypto");
+const mammoth = require("mammoth");
+const pdfParse = require("pdf-parse");
+const sourceArtifacts = require("../onboarding/source_artifact_service");
 
 module.exports = function leasePacketsModule(deps) {
   const { pool, satisfyObligation, completeObligation } = deps;
@@ -130,6 +130,38 @@ module.exports = function leasePacketsModule(deps) {
       receipt: fallbackReceipt,
       detail: e && e.message ? e.message : null,
     });
+  }
+
+  function extensionOf(filename) {
+    const match = String(filename || "").toLowerCase().match(/\.([a-z0-9]+)$/);
+    return match ? match[1] : "";
+  }
+
+  function safeDownloadName(filename) {
+    return String(filename || "lease-document")
+      .replace(/[\r\n"\\/]/g, "_")
+      .slice(0, 180) || "lease-document";
+  }
+
+  async function extractLeaseText(artifact) {
+    const ext = extensionOf(artifact && artifact.original_filename);
+    let text = "";
+    if (ext === "docx") {
+      const result = await mammoth.extractRawText({ buffer: artifact.content });
+      text = result && result.value;
+    } else if (ext === "pdf") {
+      const result = await pdfParse(artifact.content);
+      text = result && result.text;
+    } else {
+      throw packetError(409, "lease_source_shape_unsupported",
+        "The retained lease source is not a supported Word or PDF document.");
+    }
+    const normalized = String(text || "").replace(/\r\n/g, "\n").trim();
+    if (normalized.length < 500) {
+      throw packetError(409, "lease_source_text_unusable",
+        "The lease file is retained, but its text could not be read well enough to show the resident. Upload the original editable Word form or a text-based PDF.");
+    }
+    return normalized;
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -233,7 +265,36 @@ module.exports = function leasePacketsModule(deps) {
     return { ok: true, cfg, source: resolved.source };
   }
 
-  const money = (v) => (v != null && String(v).trim() !== "" ? "$" + v : null);
+  function dateOnly(value) {
+    if (value == null || String(value).trim() === "") return null;
+    if (value instanceof Date) {
+      return [value.getFullYear(), String(value.getMonth() + 1).padStart(2, "0"),
+        String(value.getDate()).padStart(2, "0")].join("-");
+    }
+    return String(value).slice(0, 10);
+  }
+
+  function displayDate(value) {
+    const normalized = dateOnly(value);
+    const match = normalized && normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return normalized;
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short", day: "numeric", year: "numeric", timeZone: "UTC",
+    }).format(new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))));
+  }
+
+  function punctuate(value) {
+    const text = value == null ? "" : String(value).trim();
+    return !text || /[.!?]$/.test(text) ? text : text + ".";
+  }
+
+  const money = (v) => {
+    if (v == null || String(v).trim() === "") return null;
+    const number = Number(String(v).replace(/[$,]/g, ""));
+    return Number.isFinite(number)
+      ? number.toLocaleString("en-US", { style: "currency", currency: "USD" })
+      : "$" + String(v).trim();
+  };
 
   // Property Spine's OWN plain-language sections. No NAA language/structure.
   // Every displayed economic value comes from validated application terms or
@@ -254,8 +315,8 @@ module.exports = function leasePacketsModule(deps) {
           : `Unit: ${terms.unit_label || terms.unit_number}, ${terms.property_address}.`,
       ] },
       { key: "term", title: "Lease Dates", ack: true, body: [
-        `Proposed start: ${terms.lease_start_date}.`,
-        `Proposed end: ${terms.lease_end_date}.`,
+        `Proposed start: ${displayDate(terms.lease_start_date)}.`,
+        `Proposed end: ${displayDate(terms.lease_end_date)}.`,
       ] },
       { key: "rent", title: "Monthly Rent", ack: true, body: [
         `Rent: ${money(terms.monthly_rent)} per month, due in advance on the 1st.`,
@@ -314,13 +375,101 @@ module.exports = function leasePacketsModule(deps) {
   //  Both halves are required together; a form named without the hash of its
   //  bytes cannot be signed ON anything, which is the one thing 184's guard
   //  exists to refuse.
-  function governingInstrumentFrom(cfg) {
+  function configuredInstrumentFrom(cfg) {
     const gi = cfg && cfg.governing_instrument;
     if (!gi || typeof gi !== "object") return null;
     const form_code = String(gi.form_code || "").trim();
     const body_sha256 = String(gi.body_sha256 || "").trim();
-    if (!form_code || !body_sha256) return null;
-    return { form_code, form_version: String(gi.form_version || "").trim() || null, body_sha256 };
+    const source_artifact_id = String(gi.source_artifact_id || "").trim();
+    if (!form_code || !body_sha256 || !source_artifact_id) {
+      throw packetError(409, "lease_instrument_configuration_incomplete",
+        "The property names a lease form but does not bind it to retained source bytes. Re-open Lease document setup and upload the exact governing form.");
+    }
+    return {
+      form_code,
+      form_version: String(gi.form_version || "").trim() || null,
+      body_sha256,
+      source_artifact_id,
+    };
+  }
+
+  function leaseTermsSchedule(terms, cfg) {
+    return {
+      schema_version: 1,
+      parties: {
+        landlord_entity: cfg.landlord_entity,
+        resident_names: terms.resident_names,
+        guarantor_name: terms.guarantor_name || null,
+      },
+      premises: {
+        property_name: terms.property_name,
+        property_address: terms.property_address,
+        unit_id: terms.unit_id,
+        unit_label: terms.unit_label || terms.unit_number,
+        space_id: terms.space_id || null,
+        space_label: terms.space_label || null,
+      },
+      term: {
+        lease_start_date: dateOnly(terms.lease_start_date),
+        lease_end_date: dateOnly(terms.lease_end_date),
+      },
+      economics: {
+        monthly_rent: terms.monthly_rent,
+        security_deposit: terms.security_deposit,
+        concession_status: terms.concession_status,
+        application_fee: cfg.application_fee,
+        amenity_fee: cfg.amenity_fee,
+        utility_fee_total: cfg.utility_fee_total == null ? null : cfg.utility_fee_total,
+        utility_fee_payment_preference: terms.utility_payment_preference || null,
+      },
+      operations: {
+        rent_payment_location: cfg.rent_payment_location || null,
+        utility_responsibility: cfg.utility_responsibility,
+        late_fee: cfg.late_fee,
+        notice_requirement: cfg.notice_requirement,
+        parking_interest: terms.parking_interest || null,
+      },
+    };
+  }
+
+  async function governingInstrumentFrom(q, property, cfg, terms) {
+    const configured = configuredInstrumentFrom(cfg);
+    if (!configured) return null;
+
+    const artifact = await sourceArtifacts.read(q, configured.source_artifact_id);
+    if (!artifact
+        || artifact.scope_type !== "property"
+        || String(artifact.scope_id) !== String(property.id)
+        || artifact.artifact_kind !== "lease_template") {
+      throw packetError(409, "lease_source_not_governing",
+        "The configured lease source is missing or does not belong to this property. Re-open Lease document setup before generating a packet.");
+    }
+    if (String(artifact.sha256).toLowerCase() !== configured.body_sha256.toLowerCase()) {
+      throw packetError(409, "lease_source_hash_mismatch",
+        "The retained lease bytes do not match the configured form hash. No packet was generated.");
+    }
+
+    const text_snapshot = await extractLeaseText(artifact);
+    const terms_schedule = leaseTermsSchedule(terms, cfg);
+    const terms_sha256 = stableHash(terms_schedule);
+    const manifest = {
+      schema_version: 1,
+      form_code: configured.form_code,
+      form_version: configured.form_version,
+      source_artifact_id: configured.source_artifact_id,
+      source_filename: artifact.original_filename,
+      source_sha256: artifact.sha256,
+      terms_sha256,
+    };
+    return {
+      ...configured,
+      artifact,
+      text_snapshot,
+      terms_schedule,
+      terms_sha256,
+      manifest,
+      package_sha256: stableHash(manifest),
+    };
   }
 
   // Fields carried by a packet, as [key, section, label, type, signer_role].
@@ -345,7 +494,7 @@ module.exports = function leasePacketsModule(deps) {
       ["ack_term",    "term",    "Lease dates",              "acknowledgment", "tenant"],
       ["ack_rent",    "rent",    "Monthly rent",             "acknowledgment", "tenant"],
       ["ack_deposit", "deposit", "Security deposit",         "acknowledgment", "tenant"],
-      ["ack_terms",   "ack",     "Demonstration terms",      "acknowledgment", "tenant"],
+      ["ack_terms",   "ack",     instrument ? "Official lease package" : "Demonstration terms", "acknowledgment", "tenant"],
     ];
     if (terms.guarantor_required) {
       base.push(["ack_guarantor", "ack", "Guarantor acknowledgment", "acknowledgment", "tenant"]);
@@ -360,24 +509,80 @@ module.exports = function leasePacketsModule(deps) {
   const NOT_THE_LEASE_STATEMENT =
     "This is a demonstration summary of proposed lease terms. It is not the complete lease, does not replace the governing lease and required addenda, and does not create or activate a tenancy.";
 
-  function buildRendered(terms, cfg) {
+  function governingPackageSections(schedule) {
+    const p = schedule.premises;
+    const e = schedule.economics;
+    const o = schedule.operations;
+    const unit = p.space_label
+      ? `${p.unit_label}, ${p.space_label}`
+      : p.unit_label;
+    return [
+      { key: "parties", title: "Parties & Home", ack: false, body: [
+        `Landlord: ${schedule.parties.landlord_entity}.`,
+        `Resident(s): ${schedule.parties.resident_names}.`,
+        schedule.parties.guarantor_name ? `Guarantor: ${schedule.parties.guarantor_name}.` : null,
+        `Home: ${unit}, ${p.property_address}.`,
+      ].filter(Boolean) },
+      { key: "term", title: "Lease Dates", ack: true, body: [
+        `Starts: ${displayDate(schedule.term.lease_start_date)}.`,
+        `Ends: ${displayDate(schedule.term.lease_end_date)}.`,
+      ] },
+      { key: "rent", title: "Rent", ack: true, body: [
+        `Monthly rent: ${money(e.monthly_rent)}.`,
+        o.rent_payment_location ? `Payment location: ${punctuate(o.rent_payment_location)}` : null,
+        `Late fee: ${money(o.late_fee)} if rent is not paid on time.`,
+      ].filter(Boolean) },
+      { key: "deposit", title: "Deposit & Property Charges", ack: true, body: [
+        `Security deposit: ${money(e.security_deposit)}.`,
+        e.application_fee != null ? `Application fee: ${money(e.application_fee)}.` : null,
+        e.amenity_fee != null ? `Amenity fee: ${money(e.amenity_fee)}.` : null,
+        e.utility_fee_total != null ? `Lease-term utility fee: ${money(e.utility_fee_total)}.` : null,
+        e.utility_fee_payment_preference ? `Resident payment preference: ${e.utility_fee_payment_preference}.` : null,
+      ].filter(Boolean) },
+      { key: "operations", title: "Utilities, Notice & Parking", ack: false, body: [
+        o.utility_responsibility,
+        `Renewal / move-out notice: ${punctuate(o.notice_requirement)}`,
+        o.parking_interest ? `Parking preference from application: ${o.parking_interest}. This is not a parking reservation.` : null,
+      ].filter(Boolean) },
+      { key: "ack", title: "Sign the Complete Package", ack: true, body: [
+        "The governing lease form and this exact deal-terms schedule are presented together as one package.",
+        "Your electronic signature applies to that complete package. The company must countersign before the tenancy is activated.",
+      ] },
+    ];
+  }
+
+  function buildRendered(terms, cfg, instrument = null) {
+    const isInstrument = !!instrument;
     return {
-      title: "Lease Terms Review — Demonstration",
+      title: isInstrument ? "Residential Lease Package" : "Lease Terms Review — Demonstration",
       is_placeholder: false,
-      is_demonstration_summary: true,
-      not_the_lease: NOT_THE_LEASE_STATEMENT,
+      is_demonstration_summary: !isInstrument,
+      is_governing_lease_package: isInstrument,
+      not_the_lease: isInstrument ? null : NOT_THE_LEASE_STATEMENT,
       subtitle: terms.property_address || "",
       summary: {
         landlord_entity: cfg.landlord_entity,
         resident_names: terms.resident_names || "",
         unit: terms.unit_label || terms.unit_number || "",
-        lease_start_date: terms.lease_start_date || "",
-        lease_end_date: terms.lease_end_date || "",
+        lease_start_date: dateOnly(terms.lease_start_date) || "",
+        lease_end_date: dateOnly(terms.lease_end_date) || "",
         monthly_rent: terms.monthly_rent ?? "",
         security_deposit: terms.security_deposit ?? "",
         guarantor_required: !!terms.guarantor_required,
       },
-      sections: demoSummarySections(terms, cfg),
+      sections: isInstrument
+        ? governingPackageSections(instrument.terms_schedule)
+        : demoSummarySections(terms, cfg),
+      instrument: isInstrument ? {
+        form_code: instrument.form_code,
+        form_version: instrument.form_version,
+        source_filename: instrument.artifact.original_filename,
+        source_sha256: instrument.body_sha256,
+        terms_sha256: instrument.terms_sha256,
+        package_sha256: instrument.package_sha256,
+        terms_schedule: instrument.terms_schedule,
+        text_snapshot: instrument.text_snapshot,
+      } : null,
     };
   }
 
@@ -397,6 +602,7 @@ module.exports = function leasePacketsModule(deps) {
     const { packet, fields, documents } = bundle;
     const req = fields.filter((f) => f.required);
     const done = req.filter((f) => f.completed).length;
+    const carriesInstrument = !!packet.instrument_source_artifact_id;
     return {
       id: packet.id,
       property_id: packet.property_id,
@@ -408,8 +614,18 @@ module.exports = function leasePacketsModule(deps) {
       sent_at: packet.sent_at || null,
       tenant_token_expires_at: packet.tenant_token_expires_at || null,
       is_placeholder: packet.is_placeholder,
-      is_demonstration_summary: true,
-      acknowledgment_meaning: "review_intent_only",   // NOT a signature on the lease
+      is_demonstration_summary: !carriesInstrument,
+      is_governing_lease_package: carriesInstrument,
+      acknowledgment_meaning: carriesInstrument ? "lease_execution" : "review_intent_only",
+      instrument: carriesInstrument ? {
+        form_code: packet.instrument_form_code,
+        form_version: packet.instrument_form_version,
+        source_filename: packet.instrument_manifest && packet.instrument_manifest.source_filename,
+        source_sha256: packet.instrument_body_sha256,
+        terms_sha256: packet.instrument_terms_sha256,
+        package_sha256: packet.instrument_package_sha256,
+        download_path: `/t/lease/{token}/instrument`,
+      } : null,
       terms: packet.terms_json,
       rendered_snapshot: packet.rendered_snapshot,
       progress: { completed: done, required: req.length },
@@ -423,6 +639,7 @@ module.exports = function leasePacketsModule(deps) {
         id: d.id, document_type: d.document_type, title: d.title,
         file_url: d.file_url, required_acknowledgment: d.required_acknowledgment,
         acknowledged_at: d.acknowledged_at,
+        has_retained_source: !!d.source_artifact_id,
       })),
     };
   }
@@ -451,6 +668,192 @@ module.exports = function leasePacketsModule(deps) {
   // One implementation, two operator doors:
   //   • legacy OPERATOR_KEY routes below
   //   • staff-session /operator/leasing/* adapters in operator.js
+
+  function normalizedLeaseSetupTerms(input = {}) {
+    const out = {};
+    for (const key of [
+      ...REQUIRED_CONFIG_KEYS,
+      "rent_payment_location", "insurance_note", "utility_fee_total",
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(input, key)) {
+        const value = input[key];
+        out[key] = value == null ? null : String(value).trim();
+      }
+    }
+    return out;
+  }
+
+  async function propertyLeaseConfiguration(q, propertyId) {
+    const property = (await q.query(
+      `select id, name, address, lease_config from properties where id=$1`,
+      [propertyId])).rows[0];
+    if (!property) throw packetError(404, "property_not_found", "No property with that id.");
+
+    const cfg = property.lease_config && typeof property.lease_config === "object"
+      ? property.lease_config
+      : {};
+    const configured = cfg.governing_instrument && typeof cfg.governing_instrument === "object"
+      ? cfg.governing_instrument
+      : null;
+    const artifact = configured && configured.source_artifact_id
+      ? await sourceArtifacts.describe(q, configured.source_artifact_id)
+      : null;
+    const authority = cfg.execution_authority && typeof cfg.execution_authority === "object"
+      ? cfg.execution_authority
+      : {};
+    const signerIds = Array.isArray(authority.company_signer_user_ids)
+      ? authority.company_signer_user_ids.map(String)
+      : [];
+    let signers = [];
+    if (signerIds.length) {
+      signers = (await q.query(
+        `select id, name from users where id = any($1::uuid[]) and is_active=true order by name`,
+        [signerIds])).rows;
+    }
+    const missingTerms = REQUIRED_CONFIG_KEYS.filter((key) =>
+      cfg[key] == null || String(cfg[key]).trim() === "");
+    const sourceMatches = !!(artifact
+      && artifact.scope_type === "property"
+      && String(artifact.scope_id) === String(property.id)
+      && artifact.artifact_kind === "lease_template"
+      && String(artifact.sha256).toLowerCase() === String(configured.body_sha256 || "").toLowerCase());
+
+    return {
+      property: { id: property.id, name: property.name, address: property.address },
+      terms: Object.fromEntries([
+        ...REQUIRED_CONFIG_KEYS,
+        "rent_payment_location", "insurance_note", "utility_fee_total",
+      ].map((key) => [key, cfg[key] == null ? "" : cfg[key]])),
+      application_options: cfg.application_options || {},
+      instrument: configured ? {
+        form_code: configured.form_code || null,
+        form_version: configured.form_version || null,
+        source_artifact_id: configured.source_artifact_id || null,
+        source_filename: artifact && artifact.original_filename,
+        source_sha256: artifact && artifact.sha256,
+        source_as_of_date: artifact ? dateOnly(artifact.source_as_of_date) : null,
+        configured_sha256: configured.body_sha256 || null,
+        source_matches_configuration: sourceMatches,
+      } : null,
+      company_signers: signers,
+      missing_terms: missingTerms,
+      ready_to_generate: sourceMatches && missingTerms.length === 0,
+      ready_to_execute: sourceMatches && missingTerms.length === 0 && signers.length > 0,
+    };
+  }
+
+  async function configurePropertyLeaseTemplate(client, {
+    propertyId,
+    actorUserId,
+    actorName = null,
+    file,
+    formCode,
+    formVersion = null,
+    sourceAsOfDate = null,
+    leaseTerms = {},
+    applicationOptions = {},
+    confirmCompanySigner = false,
+  } = {}) {
+    if (!propertyId || !actorUserId) {
+      throw packetError(400, "lease_setup_identity_required",
+        "A property and authenticated setup operator are required.");
+    }
+    if (!file || !file.buffer) {
+      throw packetError(400, "lease_template_required",
+        "Choose the exact Word or PDF lease form used by this property.");
+    }
+    const code = String(formCode || "").trim();
+    if (!code || code.length > 120 || !/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(code)) {
+      throw packetError(400, "lease_form_code_invalid",
+        "Form code is required and may contain letters, numbers, dots, dashes, and underscores.");
+    }
+    const version = String(formVersion || "").trim() || null;
+    if (version && version.length > 120) {
+      throw packetError(400, "lease_form_version_invalid", "Form version is too long.");
+    }
+    const asOf = String(sourceAsOfDate || "").trim() || null;
+    if (asOf && !/^\d{4}-\d{2}-\d{2}$/.test(asOf)) {
+      throw packetError(400, "lease_source_date_invalid", "Source date must be YYYY-MM-DD.");
+    }
+    if (confirmCompanySigner !== true) {
+      throw packetError(409, "company_signer_confirmation_required",
+        "Confirm that this signed-in account is authorized to countersign this property's leases.");
+    }
+
+    sourceArtifacts.validateUpload({
+      filename: file.originalname,
+      mimetype: file.mimetype,
+      buffer: file.buffer,
+      artifact_kind: "lease_template",
+    });
+    await extractLeaseText({ original_filename: file.originalname, content: file.buffer });
+
+    const property = (await client.query(
+      `select id, name, lease_config from properties where id=$1 for update`,
+      [propertyId])).rows[0];
+    if (!property) throw packetError(404, "property_not_found", "No property with that id.");
+
+    const stored = await sourceArtifacts.store(client, {
+      scope_type: "property",
+      scope_id: property.id,
+      filename: file.originalname,
+      mimetype: file.mimetype,
+      buffer: file.buffer,
+      uploaded_by_user_id: actorUserId,
+      authority_basis: "authenticated management lease setup",
+      source_as_of_date: asOf,
+      artifact_kind: "lease_template",
+    });
+    if (stored.artifact_kind !== "lease_template") {
+      throw packetError(409, "lease_source_kind_conflict",
+        "These exact bytes are already retained under a different source kind. Upload the actual lease form rather than relabeling another source.");
+    }
+
+    const current = property.lease_config && typeof property.lease_config === "object"
+      ? property.lease_config
+      : {};
+    const next = {
+      ...current,
+      ...normalizedLeaseSetupTerms(leaseTerms),
+      application_options: {
+        ...(current.application_options || {}),
+        ask_parking_interest: applicationOptions.ask_parking_interest === true,
+        parking_note: String(applicationOptions.parking_note || "").trim() || null,
+        ask_utility_payment_preference: applicationOptions.ask_utility_payment_preference === true,
+        utility_payment_note: String(applicationOptions.utility_payment_note || "").trim() || null,
+      },
+      governing_instrument: {
+        form_code: code,
+        form_version: version,
+        body_sha256: stored.sha256,
+        source_artifact_id: stored.id,
+        source_as_of_date: asOf,
+      },
+      execution_authority: {
+        ...(current.execution_authority || {}),
+        company_signer_user_ids: [String(actorUserId)],
+        confirmed_by_user_id: String(actorUserId),
+        confirmed_signer_name: actorName || null,
+        confirmed_at: new Date().toISOString(),
+        basis: "authenticated operator confirmed as company signer during lease setup",
+      },
+    };
+    const missingTerms = REQUIRED_CONFIG_KEYS.filter((key) =>
+      next[key] == null || String(next[key]).trim() === "");
+    if (missingTerms.length) {
+      throw packetError(409, "lease_configuration_incomplete",
+        "Complete the required property terms before establishing the governing lease form.",
+        { missing: missingTerms });
+    }
+
+    await client.query(
+      `update properties set lease_config=$2::jsonb, updated_at=now() where id=$1`,
+      [property.id, JSON.stringify(next)]);
+    return {
+      receipt: `${stored.original_filename} is now the retained governing lease source for ${property.name}. The signed-in account is the recorded company signer.`,
+      configuration: await propertyLeaseConfiguration(client, property.id),
+    };
+  }
 
   async function generateLeasePacket(client, {
     applicationId,
@@ -575,6 +978,9 @@ module.exports = function leasePacketsModule(deps) {
       lease_end_date: confirmation.lease_end_date || "",
       concession_status: confirmation.concession_status || "unknown",
       guarantor_required: !!app.guarantor_name,
+      guarantor_name: app.guarantor_name || null,
+      utility_payment_preference: captured.utility_payment_preference || null,
+      parking_interest: captured.parking_interest || null,
     };
 
     const check = requireLeaseConfig(prop, terms);
@@ -582,7 +988,7 @@ module.exports = function leasePacketsModule(deps) {
       throw packetError(
         409,
         "lease_configuration_incomplete",
-        "Cannot generate the demonstration summary — required lease configuration or confirmed terms are missing. This fails closed rather than showing a plausible default that could be materially wrong.",
+        "Cannot generate the lease package — required property configuration or confirmed terms are missing. This fails closed rather than showing a plausible default that could be materially wrong.",
         { missing: check.missing }
       );
     }
@@ -599,8 +1005,12 @@ module.exports = function leasePacketsModule(deps) {
     //      afterwards would not be what was rendered and hashed, and the
     //      signer would not be signing the exact hashed instrument, which is
     //      the single guarantee 184 exists to make.
-    const instrument = governingInstrumentFrom(check.cfg);
-    const rendered = buildRendered(terms, check.cfg);
+    const instrument = await governingInstrumentFrom(client, prop, check.cfg, terms);
+    if (instrument && terms.guarantor_required) {
+      throw packetError(409, "guarantor_execution_not_connected",
+        "This application requires a guarantor. The resident lease cannot be issued until a separate guarantor signing link is connected; the resident cannot sign for the guarantor.");
+    }
+    const rendered = buildRendered(terms, check.cfg, instrument);
     const renderedHash = stableHash(rendered);
     // Already read and already assessed by the predicate above.
     const current = existingPacket;
@@ -612,14 +1022,24 @@ module.exports = function leasePacketsModule(deps) {
             set terms_json=$2, rendered_snapshot=$3, rendered_snapshot_hash=$4,
                 proposed_terms_confirmation_id=$5,
                 instrument_form_code=$6, instrument_form_version=$7,
-                instrument_body_sha256=$8,
-                instrument_established_at = case when $8::text is null then null else now() end,
-                is_placeholder=false, updated_at=now()
+                 instrument_body_sha256=$8,
+                 instrument_source_artifact_id=$9,
+                 instrument_terms_sha256=$10,
+                 instrument_package_sha256=$11,
+                 instrument_manifest=$12,
+                 instrument_text_snapshot=$13,
+                 instrument_established_at = case when $9::uuid is null then null else now() end,
+                 is_placeholder=false, updated_at=now()
           where id=$1 returning *`,
         [current.id, terms, rendered, renderedHash, confirmation.id,
          instrument ? instrument.form_code : null,
          instrument ? instrument.form_version : null,
-         instrument ? instrument.body_sha256 : null]
+         instrument ? instrument.body_sha256 : null,
+         instrument ? instrument.source_artifact_id : null,
+         instrument ? instrument.terms_sha256 : null,
+         instrument ? instrument.package_sha256 : null,
+         instrument ? instrument.manifest : null,
+         instrument ? instrument.text_snapshot : null]
       )).rows[0];
       await audit(client, auditContext, pk.id, "system", "draft_regenerated", {
         rendered_snapshot_hash: renderedHash,
@@ -635,11 +1055,14 @@ module.exports = function leasePacketsModule(deps) {
         `insert into lease_packets
            (property_id, application_id, unit_id, version, status, terms_json,
             rendered_snapshot, rendered_snapshot_hash, is_placeholder,
-            supersedes_packet_id, proposed_terms_confirmation_id,
-            instrument_form_code, instrument_form_version, instrument_body_sha256,
-            instrument_established_at)
+             supersedes_packet_id, proposed_terms_confirmation_id,
+             instrument_form_code, instrument_form_version, instrument_body_sha256,
+             instrument_source_artifact_id, instrument_terms_sha256,
+             instrument_package_sha256, instrument_manifest, instrument_text_snapshot,
+             instrument_established_at)
          values ($1,$2,$3,$4,'draft',$5,$6,$7,false,$8,$9,$10,$11,$12,
-                 case when $12::text is null then null else now() end)
+                  $13,$14,$15,$16,$17,
+                  case when $13::uuid is null then null else now() end)
          returning *`,
         [
           app.property_id, app.id, terms.unit_id, newVersion, terms,
@@ -647,6 +1070,11 @@ module.exports = function leasePacketsModule(deps) {
           instrument ? instrument.form_code : null,
           instrument ? instrument.form_version : null,
           instrument ? instrument.body_sha256 : null,
+          instrument ? instrument.source_artifact_id : null,
+          instrument ? instrument.terms_sha256 : null,
+          instrument ? instrument.package_sha256 : null,
+          instrument ? instrument.manifest : null,
+          instrument ? instrument.text_snapshot : null,
         ]
       )).rows[0];
       if (supersedes) {
@@ -669,9 +1097,9 @@ module.exports = function leasePacketsModule(deps) {
     const requiredFields = requiredFieldsFor(terms, instrument);
     for (let i = 0; i < requiredFields.length; i++) {
       const [fk, sk, label, ft, role] = requiredFields[i];
-      const clauseHash = stableHash(
-        rendered.sections.find((s) => s.key === sk) || { sk, label }
-      );
+      const clauseHash = instrument && ft === "signature"
+        ? instrument.package_sha256
+        : stableHash(rendered.sections.find((s) => s.key === sk) || { sk, label });
       //  The company signature is the one field that is NOT required: the
       //  resident's submit gate counts required-and-incomplete fields, and
       //  the company signs after the resident (184's trigger). Requiring it
@@ -705,9 +1133,10 @@ module.exports = function leasePacketsModule(deps) {
     for (const d of docs) {
       await client.query(
         `insert into lease_packet_documents
-           (lease_packet_id, document_type, title, required_acknowledgment)
-         values ($1,$2,$3,$4)`,
-        [pk.id, d.document_type, d.title, d.required_acknowledgment]
+           (lease_packet_id, document_type, title, required_acknowledgment, source_artifact_id)
+         values ($1,$2,$3,$4,$5)`,
+        [pk.id, d.document_type, d.title, d.required_acknowledgment,
+         instrument && d.document_type === "lease_body" ? instrument.source_artifact_id : null]
       );
     }
 
@@ -715,13 +1144,17 @@ module.exports = function leasePacketsModule(deps) {
       application_id: app.id,
       proposed_terms_confirmation_id: confirmation.id,
       actor_user_id: actorUserId,
-      is_demonstration_summary: true,
+      is_demonstration_summary: !instrument,
+      instrument_source_artifact_id: instrument ? instrument.source_artifact_id : null,
+      instrument_package_sha256: instrument ? instrument.package_sha256 : null,
       config_source: check.source,
     });
 
     const bundle = await getBundle(client, pk.id);
     return {
-      receipt: `Lease Terms Review (Demonstration) generated for ${terms.resident_names || "applicant"} from the current confirmed proposed terms. This is a demonstration summary, not the lease; the complete lease and required addenda govern.`,
+      receipt: instrument
+        ? `Lease package generated for ${terms.resident_names || "applicant"}. It binds the retained ${instrument.form_code} source to the exact confirmed unit, dates, rent, deposit, and property terms.`
+        : `Lease Terms Review (Demonstration) generated for ${terms.resident_names || "applicant"} from the current confirmed proposed terms. This is a demonstration summary, not the lease; the complete lease and required addenda govern.`,
       packet: publicPacket(bundle),
     };
   }
@@ -817,6 +1250,20 @@ module.exports = function leasePacketsModule(deps) {
       );
     }
 
+    if (row.instrument_source_artifact_id) {
+      const source = await sourceArtifacts.read(client, row.instrument_source_artifact_id);
+      if (!source
+          || String(source.scope_id) !== String(row.property_id)
+          || source.artifact_kind !== "lease_template"
+          || String(source.sha256).toLowerCase() !== String(row.instrument_body_sha256 || "").toLowerCase()
+          || !row.instrument_terms_sha256
+          || !row.instrument_package_sha256
+          || !row.instrument_manifest) {
+        throw packetError(409, "lease_package_source_unavailable",
+          "The complete retained lease package cannot be reproduced. Regenerate it from Lease document setup before sending anything to the resident.");
+      }
+    }
+
     const days = Number(expiresDays);
     if (!Number.isFinite(days) || days <= 0) {
       throw packetError(400, "invalid_expiry", "expires_days must be a positive number.");
@@ -851,7 +1298,9 @@ module.exports = function leasePacketsModule(deps) {
     });
 
     return {
-      receipt: `Link issued (expires in ${days} days). This captures the resident's acknowledgment of demonstration terms only — not a signature on the lease.`,
+      receipt: pk.instrument_source_artifact_id
+        ? `Lease-signing link issued (expires in ${days} days). It presents the retained governing form and the exact deal terms as one package.`
+        : `Link issued (expires in ${days} days). This captures the resident's acknowledgment of demonstration terms only — not a signature on the lease.`,
       already_issued: false,
       tenant_url: `${BASE_URL}/t/lease/${encodeURIComponent(token)}`,
       packet_id: pk.id,
@@ -971,6 +1420,22 @@ module.exports = function leasePacketsModule(deps) {
         });
       }
 
+      const property = (await client.query(
+        `select lease_config from properties where id=$1`, [pk.property_id])).rows[0] || {};
+      const executionAuthority = property.lease_config
+        && property.lease_config.execution_authority;
+      const companySignerIds = executionAuthority
+        && Array.isArray(executionAuthority.company_signer_user_ids)
+        ? executionAuthority.company_signer_user_ids.map(String)
+        : [];
+      if (!companySignerIds.includes(String(operator.id))) {
+        await client.query("rollback");
+        return res.status(403).json({
+          error: "company_signer_not_authorized",
+          receipt: "This account is not recorded as an authorized company signer for this property's lease form.",
+        });
+      }
+
       //  EACH REFUSAL NAMES ITS OWN REASON. A single "the resident has not
       //  executed" for every non-signable packet is false on three of these
       //  four paths — an operator told that about a packet the resident
@@ -1039,6 +1504,7 @@ module.exports = function leasePacketsModule(deps) {
       await audit(client, req, pk.id, "operator", "company_executed", {
         signed_by_user_id: operator.id,
         instrument_body_sha256: pk.instrument_body_sha256,
+        instrument_package_sha256: pk.instrument_package_sha256,
       });
 
       //  ── AND THE SAME ACT REACHES CANONICAL TRUTH ──────────────────
@@ -1135,6 +1601,45 @@ module.exports = function leasePacketsModule(deps) {
     }
   });
 
+  // Exact governing bytes, token-scoped to the same resident packet. The
+  // extracted text improves review on a phone; this download is the retained
+  // source itself and remains the authoritative file.
+  router.get("/t/lease/:token/instrument", async (req, res) => {
+    try {
+      const packet = (await pool.query(
+        `select id, property_id, instrument_source_artifact_id, instrument_body_sha256
+           from lease_packets
+          where tenant_token_hash=$1 and tenant_token_expires_at > now()
+            and status <> 'voided'`,
+        [sha256(req.params.token)])).rows[0];
+      if (!packet || !packet.instrument_source_artifact_id) {
+        return res.status(404).json({ receipt: "This packet does not carry a governing lease file." });
+      }
+      const artifact = await sourceArtifacts.read(pool, packet.instrument_source_artifact_id);
+      if (!artifact
+          || artifact.scope_type !== "property"
+          || String(artifact.scope_id) !== String(packet.property_id)
+          || artifact.artifact_kind !== "lease_template"
+          || String(artifact.sha256).toLowerCase() !== String(packet.instrument_body_sha256).toLowerCase()) {
+        return res.status(409).json({
+          error: "lease_source_unavailable",
+          receipt: "The retained lease file no longer matches this packet. Do not sign it; contact the leasing office.",
+        });
+      }
+      res.set({
+        "Cache-Control": "no-store",
+        "Pragma": "no-cache",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": `attachment; filename="${safeDownloadName(artifact.original_filename)}"`,
+      });
+      return res.type(artifact.mime_type || "application/octet-stream").send(artifact.content);
+    } catch (e) {
+      console.error("lease instrument download:", e);
+      return res.status(500).json({ receipt: "Could not retrieve the lease file." });
+    }
+  });
+
   // Tenant completes ONE field (internal evidence — does NOT touch the obligation).
   router.post("/t/lease/:token/fields/:field_id/complete", async (req, res) => {
     const client = await pool.connect();
@@ -1159,8 +1664,26 @@ module.exports = function leasePacketsModule(deps) {
       //  application this packet belongs to — the token proves it is that
       //  resident, and a body-supplied name would be a claim, not evidence.
       const holder = (await client.query(
-        `select person_id from lease_applications where id=$1`, [pk.application_id])).rows[0];
+        `select person_id, applicant_name from lease_applications where id=$1`, [pk.application_id])).rows[0];
       const signerPersonId = holder ? holder.person_id : null;
+
+      const targetField = (await client.query(
+        `select field_type, signer_role from lease_packet_fields
+          where id=$1 and lease_packet_id=$2 and required=true`,
+        [req.params.field_id, pk.id])).rows[0];
+      if (!targetField) {
+        await client.query("rollback");
+        return res.status(404).json({ receipt: "No such field on this packet." });
+      }
+      if (targetField.field_type === "signature") {
+        if (req.body?.consent !== true || value.length < 2) {
+          await client.query("rollback");
+          return res.status(400).json({
+            error: "signature_intent_required",
+            receipt: "Type your full legal name and intentionally choose Sign.",
+          });
+        }
+      }
 
       const field = (await client.query(
         `update lease_packet_fields
@@ -1200,13 +1723,10 @@ module.exports = function leasePacketsModule(deps) {
   });
 
   // ─────────────── TENANT FINAL SUBMIT — THE SEAM (v3) ───────────────
-  //  When every required field is complete, this satisfies the SINGLE input
-  //  ("terms_acknowledged") on the application's terms_review obligation and
-  //  COMPLETES that obligation in the same transaction (§5b atomic; resident
-  //  supplies the input, the system records completion). It marks the packet
-  //  'submitted'. It touches nothing else: no signature inputs, no status,
-  //  no lease, no tenancy, no occupancy. application_next then reads
-  //  "Executed lease required" — the honest dead-end until Path B.
+  //  Every packet satisfies and completes the terms-review obligation in the
+  //  same transaction. A demonstration packet stops at submitted. A complete
+  //  governing package with the resident's signature reaches
+  //  resident_executed and waits for the separately authorized company act.
   router.post("/t/lease/:token/submit", async (req, res) => {
     const client = await pool.connect();
     try {
@@ -1250,6 +1770,18 @@ module.exports = function leasePacketsModule(deps) {
         });
       }
 
+      const governingPackage = !!pk.instrument_source_artifact_id;
+      if (governingPackage && (!pk.instrument_body_sha256
+          || !pk.instrument_terms_sha256
+          || !pk.instrument_package_sha256
+          || !pk.instrument_manifest)) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "lease_package_incomplete",
+          receipt: "This lease package cannot reproduce the exact form and deal terms. Do not sign it; contact the leasing office.",
+        });
+      }
+
       // §5b — the FROZEN ACKNOWLEDGMENT EVIDENCE. The resident supplies the
       // input; the system records completion (Rule 7: ownership of the
       // terms_review work ≠ who satisfied it — never the manager).
@@ -1263,14 +1795,15 @@ module.exports = function leasePacketsModule(deps) {
         packet_version: pk.version,
         rendered_snapshot_hash: pk.rendered_snapshot_hash,
         completed_field_hashes: fieldRows.map((f) => ({ field_key: f.field_key, clause_hash: f.clause_hash })),
-        acknowledgment_meaning: "review_intent_only",
+        acknowledgment_meaning: governingPackage ? "lease_execution" : "review_intent_only",
+        instrument_package_sha256: governingPackage ? pk.instrument_package_sha256 : null,
         token_hash_ref: pk.tenant_token_hash,
         person_id: app.person_id || null,
         occurred_at: new Date().toISOString(),
         recorded_at: new Date().toISOString(),
         ip: clientIp(req),
         user_agent: (req.headers && req.headers["user-agent"]) || null,
-        source: "lease_terms_demonstration",
+        source: governingPackage ? "retained_lease_package" : "lease_terms_demonstration",
       };
 
       const satisfied = [];
@@ -1317,7 +1850,7 @@ module.exports = function leasePacketsModule(deps) {
           where lease_packet_id=$1 and field_type='signature'
             and signer_role in ('tenant','guarantor') and completed=true limit 1`,
         [pk.id])).rows.length > 0;
-      const executesHere = !!pk.instrument_body_sha256 && residentSigned;
+      const executesHere = governingPackage && !!pk.instrument_package_sha256 && residentSigned;
 
       await client.query(
         `update lease_packets
@@ -1335,15 +1868,21 @@ module.exports = function leasePacketsModule(deps) {
       // tenant_submitted_at + the frozen §5b evidence on the obligation.
 
       await audit(client, req, pk.id, "tenant", "tenant_submitted",
-        { satisfied_inputs: satisfied, already_satisfied: alreadyDone, meaning: "review_intent_only",
+        { satisfied_inputs: satisfied, already_satisfied: alreadyDone,
+          meaning: governingPackage ? "lease_execution" : "review_intent_only",
+          instrument_package_sha256: governingPackage ? pk.instrument_package_sha256 : null,
           terms_review_obligation_id: app.terms_review_obligation_id });
       await client.query("commit");
       const bundle = await getBundle(pool, pk.id);
       res.json({
-        receipt: "Acknowledged. Your review of the proposed terms is recorded. This does not sign or activate a lease — a tenancy begins only when the governing lease is executed and the owner accepts through the normal process.",
+        receipt: governingPackage
+          ? "Signed. Your signature on the complete lease package is recorded. The lease becomes active after the authorized company signer countersigns."
+          : "Acknowledged. Your review of the proposed terms is recorded. This does not sign or activate a lease — a tenancy begins only when the governing lease is executed and the owner accepts through the normal process.",
         satisfied_obligation_inputs: satisfied,
-        application_next: "Executed lease required",
-        note: "This document is a demonstration summary of proposed terms, not the governing lease. Nothing further happens until a real lease execution exists.",
+        application_next: governingPackage ? "Company countersignature required" : "Executed lease required",
+        note: governingPackage
+          ? "The resident signature is complete. No tenancy is activated until the authorized company signer countersigns the same package."
+          : "This document is a demonstration summary of proposed terms, not the governing lease. Nothing further happens until a real lease execution exists.",
         packet: residentPacket(bundle),
       });
     } catch (e) {
@@ -1358,6 +1897,8 @@ module.exports = function leasePacketsModule(deps) {
     issueLeasePacketLink,
     getBundle,
     publicPacket,
+    propertyLeaseConfiguration,
+    configurePropertyLeaseTemplate,
   });
   return router;
 };
