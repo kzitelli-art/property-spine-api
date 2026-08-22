@@ -351,6 +351,40 @@ suspected. Full detail in `05_WAVE2_RESULTS.md`.
 
 ---
 
+## Property identity — the dependency evidence base — `tools/identity/`
+
+Added 2026-08-22 by CC_BUILD1 Slice 1. Read-only, no database contacted.
+Full deliverable: `docs/CC_BUILD1_PROPERTY_IDENTITY_INVENTORY.md`.
+
+| Capability | Rung | Files / note |
+|---|---|---|
+| Property dependency graph (delete + rebind), derived from migration source | `LOCALLY_EXERCISED` | `tools/identity/property_dependency_graph.js`. No `pg`, no `DATABASE_URL` — it parses migration text. **It is a catalog and cannot see rows**; per H-1 in `IDENTITY_HYGIENE_REGISTER.md`, that limit is stated rather than assumed |
+| Its falsification suite | `LOCALLY_EXERCISED` | `tools/identity/property_dependency_graph_falsify.js` — 21 cases. **Five deliberate breaks each went red on the correct case**, then were reverted. Two cases exist only because the suite was first falsely green (one flag path uncovered; one expression case with no internal comma) |
+
+**What it established, and it corrects a number in circulation:** 154 FKs
+reference `properties` — 77 `CASCADE` **declared**, but two of those are on
+`scheduled_charges`, dropped by migration 059, so **75 are live**. Also
+`RESTRICT 42` and **29 with no `ON DELETE` clause at all**, which default to
+`NO ACTION`. So **71 FKs BLOCK a delete**, and a plain `delete from properties`
+does not reach the cascades if any one of those 71 holds a row.
+
+**Separately — and this is the graph the delete question does not cover** — an
+identity ruling is a *migration*, governed by uniqueness rather than by
+`ON DELETE`. 78 unique constraints involve `property_id`: 37 are
+`unique (id, property_id)` anchors that cannot collide, 37 collide only on a
+shared business key, and **4 permit one row per property, where a merge
+collides with certainty** — `communication_lines` (active property-facing line),
+`property_pricing_versions` (published), `opening_positions` (established),
+`deal_intake_properties` (current). Two of those four intersect open work: the
+operations-line finding and Skyline pricing activation.
+
+**Not established by this, and not guessed at:** whether any row exists behind
+any edge, whether the deployed database matches these files, and which
+constraints would actually clash. Those are row questions — Slice 2's census,
+which this thread generates and does not run.
+
+---
+
 ## NOT YET SURVEYED — do not read absence as absence
 
 Wave 2 (2026-08-20) closed every area listed here as of the prior version of

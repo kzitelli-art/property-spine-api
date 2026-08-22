@@ -1,0 +1,322 @@
+PROPERTY DEPENDENCY GRAPH — derived from migration source, no database
+========================================================================
+migration files scanned : 178  (000_schema_migrations.sql … 189_unified_staff_onboarding.sql)
+foreign keys → properties: 152 live  (+2 on dropped tables, excluded)
+distinct tables         : 152
+
+WHAT A DELETE OF ONE `properties` ROW WOULD DO
+------------------------------------------------------------------------
+  BLOCKS     71 FKs   refuse the delete
+  DESTROYS   75 FKs   delete child rows
+  ORPHANS     6 FKs   null the pointer, keep the row
+
+  by declared action:
+    CASCADE      75
+    RESTRICT     42
+    NO ACTION    29
+    SET NULL      6
+
+  READ THIS BEFORE QUOTING THE NUMBERS ABOVE:
+  These are DECLARED edges. Not one of them says a row exists.
+  Whether a delete would be refused or would destroy anything
+  depends entirely on rows — which is Slice 2's census, not this.
+
+BLOCKING — any single existing child row refuses the whole delete
+------------------------------------------------------------------------
+  activations.property_id                                  NO ACTION  040_proposed_records.sql:25
+  application_intents.property_id                          NO ACTION  084_application_intent_prepare_send.sql:56
+  application_proposed_terms_confirmations.property_id     NO ACTION  085_proposed_terms_confirmation.sql:45
+  assignments.property_id                                  NO ACTION  004_org_chart.sql:30
+  bank_accounts.property_id                                NO ACTION  012_bank_intake.sql:89
+  capital_stack_conflicts.property_id                      RESTRICT   174_equity_positions.sql:398
+  capital_stack_positions.property_id                      RESTRICT   174_equity_positions.sql:89
+  common_equity_class_terms.property_id                    RESTRICT   174_equity_positions.sql:151
+  communication_lines.property_id                          RESTRICT   130_communication_lines.sql:39
+  compliance_items.property_id                             RESTRICT   168_compliance_canonical_truth.sql:9
+  contracted_service_coverage_reviews.property_id          RESTRICT   171_contracted_services_canonical_truth.sql:5
+  contracted_service_decision_links.property_id            RESTRICT   171_contracted_services_canonical_truth.sql:290
+  contracted_service_documents.property_id                 RESTRICT   171_contracted_services_canonical_truth.sql:86
+  contracted_service_engagements.property_id               RESTRICT   171_contracted_services_canonical_truth.sql:63
+  contracted_service_financial_observations.property_id    RESTRICT   171_contracted_services_canonical_truth.sql:250
+  contracted_service_locations.property_id                 RESTRICT   171_contracted_services_canonical_truth.sql:204
+  contracted_service_price_components.property_id          RESTRICT   171_contracted_services_canonical_truth.sql:228
+  contracted_service_requirements.property_id              RESTRICT   171_contracted_services_canonical_truth.sql:19
+  contracted_service_scopes.property_id                    RESTRICT   171_contracted_services_canonical_truth.sql:170
+  contracted_service_terms.property_id                     RESTRICT   171_contracted_services_canonical_truth.sql:120
+  deal_intake_files.registry_property_id                   NO ACTION  015_deal_intake.sql:50
+  deal_intake_properties.property_id                       NO ACTION  025_deal_properties.sql:18
+  debt_instrument_properties.property_id                   RESTRICT   173_debt_instruments.sql:178
+  demo_runs.property_id                                    NO ACTION  052_demo_orchestration.sql:18
+  deposit_claims.property_id                               NO ACTION  009_onboarding.sql:53
+  executed_lease_records.property_id                       NO ACTION  088_executed_lease_evidence.sql:28
+  insurance_coverage_properties.property_id                RESTRICT   162_insurance_coverage_participation.sql:71
+  insurance_funding_arrangements.property_id               RESTRICT   163_insurance_funding.sql:71
+  insurance_property_allocations.property_id               RESTRICT   161_insurance_economic_truth.sql:174
+  lead_takeover_queue.property_id                          NO ACTION  038_leasing_leads.sql:156
+  leasing_conversions.property_id                          NO ACTION  047_leasing_conversion_rail.sql:53
+  leasing_lead_lifecycle_events.property_id                RESTRICT   054_leasing_lead_lifecycle.sql:66
+  leasing_leads.property_id                                NO ACTION  038_leasing_leads.sql:65
+  leasing_tours.property_id                                NO ACTION  038_leasing_leads.sql:138
+  ledger_claims.property_id                                NO ACTION  010_ledger_reconciliation.sql:41
+  legal_entity_properties.property_id                      RESTRICT   164_legal_entities.sql:94
+  meeting_evidence_meetings.property_id                    RESTRICT   176_meeting_receipt_v0.sql:16
+  meeting_property_bindings.property_id                    RESTRICT   175_meeting_evidence_provider_inbox.sql:130
+  money_events.property_id                                 NO ACTION  005_money_events.sql:22
+  onboarding_runs.property_id                              NO ACTION  009_onboarding.sql:29
+  opening_positions.property_id                            NO ACTION  157_opening_positions.sql:43
+  person_contexts.property_id                              NO ACTION  067_staff_identity_bridge.sql:107
+  person_property_classifications.property_id              RESTRICT   076_person_property_classifications.sql:42
+  plaid_item.property_id                                   NO ACTION  031_plaid_items.sql:47
+  property_aliases.property_id                             NO ACTION  011_property_registry.sql:34
+  property_creation_events.property_id                     NO ACTION  150_canonical_property_creation.sql:109
+  property_organization_events.property_id                 NO ACTION  151_authority_mutation_containment.sql:54
+  proposed_records.property_id                             NO ACTION  040_proposed_records.sql:35
+  report_imports.property_id                               NO ACTION  016_report_compare.sql:36
+  tax_clearances.subject_property_id                       RESTRICT   165_philadelphia_tax_position.sql:318
+  tax_funding_arrangements.subject_property_id             RESTRICT   166_tax_funding.sql:76
+  tax_obligation_applicability.subject_property_id         RESTRICT   165_philadelphia_tax_position.sql:142
+  tax_obligation_properties.property_id                    RESTRICT   165_philadelphia_tax_position.sql:122
+  tax_obligations.liable_property_id                       RESTRICT   165_philadelphia_tax_position.sql:65
+  utility_account_meters.property_id                       RESTRICT   169_utilities_canonical_truth.sql:282
+  utility_account_service_points.property_id               RESTRICT   169_utilities_canonical_truth.sql:261
+  utility_account_services.property_id                     RESTRICT   169_utilities_canonical_truth.sql:219
+  utility_arrangements.property_id                         RESTRICT   169_utilities_canonical_truth.sql:103
+  utility_meter_service_points.property_id                 RESTRICT   169_utilities_canonical_truth.sql:240
+  utility_meters.property_id                               RESTRICT   169_utilities_canonical_truth.sql:175
+  utility_provider_accounts.property_id                    RESTRICT   169_utilities_canonical_truth.sql:196
+  utility_service_declarations.property_id                 RESTRICT   169_utilities_canonical_truth.sql:29
+  utility_service_points.property_id                       RESTRICT   169_utilities_canonical_truth.sql:147
+  utility_service_providers.property_id                    RESTRICT   169_utilities_canonical_truth.sql:82
+  utility_services.property_id                             RESTRICT   169_utilities_canonical_truth.sql:18
+  utility_statement_usage.property_id                      RESTRICT   169_utilities_canonical_truth.sql:339
+  utility_statements.property_id                           RESTRICT   169_utilities_canonical_truth.sql:303
+  variance_explanations.property_id                        NO ACTION  018_variance_explanations.sql:29
+  vendor_aliases.property_id                               NO ACTION  012_bank_intake.sql:76
+  vendor_property_categories.property_id                   NO ACTION  019_vendor_property_categories.sql:31
+  work_order_billback_decisions.property_id                NO ACTION  099_billback_decision.sql:40
+
+ORPHANING — the quiet ones: row survives, pointer silently nulled
+------------------------------------------------------------------------
+  person_identity_conflicts.property_id      SET NULL   050_identity_aliases_and_shadow_import.sql:105
+  person_intent_tasks.property_id            SET NULL   050_identity_aliases_and_shadow_import.sql:127
+  scheduled_tour_source_links.property_id    SET NULL   048_interaction_ledger_and_scheduling.sql:213
+  scheduled_tour_sources.property_id         SET NULL   048_interaction_ledger_and_scheduling.sql:140
+  scheduled_tours.property_id                SET NULL   048_interaction_ledger_and_scheduling.sql:168
+  unit_events.property_id                    SET NULL   006_unit_occupancy_state.sql:68
+
+CASCADING — child rows are destroyed with the parent
+------------------------------------------------------------------------
+  agent_facts.property_id                                 CASCADE    053_agent_supervised_drafts.sql:112
+  agent_tour_offers.property_id                           CASCADE    079_tour_booking_idempotency.sql:45
+  ai_leasing_operating_rules.property_id                  CASCADE    121_ai_leasing_operating_context.sql:12
+  application_invitations.property_id                     CASCADE    051_application_invitations.sql:111
+  bids.property_id                                        CASCADE    001_baseline.sql:259
+  comm_events.property_id                                 CASCADE    001_baseline.sql:175
+  concession_authority_grants.property_id                 CASCADE    062_pricing_authority.sql:124
+  concession_incidents.property_id                        CASCADE    065_guardrail_incidents.sql:32
+  concession_policies.property_id                         CASCADE    062_pricing_authority.sql:76
+  conversations.property_id                               CASCADE    027_tenant_link.sql:35
+  decision_cases.property_id                              CASCADE    059_decision_rail.sql:39
+  documents.property_id                                   CASCADE    001_baseline.sql:290
+  events.property_id                                      CASCADE    001_baseline.sql:162
+  governed_charge_rulings.property_id                     CASCADE    111_governed_charge_rulings.sql:49
+  import_batches.property_id                              CASCADE    046_historical_snapshot_provenance.sql:42
+  ingest_candidates.property_id                           CASCADE    001_baseline.sql:448
+  ingest_runs.property_id                                 CASCADE    001_baseline.sql:429
+  inventory.property_id                                   CASCADE    001_baseline.sql:275
+  inventory_retirements.property_id                       CASCADE    180_inventory_retirement.sql:55
+  lease_applications.property_id                          CASCADE    033_lease_applications.sql:21
+  lease_economic_schedules.property_id                    CASCADE    063_lease_offer_economics.sql:110
+  lease_move_in_charge_sets.property_id                   CASCADE    089_economic_tenancy_and_move_in_handoff.sql:12
+  lease_offers.property_id                                CASCADE    063_lease_offer_economics.sql:33
+  lease_packets.property_id                               CASCADE    034_lease_packets.sql:25
+  leases.property_id                                      CASCADE    001_baseline.sql:132
+  leasing_coverage_exceptions.property_id                 CASCADE    050_identity_aliases_and_shadow_import.sql:216
+  obligations.property_id                                 CASCADE    001_baseline.sql:310
+  operator_session_invites.property_id                    CASCADE    070_operator_session_bootstrap.sql:41
+  payments.property_id                                    CASCADE    037_payment_proof.sql:63
+  person_attributes.property_id                           CASCADE    061_person_attributes.sql:21
+  pricing_review_receipts.property_id                     CASCADE    102_pricing_lifecycle_and_authority.sql:73
+  property_ai_leasing_strategy_deployments.property_id    CASCADE    120_ai_leasing_strategy_foundation.sql:143
+  property_channel_capabilities.property_id               CASCADE    094_property_channel_capabilities.sql:79
+  property_controls.property_id                           CASCADE    001_baseline.sql:372
+  property_governed_charges.property_id                   CASCADE    105_governed_charges.sql:45
+  property_leasing_cycles.property_id                     CASCADE    178_property_leasing_cycles.sql:44
+  property_noi_goals.property_id                          CASCADE    029_property_noi_goals.sql:15
+  property_operating_timezone_changes.property_id         CASCADE    123_property_operating_timezone.sql:85
+  property_pricing_versions.property_id                   CASCADE    062_pricing_authority.sql:32
+  property_team_assignments.property_id                   CASCADE    035_phone_first_team.sql:68
+  property_unit_types.property_id                         CASCADE    100_durable_position_classification.sql:53
+  reclean_rulings.property_id                             CASCADE    116_readiness_certification.sql:197
+  recovery_variants.property_id                           CASCADE    058_noshow_recovery_rail.sql:14
+  renewal_cases.property_id                               CASCADE    119_renewal_operating_rail.sql:50
+  scheduling_source_mappings.property_id                  CASCADE    048_interaction_ledger_and_scheduling.sql:107
+  staff_agent_messages.property_id                        CASCADE    117_staff_agent_capture.sql:57
+  staff_agent_proposals.property_id                       CASCADE    117_staff_agent_capture.sql:90
+  staff_agent_threads.property_id                         CASCADE    117_staff_agent_capture.sql:38
+  staff_sessions.property_id                              CASCADE    035_phone_first_team.sql:121
+  supply_requests.property_id                             CASCADE    002_revenue_and_supply.sql:65
+  team_invites.property_id                                CASCADE    035_phone_first_team.sql:90
+  tenant_invites.property_id                              CASCADE    027_tenant_link.sql:50
+  tenant_sessions.property_id                             CASCADE    027_tenant_link.sql:66
+  tour_availability.property_id                           CASCADE    039_tour_scheduling.sql:127
+  tour_availability_commands.property_id                  CASCADE    188_native_tour_scheduler.sql:27
+  tour_availability_events.property_id                    CASCADE    188_native_tour_scheduler.sql:50
+  tour_booking_links.property_id                          CASCADE    056_tour_booking_links.sql:42
+  tour_schedule_policies.property_id                      CASCADE    188_native_tour_scheduler.sql:8
+  turnovers.property_id                                   CASCADE    001_baseline.sql:224
+  unit_observations.property_id                           CASCADE    112_unit_triage_capture.sql:65
+  unit_readiness_certifications.property_id               CASCADE    116_readiness_certification.sql:119
+  unit_readiness_walks.property_id                        CASCADE    116_readiness_certification.sql:56
+  unit_triage_confirmations.property_id                   CASCADE    112_unit_triage_capture.sql:108
+  unit_triage_findings.property_id                        CASCADE    112_unit_triage_capture.sql:171
+  unit_triage_required_work.property_id                   CASCADE    112_unit_triage_capture.sql:235
+  unit_turn_appliances.property_id                        CASCADE    113_unit_turn_scope.sql:125
+  unit_turn_scopes.property_id                            CASCADE    113_unit_turn_scope.sql:47
+  units.property_id                                       CASCADE    001_baseline.sql:89
+  work_acceptances.property_id                            CASCADE    115_work_acceptance_and_proof.sql:57
+  work_completion_claims.property_id                      CASCADE    115_work_acceptance_and_proof.sql:112
+  work_order_progress.property_id                         CASCADE    134_technician_lifecycle.sql:56
+  work_order_proof_attachments.property_id                CASCADE    134_technician_lifecycle.sql:100
+  work_orders.property_id                                 CASCADE    001_baseline.sql:192
+  work_proof_attachments.property_id                      CASCADE    118_work_proof_attachments.sql:66
+  work_reopenings.property_id                             CASCADE    115_work_acceptance_and_proof.sql:179
+
+WHAT A REBIND WOULD COLLIDE WITH — the constraint that actually decides
+------------------------------------------------------------------------
+  The identity question is not a delete. It is a MIGRATION: repoint one
+  property's children onto another row. ON DELETE actions say nothing
+  about that. What refuses a repoint is UNIQUENESS.
+
+  unique constraints involving property_id : 78
+    ANCHOR       37  include the row's own id — CANNOT collide on a merge
+    SINGLETON     4  at most ONE row per property — collision is GUARANTEED
+    COLLIDABLE   37  property_id + a business key — collide IF the key is shared
+
+  SINGLETON — one row per property. Merging two populated properties
+  collides here with certainty; no shared business key is required.
+    communication_lines        — one per property —
+                               WHERE line_type = 'property_facing' and status = 'active'
+                               130_communication_lines.sql:161
+    deal_intake_properties     — one per property —
+                               WHERE status = 'current'
+                               155_deal_membership_currency.sql:81
+    opening_positions          — one per property —
+                               WHERE status = 'established'
+                               157_opening_positions.sql:144
+    property_pricing_versions  — one per property —
+                               WHERE status = 'published'
+                               062_pricing_authority.sql:51
+
+  COLLIDABLE — collides only where both properties hold the same key:
+    activations                               (source_kind)
+                                              WHERE status = 'activated' and superseded_by_id is null and source_kind is not null
+                                              179_activation_source_supersession.sql:60
+    agent_facts                               (fact_key)
+                                              WHERE status = 'active' and space_id is null
+                                              053_agent_supervised_drafts.sql:129
+    agent_facts                               (space_id, fact_key)
+                                              WHERE status = 'active' and space_id is not null
+                                              053_agent_supervised_drafts.sql:131
+    ai_leasing_operating_rules                (rule_kind, rule_key)
+                                              WHERE status = 'active'
+                                              121_ai_leasing_operating_context.sql:53
+    application_intents                       (source, source_identity)
+                                              084_application_intent_prepare_send.sql:73
+    assignments                               (person_id, role)
+                                              WHERE (is_active = true)
+                                              004_org_chart.sql:58
+    bank_accounts                             (account_last4)
+                                              012_bank_intake.sql:98
+    conversations                             (person_id)
+                                              027_tenant_link.sql:44
+    deal_intake_properties                    (intake_id)
+                                              025_deal_properties.sql:22
+    insurance_coverage_properties             (coverage_id)
+                                              162_insurance_coverage_participation.sql:87
+    leasing_conversions                       (person_id)
+                                              WHERE status = 'active'
+                                              047_leasing_conversion_rail.sql:94
+    leasing_leads                             (person_id)
+                                              WHERE status not in ('leased','lost')
+                                              038_leasing_leads.sql:95
+    legal_entity_properties                   (legal_entity_id, relationship_type)
+                                              WHERE effective_to is null
+                                              164_legal_entities.sql:123
+    meeting_evidence_meetings                 (provider_meeting_id)
+                                              176_meeting_receipt_v0.sql:25
+    meeting_property_bindings                 (provider_meeting_id)
+                                              175_meeting_evidence_provider_inbox.sql:136
+    person_attributes                         (person_id, attr_key)
+                                              WHERE status = 'active'
+                                              061_person_attributes.sql:33
+    person_contexts                           (person_id, context_type, coalesce(property_id, '00000000-0000-0000-0000-000000000000'::uuid))
+                                              WHERE active_to is null
+                                              067_staff_identity_bridge.sql:120
+    person_property_classifications           (person_id)
+                                              WHERE superseded_at is null
+                                              076_person_property_classifications.sql:61
+    property_ai_leasing_strategy_deployments  (strategy_version_id)
+                                              120_ai_leasing_strategy_foundation.sql:156
+    property_ai_leasing_strategy_deployments  (strategy_profile_id)
+                                              WHERE status = 'active'
+                                              120_ai_leasing_strategy_foundation.sql:166
+    property_channel_capabilities             (channel, capability)
+                                              WHERE status = 'active'
+                                              094_property_channel_capabilities.sql:150
+    property_governed_charges                 (charge_code)
+                                              WHERE record_state = 'active'
+                                              105_governed_charges.sql:151
+    property_governed_charges                 (charge_code)
+                                              WHERE quote_state = 'live'
+                                              106_quote_activation_boundary.sql:61
+    property_leasing_cycles                   (lower(trim(cycle_label)))
+                                              WHERE state = 'active'
+                                              178_property_leasing_cycles.sql:85
+    property_operating_timezone_changes       (idempotency_key)
+                                              WHERE idempotency_key is not null
+                                              123_property_operating_timezone.sql:103
+    property_team_assignments                 (user_id)
+                                              035_phone_first_team.sql:83
+    property_team_assignments                 (user_id)
+                                              WHERE active = true
+                                              070_operator_session_bootstrap.sql:194
+    property_unit_types                       (code)
+                                              100_durable_position_classification.sql:68
+    recovery_variants                         (variant_key)
+                                              058_noshow_recovery_rail.sql:23
+    tax_obligation_properties                 (obligation_id)
+                                              165_philadelphia_tax_position.sql:124
+    tour_availability_commands                (idempotency_key)
+                                              WHERE idempotency_key is not null
+                                              188_native_tour_scheduler.sql:45
+    tour_availability_events                  (idempotency_key)
+                                              WHERE idempotency_key is not null
+                                              188_native_tour_scheduler.sql:75
+    utility_meters                            (meter_kind, meter_identifier, effective_from)
+                                              169_utilities_canonical_truth.sql:191
+    utility_provider_accounts                 (provider_id, external_account_identifier)
+                                              169_utilities_canonical_truth.sql:214
+    utility_services                          (service_class)
+                                              169_utilities_canonical_truth.sql:24
+    vendor_property_categories                (vendor_id)
+                                              019_vendor_property_categories.sql:36
+    work_orders                               (idempotency_key, coalesce(person_id,'00000000-0000-0000-0000-000000000000'::uuid))
+                                              WHERE idempotency_key is not null
+                                              078_work_order_urgency_and_idempotency.sql:24
+
+  A merge fails PART-WAY THROUGH on the first of these that clashes,
+  which is a worse outcome than refusing up front. Whether any of them
+  actually clash depends on rows — Slice 2's census answers it, this
+  file cannot.
+
+EXCLUDED — tables dropped by a later migration: scheduled_charges
+
+PARSER HONESTY
+------------------------------------------------------------------------
+  Every statement referencing `properties` was parsed into an edge.
+  Zero unparsed. This is asserted, not assumed — see below.
+
+  This graph is a CATALOG. It cannot see rows, and it describes
+  declared migration text — not the deployed database. If the two
+  disagree, this file is the one that is wrong.

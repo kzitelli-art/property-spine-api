@@ -1,0 +1,3107 @@
+{
+  "files": [
+    "000_schema_migrations.sql",
+    "001_baseline.sql",
+    "002_revenue_and_supply.sql",
+    "003_down_units.sql",
+    "004_org_chart.sql",
+    "005_money_events.sql",
+    "006_unit_occupancy_state.sql",
+    "007_money_report_ready.sql",
+    "008_category_report_map.sql",
+    "009_onboarding.sql",
+    "010_ledger_reconciliation.sql",
+    "011_property_registry.sql",
+    "012_bank_intake.sql",
+    "013_public_rent_roll_review.sql",
+    "014_intake.sql",
+    "015_deal_intake.sql",
+    "016_report_compare.sql",
+    "017_categorization.sql",
+    "018_variance_explanations.sql",
+    "019_vendor_property_categories.sql",
+    "020_multi_nature_vendors.sql",
+    "021_payment_return_exception.sql",
+    "022_rc_pairings.sql",
+    "023_needs_review.sql",
+    "024_deal_funnel.sql",
+    "025_deal_properties.sql",
+    "026_leasing_basis.sql",
+    "027_tenant_link.sql",
+    "028_tenant_messages.sql",
+    "029_property_noi_goals.sql",
+    "030_sms_transport.sql",
+    "031_plaid_items.sql",
+    "032_leasing_snapshot.sql",
+    "033_lease_applications.sql",
+    "034_lease_packets.sql",
+    "035_phone_first_team.sql",
+    "036_scheduled_charges.sql",
+    "037_payment_proof.sql",
+    "038_leasing_leads.sql",
+    "039_tour_scheduling.sql",
+    "040_proposed_records.sql",
+    "041_widen_assignment_roles.sql",
+    "042_work_order_not_done_reason.sql",
+    "043_leasing_thread_wiring.sql",
+    "044_auto_confirm_switch.sql",
+    "045_money_event_attributions.sql",
+    "046_historical_snapshot_provenance.sql",
+    "047_leasing_conversion_rail.sql",
+    "048_interaction_ledger_and_scheduling.sql",
+    "049_outlook_acuity_sync.sql",
+    "050_identity_aliases_and_shadow_import.sql",
+    "051_application_invitations.sql",
+    "052_demo_orchestration.sql",
+    "053_agent_supervised_drafts.sql",
+    "054_leasing_lead_lifecycle.sql",
+    "055_lead_event_prepared_type.sql",
+    "056_tour_booking_links.sql",
+    "057_tour_outcome_capture.sql",
+    "058_noshow_recovery_rail.sql",
+    "059_decision_rail.sql",
+    "060_property_display_name.sql",
+    "061_person_attributes.sql",
+    "062_pricing_authority.sql",
+    "063_lease_offer_economics.sql",
+    "064_decision_concession_type.sql",
+    "065_guardrail_incidents.sql",
+    "066_incident_dedupe.sql",
+    "067_staff_identity_bridge.sql",
+    "068_leasing_task_rung.sql",
+    "069_leasing_conversion_obligation_events.sql",
+    "070_operator_session_bootstrap.sql",
+    "071_bridge_prep.sql",
+    "072_term_confirmation.sql",
+    "073_property_leasing_calendar.sql",
+    "074_unit_events_lease_link.sql",
+    "075_application_structured_terms.sql",
+    "076_person_property_classifications.sql",
+    "077_agent_auto_dispatch.sql",
+    "078_work_order_urgency_and_idempotency.sql",
+    "079_tour_booking_idempotency.sql",
+    "080_tenancy_anchor_idempotency.sql",
+    "081_effective_possession_and_space_grain.sql",
+    "082_unit_events_add_effective_possession_types.sql",
+    "083_terms_review_and_packet_versioning.sql",
+    "084_application_intent_prepare_send.sql",
+    "085_proposed_terms_confirmation.sql",
+    "086_operational_escalation_idempotency.sql",
+    "087_internal_qa_leasing_coverage.sql",
+    "088_executed_lease_evidence.sql",
+    "089_economic_tenancy_and_move_in_handoff.sql",
+    "090_admin_users.sql",
+    "091_lead_source_system_bucket.sql",
+    "092_person_attributes_provenance.sql",
+    "093_organizations.sql",
+    "094_property_channel_capabilities.sql",
+    "095_staff_roles.sql",
+    "096_tour_outcome_prompts.sql",
+    "097_tour_origin.sql",
+    "098_work_order_operational_facts.sql",
+    "099_billback_decision.sql",
+    "100_durable_position_classification.sql",
+    "101_pricing_unit_type_reference.sql",
+    "102_pricing_lifecycle_and_authority.sql",
+    "103_pricing_supersession_history.sql",
+    "104_person_record_retirement.sql",
+    "105_governed_charges.sql",
+    "106_quote_activation_boundary.sql",
+    "107_property_planned_unit_count.sql",
+    "108_active_charge_term_immutability.sql",
+    "109_immutability_message_fix.sql",
+    "110_governed_charge_assessed_per.sql",
+    "111_governed_charge_rulings.sql",
+    "112_unit_triage_capture.sql",
+    "113_unit_turn_scope.sql",
+    "114_inherited_work_stage_decision.sql",
+    "115_work_acceptance_and_proof.sql",
+    "116_readiness_certification.sql",
+    "117_staff_agent_capture.sql",
+    "118_work_proof_attachments.sql",
+    "119_renewal_operating_rail.sql",
+    "120_ai_leasing_strategy_foundation.sql",
+    "121_ai_leasing_operating_context.sql",
+    "122_governed_economics_lineage.sql",
+    "123_property_operating_timezone.sql",
+    "124_application_lifecycle_milestones.sql",
+    "126_obligation_missed_recognition.sql",
+    "127_appointment_attribution_bridge.sql",
+    "128_lifecycle_event_opportunity_attribution.sql",
+    "129_property_line_uniqueness.sql",
+    "130_communication_lines.sql",
+    "131_work_acceptance.sql",
+    "132_outbound_line_policy.sql",
+    "133_work_order_reference.sql",
+    "134_technician_lifecycle.sql",
+    "135_delivery_attempts.sql",
+    "136_one_resident_update_per_cause.sql",
+    "137_release_0_completion_proof.sql",
+    "140_post_activation_completion_guard.sql",
+    "150_canonical_property_creation.sql",
+    "151_authority_mutation_containment.sql",
+    "152_fifth_creation_door.sql",
+    "153_source_artifacts.sql",
+    "154_deal_authority.sql",
+    "155_deal_membership_currency.sql",
+    "156_activation_lineage.sql",
+    "157_opening_positions.sql",
+    "158_import_batch_source_type_reality.sql",
+    "159_opening_tenancy_position.sql",
+    "160_asset_management_module.sql",
+    "161_insurance_economic_truth.sql",
+    "162_insurance_coverage_participation.sql",
+    "163_insurance_funding.sql",
+    "164_legal_entities.sql",
+    "165_philadelphia_tax_position.sql",
+    "166_tax_funding.sql",
+    "167_tax_payment_identity.sql",
+    "168_compliance_canonical_truth.sql",
+    "169_utilities_canonical_truth.sql",
+    "170_compliance_extended_truth.sql",
+    "171_contracted_services_canonical_truth.sql",
+    "172_contracted_service_nullable_commencement_trigger.sql",
+    "173_debt_instruments.sql",
+    "174_equity_positions.sql",
+    "175_meeting_evidence_provider_inbox.sql",
+    "176_meeting_receipt_v0.sql",
+    "177_person_ingress_resolution_kind.sql",
+    "178_property_leasing_cycles.sql",
+    "179_activation_source_supersession.sql",
+    "180_inventory_retirement.sql",
+    "181_meeting_evidence_binding_finality_lineage.sql",
+    "182_application_space_grain.sql",
+    "183_pricing_override_uniqueness.sql",
+    "184_governing_lease_execution.sql",
+    "185_spine_execution_basis.sql",
+    "186_property_lease_config.sql",
+    "187_lease_security_deposit.sql",
+    "188_native_tour_scheduler.sql",
+    "189_unified_staff_onboarding.sql"
+  ],
+  "edges": [
+    {
+      "table": "units",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "001_baseline.sql",
+      "line": 89,
+      "form": "column_inline"
+    },
+    {
+      "table": "leases",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "001_baseline.sql",
+      "line": 132,
+      "form": "column_inline"
+    },
+    {
+      "table": "events",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": false,
+      "declaredIn": "001_baseline.sql",
+      "line": 162,
+      "form": "column_inline"
+    },
+    {
+      "table": "comm_events",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": false,
+      "declaredIn": "001_baseline.sql",
+      "line": 175,
+      "form": "column_inline"
+    },
+    {
+      "table": "work_orders",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "001_baseline.sql",
+      "line": 192,
+      "form": "column_inline"
+    },
+    {
+      "table": "turnovers",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "001_baseline.sql",
+      "line": 224,
+      "form": "column_inline"
+    },
+    {
+      "table": "bids",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": false,
+      "declaredIn": "001_baseline.sql",
+      "line": 259,
+      "form": "column_inline"
+    },
+    {
+      "table": "inventory",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": false,
+      "declaredIn": "001_baseline.sql",
+      "line": 275,
+      "form": "column_inline"
+    },
+    {
+      "table": "documents",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": false,
+      "declaredIn": "001_baseline.sql",
+      "line": 290,
+      "form": "column_inline"
+    },
+    {
+      "table": "obligations",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": false,
+      "declaredIn": "001_baseline.sql",
+      "line": 310,
+      "form": "column_inline"
+    },
+    {
+      "table": "property_controls",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "001_baseline.sql",
+      "line": 372,
+      "form": "column_inline"
+    },
+    {
+      "table": "ingest_runs",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "001_baseline.sql",
+      "line": 429,
+      "form": "column_inline"
+    },
+    {
+      "table": "ingest_candidates",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "001_baseline.sql",
+      "line": 448,
+      "form": "column_inline"
+    },
+    {
+      "table": "supply_requests",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "002_revenue_and_supply.sql",
+      "line": 65,
+      "form": "column_inline"
+    },
+    {
+      "table": "assignments",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "004_org_chart.sql",
+      "line": 30,
+      "form": "column_inline"
+    },
+    {
+      "table": "money_events",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "005_money_events.sql",
+      "line": 22,
+      "form": "column_inline"
+    },
+    {
+      "table": "unit_events",
+      "column": "property_id",
+      "constraint": null,
+      "action": "SET NULL",
+      "effect": "ORPHANS",
+      "notNull": false,
+      "declaredIn": "006_unit_occupancy_state.sql",
+      "line": 68,
+      "form": "column_inline"
+    },
+    {
+      "table": "onboarding_runs",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "009_onboarding.sql",
+      "line": 29,
+      "form": "column_inline"
+    },
+    {
+      "table": "deposit_claims",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "009_onboarding.sql",
+      "line": 53,
+      "form": "column_inline"
+    },
+    {
+      "table": "ledger_claims",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "010_ledger_reconciliation.sql",
+      "line": 41,
+      "form": "column_inline"
+    },
+    {
+      "table": "property_aliases",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": false,
+      "declaredIn": "011_property_registry.sql",
+      "line": 34,
+      "form": "column_inline"
+    },
+    {
+      "table": "vendor_aliases",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": false,
+      "declaredIn": "012_bank_intake.sql",
+      "line": 76,
+      "form": "column_inline"
+    },
+    {
+      "table": "bank_accounts",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "012_bank_intake.sql",
+      "line": 89,
+      "form": "column_inline"
+    },
+    {
+      "table": "deal_intake_files",
+      "column": "registry_property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": false,
+      "declaredIn": "015_deal_intake.sql",
+      "line": 50,
+      "form": "column_inline"
+    },
+    {
+      "table": "report_imports",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "016_report_compare.sql",
+      "line": 36,
+      "form": "column_inline"
+    },
+    {
+      "table": "variance_explanations",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "018_variance_explanations.sql",
+      "line": 29,
+      "form": "column_inline"
+    },
+    {
+      "table": "vendor_property_categories",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "019_vendor_property_categories.sql",
+      "line": 31,
+      "form": "column_inline"
+    },
+    {
+      "table": "deal_intake_properties",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "025_deal_properties.sql",
+      "line": 18,
+      "form": "column_inline"
+    },
+    {
+      "table": "conversations",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "027_tenant_link.sql",
+      "line": 35,
+      "form": "column_inline"
+    },
+    {
+      "table": "tenant_invites",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "027_tenant_link.sql",
+      "line": 50,
+      "form": "column_inline"
+    },
+    {
+      "table": "tenant_sessions",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "027_tenant_link.sql",
+      "line": 66,
+      "form": "column_inline"
+    },
+    {
+      "table": "property_noi_goals",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": false,
+      "declaredIn": "029_property_noi_goals.sql",
+      "line": 15,
+      "form": "column_inline"
+    },
+    {
+      "table": "plaid_item",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "031_plaid_items.sql",
+      "line": 47,
+      "form": "column_inline"
+    },
+    {
+      "table": "lease_applications",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "033_lease_applications.sql",
+      "line": 21,
+      "form": "column_inline"
+    },
+    {
+      "table": "lease_packets",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "034_lease_packets.sql",
+      "line": 25,
+      "form": "column_inline"
+    },
+    {
+      "table": "property_team_assignments",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "035_phone_first_team.sql",
+      "line": 68,
+      "form": "column_inline"
+    },
+    {
+      "table": "team_invites",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "035_phone_first_team.sql",
+      "line": 90,
+      "form": "column_inline"
+    },
+    {
+      "table": "staff_sessions",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "035_phone_first_team.sql",
+      "line": 121,
+      "form": "column_inline"
+    },
+    {
+      "table": "payments",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "037_payment_proof.sql",
+      "line": 63,
+      "form": "column_inline"
+    },
+    {
+      "table": "leasing_leads",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "038_leasing_leads.sql",
+      "line": 65,
+      "form": "column_inline"
+    },
+    {
+      "table": "leasing_tours",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "038_leasing_leads.sql",
+      "line": 138,
+      "form": "column_inline"
+    },
+    {
+      "table": "lead_takeover_queue",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "038_leasing_leads.sql",
+      "line": 156,
+      "form": "column_inline"
+    },
+    {
+      "table": "tour_availability",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "039_tour_scheduling.sql",
+      "line": 127,
+      "form": "column_inline"
+    },
+    {
+      "table": "activations",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": false,
+      "declaredIn": "040_proposed_records.sql",
+      "line": 25,
+      "form": "column_inline"
+    },
+    {
+      "table": "proposed_records",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": false,
+      "declaredIn": "040_proposed_records.sql",
+      "line": 35,
+      "form": "column_inline"
+    },
+    {
+      "table": "import_batches",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "046_historical_snapshot_provenance.sql",
+      "line": 42,
+      "form": "column_inline"
+    },
+    {
+      "table": "leasing_conversions",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "047_leasing_conversion_rail.sql",
+      "line": 53,
+      "form": "column_inline"
+    },
+    {
+      "table": "scheduling_source_mappings",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "048_interaction_ledger_and_scheduling.sql",
+      "line": 107,
+      "form": "column_inline"
+    },
+    {
+      "table": "scheduled_tour_sources",
+      "column": "property_id",
+      "constraint": null,
+      "action": "SET NULL",
+      "effect": "ORPHANS",
+      "notNull": false,
+      "declaredIn": "048_interaction_ledger_and_scheduling.sql",
+      "line": 140,
+      "form": "column_inline"
+    },
+    {
+      "table": "scheduled_tours",
+      "column": "property_id",
+      "constraint": null,
+      "action": "SET NULL",
+      "effect": "ORPHANS",
+      "notNull": false,
+      "declaredIn": "048_interaction_ledger_and_scheduling.sql",
+      "line": 168,
+      "form": "column_inline"
+    },
+    {
+      "table": "scheduled_tour_source_links",
+      "column": "property_id",
+      "constraint": null,
+      "action": "SET NULL",
+      "effect": "ORPHANS",
+      "notNull": false,
+      "declaredIn": "048_interaction_ledger_and_scheduling.sql",
+      "line": 213,
+      "form": "column_inline"
+    },
+    {
+      "table": "person_identity_conflicts",
+      "column": "property_id",
+      "constraint": null,
+      "action": "SET NULL",
+      "effect": "ORPHANS",
+      "notNull": false,
+      "declaredIn": "050_identity_aliases_and_shadow_import.sql",
+      "line": 105,
+      "form": "column_inline"
+    },
+    {
+      "table": "person_intent_tasks",
+      "column": "property_id",
+      "constraint": null,
+      "action": "SET NULL",
+      "effect": "ORPHANS",
+      "notNull": false,
+      "declaredIn": "050_identity_aliases_and_shadow_import.sql",
+      "line": 127,
+      "form": "column_inline"
+    },
+    {
+      "table": "leasing_coverage_exceptions",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "050_identity_aliases_and_shadow_import.sql",
+      "line": 216,
+      "form": "column_inline"
+    },
+    {
+      "table": "application_invitations",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "051_application_invitations.sql",
+      "line": 111,
+      "form": "column_inline"
+    },
+    {
+      "table": "demo_runs",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "052_demo_orchestration.sql",
+      "line": 18,
+      "form": "column_inline"
+    },
+    {
+      "table": "agent_facts",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "053_agent_supervised_drafts.sql",
+      "line": 112,
+      "form": "column_inline"
+    },
+    {
+      "table": "leasing_lead_lifecycle_events",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "054_leasing_lead_lifecycle.sql",
+      "line": 66,
+      "form": "column_inline"
+    },
+    {
+      "table": "tour_booking_links",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "056_tour_booking_links.sql",
+      "line": 42,
+      "form": "column_inline"
+    },
+    {
+      "table": "recovery_variants",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "058_noshow_recovery_rail.sql",
+      "line": 14,
+      "form": "column_inline"
+    },
+    {
+      "table": "decision_cases",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "059_decision_rail.sql",
+      "line": 39,
+      "form": "column_inline"
+    },
+    {
+      "table": "person_attributes",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": false,
+      "declaredIn": "061_person_attributes.sql",
+      "line": 21,
+      "form": "column_inline"
+    },
+    {
+      "table": "property_pricing_versions",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "062_pricing_authority.sql",
+      "line": 32,
+      "form": "column_inline"
+    },
+    {
+      "table": "concession_policies",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "062_pricing_authority.sql",
+      "line": 76,
+      "form": "column_inline"
+    },
+    {
+      "table": "concession_authority_grants",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "062_pricing_authority.sql",
+      "line": 124,
+      "form": "column_inline"
+    },
+    {
+      "table": "lease_offers",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "063_lease_offer_economics.sql",
+      "line": 33,
+      "form": "column_inline"
+    },
+    {
+      "table": "lease_economic_schedules",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "063_lease_offer_economics.sql",
+      "line": 110,
+      "form": "column_inline"
+    },
+    {
+      "table": "concession_incidents",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "065_guardrail_incidents.sql",
+      "line": 32,
+      "form": "column_inline"
+    },
+    {
+      "table": "person_contexts",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": false,
+      "declaredIn": "067_staff_identity_bridge.sql",
+      "line": 107,
+      "form": "column_inline"
+    },
+    {
+      "table": "operator_session_invites",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "070_operator_session_bootstrap.sql",
+      "line": 41,
+      "form": "column_inline"
+    },
+    {
+      "table": "person_property_classifications",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "076_person_property_classifications.sql",
+      "line": 42,
+      "form": "column_inline"
+    },
+    {
+      "table": "agent_tour_offers",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "079_tour_booking_idempotency.sql",
+      "line": 45,
+      "form": "column_inline"
+    },
+    {
+      "table": "application_intents",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "084_application_intent_prepare_send.sql",
+      "line": 56,
+      "form": "column_inline"
+    },
+    {
+      "table": "application_proposed_terms_confirmations",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "085_proposed_terms_confirmation.sql",
+      "line": 45,
+      "form": "column_inline"
+    },
+    {
+      "table": "executed_lease_records",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "088_executed_lease_evidence.sql",
+      "line": 28,
+      "form": "column_inline"
+    },
+    {
+      "table": "lease_move_in_charge_sets",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "089_economic_tenancy_and_move_in_handoff.sql",
+      "line": 12,
+      "form": "column_inline"
+    },
+    {
+      "table": "property_channel_capabilities",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "094_property_channel_capabilities.sql",
+      "line": 79,
+      "form": "column_inline"
+    },
+    {
+      "table": "work_order_billback_decisions",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "099_billback_decision.sql",
+      "line": 40,
+      "form": "column_inline"
+    },
+    {
+      "table": "property_unit_types",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "100_durable_position_classification.sql",
+      "line": 53,
+      "form": "column_inline"
+    },
+    {
+      "table": "pricing_review_receipts",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "102_pricing_lifecycle_and_authority.sql",
+      "line": 73,
+      "form": "column_inline"
+    },
+    {
+      "table": "property_governed_charges",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "105_governed_charges.sql",
+      "line": 45,
+      "form": "column_inline"
+    },
+    {
+      "table": "governed_charge_rulings",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "111_governed_charge_rulings.sql",
+      "line": 49,
+      "form": "column_inline"
+    },
+    {
+      "table": "unit_observations",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "112_unit_triage_capture.sql",
+      "line": 65,
+      "form": "column_inline"
+    },
+    {
+      "table": "unit_triage_confirmations",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "112_unit_triage_capture.sql",
+      "line": 108,
+      "form": "column_inline"
+    },
+    {
+      "table": "unit_triage_findings",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "112_unit_triage_capture.sql",
+      "line": 171,
+      "form": "column_inline"
+    },
+    {
+      "table": "unit_triage_required_work",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "112_unit_triage_capture.sql",
+      "line": 235,
+      "form": "column_inline"
+    },
+    {
+      "table": "unit_turn_scopes",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "113_unit_turn_scope.sql",
+      "line": 47,
+      "form": "column_inline"
+    },
+    {
+      "table": "unit_turn_appliances",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "113_unit_turn_scope.sql",
+      "line": 125,
+      "form": "column_inline"
+    },
+    {
+      "table": "work_acceptances",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "115_work_acceptance_and_proof.sql",
+      "line": 57,
+      "form": "column_inline"
+    },
+    {
+      "table": "work_completion_claims",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "115_work_acceptance_and_proof.sql",
+      "line": 112,
+      "form": "column_inline"
+    },
+    {
+      "table": "work_reopenings",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "115_work_acceptance_and_proof.sql",
+      "line": 179,
+      "form": "column_inline"
+    },
+    {
+      "table": "unit_readiness_walks",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "116_readiness_certification.sql",
+      "line": 56,
+      "form": "column_inline"
+    },
+    {
+      "table": "unit_readiness_certifications",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "116_readiness_certification.sql",
+      "line": 119,
+      "form": "column_inline"
+    },
+    {
+      "table": "reclean_rulings",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "116_readiness_certification.sql",
+      "line": 197,
+      "form": "column_inline"
+    },
+    {
+      "table": "staff_agent_threads",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "117_staff_agent_capture.sql",
+      "line": 38,
+      "form": "column_inline"
+    },
+    {
+      "table": "staff_agent_messages",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "117_staff_agent_capture.sql",
+      "line": 57,
+      "form": "column_inline"
+    },
+    {
+      "table": "staff_agent_proposals",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "117_staff_agent_capture.sql",
+      "line": 90,
+      "form": "column_inline"
+    },
+    {
+      "table": "work_proof_attachments",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "118_work_proof_attachments.sql",
+      "line": 66,
+      "form": "column_inline"
+    },
+    {
+      "table": "renewal_cases",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "119_renewal_operating_rail.sql",
+      "line": 50,
+      "form": "column_inline"
+    },
+    {
+      "table": "property_ai_leasing_strategy_deployments",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "120_ai_leasing_strategy_foundation.sql",
+      "line": 143,
+      "form": "column_inline"
+    },
+    {
+      "table": "ai_leasing_operating_rules",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "121_ai_leasing_operating_context.sql",
+      "line": 12,
+      "form": "column_inline"
+    },
+    {
+      "table": "property_operating_timezone_changes",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "123_property_operating_timezone.sql",
+      "line": 85,
+      "form": "column_inline"
+    },
+    {
+      "table": "communication_lines",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": false,
+      "declaredIn": "130_communication_lines.sql",
+      "line": 39,
+      "form": "column_inline"
+    },
+    {
+      "table": "work_order_progress",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "134_technician_lifecycle.sql",
+      "line": 56,
+      "form": "column_inline"
+    },
+    {
+      "table": "work_order_proof_attachments",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "134_technician_lifecycle.sql",
+      "line": 100,
+      "form": "column_inline"
+    },
+    {
+      "table": "property_creation_events",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "150_canonical_property_creation.sql",
+      "line": 109,
+      "form": "column_inline"
+    },
+    {
+      "table": "property_organization_events",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "151_authority_mutation_containment.sql",
+      "line": 54,
+      "form": "column_inline"
+    },
+    {
+      "table": "opening_positions",
+      "column": "property_id",
+      "constraint": null,
+      "action": "NO ACTION",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "157_opening_positions.sql",
+      "line": 43,
+      "form": "column_inline"
+    },
+    {
+      "table": "insurance_property_allocations",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "161_insurance_economic_truth.sql",
+      "line": 174,
+      "form": "column_inline"
+    },
+    {
+      "table": "insurance_coverage_properties",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "162_insurance_coverage_participation.sql",
+      "line": 71,
+      "form": "column_inline"
+    },
+    {
+      "table": "insurance_funding_arrangements",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "163_insurance_funding.sql",
+      "line": 71,
+      "form": "column_inline"
+    },
+    {
+      "table": "legal_entity_properties",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "164_legal_entities.sql",
+      "line": 94,
+      "form": "column_inline"
+    },
+    {
+      "table": "tax_obligations",
+      "column": "liable_property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": false,
+      "declaredIn": "165_philadelphia_tax_position.sql",
+      "line": 65,
+      "form": "column_inline"
+    },
+    {
+      "table": "tax_obligation_properties",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "165_philadelphia_tax_position.sql",
+      "line": 122,
+      "form": "column_inline"
+    },
+    {
+      "table": "tax_obligation_applicability",
+      "column": "subject_property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": false,
+      "declaredIn": "165_philadelphia_tax_position.sql",
+      "line": 142,
+      "form": "column_inline"
+    },
+    {
+      "table": "tax_clearances",
+      "column": "subject_property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": false,
+      "declaredIn": "165_philadelphia_tax_position.sql",
+      "line": 318,
+      "form": "column_inline"
+    },
+    {
+      "table": "tax_funding_arrangements",
+      "column": "subject_property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": false,
+      "declaredIn": "166_tax_funding.sql",
+      "line": 76,
+      "form": "column_inline"
+    },
+    {
+      "table": "compliance_items",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "168_compliance_canonical_truth.sql",
+      "line": 9,
+      "form": "column_inline"
+    },
+    {
+      "table": "utility_services",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 18,
+      "form": "column_inline"
+    },
+    {
+      "table": "utility_service_declarations",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 29,
+      "form": "column_inline"
+    },
+    {
+      "table": "utility_service_providers",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 82,
+      "form": "column_inline"
+    },
+    {
+      "table": "utility_arrangements",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 103,
+      "form": "column_inline"
+    },
+    {
+      "table": "utility_service_points",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 147,
+      "form": "column_inline"
+    },
+    {
+      "table": "utility_meters",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 175,
+      "form": "column_inline"
+    },
+    {
+      "table": "utility_provider_accounts",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 196,
+      "form": "column_inline"
+    },
+    {
+      "table": "utility_account_services",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 219,
+      "form": "column_inline"
+    },
+    {
+      "table": "utility_meter_service_points",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 240,
+      "form": "column_inline"
+    },
+    {
+      "table": "utility_account_service_points",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 261,
+      "form": "column_inline"
+    },
+    {
+      "table": "utility_account_meters",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 282,
+      "form": "column_inline"
+    },
+    {
+      "table": "utility_statements",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 303,
+      "form": "column_inline"
+    },
+    {
+      "table": "utility_statement_usage",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 339,
+      "form": "column_inline"
+    },
+    {
+      "table": "contracted_service_coverage_reviews",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 5,
+      "form": "column_inline"
+    },
+    {
+      "table": "contracted_service_requirements",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 19,
+      "form": "column_inline"
+    },
+    {
+      "table": "contracted_service_engagements",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 63,
+      "form": "column_inline"
+    },
+    {
+      "table": "contracted_service_documents",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 86,
+      "form": "column_inline"
+    },
+    {
+      "table": "contracted_service_terms",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 120,
+      "form": "column_inline"
+    },
+    {
+      "table": "contracted_service_scopes",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 170,
+      "form": "column_inline"
+    },
+    {
+      "table": "contracted_service_locations",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 204,
+      "form": "column_inline"
+    },
+    {
+      "table": "contracted_service_price_components",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 228,
+      "form": "column_inline"
+    },
+    {
+      "table": "contracted_service_financial_observations",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 250,
+      "form": "column_inline"
+    },
+    {
+      "table": "contracted_service_decision_links",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 290,
+      "form": "column_inline"
+    },
+    {
+      "table": "debt_instrument_properties",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "173_debt_instruments.sql",
+      "line": 178,
+      "form": "column_inline"
+    },
+    {
+      "table": "capital_stack_positions",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "174_equity_positions.sql",
+      "line": 89,
+      "form": "column_inline"
+    },
+    {
+      "table": "common_equity_class_terms",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "174_equity_positions.sql",
+      "line": 151,
+      "form": "column_inline"
+    },
+    {
+      "table": "capital_stack_conflicts",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "174_equity_positions.sql",
+      "line": 398,
+      "form": "column_inline"
+    },
+    {
+      "table": "meeting_property_bindings",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "175_meeting_evidence_provider_inbox.sql",
+      "line": 130,
+      "form": "column_inline"
+    },
+    {
+      "table": "meeting_evidence_meetings",
+      "column": "property_id",
+      "constraint": null,
+      "action": "RESTRICT",
+      "effect": "BLOCKS",
+      "notNull": true,
+      "declaredIn": "176_meeting_receipt_v0.sql",
+      "line": 16,
+      "form": "column_inline"
+    },
+    {
+      "table": "property_leasing_cycles",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "178_property_leasing_cycles.sql",
+      "line": 44,
+      "form": "column_inline"
+    },
+    {
+      "table": "inventory_retirements",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "180_inventory_retirement.sql",
+      "line": 55,
+      "form": "column_inline"
+    },
+    {
+      "table": "tour_schedule_policies",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": false,
+      "declaredIn": "188_native_tour_scheduler.sql",
+      "line": 8,
+      "form": "column_inline"
+    },
+    {
+      "table": "tour_availability_commands",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "188_native_tour_scheduler.sql",
+      "line": 27,
+      "form": "column_inline"
+    },
+    {
+      "table": "tour_availability_events",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "188_native_tour_scheduler.sql",
+      "line": 50,
+      "form": "column_inline"
+    }
+  ],
+  "droppedEdges": [
+    {
+      "table": "scheduled_charges",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": false,
+      "declaredIn": "002_revenue_and_supply.sql",
+      "line": 33,
+      "form": "column_inline"
+    },
+    {
+      "table": "scheduled_charges",
+      "column": "property_id",
+      "constraint": null,
+      "action": "CASCADE",
+      "effect": "DESTROYS",
+      "notNull": true,
+      "declaredIn": "036_scheduled_charges.sql",
+      "line": 62,
+      "form": "column_inline"
+    }
+  ],
+  "droppedTables": [
+    "scheduled_charges"
+  ],
+  "unparsed": [],
+  "uniques": [
+    {
+      "table": "assignments",
+      "name": "ux_assign_person_prop_role_active",
+      "columns": [
+        "person_id",
+        "property_id",
+        "role"
+      ],
+      "partial": "(is_active = true)",
+      "declaredIn": "004_org_chart.sql",
+      "line": 58,
+      "klass": "COLLIDABLE",
+      "business": [
+        "person_id",
+        "role"
+      ]
+    },
+    {
+      "table": "bank_accounts",
+      "name": null,
+      "columns": [
+        "property_id",
+        "account_last4"
+      ],
+      "partial": null,
+      "declaredIn": "012_bank_intake.sql",
+      "line": 98,
+      "klass": "COLLIDABLE",
+      "business": [
+        "account_last4"
+      ]
+    },
+    {
+      "table": "vendor_property_categories",
+      "name": "vendor_property_categories_one_rule",
+      "columns": [
+        "vendor_id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "019_vendor_property_categories.sql",
+      "line": 36,
+      "klass": "COLLIDABLE",
+      "business": [
+        "vendor_id"
+      ]
+    },
+    {
+      "table": "deal_intake_properties",
+      "name": null,
+      "columns": [
+        "intake_id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "025_deal_properties.sql",
+      "line": 22,
+      "klass": "COLLIDABLE",
+      "business": [
+        "intake_id"
+      ]
+    },
+    {
+      "table": "conversations",
+      "name": null,
+      "columns": [
+        "property_id",
+        "person_id"
+      ],
+      "partial": null,
+      "declaredIn": "027_tenant_link.sql",
+      "line": 44,
+      "klass": "COLLIDABLE",
+      "business": [
+        "person_id"
+      ]
+    },
+    {
+      "table": "property_team_assignments",
+      "name": null,
+      "columns": [
+        "property_id",
+        "user_id"
+      ],
+      "partial": null,
+      "declaredIn": "035_phone_first_team.sql",
+      "line": 83,
+      "klass": "COLLIDABLE",
+      "business": [
+        "user_id"
+      ]
+    },
+    {
+      "table": "leasing_leads",
+      "name": "leasing_leads_one_open_per_person_property",
+      "columns": [
+        "person_id",
+        "property_id"
+      ],
+      "partial": "status not in ('leased','lost')",
+      "declaredIn": "038_leasing_leads.sql",
+      "line": 95,
+      "klass": "COLLIDABLE",
+      "business": [
+        "person_id"
+      ]
+    },
+    {
+      "table": "leasing_conversions",
+      "name": "leasing_conversions_one_active",
+      "columns": [
+        "person_id",
+        "property_id"
+      ],
+      "partial": "status = 'active'",
+      "declaredIn": "047_leasing_conversion_rail.sql",
+      "line": 94,
+      "klass": "COLLIDABLE",
+      "business": [
+        "person_id"
+      ]
+    },
+    {
+      "table": "agent_facts",
+      "name": "uq_agent_facts_property_active",
+      "columns": [
+        "property_id",
+        "fact_key"
+      ],
+      "partial": "status = 'active' and space_id is null",
+      "declaredIn": "053_agent_supervised_drafts.sql",
+      "line": 129,
+      "klass": "COLLIDABLE",
+      "business": [
+        "fact_key"
+      ]
+    },
+    {
+      "table": "agent_facts",
+      "name": "uq_agent_facts_space_active",
+      "columns": [
+        "property_id",
+        "space_id",
+        "fact_key"
+      ],
+      "partial": "status = 'active' and space_id is not null",
+      "declaredIn": "053_agent_supervised_drafts.sql",
+      "line": 131,
+      "klass": "COLLIDABLE",
+      "business": [
+        "space_id",
+        "fact_key"
+      ]
+    },
+    {
+      "table": "recovery_variants",
+      "name": null,
+      "columns": [
+        "property_id",
+        "variant_key"
+      ],
+      "partial": null,
+      "declaredIn": "058_noshow_recovery_rail.sql",
+      "line": 23,
+      "klass": "COLLIDABLE",
+      "business": [
+        "variant_key"
+      ]
+    },
+    {
+      "table": "person_attributes",
+      "name": "uq_person_attr_active",
+      "columns": [
+        "person_id",
+        "property_id",
+        "attr_key"
+      ],
+      "partial": "status = 'active'",
+      "declaredIn": "061_person_attributes.sql",
+      "line": 33,
+      "klass": "COLLIDABLE",
+      "business": [
+        "person_id",
+        "attr_key"
+      ]
+    },
+    {
+      "table": "property_pricing_versions",
+      "name": "uq_ppv_one_published",
+      "columns": [
+        "property_id"
+      ],
+      "partial": "status = 'published'",
+      "declaredIn": "062_pricing_authority.sql",
+      "line": 51,
+      "klass": "SINGLETON",
+      "business": []
+    },
+    {
+      "table": "person_contexts",
+      "name": "uq_person_context_active",
+      "columns": [
+        "person_id",
+        "context_type",
+        "coalesce(property_id, '00000000-0000-0000-0000-000000000000'::uuid)"
+      ],
+      "partial": "active_to is null",
+      "declaredIn": "067_staff_identity_bridge.sql",
+      "line": 120,
+      "klass": "COLLIDABLE",
+      "business": [
+        "person_id",
+        "context_type",
+        "coalesce(property_id, '00000000-0000-0000-0000-000000000000'::uuid)"
+      ]
+    },
+    {
+      "table": "property_team_assignments",
+      "name": "uq_pta_one_active",
+      "columns": [
+        "property_id",
+        "user_id"
+      ],
+      "partial": "active = true",
+      "declaredIn": "070_operator_session_bootstrap.sql",
+      "line": 194,
+      "klass": "COLLIDABLE",
+      "business": [
+        "user_id"
+      ]
+    },
+    {
+      "table": "person_property_classifications",
+      "name": "person_property_classifications_current",
+      "columns": [
+        "person_id",
+        "property_id"
+      ],
+      "partial": "superseded_at is null",
+      "declaredIn": "076_person_property_classifications.sql",
+      "line": 61,
+      "klass": "COLLIDABLE",
+      "business": [
+        "person_id"
+      ]
+    },
+    {
+      "table": "work_orders",
+      "name": "ux_work_orders_idempotency",
+      "columns": [
+        "idempotency_key",
+        "property_id",
+        "coalesce(person_id,'00000000-0000-0000-0000-000000000000'::uuid)"
+      ],
+      "partial": "idempotency_key is not null",
+      "declaredIn": "078_work_order_urgency_and_idempotency.sql",
+      "line": 24,
+      "klass": "COLLIDABLE",
+      "business": [
+        "idempotency_key",
+        "coalesce(person_id,'00000000-0000-0000-0000-000000000000'::uuid)"
+      ]
+    },
+    {
+      "table": "application_intents",
+      "name": "uq_application_intents_identity",
+      "columns": [
+        "property_id",
+        "source",
+        "source_identity"
+      ],
+      "partial": null,
+      "declaredIn": "084_application_intent_prepare_send.sql",
+      "line": 73,
+      "klass": "COLLIDABLE",
+      "business": [
+        "source",
+        "source_identity"
+      ]
+    },
+    {
+      "table": "application_proposed_terms_confirmations",
+      "name": "aptc_id_app_prop_uq",
+      "columns": [
+        "id",
+        "application_id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "085_proposed_terms_confirmation.sql",
+      "line": 63,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "application_id"
+      ]
+    },
+    {
+      "table": "property_channel_capabilities",
+      "name": "pcc_one_active_per_capability",
+      "columns": [
+        "property_id",
+        "channel",
+        "capability"
+      ],
+      "partial": "status = 'active'",
+      "declaredIn": "094_property_channel_capabilities.sql",
+      "line": 150,
+      "klass": "COLLIDABLE",
+      "business": [
+        "channel",
+        "capability"
+      ]
+    },
+    {
+      "table": "property_unit_types",
+      "name": "uq_property_unit_types_code",
+      "columns": [
+        "property_id",
+        "code"
+      ],
+      "partial": null,
+      "declaredIn": "100_durable_position_classification.sql",
+      "line": 68,
+      "klass": "COLLIDABLE",
+      "business": [
+        "code"
+      ]
+    },
+    {
+      "table": "property_unit_types",
+      "name": "uq_property_unit_types_prop_id",
+      "columns": [
+        "property_id",
+        "id"
+      ],
+      "partial": null,
+      "declaredIn": "101_pricing_unit_type_reference.sql",
+      "line": 50,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "property_pricing_versions",
+      "name": "uq_property_pricing_versions_prop_id",
+      "columns": [
+        "property_id",
+        "id"
+      ],
+      "partial": null,
+      "declaredIn": "101_pricing_unit_type_reference.sql",
+      "line": 53,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "property_governed_charges",
+      "name": "uq_gc_active_code",
+      "columns": [
+        "property_id",
+        "charge_code"
+      ],
+      "partial": "record_state = 'active'",
+      "declaredIn": "105_governed_charges.sql",
+      "line": 151,
+      "klass": "COLLIDABLE",
+      "business": [
+        "charge_code"
+      ]
+    },
+    {
+      "table": "property_governed_charges",
+      "name": "uq_gc_one_live_owner",
+      "columns": [
+        "property_id",
+        "charge_code"
+      ],
+      "partial": "quote_state = 'live'",
+      "declaredIn": "106_quote_activation_boundary.sql",
+      "line": 61,
+      "klass": "COLLIDABLE",
+      "business": [
+        "charge_code"
+      ]
+    },
+    {
+      "table": "unit_triage_required_work",
+      "name": "uq_utrw_id_property_unit",
+      "columns": [
+        "id",
+        "property_id",
+        "unit_id"
+      ],
+      "partial": null,
+      "declaredIn": "118_work_proof_attachments.sql",
+      "line": 62,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "unit_id"
+      ]
+    },
+    {
+      "table": "property_ai_leasing_strategy_deployments",
+      "name": null,
+      "columns": [
+        "property_id",
+        "strategy_version_id"
+      ],
+      "partial": null,
+      "declaredIn": "120_ai_leasing_strategy_foundation.sql",
+      "line": 156,
+      "klass": "COLLIDABLE",
+      "business": [
+        "strategy_version_id"
+      ]
+    },
+    {
+      "table": "property_ai_leasing_strategy_deployments",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id",
+        "strategy_profile_id",
+        "strategy_version_id"
+      ],
+      "partial": null,
+      "declaredIn": "120_ai_leasing_strategy_foundation.sql",
+      "line": 157,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "strategy_profile_id",
+        "strategy_version_id"
+      ]
+    },
+    {
+      "table": "conversation_ai_leasing_strategy_events",
+      "name": null,
+      "columns": [
+        "id",
+        "leasing_lead_id",
+        "conversation_id",
+        "property_id",
+        "strategy_profile_id",
+        "strategy_version_id"
+      ],
+      "partial": null,
+      "declaredIn": "120_ai_leasing_strategy_foundation.sql",
+      "line": 231,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "leasing_lead_id",
+        "conversation_id",
+        "strategy_profile_id",
+        "strategy_version_id"
+      ]
+    },
+    {
+      "table": "property_ai_leasing_strategy_deployments",
+      "name": "uq_property_ai_strategy_active_profile",
+      "columns": [
+        "property_id",
+        "strategy_profile_id"
+      ],
+      "partial": "status = 'active'",
+      "declaredIn": "120_ai_leasing_strategy_foundation.sql",
+      "line": 166,
+      "klass": "COLLIDABLE",
+      "business": [
+        "strategy_profile_id"
+      ]
+    },
+    {
+      "table": "conversations",
+      "name": "uq_conversations_id_property_person",
+      "columns": [
+        "id",
+        "property_id",
+        "person_id"
+      ],
+      "partial": null,
+      "declaredIn": "120_ai_leasing_strategy_foundation.sql",
+      "line": 197,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "person_id"
+      ]
+    },
+    {
+      "table": "leasing_leads",
+      "name": "uq_leasing_leads_id_property_person",
+      "columns": [
+        "id",
+        "property_id",
+        "person_id"
+      ],
+      "partial": null,
+      "declaredIn": "120_ai_leasing_strategy_foundation.sql",
+      "line": 199,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "person_id"
+      ]
+    },
+    {
+      "table": "comm_events",
+      "name": "uq_comm_events_id_conversation_property",
+      "columns": [
+        "id",
+        "conversation_id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "120_ai_leasing_strategy_foundation.sql",
+      "line": 201,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "conversation_id"
+      ]
+    },
+    {
+      "table": "ai_leasing_operating_rules",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "121_ai_leasing_operating_context.sql",
+      "line": 48,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "ai_leasing_operating_rules",
+      "name": "uq_ai_leasing_operating_rule_active",
+      "columns": [
+        "property_id",
+        "rule_kind",
+        "rule_key"
+      ],
+      "partial": "status = 'active'",
+      "declaredIn": "121_ai_leasing_operating_context.sql",
+      "line": 53,
+      "klass": "COLLIDABLE",
+      "business": [
+        "rule_kind",
+        "rule_key"
+      ]
+    },
+    {
+      "table": "property_operating_timezone_changes",
+      "name": "uq_pot_changes_idempotency",
+      "columns": [
+        "property_id",
+        "idempotency_key"
+      ],
+      "partial": "idempotency_key is not null",
+      "declaredIn": "123_property_operating_timezone.sql",
+      "line": 103,
+      "klass": "COLLIDABLE",
+      "business": [
+        "idempotency_key"
+      ]
+    },
+    {
+      "table": "communication_lines",
+      "name": "uq_cl_one_active_property_line",
+      "columns": [
+        "property_id"
+      ],
+      "partial": "line_type = 'property_facing' and status = 'active'",
+      "declaredIn": "130_communication_lines.sql",
+      "line": 161,
+      "klass": "SINGLETON",
+      "business": []
+    },
+    {
+      "table": "work_orders",
+      "name": "uq_work_orders_id_property",
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "134_technician_lifecycle.sql",
+      "line": 47,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "work_order_proof_attachments",
+      "name": "uq_wopa_id_scope",
+      "columns": [
+        "id",
+        "work_order_id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "137_release_0_completion_proof.sql",
+      "line": 45,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "work_order_id"
+      ]
+    },
+    {
+      "table": "work_order_proof_evaluations",
+      "name": "uq_wope_id_scope",
+      "columns": [
+        "id",
+        "work_order_id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "137_release_0_completion_proof.sql",
+      "line": 67,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "work_order_id"
+      ]
+    },
+    {
+      "table": "deal_intake_properties",
+      "name": "uq_dip_one_current_deal_per_property",
+      "columns": [
+        "property_id"
+      ],
+      "partial": "status = 'current'",
+      "declaredIn": "155_deal_membership_currency.sql",
+      "line": 81,
+      "klass": "SINGLETON",
+      "business": []
+    },
+    {
+      "table": "opening_positions",
+      "name": "uq_opening_position_current_per_property",
+      "columns": [
+        "property_id"
+      ],
+      "partial": "status = 'established'",
+      "declaredIn": "157_opening_positions.sql",
+      "line": 144,
+      "klass": "SINGLETON",
+      "business": []
+    },
+    {
+      "table": "insurance_coverage_properties",
+      "name": "uq_ins_cov_prop",
+      "columns": [
+        "coverage_id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "162_insurance_coverage_participation.sql",
+      "line": 87,
+      "klass": "COLLIDABLE",
+      "business": [
+        "coverage_id"
+      ]
+    },
+    {
+      "table": "legal_entity_properties",
+      "name": "uq_lep_live_relationship",
+      "columns": [
+        "legal_entity_id",
+        "property_id",
+        "relationship_type"
+      ],
+      "partial": "effective_to is null",
+      "declaredIn": "164_legal_entities.sql",
+      "line": 123,
+      "klass": "COLLIDABLE",
+      "business": [
+        "legal_entity_id",
+        "relationship_type"
+      ]
+    },
+    {
+      "table": "tax_obligation_properties",
+      "name": "uq_tax_obl_prop",
+      "columns": [
+        "obligation_id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "165_philadelphia_tax_position.sql",
+      "line": 124,
+      "klass": "COLLIDABLE",
+      "business": [
+        "obligation_id"
+      ]
+    },
+    {
+      "table": "utility_services",
+      "name": null,
+      "columns": [
+        "property_id",
+        "service_class"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 24,
+      "klass": "COLLIDABLE",
+      "business": [
+        "service_class"
+      ]
+    },
+    {
+      "table": "utility_services",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 25,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "utility_service_declarations",
+      "name": null,
+      "columns": [
+        "id",
+        "service_id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 43,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "service_id"
+      ]
+    },
+    {
+      "table": "utility_service_providers",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 99,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "utility_arrangements",
+      "name": null,
+      "columns": [
+        "id",
+        "service_id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 131,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "service_id"
+      ]
+    },
+    {
+      "table": "utility_service_points",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 169,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "utility_meters",
+      "name": null,
+      "columns": [
+        "property_id",
+        "meter_kind",
+        "meter_identifier",
+        "effective_from"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 191,
+      "klass": "COLLIDABLE",
+      "business": [
+        "meter_kind",
+        "meter_identifier",
+        "effective_from"
+      ]
+    },
+    {
+      "table": "utility_meters",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 192,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "utility_provider_accounts",
+      "name": null,
+      "columns": [
+        "property_id",
+        "provider_id",
+        "external_account_identifier"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 214,
+      "klass": "COLLIDABLE",
+      "business": [
+        "provider_id",
+        "external_account_identifier"
+      ]
+    },
+    {
+      "table": "utility_provider_accounts",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 215,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "utility_account_services",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 236,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "utility_meter_service_points",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 257,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "utility_account_service_points",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 278,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "utility_account_meters",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 299,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "utility_statements",
+      "name": null,
+      "columns": [
+        "id",
+        "account_id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "169_utilities_canonical_truth.sql",
+      "line": 323,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "account_id"
+      ]
+    },
+    {
+      "table": "contracted_service_coverage_reviews",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 13,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "contracted_service_requirements",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id",
+        "service_class"
+      ],
+      "partial": null,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 34,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "service_class"
+      ]
+    },
+    {
+      "table": "contracted_service_engagements",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 78,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "contracted_service_documents",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 106,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "contracted_service_terms",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 149,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "contracted_service_terms",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id",
+        "engagement_id"
+      ],
+      "partial": null,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 150,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "engagement_id"
+      ]
+    },
+    {
+      "table": "contracted_service_scopes",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 189,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "contracted_service_scopes",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id",
+        "engagement_id"
+      ],
+      "partial": null,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 190,
+      "klass": "ANCHOR",
+      "business": [
+        "id",
+        "engagement_id"
+      ]
+    },
+    {
+      "table": "contracted_service_locations",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 222,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "contracted_service_price_components",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 244,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "contracted_service_financial_observations",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 272,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "contracted_service_decision_links",
+      "name": null,
+      "columns": [
+        "id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "171_contracted_services_canonical_truth.sql",
+      "line": 302,
+      "klass": "ANCHOR",
+      "business": [
+        "id"
+      ]
+    },
+    {
+      "table": "meeting_property_bindings",
+      "name": null,
+      "columns": [
+        "provider_meeting_id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "175_meeting_evidence_provider_inbox.sql",
+      "line": 136,
+      "klass": "COLLIDABLE",
+      "business": [
+        "provider_meeting_id"
+      ]
+    },
+    {
+      "table": "meeting_evidence_meetings",
+      "name": null,
+      "columns": [
+        "provider_meeting_id",
+        "property_id"
+      ],
+      "partial": null,
+      "declaredIn": "176_meeting_receipt_v0.sql",
+      "line": 25,
+      "klass": "COLLIDABLE",
+      "business": [
+        "provider_meeting_id"
+      ]
+    },
+    {
+      "table": "property_leasing_cycles",
+      "name": "uq_leasing_cycle_live_label",
+      "columns": [
+        "property_id",
+        "lower(trim(cycle_label))"
+      ],
+      "partial": "state = 'active'",
+      "declaredIn": "178_property_leasing_cycles.sql",
+      "line": 85,
+      "klass": "COLLIDABLE",
+      "business": [
+        "lower(trim(cycle_label))"
+      ]
+    },
+    {
+      "table": "activations",
+      "name": "uq_activation_current_source",
+      "columns": [
+        "property_id",
+        "source_kind"
+      ],
+      "partial": "status = 'activated' and superseded_by_id is null and source_kind is not null",
+      "declaredIn": "179_activation_source_supersession.sql",
+      "line": 60,
+      "klass": "COLLIDABLE",
+      "business": [
+        "source_kind"
+      ]
+    },
+    {
+      "table": "tour_availability_commands",
+      "name": "uq_tour_availability_commands_idempotency",
+      "columns": [
+        "property_id",
+        "idempotency_key"
+      ],
+      "partial": "idempotency_key is not null",
+      "declaredIn": "188_native_tour_scheduler.sql",
+      "line": 45,
+      "klass": "COLLIDABLE",
+      "business": [
+        "idempotency_key"
+      ]
+    },
+    {
+      "table": "tour_availability_events",
+      "name": "uq_tour_availability_events_idempotency",
+      "columns": [
+        "property_id",
+        "idempotency_key"
+      ],
+      "partial": "idempotency_key is not null",
+      "declaredIn": "188_native_tour_scheduler.sql",
+      "line": 75,
+      "klass": "COLLIDABLE",
+      "business": [
+        "idempotency_key"
+      ]
+    }
+  ]
+}
