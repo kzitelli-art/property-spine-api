@@ -43,6 +43,7 @@
  * demo rehearsal conversations were closed," which is reversible.
  */
 const crypto = require("crypto");
+const { resolveDemoPropertyRow } = require("../shared/demo_property_identity.js");
 
 module.exports = function demoReset(deps) {
   const { pool, leasingLifecycle } = deps || {};
@@ -54,7 +55,6 @@ module.exports = function demoReset(deps) {
   const express = require("express");
   const router = express.Router();
 
-  const DEMO_PROP_NAME = "Property Spine Demo Building"; // MUST match /demo/intake + operator.js
   const DEMO_SOURCE = "boardroom_demo";                  // MUST match /demo/intake DEMO_INTAKE_SOURCE
 
   // tiny per-IP limiter (reset is low-frequency; a Map is enough).
@@ -76,11 +76,10 @@ module.exports = function demoReset(deps) {
   // Resolve the Demo Building + the boardroom_demo source id. Returns
   // { prop, srcId } or null on the honest "nothing to reset" cases.
   async function resolveScope() {
-    const prop = (await pool.query(
-      "select id, name from properties where name=$1 order by created_at asc limit 1",
-      [DEMO_PROP_NAME]
-    )).rows[0];
-    if (!prop) return { missingProperty: true };
+    //  Was: `where name=$1 order by created_at asc limit 1`. What gets
+    //  RESET was chosen by creation order among three same-named rows.
+    const { res: demoRes, row: prop } = await resolveDemoPropertyRow(pool);
+    if (!prop) return { missingProperty: true, receipt: demoRes.receipt };
     const src = (await pool.query(
       "select id from lead_sources where lower(name)=lower($1) limit 1",
       [DEMO_SOURCE]

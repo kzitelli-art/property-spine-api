@@ -32,7 +32,8 @@
 //       the operator-facing actions agent.js exposes. Mounted under "/".
 
 const crypto = require("crypto");
-const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
+const staffSessions = require("./staff_session_service.js");
+const { resolveDemoProperty } = require("../shared/demo_property_identity.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const proposedTerms = require("../applications/proposed_terms_service"); // Part 3: governed proposed-terms confirmation (Part 2 service)
 // Slice 9: the canonical application READ authority. One definition of
@@ -99,7 +100,6 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
 
   const DEMO_MODE = String(process.env.DEMO_MODE || "").toLowerCase() === "true";
   const DEMO_ACCESS_CODE = process.env.DEMO_ACCESS_CODE || ""; // high-entropy, single-purpose; DISTINCT from OPERATOR_KEY
-  const DEMO_PROP_NAME = "Property Spine Demo Building";
   const DEMO_MGR_EMAIL = "demo-manager@propertyspine.internal";
   const DEMO_SESSION_HOURS = 6;
 
@@ -192,11 +192,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           await client.query("begin");
 
           // the dedicated demo property (must already exist — created by the demo seed)
-          const prop = (await client.query(
-            "select id from properties where name=$1 order by created_at asc limit 1",
-            [DEMO_PROP_NAME]
-          )).rows[0];
-          if (!prop) throw httpErr(409, "No demo property yet — start the demo (it seeds the property) first.");
+          //  Was: `where name=$1 order by created_at asc limit 1`. Three rows
+          //  share that name, so it took the oldest and said nothing.
+          const demoRes = await resolveDemoProperty(client);
+          if (demoRes.status !== "resolved") throw httpErr(409, demoRes.receipt);
+          const prop = { id: demoRes.property_id };
 
           // the seeded leasing_manager (created by the demo seed)
           let mgr = (await client.query("select id from users where email=$1 limit 1", [DEMO_MGR_EMAIL])).rows[0];

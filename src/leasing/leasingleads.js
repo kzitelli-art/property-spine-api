@@ -26,6 +26,7 @@ const staffSessions = require("../identity/staff_session_service.js"); // BRICK 
 const staffIdentity = require("../identity/staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const { recordPersonFact } = require("../identity/person_facts.js"); // 092: the ONE person × property fact write
 const crypto = require("crypto");
+const { resolveDemoProperty, resolveDemoPropertyRow } = require("../shared/demo_property_identity.js");
 const aiLeasingStrategy = require("./ai_leasing_strategy");
 // Slice 9 attribution foundation: the ONE place an appointment binds to an opportunity.
 const attribution = require("./appointment_attribution");
@@ -806,7 +807,8 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //  A constrained public door into the SAME intakeProspect service — not a
   //  second implementation. Fail-closed controls:
   //    • DEMO_MODE=true required (absent/false → 403, same as /demo/operator-session)
-  //    • property is SERVER-DERIVED: always the property named DEMO_INTAKE_PROP_NAME
+  //    • property is SERVER-DERIVED: the one demo identity module resolves it,
+  //      and REFUSES on ambiguity rather than taking the oldest of three
   //      (the identical constant operator.js uses to mint the door's session, so the
   //      form and the door are guaranteed to agree). A client-supplied property_id
   //      is IGNORED — an env typo cannot redirect public lead creation into a live
@@ -822,7 +824,6 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //    • attempt_sms=false: the AI opening response is PREPARED, never claimed sent
   //      ('ai_response_prepared'). No transport call is made.
   // ════════════════════════════════════════════════════════════════════
-  const DEMO_INTAKE_PROP_NAME = "Property Spine Demo Building"; // MUST match operator.js DEMO_PROP_NAME
   const DEMO_INTAKE_SOURCE = "boardroom_demo";
   const _demoRate = { ip: new Map(), phone: new Map() };
   function _rateOk(map, key, max, windowMs) {
@@ -896,12 +897,14 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       }
 
       // ── SERVER-DERIVED demo property (client property_id ignored entirely) ──
-      const prop = (await pool.query(
-        "select id, name, coalesce(display_name, name) as display_name from properties where name=$1 order by created_at asc limit 1",
-        [DEMO_INTAKE_PROP_NAME]
-      )).rows[0];
+      //  "Server-derived" was true and still insufficient: the server derived
+      //  it with `order by created_at asc limit 1` over a name three rows
+      //  share, so it derived the OLDEST rather than the right one.
+      const { res: demoRes, row: prop } = await resolveDemoPropertyRow(pool);
       if (!prop) {
-        return res.status(409).json({ receipt: "The demo property is not seeded yet — start the demo first." });
+        return res.status(409).json({ receipt: demoRes.status === "ambiguous"
+          ? demoRes.receipt
+          : "The demo property is not seeded yet — start the demo first." });
       }
 
       // ── ensure the tagging source exists (demo-scope only; the authenticated
@@ -1021,7 +1024,6 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     if (!rawToken) return res.status(400).json({ receipt: "A booking token is required." });
     if (!slotId)   return res.status(400).json({ receipt: "A slot_id is required to book." });
 
-    const DEMO_INTAKE_PROP_NAME = "Property Spine Demo Building"; // MUST match /demo/intake + operator.js
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -1046,10 +1048,26 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         return res.status(409).json({ receipt: "This booking link has expired." });
       }
 
-      // 3) SCOPE WALL: the link's property must be the Demo Building. Re-verify by
-      //    name, so a tampered property_id can't aim a booking at a live property.
-      const demoProp = (await client.query(`select id, name from properties where name=$1`, [DEMO_INTAKE_PROP_NAME])).rows[0];
-      if (!demoProp || demoProp.id !== link.property_id) {
+      // 3) SCOPE WALL: the link's property must be the Demo Building.
+      //
+      //    This re-verified BY NAME, with no `limit`, taking rows[0] — to stop
+      //    a tampered property_id aiming a booking at a live property. Three
+      //    rows share that name, so the wall compared the link against
+      //    whichever of three the database happened to return first. A guard
+      //    that guesses is worse than one that fails, because the failure is
+      //    visible (§5).
+      //
+      //    Ambiguity is now a REFUSAL. It is never resolved to a best guess,
+      //    and the candidates are logged so a human can see what was seen.
+      const demoRes = await resolveDemoProperty(client);
+      if (demoRes.status !== "resolved") {
+        await client.query("rollback");
+        console.warn("[booking scope wall] REFUSED — demo property identity not established:",
+          JSON.stringify({ status: demoRes.status, receipt: demoRes.receipt,
+                           candidates: (demoRes.candidates || []).map((c) => c.property_id) }));
+        return res.status(409).json({ receipt: "This booking link is not valid for this property." });
+      }
+      if (demoRes.property_id !== link.property_id) {
         await client.query("rollback");
         return res.status(409).json({ receipt: "This booking link is not valid for this property." });
       }

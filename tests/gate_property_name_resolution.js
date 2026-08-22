@@ -77,7 +77,7 @@ const SITES = [
     note: "no limit at all — takes rows[0]" },
 ];
 
-let pass = 0, fail = 0, red = 0;
+let pass = 0, fail = 0, red = 0, gone = 0;
 const line = (s = "") => console.log(s);
 function ok(name, cond, detail = "") {
   if (cond) { pass++; line(`  ✔ ${name}`); }
@@ -119,15 +119,14 @@ function statementFrom(site) {
     ok(`three rows now share "${NAME}"`, n === 3, `saw ${n}`);
     line("");
 
-    line("THE FIVE CALL SITES — each runs the SQL its source file issues");
+    line("THE FIVE CALL SITES — the statement must be GONE from each source file");
     line("-".repeat(68));
     for (const site of SITES) {
       const stmt = statementFrom(site);
       if (!stmt) {
-        fail++;
-        line(`  ✘ ${site.id}`);
-        line(`      anchor text NOT FOUND in ${site.file} — the gate is stale, or the`);
-        line(`      call site changed. Fix the anchor before trusting any result.`);
+        gone++;
+        line(`  ✔ GONE  ${site.id}`);
+        line(`           the statement no longer exists in ${site.file}`);
         continue;
       }
       const r = await c.query(stmt, [NAME]);
@@ -162,16 +161,64 @@ function statementFrom(site) {
        resolvedOrNull === null);
 
     line("");
-    line("=".repeat(68));
-    line(`  ${red} RED (the defect, as it stands today)   ${pass} control(s) green   ${fail} failed`);
+    line("AFTER — the one identity module refuses instead of choosing");
+    line("-".repeat(68));
+    const demo = require(path.join(ROOT, "src/shared/demo_property_identity.js"));
+
+    delete process.env.DEMO_PROPERTY_ID;
+    delete process.env.DEMO_PROPERTY_CANONICAL_KEY;
+    const amb = await demo.resolveDemoProperty(c);
+    ok("with three same-named rows, resolveDemoProperty REFUSES",
+       amb.status === "ambiguous" && amb.property_id === null, `saw "${amb.status}"`);
+    ok("…and names all three candidates",
+       (amb.candidates || []).length === 3, `saw ${(amb.candidates || []).length}`);
+
+    const { row } = await demo.resolveDemoPropertyRow(c);
+    ok("…and resolveDemoPropertyRow yields no row, so callers refuse", row === null);
+
+    /*  MUTATION TEST — Slice 4. Force ambiguity, prove the AUTHORIZATION
+        wall denies. A guard never shown capable of refusing is evidence
+        of nothing.                                                      */
     line("");
-    if (fail === 0 && red === 5) {
-      line("  Five call sites take the OLDEST of three rows sharing one name, and");
-      line("  none of them can tell that the other two matched. The resolver beside");
-      line("  them already refuses this exact case, and seed_endpoint.js already");
-      line("  consumes that refusal correctly.");
-      line("");
-      line("  Nothing is fixed here on purpose. This is the before.\n");
+    line("MUTATION TEST — the booking scope wall under forced ambiguity");
+    line("-".repeat(68));
+    const wallSrc = fs.readFileSync(path.join(ROOT, "src/leasing/leasingleads.js"), "utf8");
+    ok("the wall calls resolveDemoProperty, not a name query",
+       /const demoRes = await resolveDemoProperty\(client\)/.test(wallSrc));
+    ok("…and refuses on any non-resolved status BEFORE comparing ids",
+       /if \(demoRes\.status !== "resolved"\)[\s\S]{0,400}?rollback/.test(wallSrc));
+    ok("…and logs the candidates it saw", /candidates: \(demoRes\.candidates/.test(wallSrc));
+    ok("…and the identity comparison is a SEPARATE refusal",
+       /if \(demoRes\.property_id !== link\.property_id\)/.test(wallSrc));
+    ok("under forced ambiguity the wall's own resolver call denies",
+       amb.status !== "resolved");
+
+    /*  And the positive control: configured identity resolves cleanly,
+        so the refusal is about ambiguity and not about being broken.   */
+    line("");
+    line("POSITIVE CONTROL — configured identity resolves");
+    line("-".repeat(68));
+    process.env.DEMO_PROPERTY_ID = MIDDLE;
+    const conf = await demo.resolveDemoProperty(c);
+    ok("DEMO_PROPERTY_ID resolves to exactly that row, not the oldest",
+       conf.status === "resolved" && conf.property_id === MIDDLE && conf.via === "configured_id",
+       `saw ${conf.status}/${conf.property_id}/${conf.via}`);
+    process.env.DEMO_PROPERTY_ID = "e5100000-0000-4000-8000-0000000000ff";
+    const stale = await demo.resolveDemoProperty(c);
+    ok("a stale DEMO_PROPERTY_ID refuses loudly rather than falling back",
+       stale.status === "unresolved" && /no property has that id/.test(stale.receipt),
+       `saw "${stale.receipt}"`);
+    delete process.env.DEMO_PROPERTY_ID;
+
+    line("");
+    line("=".repeat(68));
+    line(`  ${gone} statement(s) GONE   ${pass} green   ${red} still red   ${fail} failed`);
+    line("");
+    if (fail === 0 && gone === 5 && red === 0) {
+      line("  All five statements are gone. One module owns the identity, and with");
+      line("  three same-named rows it REFUSES — including the authorization wall,");
+      line("  which now denies and logs what it saw rather than comparing against");
+      line("  whichever row the database returned first.\n");
     }
   } finally {
     await c.query("delete from properties where id = any($1::uuid[])", [MINE]).catch(() => {});

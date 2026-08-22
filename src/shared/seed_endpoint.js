@@ -29,7 +29,6 @@
 //   GET  /admin/seed-snapshot/status
 // ============================================================
 
-const DEMO_PROP_NAME = "Property Spine Demo Building";
 const DEMO_MODE = String(process.env.DEMO_MODE || "").toLowerCase() === "true";
 
 const staffSessions = require("../identity/staff_session_service.js");
@@ -37,6 +36,7 @@ const staffSessions = require("../identity/staff_session_service.js");
 //  perimeter answers WHERE synthetic data may land.
 const { syntheticTargetAllowed, syntheticRefusal } = require("./synthetic_data_perimeter.js");
 const { resolvePropertyIdentity } = require("../identity/property_resolution_service.js");
+const { DEMO_PROPERTY_NAME, resolveDemoProperty } = require("./demo_property_identity.js");
 
 module.exports = function seedEndpoint(deps){
   const express = require("express");
@@ -55,8 +55,11 @@ module.exports = function seedEndpoint(deps){
   //  is a real state (a QA reseed, a rename that half-applied), and the
   //  silent pick would send a rent roll to whichever was created first.
   //  Exact name, and more than one is a refusal rather than a choice.
+  //  This file already had the right shape and was the model the other
+  //  five were brought up to. What it also had was a SIXTH declaration
+  //  of the name; it now imports the one.
   async function resolveDemoPropertyId(){
-    const res = await resolvePropertyIdentity(pool, { name_exact: DEMO_PROP_NAME });
+    const res = await resolveDemoProperty(pool);
     return res.status === "resolved" ? res.property_id : null;
   }
 
@@ -121,7 +124,7 @@ module.exports = function seedEndpoint(deps){
 
   async function ensureSoloQaBaseline(){
     const propertyId = await resolveDemoPropertyId();
-    if (!propertyId) return { error:"demo_property_not_found", property_name:DEMO_PROP_NAME };
+    if (!propertyId) return { error:"demo_property_not_found", property_name:DEMO_PROPERTY_NAME };
 
     const existing = await pool.query(
       `select id from import_batches

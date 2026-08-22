@@ -17,6 +17,7 @@
 
 const { Pool } = require("pg");
 
+const { resolveDemoProperty } = require("../shared/demo_property_identity.js");
 const DEMO_PROPERTY_ID = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
 const REAL_SOLO_ID     = "9e2bb96e-08e2-41db-81c2-91055ceb50a3";
 const TZ               = "America/New_York";
@@ -99,19 +100,26 @@ async function checkProperty(pool) {
     ? note("OK", `Property SMS line: ${byId.sms_number} — this is the "from" every send derives server-side.`)
     : note("STOP", "Property has no sms_number. The outbound gate refuses with no_property_line and never falls back to the Messaging Service default.");
 
-  // /demo/intake finds the property by NAME, not id. If the name column has
-  // drifted, the public form 409s with "demo property is not seeded yet."
-  const byName = await safe("name lookup", async () =>
-    (await pool.query(
-      `select id from properties where name = $1 order by created_at asc limit 1`,
-      ["Property Spine Demo Building"])).rows[0]);
+  //  /demo/intake used to find the property by NAME with
+  //  `order by created_at asc limit 1`. It now goes through the one
+  //  identity module, which refuses rather than choosing. This check
+  //  asks the SAME question the form now asks, so a drift here is a
+  //  drift there.
+  const identity = await safe("identity resolution", () => resolveDemoProperty(pool));
 
-  if (!byName) {
-    note("STOP", 'No property named exactly "Property Spine Demo Building". /demo/intake will 409 — the form will fail for everyone.');
-  } else if (byName.id !== DEMO_PROPERTY_ID) {
-    note("STOP", `The name lookup resolves to a DIFFERENT property (${byName.id}). The form would file leads against the wrong building.`);
+  if (!identity) {
+    note("STOP", "Could not resolve the demo property identity at all.");
+  } else if (identity.status === "ambiguous") {
+    note("STOP", `${identity.receipt} /demo/intake REFUSES rather than filing leads ` +
+      `against whichever row is oldest — which is correct, and it also means the ` +
+      `public form is down until the identity is adjudicated or ` +
+      `DEMO_PROPERTY_ID / DEMO_PROPERTY_CANONICAL_KEY is configured.`);
+  } else if (identity.status !== "resolved") {
+    note("STOP", `${identity.receipt} /demo/intake will 409 — the form will fail for everyone.`);
+  } else if (identity.property_id !== DEMO_PROPERTY_ID) {
+    note("STOP", `Identity resolves to a DIFFERENT property (${identity.property_id}). The form would file leads against the wrong building.`);
   } else {
-    note("OK", "The public form's name lookup resolves to this same property.");
+    note("OK", `The public form resolves to this same property, via ${identity.via}.`);
   }
   return byId;
 }

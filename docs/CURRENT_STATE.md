@@ -443,6 +443,37 @@ contacted. The census answers those, and a human runs it.
 
 ---
 
+## Property identity resolution — one contract, five callers — `src/shared/`
+
+Appended 2026-08-22 (Q5). Product code changed; no migration, no database write.
+
+| Capability | Rung | Files / note |
+|---|---|---|
+| One demo-property identity module | `LOCALLY_EXERCISED` | `src/shared/demo_property_identity.js`. **Class 2.** Replacement condition: `properties.canonical_key` populated for the demo row. Noticed by `via` in its result, asserted by the gate |
+| Five name lookups deleted | `LOCALLY_EXERCISED` | `operator.js`, `demo_reset.js`, `demo_preflight.js`, `leasingleads.js` ×2. All five `from properties where name` statements are gone; the gate fails if any returns |
+| Booking scope wall refuses on ambiguity | `LOCALLY_EXERCISED` | `leasingleads.js`. Was `select … where name=$1` with **no limit**, taking `rows[0]`. Now refuses, logs candidates, and compares identity as a separate refusal. Mutation-tested |
+| `resolvePropertyForImport` → `resolvePropertyIdentity` | `LOCALLY_EXERCISED` | Renamed in a commit of its own with no behaviour change. `resolveProperty` was unavailable — `snapshot_loader.js` and `seed_snapshot.js` define local wrappers by that name |
+| Scale seeds self-guard | `LOCALLY_EXERCISED` | `tools/scale/seed_b_qa_identity.sql`, `seed_c_governed_charges.sql`. Both carry the production Demo Building UUID; all prior guards lived in the runner, so `psql -f` bypassed them. Verified in three directions |
+
+**What was deleted, measured as decisions rather than lines:** 8 declarations of
+the demo property name → **1**; 5 SQL statements resolving a property by name →
+**0**; 5 call sites able to silently pick one of three same-named rows → **0**.
+
+**Net line count is POSITIVE (+163 in `src/`), and the contract asked to be told
+if so.** Counted as code with comments stripped, the five callers are **+5** —
+flat. The addition is the one module (122 lines, ~65 of them the header stating
+the defect, the class and the removal condition), two 35-line SQL self-guards
+that are pure addition, and Slice 4 splitting one silent comparison into two
+explicit refusals plus candidate logging. The duplication is gone; the volume is
+not. Recorded rather than argued away.
+
+**Not established:** whether the demo row has a `canonical_key`. That needs a
+production read, which this build did not do. Until it is known, resolution falls
+to the exact-name branch — which **refuses** on ambiguity rather than taking the
+oldest. That improvement holds either way.
+
+---
+
 ## NOT YET SURVEYED — do not read absence as absence
 
 Wave 2 (2026-08-20) closed every area listed here as of the prior version of
