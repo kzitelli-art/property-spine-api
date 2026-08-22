@@ -110,6 +110,8 @@ async function latestPacket(client, applicationId) {
             sent_at, tenant_token_expires_at, tenant_submitted_at,
             voided_at, void_reason, superseded_at,
             instrument_form_code, instrument_body_sha256,
+            instrument_source_artifact_id, instrument_terms_sha256,
+            instrument_package_sha256,
             resident_executed_at, company_executed_at,
             proposed_terms_confirmation_id, created_at, updated_at
        from lease_packets
@@ -235,7 +237,9 @@ function executionPrimaryAction(app, exec, leaseId, packet) {
   //  the execution as staff_attestation when spine_instrument is the truth.
   //  Found by driving a resident signature and reading what the surface
   //  then told the operator to do.
-  if (!leaseId && packet && packet.status === "resident_executed") {
+  if (!leaseId && packet && packet.status === "resident_executed"
+      && packet.instrument_source_artifact_id
+      && packet.instrument_terms_sha256 && packet.instrument_package_sha256) {
     return { action: "company_execute_lease", label: "Sign for the Company",
       reason: "The resident has executed the governing instrument. The authorised company signer signs to complete it.",
       method: "POST",
@@ -243,7 +247,8 @@ function executionPrimaryAction(app, exec, leaseId, packet) {
   }
   //  Awaiting the resident on an instrument Spine holds — nothing for the
   //  company to do yet, and nothing to attest to.
-  if (!leaseId && packet && packet.instrument_body_sha256
+  if (!leaseId && packet && packet.instrument_source_artifact_id
+      && packet.instrument_terms_sha256 && packet.instrument_package_sha256
       && ["sent", "in_progress", "tenant_in_progress", "draft"].includes(packet.status)) {
     return { action: "await_resident_execution", label: "Awaiting the Resident",
       reason: "The resident has not yet executed the governing instrument.",
@@ -410,8 +415,14 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
       //  packet and this read already loads them; not projecting them meant
       //  the operator's review screen could not say whether the resident had
       //  signed, while three other surfaces could.
-      carries_governing_instrument: packet ? !!packet.instrument_body_sha256 : null,
+      carries_governing_instrument: packet
+        ? !!(packet.instrument_source_artifact_id
+             && packet.instrument_body_sha256
+             && packet.instrument_terms_sha256
+             && packet.instrument_package_sha256)
+        : null,
       instrument_form_code: packet ? (packet.instrument_form_code || null) : null,
+      instrument_package_sha256: packet ? (packet.instrument_package_sha256 || null) : null,
       resident_executed_at: packet ? (packet.resident_executed_at || null) : null,
       company_executed_at: packet ? (packet.company_executed_at || null) : null,
       voided_at: packet ? (packet.voided_at || null) : null,

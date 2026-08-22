@@ -16,7 +16,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const FILE = path.join(__dirname, "applicationSubmission.js");
+const FILE = path.join(__dirname, "..", "src", "applications", "applicationSubmission.js");
 let pass = 0, fail = 0;
 const ok = (name, cond, detail) => {
   if (cond) { pass++; console.log("  PASS  " + name); }
@@ -96,7 +96,12 @@ const found = banned.filter((b) => html.includes(b));
 ok("no hardcoded rent, availability, sq ft, floor plans, or specials", found.length === 0, found.join(", "));
 ok("property name comes from the invitation record", /CTX\.property_name/.test(html));
 ok("unit label comes from the invitation record", /CTX\.unit_label/.test(html));
-ok("unit details are deferred to the leasing team", html.includes("The leasing team will confirm the final unit details and terms before lease preparation."));
+ok("final economics remain a governed review step", html.includes("Final rent, deposit, and lease terms are reviewed before lease preparation."));
+ok("the target home stays visible throughout the application", /id="unitPill"/.test(html) && /id="targetMoveIn"/.test(html));
+ok("the form states its realistic completion time", html.includes("About 5 minutes"));
+ok("SSN is not collected into the broad application record", !/social security|\bssn\b/i.test(html));
+ok("public submission refuses an unversioned validation bypass",
+  src.includes("This application form is out of date. Reload the application link"));
 
 // ── 5. security posture unchanged ──────────────────────────────────────────
 console.log("\n5. Security posture");

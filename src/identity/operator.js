@@ -52,6 +52,7 @@ module.exports = function operatorModule(deps) {
     // implementation. Absent (older server.js) → the route fails closed 503.
     applicationsService = null,
     leasePacketsService = null,
+    leaseTemplateUpload = null,
   } = deps;
   const { rankTurnPriority } = require("../maintenance/turn_priority"); // shared Turn-Priority ranking (slice 1)
   const { buildReviewList, buildReviewDetail } = require("../applications/application_review"); // application review reads (slice 2)
@@ -1369,6 +1370,94 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
     }
   });
+
+  router.get("/operator/leasing/lease-configuration", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasePacketsService || typeof leasePacketsService.propertyLeaseConfiguration !== "function") {
+      return res.status(503).json({
+        error: "lease_configuration_not_wired",
+        receipt: "Lease document setup is not wired on this deploy.",
+      });
+    }
+    try {
+      const configuration = await leasePacketsService.propertyLeaseConfiguration(
+        pool, req.operator.property_id);
+      return res.json({
+        configuration: {
+          ...configuration,
+          can_configure: ((req.operator && req.operator.allowed_modules) || []).includes("management"),
+        },
+      });
+    } catch (e) {
+      if (e && e.httpStatus) return res.status(e.httpStatus).json(e.body || { receipt: e.message });
+      console.error("lease-configuration read error", e);
+      return res.status(500).json({ receipt: "Lease document setup could not be loaded." });
+    }
+  });
+
+  const receiveLeaseTemplate = typeof leaseTemplateUpload === "function"
+    ? leaseTemplateUpload
+    : (_req, res) => res.status(503).json({
+        error: "lease_template_upload_not_wired",
+        receipt: "Lease document upload is not wired on this deploy.",
+      });
+
+  router.post(
+    "/operator/leasing/lease-configuration/template",
+    requireOperator,
+    requireManagementModuleAccess,
+    receiveLeaseTemplate,
+    async (req, res) => {
+      res.set("Cache-Control", "no-store");
+      if (!leasePacketsService || typeof leasePacketsService.configurePropertyLeaseTemplate !== "function") {
+        return res.status(503).json({
+          error: "lease_configuration_not_wired",
+          receipt: "Lease document setup is not wired on this deploy.",
+        });
+      }
+      const body = req.body || {};
+      const leaseTerms = Object.fromEntries([
+        "landlord_entity", "rent_payment_location", "application_fee", "amenity_fee",
+        "utility_responsibility", "utility_fee_total", "late_fee",
+        "notice_requirement", "insurance_note",
+      ].filter((key) => Object.prototype.hasOwnProperty.call(body, key))
+        .map((key) => [key, body[key]]));
+      const applicationOptions = {
+        ask_parking_interest: body.ask_parking_interest === "true",
+        parking_note: body.parking_note || null,
+        ask_utility_payment_preference: body.ask_utility_payment_preference === "true",
+        utility_payment_note: body.utility_payment_note || null,
+      };
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const out = await leasePacketsService.configurePropertyLeaseTemplate(client, {
+          propertyId: req.operator.property_id,
+          actorUserId: req.operator.id,
+          actorName: req.operator.name || null,
+          file: req.file,
+          formCode: body.form_code,
+          formVersion: body.form_version,
+          sourceAsOfDate: body.source_as_of_date,
+          leaseTerms,
+          applicationOptions,
+          confirmCompanySigner: body.confirm_company_signer === "true",
+        });
+        await client.query("commit");
+        return res.status(201).json(out);
+      } catch (e) {
+        await client.query("rollback").catch(() => {});
+        if (e && e.artifactRefusal) {
+          return res.status(400).json({ error: e.reason, receipt: e.receipt });
+        }
+        if (e && e.httpStatus) return res.status(e.httpStatus).json(e.body || { receipt: e.message });
+        console.error("lease-configuration write error", e);
+        return res.status(500).json({ receipt: "The lease document could not be established." });
+      } finally {
+        client.release();
+      }
+    }
+  );
 
   router.post("/operator/leasing/tour-slots", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
@@ -2929,6 +3018,13 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     return next();
   }
 
+  async function requireManagementModuleAccess(req, res, next) {
+    const mods = (req.operator && req.operator.allowed_modules) || [];
+    if (!mods.includes("management")) return res.status(403).json({
+      error: "management-module access required at this property (property_team_assignments.allowed_modules)." });
+    return next();
+  }
+
   // ── TOUR FOLLOW-UPS AND LEASING TASKS — the queue read (contract §6) ──
   // Deterministic order: overdue → due today → upcoming → no due date, then
   // due_at, created_at, id (stable tie-break). Bounded: limit ≤ 200, keyset
@@ -3768,9 +3864,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   //
   //  The return shape keeps `offerable` so existing call sites are untouched;
   //  callers that want to explain the refusal read refusal_code/refusal_reason.
-  async function unitOfferableState(property_id, unit_id, q = pool, space_id = null) {
+  async function unitOfferableState(property_id, unit_id, q = pool, space_id = null, intended_move_in = null) {
     return applicationTargetAuthority.resolveApplicationTarget(q, {
-      property_id, unit_id, space_id, require_offerable: true,
+      property_id, unit_id, space_id, intended_move_in, require_offerable: true,
     });
   }
 
@@ -3876,7 +3972,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     //  property never sends one and the server derives the sole space exactly
     //  as before. For a by-the-bed unit it is required, and the authority
     //  refuses with space_choice_required when it is missing.
-    const { prepare_obligation_id, unit_id, space_id = null, expires_at = null } = req.body || {};
+    const { prepare_obligation_id, unit_id, space_id = null, intended_move_in = null, expires_at = null } = req.body || {};
     if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required — prepare acts on the exact open commitment." });
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
     const client = await pool.connect();
@@ -3891,10 +3987,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const gate = await applicationBirthGate(req, ob.person_id, client);
       if (!gate.ok) { await client.query("rollback"); return res.status(gate.status).json(gate); }
       const out = await applicationInvitations.prepareApplicationLinkForObligation(client, {
-        prepare_obligation_id, unit_id, space_id, expires_at,
+        prepare_obligation_id, unit_id, space_id, intended_move_in, expires_at,
         actor_user_id: req.operator.id,
-        unitOfferable: async (c, { property_id, unit_id, space_id }) =>
-          unitOfferableState(property_id, unit_id, c, space_id),
+        unitOfferable: async (c, { property_id, unit_id, space_id, intended_move_in }) =>
+          unitOfferableState(property_id, unit_id, c, space_id, intended_move_in),
       });
       await client.query("commit");
       out.link = `${APPLICANT_ORIGIN}/t/application/${out.token}`;
@@ -3910,7 +4006,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   router.post("/operator/leasing/application-invitations/send", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     if (!svcGuard(res, "dispatchPreparedLinkProvider")) return;
-    const { prepare_obligation_id, unit_id, space_id = null, expires_at = null, message_prefix = "" } = req.body || {};
+    const { prepare_obligation_id, unit_id, space_id = null, intended_move_in = null, expires_at = null, message_prefix = "" } = req.body || {};
     if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required." });
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
     const client = await pool.connect();
@@ -3926,10 +4022,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const gate = await applicationBirthGate(req, ob.person_id, client);
       if (!gate.ok) { await client.query("rollback"); return res.status(gate.status).json(gate); }
       prepared = await applicationInvitations.prepareApplicationLinkForObligation(client, {
-        prepare_obligation_id, unit_id, space_id, expires_at,
+        prepare_obligation_id, unit_id, space_id, intended_move_in, expires_at,
         actor_user_id: req.operator.id,
-        unitOfferable: async (c, { property_id, unit_id, space_id }) =>
-          unitOfferableState(property_id, unit_id, c, space_id),
+        unitOfferable: async (c, { property_id, unit_id, space_id, intended_move_in }) =>
+          unitOfferableState(property_id, unit_id, c, space_id, intended_move_in),
       });
       await client.query("commit");
     } catch (e) {
@@ -3983,6 +4079,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const {
         unit_id,
         space_id = null,
+        intended_move_in = null,
         idempotency_key,
         expires_at = null,
         message_prefix = "",
@@ -4042,17 +4139,20 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
             actorUserId: req.operator.id,
             unitId: unit_id,
             spaceId: space_id,
+            intendedMoveIn: intended_move_in,
             idempotencyKey: idempotency_key,
             expiresAt: expires_at,
             unitOfferable: async (c, {
               property_id,
               unit_id: candidateUnitId,
               space_id: candidateSpaceId,
+              intended_move_in: candidateMoveIn,
             }) => unitOfferableState(
               property_id,
               candidateUnitId,
               c,
-              candidateSpaceId
+              candidateSpaceId,
+              candidateMoveIn
             ),
           }
         );

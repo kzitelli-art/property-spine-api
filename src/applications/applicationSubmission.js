@@ -183,6 +183,7 @@ module.exports = function applicationSubmissionModule(deps) {
   // ════════════════════════════════════════════════════════════════════
   async function submitApplicationService(client, {
     property_id, person_id = null, unit_id = null, space_id = null, unit_label = null,
+    intended_move_in = null,
     applicant_name, rent = null, deposit = null, guarantor_name = null,
     captured = {}, source = "applicant",
     conversion_id = null,
@@ -240,7 +241,7 @@ module.exports = function applicationSubmissionModule(deps) {
     let resolvedUnitId = unit_id;
     if (unit_id || space_id) {
       const target = await applicationTarget.resolveApplicationTarget(client, {
-        property_id, unit_id, space_id, require_offerable: false });
+        property_id, unit_id, space_id, intended_move_in, require_offerable: false });
       if (!target.ok) {
         throw httpErr(target.httpStatus || 409,
           target.refusal_reason || "That unit cannot carry an application.",
@@ -271,6 +272,7 @@ module.exports = function applicationSubmissionModule(deps) {
     //    lifecycle column, and unknown keys are refused rather than ignored.
     const born = await lifecycle.createSubmittedApplication(client, {
       property_id, unit_id: resolvedUnitId, space_id: resolvedSpaceId,
+      intended_move_in,
       person_id, leasing_lead_id: resolvedLeasingLeadId,
       applicant_name, unit_label, rent, deposit, guarantor_name,
       captured: captured || {}, source, conversion_id,
@@ -377,7 +379,7 @@ module.exports = function applicationSubmissionModule(deps) {
   // staff-session operator route call this ONE service — no duplicated logic.
   async function createPreparedInvitation(client, {
     conversion_id = null, person_id = null, property_id, unit_id = null,
-    space_id = null, expires_at = null, created_by_user_id = null,
+    space_id = null, intended_move_in = null, expires_at = null, created_by_user_id = null,
   }) {
     if (!property_id) throw httpErr(400, "property_id is required.");
     const prop = (await client.query("select id from properties where id=$1", [property_id])).rows[0];
@@ -395,7 +397,7 @@ module.exports = function applicationSubmissionModule(deps) {
     let target = null;
     if (unit_id || space_id) {
       target = await applicationTarget.resolveApplicationTarget(client, {
-        property_id, unit_id, space_id, require_offerable: true,
+        property_id, unit_id, space_id, intended_move_in, require_offerable: true,
       });
       if (!target.ok) {
         throw httpErr(target.httpStatus || 409, target.refusal_reason || "That unit cannot be used for an application.",
@@ -405,9 +407,9 @@ module.exports = function applicationSubmissionModule(deps) {
     const rawToken = crypto.randomBytes(24).toString("base64url");
     const tokenDigest = digestToken(rawToken);
     const inv = (await client.query(
-      `insert into application_invitations
-         (token_digest, conversion_id, person_id, property_id, unit_id, space_id, status, expires_at, created_by_user_id)
-       values ($1,$2,$3,$4,$5,$6,'prepared',$7,$8) returning *`,
+       `insert into application_invitations
+         (token_digest, conversion_id, person_id, property_id, unit_id, space_id, intended_move_in, status, expires_at, created_by_user_id)
+       values ($1,$2,$3,$4,$5,$6,$7,'prepared',$8,$9) returning *`,
       //  THE RESOLVED BED IS WHAT IS WRITTEN (182) — not the caller's request.
       //  A single-space unit therefore persists the derived space with no
       //  behaviour change; a chosen bed persists the one availability was
@@ -415,6 +417,7 @@ module.exports = function applicationSubmissionModule(deps) {
       [tokenDigest, conversion_id, person_id, property_id,
        target ? target.unit_id : unit_id,
        target ? target.resolved_space_id : null,
+       target ? target.intended_move_in : intended_move_in,
        expires_at, created_by_user_id]
     )).rows[0];
     return {
@@ -426,6 +429,7 @@ module.exports = function applicationSubmissionModule(deps) {
       // .space_id above, and carried forward to the application at submission,
       // so the bed availability was checked against is the bed on the record.
       resolved_space_id: target ? target.resolved_space_id : null,
+      intended_move_in: target ? target.intended_move_in : intended_move_in,
       resolution_basis: target ? target.resolution_basis : null,
     };
   }
@@ -451,6 +455,7 @@ module.exports = function applicationSubmissionModule(deps) {
   //  prepared ≠ dispatched · transport-accepted ≠ received. Both kept.
   async function createAndDispatchApplicationInvitation({
     property_id, person_id, unit_id = null, space_id = null, conversion_id = null,
+    intended_move_in = null,
     expires_at = null, created_by_user_id = null, message_prefix = null,
     resume_invitation_id = null,
   }) {
@@ -493,6 +498,7 @@ module.exports = function applicationSubmissionModule(deps) {
       if (inv.unit_id || inv.space_id) {
         const still = await applicationTarget.resolveApplicationTarget(pool, {
           property_id: inv.property_id, unit_id: inv.unit_id, space_id: inv.space_id,
+          intended_move_in: inv.intended_move_in,
           require_offerable: false });
         if (!still.ok) {
           return { dispatched: false, reason: still.refusal_code, invitation_id: inv.id,
@@ -547,7 +553,7 @@ module.exports = function applicationSubmissionModule(deps) {
       let dispatchTarget = null;
       if (unit_id || space_id) {
         dispatchTarget = await applicationTarget.resolveApplicationTarget(client, {
-          property_id, unit_id, space_id, require_offerable: true });
+          property_id, unit_id, space_id, intended_move_in, require_offerable: true });
         if (!dispatchTarget.ok) {
           throw httpErr(dispatchTarget.httpStatus || 409,
             dispatchTarget.refusal_reason || "That unit cannot be used for an application.",
@@ -556,12 +562,13 @@ module.exports = function applicationSubmissionModule(deps) {
       }
       const rawToken = crypto.randomBytes(24).toString("base64url");
       const inv = (await client.query(
-        `insert into application_invitations
-           (token_digest, conversion_id, person_id, property_id, unit_id, space_id, status, expires_at, created_by_user_id)
-         values ($1,$2,$3,$4,$5,$6,'prepared',$7,$8) returning *`,
+       `insert into application_invitations
+           (token_digest, conversion_id, person_id, property_id, unit_id, space_id, intended_move_in, status, expires_at, created_by_user_id)
+         values ($1,$2,$3,$4,$5,$6,$7,'prepared',$8,$9) returning *`,
         [digestToken(rawToken), conversion_id, person_id, property_id,
          dispatchTarget ? dispatchTarget.unit_id : unit_id,
          dispatchTarget ? dispatchTarget.resolved_space_id : null,
+         dispatchTarget ? dispatchTarget.intended_move_in : intended_move_in,
          expires_at, created_by_user_id]
       )).rows[0];
       const url = `${base}/t/application/${rawToken}`;
@@ -780,12 +787,18 @@ module.exports = function applicationSubmissionModule(deps) {
     return res.status(410).json({ error: "retired", receipt: "This route is retired. Revocation runs through the staff-session operator surface, which reconciles dispatch state before any correction." });
   });
 
-  // Tenant V2 validation is intentionally scoped by the form-version marker,
-  // so legacy/import callers keep their existing contract. The browser improves
-  // usability; this server check remains the authority for accepted structure.
-  function validateTenantV2Capture(captured) {
-    if (!captured || captured.application_form_version !== "tenant_v2") return;
+  // Tenant form validation is scoped by the version marker so legacy/import
+  // callers keep their contract. V3 adds conditional questions and consent,
+  // but V2 links remain submittable during a rolling deployment.
+  function validateTenantCapture(captured, {
+    intended_move_in = null,
+    application_options = null,
+  } = {}) {
     const fail = (message) => { throw httpErr(400, message); };
+    if (!captured || !["tenant_v2", "tenant_v3"].includes(captured.application_form_version)) {
+      fail("This application form is out of date. Reload the application link and submit the current form.");
+    }
+    const isV3 = captured.application_form_version === "tenant_v3";
     const requiredText = (value, label, max = 300) => {
       const s = value == null ? "" : String(value).trim();
       if (!s) fail(`${label} is required.`);
@@ -831,19 +844,58 @@ module.exports = function applicationSubmissionModule(deps) {
       fail("Income amount is invalid.");
     }
     oneOf(captured.income_frequency, ["monthly", "annual", "weekly", "biweekly"], "Income frequency");
-    optionalText(captured.employer, "Employer", 200);
+    const employer = optionalText(captured.employer, "Employer", 200);
     optionalText(captured.job_title, "Job title", 200);
     optionalText(captured.income_notes, "Income notes", 2000);
+    if (isV3 && ["employed", "self_employed"].includes(captured.income_status) && !employer) {
+      fail("Employer or business is required for this income situation.");
+    }
+    if (isV3 && captured.income_status === "student") {
+      requiredText(captured.school_name, "School", 200);
+      const graduationYear = Number(captured.graduation_year);
+      const thisYear = new Date().getUTCFullYear();
+      if (!/^\d{4}$/.test(String(captured.graduation_year || ""))
+          || graduationYear < thisYear - 1 || graduationYear > thisYear + 10) {
+        fail("Graduation year is invalid.");
+      }
+      optionalText(captured.student_id, "Student ID", 100);
+    }
 
     if (!validDate(captured.desired_move_in)) fail("Preferred move-in date is invalid.");
+    if (intended_move_in && String(captured.desired_move_in) < String(intended_move_in).slice(0, 10)) {
+      fail("Preferred move-in date cannot be before the targeted move-in date.");
+    }
     oneOf(captured.move_flexibility, ["exact", "plus_minus_7", "plus_minus_30", "flexible"], "Move-in flexibility");
     const occupants = Number(captured.occupants);
     if (!Number.isInteger(occupants) || occupants < 1 || occupants > 20) fail("Occupant count is invalid.");
     oneOf(captured.has_pets, ["yes", "no"], "Pets or assistance animals");
     oneOf(captured.guarantor_needed, ["yes", "no", "unsure"], "Guarantor selection");
-    optionalText(captured.household_names, "Other adult occupants", 2000);
+    const householdNames = optionalText(captured.household_names, "Other adult occupants", 2000);
+    if (isV3 && occupants > 1 && !householdNames) {
+      fail("List the other adult occupants or explain that the additional occupants are minors.");
+    }
     optionalText(captured.pets, "Pets or assistance animals", 2000);
     optionalText(captured.additional_notes, "Additional notes", 3000);
+    if (isV3) {
+      if (captured.guarantor_needed === "yes") {
+        const contact = captured.guarantor_contact || {};
+        requiredText(contact.name, "Guarantor name", 300);
+        const guarantorPhone = requiredText(contact.phone, "Guarantor phone", 40);
+        if (guarantorPhone.replace(/\D/g, "").length < 10) fail("Guarantor phone is invalid.");
+        const guarantorEmail = requiredText(contact.email, "Guarantor email", 254);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(guarantorEmail)) fail("Guarantor email is invalid.");
+      }
+      optionalText(captured.lead_source, "Lead source", 100);
+      const options = application_options || {};
+      if (options.ask_parking_interest) {
+        oneOf(captured.parking_interest, ["none", "interested", "unsure"], "Parking preference");
+      }
+      if (options.ask_utility_payment_preference) {
+        oneOf(captured.utility_payment_preference, ["upfront", "monthly", "unsure"], "Utility-fee preference");
+      }
+      if (captured.applicant_accuracy_certified !== true) fail("Application accuracy certification is required.");
+      if (captured.electronic_delivery_consent !== true) fail("Electronic delivery consent is required.");
+    }
   }
 
   // 3) PUBLIC SUBMIT — invitation-bound. The applicant submits against a live
@@ -854,8 +906,6 @@ module.exports = function applicationSubmissionModule(deps) {
     const { token, applicant_name = null, rent = null, deposit = null,
             guarantor_name = null, captured = {} } = req.body || {};
     if (!token) throw httpErr(400, "token is required.");
-    validateTenantV2Capture(captured);
-
     // look up by DIGEST — the raw token is never stored. `for update` row-locks
     // the invitation so concurrent submits serialize on it (double-tap safety).
     const inv = (await client.query(
@@ -880,6 +930,13 @@ module.exports = function applicationSubmissionModule(deps) {
     if (!["manually_sent", "provider_dispatched"].includes(inv.status)) {
       throw httpErr(409, `Invitation is '${inv.status}' — not in a submittable state.`);
     }
+    const validationProperty = (await client.query(
+      "select lease_config from properties where id=$1", [inv.property_id]
+    )).rows[0] || {};
+    validateTenantCapture(captured, {
+      intended_move_in: inv.intended_move_in,
+      application_options: validationProperty.lease_config && validationProperty.lease_config.application_options,
+    });
 
     // resolve the applicant name: explicit, else the person on file
     let name = applicant_name;
@@ -912,7 +969,8 @@ module.exports = function applicationSubmissionModule(deps) {
     //  selected. A target that no longer holds is refused, never re-aimed.
     if (inv.unit_id || inv.space_id) {
       const still = await applicationTarget.resolveSubmissionTarget(client, {
-        property_id: inv.property_id, unit_id: inv.unit_id, space_id: inv.space_id });
+        property_id: inv.property_id, unit_id: inv.unit_id, space_id: inv.space_id,
+        intended_move_in: inv.intended_move_in });
       if (!still.ok) {
         throw httpErr(still.httpStatus || 409,
           still.refusal_reason || "This application link can no longer be used.",
@@ -945,6 +1003,7 @@ module.exports = function applicationSubmissionModule(deps) {
       //  recorded at the invitation and lost at the application, which is the
       //  gap this build exists to close.
       space_id: inv.space_id,
+      intended_move_in: inv.intended_move_in,
       applicant_name: name, rent, deposit, guarantor_name, captured,
       source: "applicant",
       conversion_id: inv.conversion_id,
@@ -1088,7 +1147,7 @@ module.exports = function applicationSubmissionModule(deps) {
 
     // live token → resolve the display context, all server-derived from the invitation
     const prop = inv.property_id
-      ? (await client.query("select id, name from properties where id=$1", [inv.property_id])).rows[0]
+      ? (await client.query("select id, name, address, lease_config from properties where id=$1", [inv.property_id])).rows[0]
       : null;
     let unitLabel = null;
     if (inv.unit_id) {
@@ -1124,10 +1183,20 @@ module.exports = function applicationSubmissionModule(deps) {
         if (rp && rp.desired_move_month) prefill.move_month = rp.desired_move_month;
       } catch (_) { /* honest null beats a bad parse */ }
     }
+    const intendedMoveIn = inv.intended_move_in instanceof Date
+      ? [inv.intended_move_in.getFullYear(),
+         String(inv.intended_move_in.getMonth() + 1).padStart(2, "0"),
+         String(inv.intended_move_in.getDate()).padStart(2, "0")].join("-")
+      : (inv.intended_move_in ? String(inv.intended_move_in).slice(0, 10) : null);
     return {
       state: "open",
       property_name: prop ? prop.name : null,
+      property_address: prop ? prop.address : null,
       unit_label: unitLabel,
+      intended_move_in: intendedMoveIn,
+      application_options: prop && prop.lease_config && prop.lease_config.application_options
+        ? prop.lease_config.application_options
+        : null,
       person, prefill,
     };
   }
@@ -1160,8 +1229,8 @@ module.exports = function applicationSubmissionModule(deps) {
   <title>Rental application</title>
   <style>
     :root{
-      --ink:#171714;--muted:#69675f;--faint:#918d84;--line:#ddd8ce;
-      --soft:#f5f2eb;--paper:#fff;--canvas:#eeece6;--warm:#f8f3e9;
+      --ink:#171a18;--muted:#626b66;--faint:#87918c;--line:#d7ded9;
+      --soft:#f3f6f4;--paper:#fff;--canvas:#edf1ef;--warm:#edf5f1;
       --green:#245b47;--red:#9c3026;--blue:#1e5c91;
     }
     *{box-sizing:border-box}
@@ -1181,24 +1250,25 @@ module.exports = function applicationSubmissionModule(deps) {
       position:sticky;top:0;height:100vh;padding:42px 34px;
       display:flex;flex-direction:column;background:#171714;color:#fff;
     }
-    .brand{font-size:12px;font-weight:750;letter-spacing:.16em;text-transform:uppercase;opacity:.72}
+    .brand{font-size:12px;font-weight:750;letter-spacing:0;text-transform:uppercase;opacity:.72}
     .property-card{margin-top:56px}
     .eyebrow{font-size:11px;font-weight:750;letter-spacing:.13em;text-transform:uppercase;color:#b7b1a5}
     .property-card h1{
       margin:12px 0 10px;font-family:Georgia,serif;font-size:38px;
-      font-weight:500;line-height:1.03;letter-spacing:-.035em;
+       font-weight:500;line-height:1.03;letter-spacing:0;
     }
     .property-card p{margin:0;color:#c9c4b9;font-size:14px;line-height:1.55}
-    .unit-pill{
-      display:inline-flex;margin-top:20px;padding:9px 13px;border:1px solid rgba(255,255,255,.22);
-      border-radius:999px;font-size:13px;font-weight:700;
-    }
-    .unit-note{margin:14px 0 0;color:#a8a49a;font-size:12.5px;line-height:1.55}
+    .target-summary{margin-top:22px;border-top:1px solid rgba(255,255,255,.18);border-bottom:1px solid rgba(255,255,255,.18)}
+    .target-row{display:grid;grid-template-columns:88px minmax(0,1fr);gap:12px;padding:11px 0;border-top:1px solid rgba(255,255,255,.1);font-size:13px}
+    .target-row:first-child{border-top:0}
+    .target-row span{color:#9ea8a2}
+    .target-row strong{color:#fff;font-weight:700;overflow-wrap:anywhere}
+    .unit-note{margin:14px 0 0;color:#aeb8b2;font-size:12.5px;line-height:1.55}
     .rail-note{margin-top:auto;padding-top:22px;border-top:1px solid rgba(255,255,255,.14);color:#bdb8ad;font-size:12px;line-height:1.6}
     .rail-note strong{display:block;margin-bottom:6px;color:#fff}
     .main{min-width:0;padding:38px 56px 56px}
     .topbar{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:34px}
-    .step-label{font-size:12px;font-weight:750;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+    .step-label{font-size:12px;font-weight:750;letter-spacing:0;text-transform:uppercase;color:var(--muted)}
     .save-state{font-size:12px;color:var(--faint)}
     .progress{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-bottom:42px}
     .progress span{height:4px;border-radius:999px;background:#e8e4db}
@@ -1207,15 +1277,16 @@ module.exports = function applicationSubmissionModule(deps) {
     .screen.on{display:block}
     .screen h2{
       margin:0 0 10px;font-family:Georgia,serif;font-size:38px;
-      font-weight:500;line-height:1.08;letter-spacing:-.035em;
+       font-weight:500;line-height:1.08;letter-spacing:0;
     }
+    .screen h2:focus{outline:none}
     .lede{max-width:650px;margin:0 0 30px;color:var(--muted);font-size:15px;line-height:1.6}
-    .info-card{margin-bottom:26px;padding:20px 22px;border:1px solid var(--line);border-radius:18px;background:var(--warm)}
+    .info-card{margin-bottom:26px;padding:20px 22px;border:1px solid var(--line);border-radius:8px;background:var(--warm)}
     .info-card h3{margin:0 0 9px;font-size:14px}
     .info-card p,.info-card li{color:#555248;font-size:13px;line-height:1.55}
     .info-card ul{margin:8px 0 0;padding-left:18px}
     .intro-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:28px}
-    .intro-tile{padding:18px;border:1px solid var(--line);border-radius:16px}
+    .intro-tile{padding:18px;border:1px solid var(--line);border-radius:8px}
     .intro-tile strong{display:block;margin-bottom:5px;font-size:13px}
     .intro-tile span{color:var(--muted);font-size:12px;line-height:1.5}
     .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px 20px}
@@ -1224,7 +1295,7 @@ module.exports = function applicationSubmissionModule(deps) {
     .field label,.legend{display:block;margin-bottom:7px;font-size:13px;font-weight:750}
     .hint{margin:-2px 0 8px;color:var(--muted);font-size:12px;line-height:1.45}
     input,select,textarea{
-      width:100%;padding:13px 14px;border:1px solid #c9c5bb;border-radius:11px;
+      width:100%;padding:13px 14px;border:1px solid #c5cec9;border-radius:8px;
       background:#fff;color:var(--ink);font-size:16px;line-height:1.25;
     }
     textarea{min-height:88px;resize:vertical}
@@ -1240,7 +1311,7 @@ module.exports = function applicationSubmissionModule(deps) {
     .choice{position:relative}
     .choice input{position:absolute;opacity:0;pointer-events:none}
     .choice label{
-      display:block;margin:0;padding:10px 14px;border:1px solid #c9c5bb;
+      display:block;margin:0;padding:10px 14px;border:1px solid #c5cec9;
       border-radius:999px;background:#fff;font-size:13px;font-weight:700;
     }
     .choice input:focus+label{outline:3px solid rgba(30,92,145,.16);border-color:var(--blue)}
@@ -1248,7 +1319,7 @@ module.exports = function applicationSubmissionModule(deps) {
     .conditional{display:none}
     .conditional.on{display:block}
     .divider{margin:30px 0;border:0;border-top:1px solid var(--line)}
-    .error-summary{display:none;margin-bottom:24px;padding:15px 16px;border:1px solid #dfb7b1;border-left:5px solid var(--red);border-radius:12px;background:#fff2f0}
+    .error-summary{display:none;margin-bottom:24px;padding:15px 16px;border:1px solid #dfb7b1;border-left:5px solid var(--red);border-radius:8px;background:#fff2f0}
     .error-summary.on{display:block}
     .error-summary h3{margin:0 0 7px;color:var(--red);font-size:14px}
     .error-summary ul{margin:0;padding-left:18px}
@@ -1261,7 +1332,7 @@ module.exports = function applicationSubmissionModule(deps) {
     .primary:hover{background:#30302b}
     .primary:disabled{cursor:default;opacity:.45}
     .secondary{padding:12px 0;border:0;background:transparent;color:var(--muted);font-size:14px;font-weight:700}
-    .review-section{margin-bottom:16px;overflow:hidden;border:1px solid var(--line);border-radius:16px}
+    .review-section{margin-bottom:16px;overflow:hidden;border:1px solid var(--line);border-radius:8px}
     .review-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;background:var(--soft)}
     .review-head h3{margin:0;font-size:13px}
     .edit{border:0;background:transparent;color:var(--blue);font-size:12px;font-weight:750}
@@ -1270,7 +1341,7 @@ module.exports = function applicationSubmissionModule(deps) {
     .review-row:first-child{border-top:0}
     .review-row span{color:var(--muted)}
     .review-row b{font-weight:650;overflow-wrap:anywhere}
-    .attest{display:flex;align-items:flex-start;gap:10px;margin-top:20px;padding:15px 16px;border:1px solid var(--line);border-radius:14px}
+    .attest{display:flex;align-items:flex-start;gap:10px;margin-top:20px;padding:15px 16px;border:1px solid var(--line);border-radius:8px}
     .attest input{width:18px;height:18px;margin:1px 0 0}
     .attest label{margin:0;font-size:13px;font-weight:600;line-height:1.5}
     .privacy{margin-top:14px;color:var(--muted);font-size:12px;line-height:1.55}
@@ -1278,7 +1349,7 @@ module.exports = function applicationSubmissionModule(deps) {
     .message-mark{display:grid;width:58px;height:58px;margin:0 auto 20px;place-items:center;border-radius:50%;background:#e8f1ec;color:var(--green);font-size:28px}
     .message h2{margin:0 0 10px;font-family:Georgia,serif;font-size:38px;font-weight:500}
     .message p{color:var(--muted);line-height:1.6}
-    .server-error{display:none;margin-top:16px;padding:13px 14px;border:1px solid #dfb7b1;border-radius:11px;background:#fff2f0;color:var(--red);font-size:13px;line-height:1.45}
+    .server-error{display:none;margin-top:16px;padding:13px 14px;border:1px solid #dfb7b1;border-radius:8px;background:#fff2f0;color:var(--red);font-size:13px;line-height:1.45}
     .server-error.on{display:block}
     @media(max-width:800px){
       .shell{display:block}
@@ -1294,7 +1365,7 @@ module.exports = function applicationSubmissionModule(deps) {
       .field.full{grid-column:auto}
       .date-parts .month{flex:1;min-width:0}
       .review-row{grid-template-columns:1fr;gap:4px}
-      .actions{position:sticky;bottom:0;z-index:5;margin-right:-20px;margin-left:-20px;padding:16px 20px;border-top:1px solid var(--line);background:rgba(255,255,255,.96)}
+      .actions{position:static;margin-right:0;margin-left:0;padding:24px 0 0;background:transparent}
     }
   </style>
 </head>
@@ -1306,8 +1377,11 @@ module.exports = function applicationSubmissionModule(deps) {
       <div class="eyebrow">Rental application</div>
       <h1 id="propertyName">Your next home</h1>
       <p>A secure application prepared for you by the leasing team.</p>
-      <div class="unit-pill" id="unitPill">Application</div>
-      <p class="unit-note">The leasing team will confirm the final unit details and terms before lease preparation.</p>
+       <div class="target-summary" aria-label="Application target">
+         <div class="target-row"><span>Home</span><strong id="unitPill">Application</strong></div>
+         <div class="target-row" id="targetMoveRow" hidden><span>Target date</span><strong id="targetMoveIn"></strong></div>
+       </div>
+       <p class="unit-note">This application stays tied to this exact home. Final rent, deposit, and lease terms are reviewed before lease preparation.</p>
     </div>
     <div class="rail-note">
       <strong>Private by design</strong>
@@ -1330,8 +1404,8 @@ module.exports = function applicationSubmissionModule(deps) {
     </div>
 
     <section class="screen on" data-step="0">
-      <h2>A straightforward application.</h2>
-      <p class="lede">We have already connected this form to the property and unit you selected. Confirm your information, tell us about your housing and income, then review everything before submitting.</p>
+       <h2>Apply in a few minutes.</h2>
+       <p class="lede">This form is already connected to the exact home selected with the leasing team. Answer only what applies, then review everything before submitting.</p>
       <div class="info-card">
         <h3>What you will need</h3>
         <ul>
@@ -1342,8 +1416,8 @@ module.exports = function applicationSubmissionModule(deps) {
       </div>
       <div class="intro-grid">
         <div class="intro-tile"><strong>No fee in this step</strong><span>You will see any future fee or screening request before agreeing to it.</span></div>
-        <div class="intro-tile"><strong>About 6 minutes</strong><span>You can review every answer before anything is submitted.</span></div>
-        <div class="intro-tile"><strong>Exact unit</strong><span>This application is linked to the unit shown on this page.</span></div>
+         <div class="intro-tile"><strong>About 5 minutes</strong><span>Your progress stays on this device until you submit.</span></div>
+         <div class="intro-tile"><strong>Exact home</strong><span>The unit or bed shown here travels with the application and lease.</span></div>
         <div class="intro-tile"><strong>Human review</strong><span>Submitting is not an approval or a lease. The leasing team reviews it next.</span></div>
       </div>
       <div class="actions"><span></span><button class="primary" type="button" data-next>Start application</button></div>
@@ -1372,6 +1446,19 @@ module.exports = function applicationSubmissionModule(deps) {
           <label for="phone">Mobile phone</label>
           <input id="phone" type="tel" autocomplete="tel" inputmode="tel"/>
           <div class="error-text"></div>
+        </div>
+        <div class="field full">
+          <label for="lead_source">How did you hear about us? <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <select id="lead_source">
+            <option value="">Choose one</option>
+            <option value="friend_or_resident">Friend or current resident</option>
+            <option value="search">Web search</option>
+            <option value="listing_site">Rental listing site</option>
+            <option value="social">Social media</option>
+            <option value="sign_or_walk_by">Sign or walked by</option>
+            <option value="school">School or campus resource</option>
+            <option value="other">Other</option>
+          </select>
         </div>
       </div>
       <div class="actions"><button class="secondary" type="button" data-back>Back</button><button class="primary" type="button" data-next>Continue</button></div>
@@ -1470,6 +1557,13 @@ module.exports = function applicationSubmissionModule(deps) {
             <div class="field"><label for="employment_start">Working there since <span style="font-weight:400;color:var(--muted)">(optional)</span></label><input id="employment_start" type="month"/></div>
           </div>
         </div>
+        <div id="studentFields" class="conditional full" style="grid-column:1/-1">
+          <div class="form-grid">
+            <div class="field" data-field="school_name"><label for="school_name">School</label><input id="school_name" autocomplete="organization"/></div>
+            <div class="field" data-field="graduation_year"><label for="graduation_year">Expected graduation year</label><input id="graduation_year" inputmode="numeric" maxlength="4"/></div>
+            <div class="field full"><label for="student_id">Student ID number <span style="font-weight:400;color:var(--muted)">(optional)</span></label><input id="student_id" autocomplete="off"/></div>
+          </div>
+        </div>
         <div class="field" data-field="income_amount">
           <label for="income_amount">Gross income before taxes</label>
           <div class="input-wrap currency"><input id="income_amount" inputmode="decimal"/></div>
@@ -1534,9 +1628,10 @@ module.exports = function applicationSubmissionModule(deps) {
           <input id="occupants" type="number" inputmode="numeric" min="1" max="20"/>
           <div class="error-text"></div>
         </div>
-        <div class="field full">
+        <div class="field full" data-field="household_names">
           <label for="household_names">Other adult occupants <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
           <textarea id="household_names" placeholder="Names only. The leasing team will explain whether each adult needs a separate application."></textarea>
+          <div class="error-text"></div>
         </div>
         <div class="field full" data-field="has_pets">
           <fieldset>
@@ -1566,11 +1661,35 @@ module.exports = function applicationSubmissionModule(deps) {
           <div class="error-text"></div>
         </div>
         <div id="guarantorFields" class="conditional full" style="grid-column:1/-1">
-          <div class="field"><label for="guarantor_name">Guarantor's name</label><input id="guarantor_name"/></div>
+          <div class="form-grid">
+            <div class="field" data-field="guarantor_name"><label for="guarantor_name">Guarantor's full name</label><input id="guarantor_name" autocomplete="off"/><div class="error-text"></div></div>
+            <div class="field" data-field="guarantor_phone"><label for="guarantor_phone">Guarantor's mobile phone</label><input id="guarantor_phone" type="tel" inputmode="tel" autocomplete="off"/><div class="error-text"></div></div>
+            <div class="field full" data-field="guarantor_email"><label for="guarantor_email">Guarantor's email</label><input id="guarantor_email" type="email" inputmode="email" autocomplete="off"/><div class="error-text"></div></div>
+          </div>
+        </div>
+        <div class="field full" id="parkingField" data-field="parking_interest" hidden>
+          <label for="parking_interest">Parking</label>
+          <select id="parking_interest">
+            <option value="">Choose one</option>
+            <option value="none">No parking needed</option>
+            <option value="interested">I am interested in parking</option>
+            <option value="unsure">Not sure yet</option>
+          </select>
+          <p class="hint" id="parkingNote"></p>
+        </div>
+        <div class="field full" id="utilityChoiceField" data-field="utility_payment_preference" hidden>
+          <label for="utility_payment_preference">Utility-fee payment preference</label>
+          <select id="utility_payment_preference">
+            <option value="">Choose one</option>
+            <option value="upfront">Pay with lease or move-in charges</option>
+            <option value="monthly">Pay monthly over the lease term</option>
+            <option value="unsure">Decide with the leasing team</option>
+          </select>
+          <p class="hint" id="utilityChoiceNote"></p>
         </div>
         <div class="field full">
-          <label for="vehicles">Vehicles <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
-          <input id="vehicles" placeholder="Number of vehicles"/>
+          <label for="vehicles">Vehicle details <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <input id="vehicles" placeholder="Year, make, model, and plate if known"/>
         </div>
         <div class="field full">
           <label for="additional_notes">Anything else the leasing team should know? <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
@@ -1588,6 +1707,10 @@ module.exports = function applicationSubmissionModule(deps) {
         <input id="certify" type="checkbox"/>
         <label for="certify">I certify that the information in this application is complete and accurate to the best of my knowledge.</label>
       </div>
+      <div class="attest">
+        <input id="electronicConsent" type="checkbox"/>
+        <label for="electronicConsent">I agree to receive application, lease, and move-in notices at the mobile number and email above. Message and data rates may apply; reply STOP to stop texts.</label>
+      </div>
       <p class="privacy">Submitting this application is not an approval, a screening authorization, or a lease. The leasing team will contact you about the next step.</p>
       <div id="serverError" class="server-error" role="alert"></div>
       <div class="actions"><button class="secondary" type="button" data-back>Back</button><button class="primary" id="submitButton" type="button">Submit application</button></div>
@@ -1603,15 +1726,17 @@ module.exports = function applicationSubmissionModule(deps) {
   var step = 0;
   var stepNames = ["Before you begin","Your information","Residence","Income","Household","Review"];
   var state = {
-    legal_name:"",dob_input:"",email:"",phone:"",
+    legal_name:"",dob_input:"",email:"",phone:"",lead_source:"",
     address_line1:"",address_line2:"",city:"",state_code:"",postal_code:"",
     current_since:"",housing_status:"",housing_payment:"",landlord_contact:"",
     prior_address:"",prior_city:"",prior_state:"",prior_postal:"",prior_landlord_contact:"",
     income_status:"",employer:"",job_title:"",employment_start:"",
+    school_name:"",graduation_year:"",student_id:"",
     income_amount:"",income_frequency:"",additional_income:"",additional_income_frequency:"",
     income_notes:"",desired_move_in:"",move_flexibility:"",occupants:"",
     household_names:"",has_pets:"",pets_description:"",guarantor_needed:"",
-    guarantor_name:"",vehicles:"",additional_notes:""
+    guarantor_name:"",guarantor_phone:"",guarantor_email:"",
+    parking_interest:"",utility_payment_preference:"",vehicles:"",additional_notes:""
   };
   var STORAGE_KEY = "ps_tenant_application_v2_"+TOKEN;
 
@@ -1701,14 +1826,16 @@ module.exports = function applicationSubmissionModule(deps) {
   }
   function capture(){
     var ids = [
-      "legal_name","dob_input","email","phone",
+      "legal_name","dob_input","email","phone","lead_source",
       "address_line1","address_line2","city","postal_code","current_since",
       "housing_payment","landlord_contact","prior_address","prior_city","prior_state",
       "prior_postal","prior_landlord_contact","income_status","employer","job_title",
-      "employment_start","income_amount","income_frequency","additional_income",
+      "employment_start","school_name","graduation_year","student_id",
+      "income_amount","income_frequency","additional_income",
       "additional_income_frequency","income_notes","desired_move_in","move_flexibility",
       "occupants","household_names","pets_description","guarantor_name","vehicles",
-      "additional_notes"
+      "guarantor_phone","guarantor_email","parking_interest",
+      "utility_payment_preference","additional_notes"
     ];
     ids.forEach(function(id){ var node=byId(id); if(node) state[id]=node.value.trim(); });
     state.state_code = (byId("state").value || "").trim().toUpperCase();
@@ -1732,6 +1859,7 @@ module.exports = function applicationSubmissionModule(deps) {
     var months = monthsAtCurrent();
     byId("priorResidence").classList.toggle("on",months != null && months < 24);
     byId("employmentFields").classList.toggle("on",state.income_status === "employed" || state.income_status === "self_employed");
+    byId("studentFields").classList.toggle("on",state.income_status === "student");
     byId("petFields").classList.toggle("on",state.has_pets === "yes");
     byId("guarantorFields").classList.toggle("on",state.guarantor_needed === "yes");
   }
@@ -1774,16 +1902,33 @@ module.exports = function applicationSubmissionModule(deps) {
     }
     if(which === 3){
       if(!state.income_status) errors.push(fieldError("income_status","Choose your primary income situation."));
+      if((state.income_status === "employed" || state.income_status === "self_employed") && !state.employer) errors.push(fieldError("income_status","Enter your employer or business.","employer"));
+      if(state.income_status === "student"){
+        if(!state.school_name) errors.push(fieldError("school_name","Enter your school."));
+        var gy=Number(state.graduation_year);
+        var thisYear=new Date().getFullYear();
+        if(!/^\\d{4}$/.test(state.graduation_year) || gy < thisYear-1 || gy > thisYear+10) errors.push(fieldError("graduation_year","Enter a reasonable four-digit graduation year."));
+      }
       if(normalizeMoney(state.income_amount) == null) errors.push(fieldError("income_amount","Enter your gross income amount."));
       if(!state.income_frequency) errors.push(fieldError("income_frequency","Choose how often you receive this income."));
     }
     if(which === 4){
       if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(state.desired_move_in)) errors.push(fieldError("desired_move_in","Choose a preferred move-in date."));
+      else if(CTX&&CTX.intended_move_in&&state.desired_move_in<CTX.intended_move_in) errors.push(fieldError("desired_move_in","Choose the targeted move-in date or a later date."));
       if(!state.move_flexibility) errors.push(fieldError("move_flexibility","Choose how flexible the move-in date is."));
       var occ = Number(state.occupants);
       if(!Number.isInteger(occ) || occ < 1 || occ > 20) errors.push(fieldError("occupants","Enter the total number of occupants."));
+      if(occ > 1 && !state.household_names) errors.push(fieldError("household_names","Enter the names of the other adult occupants, or explain that the additional occupants are minors."));
       if(!state.has_pets) errors.push(fieldError("has_pets","Choose yes or no.","pets_no"));
       if(!state.guarantor_needed) errors.push(fieldError("guarantor_needed","Choose yes, no, or not sure.","guarantor_no"));
+      if(state.guarantor_needed === "yes"){
+        if(!state.guarantor_name) errors.push(fieldError("guarantor_name","Enter the guarantor's full name."));
+        if(state.guarantor_phone.replace(/\\D/g,"").length < 10) errors.push(fieldError("guarantor_phone","Enter the guarantor's mobile phone."));
+        if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(state.guarantor_email)) errors.push(fieldError("guarantor_email","Enter the guarantor's email."));
+      }
+      var options=(CTX&&CTX.application_options)||{};
+      if(options.ask_parking_interest && !state.parking_interest) errors.push(fieldError("parking_interest","Choose a parking preference.","parking_interest"));
+      if(options.ask_utility_payment_preference && !state.utility_payment_preference) errors.push(fieldError("utility_payment_preference","Choose a utility-fee payment preference.","utility_payment_preference"));
     }
     if(errors.length){
       var list = byId("errorSummary").querySelector("ul");
@@ -1829,6 +1974,15 @@ module.exports = function applicationSubmissionModule(deps) {
     var label={annual:"per year",monthly:"per month",weekly:"per week",biweekly:"every two weeks"}[frequency] || "";
     return "$"+n.toLocaleString()+ (label ? " "+label : "");
   }
+  function dateDisplay(value){
+    var parts=String(value||"").match(/^(\\d{4})-(\\d{2})-(\\d{2})$/);
+    if(!parts) return value||"";
+    return new Intl.DateTimeFormat("en-US",{month:"short",day:"numeric",year:"numeric",timeZone:"UTC"})
+      .format(new Date(Date.UTC(Number(parts[1]),Number(parts[2])-1,Number(parts[3]))));
+  }
+  function choiceDisplay(value,labels){
+    return (value&&labels[value])||value||"";
+  }
   function row(label,value){
     return '<div class="review-row"><span>'+esc(label)+'</span><b>'+display(value)+'</b></div>';
   }
@@ -1841,19 +1995,35 @@ module.exports = function applicationSubmissionModule(deps) {
     var residence=currentAddress();
     var pets=state.has_pets==="yes" ? (state.pets_description || "Yes") : "No";
     var guarantor=state.guarantor_needed==="yes" ? (state.guarantor_name || "Yes") : (state.guarantor_needed==="unsure" ? "Not sure" : "No");
+    var options=(CTX&&CTX.application_options)||{};
     var html="";
     html+=section("Applicant",1,
-      row("Legal name",state.legal_name)+row("Date of birth",dob)+row("Email",state.email)+row("Phone",state.phone));
+      row("Legal name",state.legal_name)+row("Date of birth",dateDisplay(dob))+row("Email",state.email)+row("Phone",state.phone)+
+      row("How you heard",choiceDisplay(state.lead_source,{referral:"Friend or current resident",search:"Web search",listing:"Rental listing site",social:"Social media",sign:"Sign or walked by",school:"School or campus resource",other:"Other"})));
     html+=section("Residence",2,
-      row("Current address",residence)+row("Living there since",state.current_since)+row("Housing",state.housing_status)+row("Monthly payment",state.housing_payment ? "$"+state.housing_payment : ""));
-    html+=section("Income",3,
-      row("Situation",state.income_status)+row("Employer or business",state.employer)+row("Job title or work",state.job_title)+
-      row("Primary income",moneyDisplay(state.income_amount,state.income_frequency))+
-      row("Additional income",state.additional_income ? moneyDisplay(state.additional_income,state.additional_income_frequency) : ""));
-    html+=section("Household and move-in",4,
-      row("Preferred move-in",state.desired_move_in)+row("Date flexibility",state.move_flexibility)+
-      row("Total occupants",state.occupants)+row("Other adult occupants",state.household_names)+
-      row("Pets or assistance animals",pets)+row("Guarantor or co-signer",guarantor)+row("Vehicles",state.vehicles));
+      row("Current address",residence)+row("Living there since",state.current_since)+
+      row("Housing",choiceDisplay(state.housing_status,{rent:"Renting",own:"Owning",other:"Other"}))+
+      row("Monthly payment",state.housing_payment ? "$"+state.housing_payment : ""));
+    var incomeBody=row("Situation",choiceDisplay(state.income_status,{employed:"Employed",self_employed:"Self-employed",student:"Student",retired:"Retired",not_working:"Not currently working",other:"Other"}));
+    if(state.income_status==="employed"||state.income_status==="self_employed"){
+      incomeBody+=row("Employer or business",state.employer)+row("Job title or work",state.job_title);
+    }
+    if(state.income_status==="student"){
+      incomeBody+=row("School",state.school_name)+row("Graduation year",state.graduation_year);
+    }
+    incomeBody+=row("Primary income",moneyDisplay(state.income_amount,state.income_frequency))+
+      row("Additional income",state.additional_income ? moneyDisplay(state.additional_income,state.additional_income_frequency) : "");
+    html+=section("Income",3,incomeBody);
+    var householdBody=row("Preferred move-in",dateDisplay(state.desired_move_in))+
+      row("Date flexibility",choiceDisplay(state.move_flexibility,{exact:"That date is important",plus_minus_7:"Within about one week",plus_minus_30:"Within about one month",flexible:"Flexible"}))+
+      row("Total occupants",state.occupants)+
+      (Number(state.occupants)>1?row("Other adult occupants",state.household_names):"")+
+      row("Pets or assistance animals",pets)+row("Guarantor or co-signer",guarantor)+
+      (state.guarantor_needed==="yes"?row("Guarantor contact",[state.guarantor_phone,state.guarantor_email].filter(Boolean).join(" · ")):"")+
+      (options.ask_parking_interest?row("Parking",choiceDisplay(state.parking_interest,{interested:"Interested",none:"Not needed",unsure:"Not sure"})):"")+
+      (options.ask_utility_payment_preference?row("Utility-fee preference",choiceDisplay(state.utility_payment_preference,{monthly:"Monthly",upfront:"Up front",unsure:"Not sure"})):"")+
+      row("Vehicles",state.vehicles);
+    html+=section("Household and move-in",4,householdBody);
     byId("review").innerHTML=html;
     document.querySelectorAll("[data-edit]").forEach(function(button){
       button.onclick=function(){showStep(Number(button.getAttribute("data-edit")));};
@@ -1863,10 +2033,11 @@ module.exports = function applicationSubmissionModule(deps) {
     var primaryMonthly=monthlyAmount(state.income_amount,state.income_frequency);
     var additionalMonthly=monthlyAmount(state.additional_income,state.additional_income_frequency);
     return {
-      application_form_version:"tenant_v2",
+      application_form_version:"tenant_v3",
       date_of_birth:isoDob(),
       email:state.email||null,
       phone:state.phone||null,
+      lead_source:state.lead_source||null,
       current_address:currentAddress()||null,
       address:{
         line1:state.address_line1||null,line2:state.address_line2||null,
@@ -1885,6 +2056,9 @@ module.exports = function applicationSubmissionModule(deps) {
       employer:state.employer||null,
       job_title:state.job_title||null,
       employment_start:state.employment_start||null,
+      school_name:state.school_name||null,
+      graduation_year:state.graduation_year||null,
+      student_id:state.student_id||null,
       income_amount:normalizeMoney(state.income_amount),
       income_frequency:state.income_frequency||null,
       monthly_income:primaryMonthly,
@@ -1899,6 +2073,11 @@ module.exports = function applicationSubmissionModule(deps) {
       has_pets:state.has_pets||null,
       pets:state.has_pets==="yes" ? (state.pets_description||"Yes") : "None",
       guarantor_needed:state.guarantor_needed||null,
+      guarantor_contact:state.guarantor_needed==="yes" ? {
+        name:state.guarantor_name||null,phone:state.guarantor_phone||null,email:state.guarantor_email||null
+      } : null,
+      parking_interest:state.parking_interest||null,
+      utility_payment_preference:state.utility_payment_preference||null,
       vehicles:state.vehicles||null,
       additional_notes:state.additional_notes||null
     };
@@ -1913,6 +2092,12 @@ module.exports = function applicationSubmissionModule(deps) {
       byId("certify").focus();
       return;
     }
+    if(!byId("electronicConsent").checked){
+      error.textContent="Confirm how the leasing team may send application and lease updates.";
+      error.classList.add("on");
+      byId("electronicConsent").focus();
+      return;
+    }
     var button=byId("submitButton");
     button.disabled=true;button.textContent="Submitting…";
     try{
@@ -1923,7 +2108,10 @@ module.exports = function applicationSubmissionModule(deps) {
           token:TOKEN,
           applicant_name:state.legal_name||null,
           guarantor_name:state.guarantor_needed==="yes" ? (state.guarantor_name||null) : null,
-          captured:capturedPayload()
+          captured:Object.assign(capturedPayload(),{
+            applicant_accuracy_certified:true,
+            electronic_delivery_consent:true
+          })
         })
       });
       var out=await response.json().catch(function(){return null;});
@@ -1964,20 +2152,38 @@ module.exports = function applicationSubmissionModule(deps) {
     }
     byId("propertyName").textContent=CTX.property_name||"Rental application";
     byId("unitPill").textContent=CTX.unit_label ? "Unit "+CTX.unit_label : "Rental application";
-    if(CTX.person){
-      state.legal_name=CTX.person.name||"";
-      state.email=CTX.person.email||"";
-      state.phone=CTX.person.phone||"";
+    if(CTX.intended_move_in){
+      byId("targetMoveRow").hidden=false;
+      byId("targetMoveIn").textContent=dateDisplay(CTX.intended_move_in);
     }
-    if(CTX.prefill&&CTX.prefill.move_month){
+    var options=CTX.application_options||{};
+    if(options.ask_parking_interest){
+      byId("parkingField").hidden=false;
+      byId("parkingNote").textContent=options.parking_note||"Interest is not a reservation. The leasing team confirms availability and terms.";
+    }
+    if(options.ask_utility_payment_preference){
+      byId("utilityChoiceField").hidden=false;
+      byId("utilityChoiceNote").textContent=options.utility_payment_note||"This records your preference. The lease states the final fee and schedule.";
+    }
+    restoreDraft();
+    if(CTX.person){
+      state.legal_name=state.legal_name||CTX.person.name||"";
+      state.email=state.email||CTX.person.email||"";
+      state.phone=state.phone||CTX.person.phone||"";
+    }
+    if(CTX.intended_move_in){
+      state.desired_move_in=state.desired_move_in||CTX.intended_move_in;
+      var targetHint=byId("moveMonthHint");
+      targetHint.style.display="block";
+      targetHint.querySelector("p").textContent="The leasing team targeted "+dateDisplay(CTX.intended_move_in)+" for this home. You may request a later date here.";
+    }else if(CTX.prefill&&CTX.prefill.move_month){
       var hint=byId("moveMonthHint");
       hint.style.display="block";
       hint.querySelector("p").textContent="You previously discussed a move around "+CTX.prefill.move_month+". Choose the specific date that works best.";
     }
-    restoreDraft();
     var today=new Date();
     var localToday=new Date(today.getTime()-today.getTimezoneOffset()*60000).toISOString().slice(0,10);
-    byId("desired_move_in").min=localToday;
+    byId("desired_move_in").min=CTX.intended_move_in||localToday;
     hydrate();
     showStep(0);
   }
@@ -2021,7 +2227,10 @@ module.exports = function applicationSubmissionModule(deps) {
   //  provider_dispatched) and is still live (not consumed/revoked/expired), a
   //  second tap does NOT create a second invitation or a second text — it
   //  returns that existing send idempotently. They're already in Applicants.
-  async function sendApplication({ property_id, person_id, unit_id, conversion_id = null, created_by_user_id = null }) {
+  async function sendApplication({
+    property_id, person_id, unit_id, space_id = null, intended_move_in = null,
+    conversion_id = null, created_by_user_id = null,
+  }) {
     // 1) DOUBLE-TAP GUARD — an already-sent, still-live invitation on this
     //    conversion means the application is already out; we do NOT send a second
     //    text. BUT "already sent" is not the same as "already in Applicants":
@@ -2054,12 +2263,12 @@ module.exports = function applicationSubmissionModule(deps) {
     // 2) DISPATCH — the proven primitive (validates person+unit belong to the
     //    property, creates the prepared invitation, sends via the ONE comms
     //    gate, records the SID on acceptance; on refusal, revokes honestly).
-    //  No intended_move_in is threaded anywhere. A targeted invitation requires
-    //  marketable_now — a present-tense fact BOTH boundaries read from durable
-    //  state — so there is no request-time context for either to lose, and no
-    //  shadow field in which to hide one.
+    //  The target is one durable tuple: property + unit + bed + intended date.
+    //  Future targeting is accepted only when canonical availability can prove
+    //  the turn-ready date, and submission rechecks the same persisted tuple.
     const out = await createAndDispatchApplicationInvitation({
-      property_id, person_id, unit_id, conversion_id, created_by_user_id });
+      property_id, person_id, unit_id, space_id, intended_move_in,
+      conversion_id, created_by_user_id });
     if (!out || !out.dispatched) return out;   // honest failure passes straight through — NO advance
     // 3) ADVANCE — only on provider acceptance. One shared transition helper,
     //    its own txn. The SMS is already out; an advance hiccup is a follow-up
@@ -2135,7 +2344,7 @@ module.exports = function applicationSubmissionModule(deps) {
   //  authority, opens the invitation-specific send child. Parent untouched,
   //  stage NOT advanced.
   async function prepareApplicationLinkForObligation(client, {
-    prepare_obligation_id, unit_id = null, space_id = null, expires_at = null,
+    prepare_obligation_id, unit_id = null, space_id = null, intended_move_in = null, expires_at = null,
     actor_user_id, unitOfferable = null,
   }) {
     if (!prepare_obligation_id) throw httpErr(400, "prepare_obligation_id is required.");
@@ -2183,9 +2392,12 @@ module.exports = function applicationSubmissionModule(deps) {
     //  on an unresolved target.
     if (unit_id || space_id) {
       const verdict = unitOfferable
-        ? await unitOfferable(client, { property_id: conv.property_id, unit_id, space_id })
+        ? await unitOfferable(client, {
+            property_id: conv.property_id, unit_id, space_id, intended_move_in,
+          })
         : await applicationTarget.resolveApplicationTarget(client, {
-            property_id: conv.property_id, unit_id, space_id, require_offerable: true });
+            property_id: conv.property_id, unit_id, space_id, intended_move_in,
+            require_offerable: true });
       if (!verdict || verdict.offerable === false || verdict.ok === false) {
         const why = verdict && (verdict.refusal_reason || verdict.reason);
         throw httpErr(
@@ -2199,7 +2411,7 @@ module.exports = function applicationSubmissionModule(deps) {
     try {
       made = await createPreparedInvitation(client, {
         conversion_id, person_id: conv.person_id, property_id: conv.property_id,
-        unit_id, space_id, expires_at, created_by_user_id: actor_user_id,
+        unit_id, space_id, intended_move_in, expires_at, created_by_user_id: actor_user_id,
       });
     } catch (e) {
       if (e && e.code === "23505") {
@@ -2235,6 +2447,8 @@ module.exports = function applicationSubmissionModule(deps) {
     return {
       receipt: "Application link prepared. Copy it and send it through the real channel, then attest the send — the follow-up stays open until the link is actually sent.",
       invitation_id: made.invitation_id, token: made.token,
+      space_id: made.resolved_space_id || null,
+      intended_move_in: made.intended_move_in || null,
       send_obligation_id: sendChild.id,
       parent_obligation_id: ob.parent_obligation_id,
       conversion_id, prepared_by_basis: basis.basis,
@@ -2389,7 +2603,8 @@ module.exports = function applicationSubmissionModule(deps) {
 
     const made = await createPreparedInvitation(client, {
       conversion_id: inv.conversion_id, person_id: inv.person_id,
-      property_id: inv.property_id, unit_id: inv.unit_id,
+      property_id: inv.property_id, unit_id: inv.unit_id, space_id: inv.space_id,
+      intended_move_in: inv.intended_move_in,
       expires_at: inv.expires_at, created_by_user_id: actor_user_id,
     });
     await client.query(

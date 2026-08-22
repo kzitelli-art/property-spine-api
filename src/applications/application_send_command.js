@@ -66,6 +66,9 @@ async function stageApplicationSend(client, deps, input) {
   const spaceId = input && input.spaceId != null
     ? requiredString(input.spaceId, "space_id")
     : null;
+  const intendedMoveIn = input && input.intendedMoveIn != null
+    ? requiredString(input.intendedMoveIn, "intended_move_in")
+    : null;
   const idempotencyKey = requiredString(
     input && input.idempotencyKey,
     "idempotency_key"
@@ -97,6 +100,7 @@ async function stageApplicationSend(client, deps, input) {
     prepare_obligation_id: prepareObligationId,
     unit_id: unitId,
     space_id: spaceId,
+    intended_move_in: intendedMoveIn,
     expires_at: (input && input.expiresAt) || null,
     actor_user_id: actorUserId,
     unitOfferable: input && input.unitOfferable,
@@ -114,6 +118,7 @@ async function stageApplicationSend(client, deps, input) {
     conversion_id: conversionId,
     unit_id: unitId,
     space_id: prepared.space_id || spaceId || null,
+    intended_move_in: prepared.intended_move_in || intendedMoveIn || null,
     intent_id: intent && intent.intent ? intent.intent.id || null : null,
     recorded_intent: !!(intent && intent.recorded),
     prepare_obligation_id: prepareObligationId,
@@ -163,6 +168,7 @@ async function dispatchApplicationSend(deps, staged, input) {
     conversion_id: staged.conversion_id,
     unit_id: staged.unit_id,
     space_id: staged.space_id || null,
+    intended_move_in: staged.intended_move_in || null,
     intent_id: staged.intent_id,
     recorded_intent: staged.recorded_intent,
     prepare_obligation_id: staged.prepare_obligation_id,

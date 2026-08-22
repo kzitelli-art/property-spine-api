@@ -273,7 +273,7 @@ module.exports = function applicationsModule(deps) {
       //  not an acknowledgment. Calling a signature an acknowledgment is the
       //  exact false equivalence the terms-review correction removed, and it
       //  would have crept back in through this label.
-      const awaiting = (pk && pk.instrument_body_sha256)
+      const awaiting = (pk && pk.carries_governing_instrument === true)
         ? "Awaiting the resident's signature on the lease."
         : "Awaiting the resident's terms acknowledgment.";
       return rv

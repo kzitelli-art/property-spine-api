@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Lease Terms Review — Demonstration</title>
+  <title>Lease Review</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -34,7 +34,7 @@
     .mh-eyebrow{color:var(--faint);text-transform:uppercase;letter-spacing:.22em;
       font-size:10.5px;font-weight:500;font-family:var(--mono)}
     .mh-title{margin:16px 0 20px;font-size:40px;line-height:1.02;font-family:var(--serif);
-      font-weight:400;letter-spacing:-.02em}
+      font-weight:400;letter-spacing:0}
     .mh-meta{display:flex;flex-wrap:wrap;gap:4px 34px;padding:18px 0;
       border-top:1px solid var(--rule);border-bottom:1px solid var(--line)}
     .mh-meta .item{min-width:0}
@@ -54,7 +54,7 @@
     .schedule td{padding:13px 0;vertical-align:baseline;font-size:14.5px}
     .schedule td.k{color:var(--muted);width:42%}
     .schedule td.v{text-align:right;font-family:var(--mono);font-weight:500;
-      font-variant-numeric:tabular-nums;letter-spacing:-.01em;color:var(--ink)}
+       font-variant-numeric:tabular-nums;letter-spacing:0;color:var(--ink)}
 
     /* ── BODY — numbered sections, hairline separated ── */
     .body-head{margin:52px 0 4px;display:flex;align-items:baseline;gap:12px}
@@ -67,7 +67,7 @@
       padding-top:3px;font-variant-numeric:tabular-nums}
     .sec-body{min-width:0}
     .section h3{margin:0 0 12px;font-size:19px;font-family:var(--serif);font-weight:400;
-      letter-spacing:-.01em;line-height:1.2}
+      letter-spacing:0;line-height:1.2}
     .section p{margin:10px 0;line-height:1.66;font-size:14.5px;color:var(--ink-soft)}
 
     /* acknowledge row — a hairline row within the section column */
@@ -85,6 +85,22 @@
     button:hover{opacity:.82}
     button:disabled{opacity:.3;cursor:not-allowed}
     .field.done button{border-color:var(--green-line);background:var(--green-bg);color:var(--green)}
+    .signature-entry{display:flex;align-items:center;gap:8px;min-width:260px}
+    .signature-entry input{min-width:0;flex:1;border:1px solid var(--line-strong);border-radius:4px;
+      padding:8px 10px;font:13px var(--sans);color:var(--ink);background:#fff}
+    .signature-entry input:focus{outline:2px solid var(--green-line);outline-offset:1px}
+
+    .instrument{margin:42px 0 8px;border-top:1px solid var(--rule);padding-top:24px}
+    .instrument-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}
+    .instrument h2{font:400 22px/1.2 var(--serif);margin:3px 0 5px}
+    .instrument-meta{font:10.5px/1.6 var(--mono);color:var(--muted);overflow-wrap:anywhere}
+    .source-link{display:inline-flex;align-items:center;justify-content:center;flex:none;
+      border:1px solid var(--ink);border-radius:4px;padding:8px 12px;color:var(--ink);
+      text-decoration:none;font-size:12.5px;font-weight:500}
+    .source-link:hover{background:#f6f6f4}
+    .lease-text{margin:20px 0 0;border:1px solid var(--line);background:#fbfbfa;
+      max-height:520px;overflow:auto;padding:20px;white-space:pre-wrap;overflow-wrap:anywhere;
+      font:12.5px/1.65 var(--sans);color:var(--ink-soft)}
 
     /* progress — inline schedule of what remains */
     .progress{margin:44px 0 0;border-top:1px solid var(--rule);padding-top:24px}
@@ -124,20 +140,25 @@
       .masthead{padding-top:38px}
       .mh-meta{gap:14px 24px}
       .section{grid-template-columns:26px 1fr}
+      .field{align-items:flex-start;flex-direction:column}
+      .signature-entry{width:100%;min-width:0}
+      .instrument-head{display:block}
+      .source-link{margin-top:14px;width:100%}
     }
   </style>
 </head>
 <body>
-  <div class="demo-note" id="phBar"><div class="inner"><b>Demonstration summary.</b> Proposed lease terms for review — not the complete lease. Acknowledging does not create or activate a tenancy; the complete lease and required addenda govern.</div></div>
+  <div class="demo-note" id="phBar"><div class="inner"><b>Loading lease.</b></div></div>
   <main class="shell">
     <header class="masthead">
       <div class="mh-eyebrow">Lease Terms Review</div>
       <h1 class="mh-title" id="mhTitle">Proposed Terms</h1>
       <div class="mh-meta" id="mhMeta"></div>
-      <p class="lede">Review each numbered term and acknowledge it below. This records your review only — <span class="em">it is not a signature on the lease</span>, and a tenancy begins only when the owner executes the complete lease.</p>
+      <p class="lede" id="lede">Loading your lease details.</p>
     </header>
 
     <div class="schedule" id="schedule"></div>
+    <div id="instrumentBlock"></div>
 
     <div class="body-head">
       <div class="doc-title" id="paperTitle">Terms</div>
@@ -148,12 +169,12 @@
 
     <section class="progress">
       <div class="progress-head">
-        <h3>To acknowledge</h3>
+        <h3 id="progressLabel">To complete</h3>
         <div class="count" id="progressText">Loading…</div>
       </div>
       <div class="meter"><div id="meter"></div></div>
       <div id="todos"></div>
-      <button class="submit" id="submitBtn" disabled>Acknowledge Demonstration Terms</button>
+      <button class="submit" id="submitBtn" disabled>Complete Review</button>
     </section>
 
     <div class="colophon" id="colophon"></div>
@@ -172,6 +193,18 @@
       return id;
     }
     function esc(s){return String(s??'').replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]));}
+    function displayDate(value){
+      const match=String(value||'').slice(0,10).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if(!match)return value||'—';
+      return new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'})
+        .format(new Date(Date.UTC(Number(match[1]),Number(match[2])-1,Number(match[3]))));
+    }
+    function displayMoney(value){
+      const number=Number(String(value??'').replace(/[$,]/g,''));
+      return Number.isFinite(number)
+        ? number.toLocaleString('en-US',{style:'currency',currency:'USD'})
+        : '$'+String(value??'');
+    }
 
     async function api(path, options={}){
       const res = await fetch(path, { ...options, headers:{'Content-Type':'application/json', ...(options.headers||{})} });
@@ -192,10 +225,21 @@
       const S = snap.summary||{};
       const propName = terms.property_name || snap.title || 'Proposed Terms';
       const addr = snap.subtitle || terms.property_address || '';
+      const governing = packet.is_governing_lease_package === true;
+
+      document.title = governing ? 'Sign Lease Package' : 'Lease Terms Review';
+      document.getElementById('phBar').innerHTML = governing
+        ? '<div class="inner"><b>Official lease package.</b> The retained property lease and the exact deal terms below are one package. Your signature applies to both; the company must countersign before activation.</div>'
+        : '<div class="inner"><b>Demonstration summary.</b> Proposed lease terms for review — not the complete lease. Acknowledging does not create or activate a tenancy; the complete lease and required addenda govern.</div>';
+      document.getElementById('lede').innerHTML = governing
+        ? 'Review the home, dates, and charges, then read the official lease below. Type your full legal name where requested and sign the <span class="em">complete package</span>.'
+        : 'Review each numbered term and acknowledge it below. This records your review only — <span class="em">it is not a signature on the lease</span>, and a tenancy begins only when the owner executes the complete lease.';
+      document.getElementById('progressLabel').textContent = governing ? 'Required before signing' : 'To acknowledge';
+      document.getElementById('submitBtn').textContent = governing ? 'Sign Lease Package' : 'Acknowledge Demonstration Terms';
 
       // masthead
       document.getElementById('mhTitle').textContent = propName;
-      const term = (S.lease_start_date||'—') + ' – ' + (S.lease_end_date||'—');
+      const term = displayDate(S.lease_start_date) + ' – ' + displayDate(S.lease_end_date);
       const metaItems = [
         ['Premises', esc(addr || (S.unit ? 'Unit '+S.unit : '—'))],
         ['Owner', esc(S.landlord_entity||'—')],
@@ -207,8 +251,8 @@
 
       // schedule (money terms as a formal table)
       const rows = [];
-      if(S.monthly_rent) rows.push(['Monthly rent', '$'+esc(S.monthly_rent)]);
-      if(S.security_deposit) rows.push(['Security deposit', '$'+esc(S.security_deposit)]);
+      if(S.monthly_rent) rows.push(['Monthly rent', displayMoney(S.monthly_rent)]);
+      if(S.security_deposit) rows.push(['Security deposit', displayMoney(S.security_deposit)]);
       // pull fee/notice figures out of the sections if present
       const feeSec = (snap.sections||[]).find(s=>s.key==='fees');
       const noticeSec = (snap.sections||[]).find(s=>s.key==='notice');
@@ -220,7 +264,21 @@
         <div class="schedule-cap">Schedule of terms</div>
         <table>${rows.map(([k,v])=>`<tr><td class="k">${esc(k)}</td><td class="v">${esc(v)}</td></tr>`).join('')}</table>` : '';
 
-      document.getElementById('paperTitle').textContent = 'Terms';
+      const instrument = snap.instrument || null;
+      document.getElementById('instrumentBlock').innerHTML = governing && instrument ? `
+        <section class="instrument" aria-labelledby="instrumentTitle">
+          <div class="instrument-head">
+            <div>
+              <div class="schedule-cap">Governing lease form</div>
+              <h2 id="instrumentTitle">${esc(instrument.source_filename || instrument.form_code || 'Residential lease')}</h2>
+              <div class="instrument-meta">Form ${esc(instrument.form_code || '—')}${instrument.form_version ? ' · version '+esc(instrument.form_version) : ''}<br>Package ${esc((instrument.package_sha256 || '').slice(0,16))}</div>
+            </div>
+            <a class="source-link" href="${esc(DATA_BASE + '/instrument')}">Download original</a>
+          </div>
+          <pre class="lease-text" tabindex="0">${esc(instrument.text_snapshot || '')}</pre>
+        </section>` : '';
+
+      document.getElementById('paperTitle').textContent = governing ? 'Deal Terms' : 'Terms';
 
       // numbered body sections
       const bySection = new Map();
@@ -243,7 +301,9 @@
 
       // colophon
       document.getElementById('colophon').textContent =
-        (snap.not_the_lease || 'Demonstration summary — not the complete lease.') +
+        (governing
+          ? 'The retained source hash and deal-terms hash are bound in the package shown above.'
+          : (snap.not_the_lease || 'Demonstration summary — not the complete lease.')) +
         (addr ? '  ·  ' + addr : '');
 
       renderProgress();
@@ -252,9 +312,12 @@
     function fieldHtml(f){
       const done=f.completed;
       const action = f.field_type==='signature'?'Sign':(f.field_type==='acknowledgment'?'Acknowledge':'Initial');
+      const signatureControl = f.field_type==='signature' && !done
+        ? `<div class="signature-entry"><input aria-label="Full legal name" data-signature-name="${esc(f.id)}" autocomplete="name" placeholder="Full legal name"><button data-complete="${esc(f.id)}" data-ftype="signature">Sign</button></div>`
+        : `<button ${done?'disabled':''} data-complete="${esc(f.id)}" data-ftype="${esc(f.field_type)}">${done?'Done':action}</button>`;
       return `<div class="field ${done?'done':''}" id="field-${esc(f.id)}">
-        <div><div class="field-title">${esc(f.label)}</div><small>${done?'Acknowledged':action+' to continue'}</small></div>
-        <button ${done?'disabled':''} data-complete="${esc(f.id)}" data-ftype="${esc(f.field_type)}">${done?'✓ Done':action}</button>
+        <div><div class="field-title">${esc(f.label)}</div><small>${done?(f.field_type==='signature'?'Signed':'Acknowledged'):action+' to continue'}</small></div>
+        ${signatureControl}
       </div>`;
     }
 
@@ -283,8 +346,10 @@
 
     async function completeField(id,type){
       try{
-        const value = type==='signature' ? (packet.terms?.resident_names||'Resident') : initials();
-        const data = await api(DATA_BASE+`/fields/${id}/complete`,{method:'POST',body:JSON.stringify({value,session_id:sessionId()})});
+        const signatureInput = type==='signature' ? document.querySelector(`[data-signature-name="${CSS.escape(id)}"]`) : null;
+        const value = type==='signature' ? String(signatureInput?.value||'').trim() : initials();
+        if(type==='signature' && value.length<2){ showError('Type your full legal name before signing.'); signatureInput?.focus(); return; }
+        const data = await api(DATA_BASE+`/fields/${id}/complete`,{method:'POST',body:JSON.stringify({value,consent:type==='signature',session_id:sessionId()})});
         packet=data.packet; render(); jumpNext();
       }catch(e){ showError(e.receipt||e.error||'Could not record that field.'); }
     }
@@ -299,7 +364,9 @@
 
     function showSubmitted(){
       const el=document.getElementById('notice');
-      el.innerHTML='<b>Acknowledged.</b> Your review of the demonstration terms is recorded. This does <b>not</b> activate a lease — a tenancy begins only when the owner executes the complete lease and required addenda through the normal process.';
+      el.innerHTML=packet?.is_governing_lease_package
+        ? '<b>Signed.</b> Your signature on the complete lease package is recorded. The authorized company signer must countersign before the tenancy is activated.'
+        : '<b>Acknowledged.</b> Your review of the demonstration terms is recorded. This does <b>not</b> activate a lease — a tenancy begins only when the owner executes the complete lease and required addenda through the normal process.';
       el.style.display='block';
     }
     function jump(id){document.getElementById('field-'+id)?.scrollIntoView({behavior:'smooth',block:'center'});}
