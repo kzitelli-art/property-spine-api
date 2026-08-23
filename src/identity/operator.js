@@ -50,6 +50,11 @@ module.exports = function operatorModule(deps) {
     // implementation. Absent (older server.js) → the route fails closed 503.
     applicationsService = null,
     leasePacketsService = null,
+    //  The applicationSubmission service surface. The session-gated denial
+    //  door calls its denyApplicationService — the SAME transaction the legacy
+    //  shared-key door calls. Absent (older server.js) → that route fails
+    //  closed 503 rather than growing a second denial.
+    submissionService = null,
   } = deps;
   const { rankTurnPriority } = require("../maintenance/turn_priority"); // shared Turn-Priority ranking (slice 1)
   const { buildReviewList, buildReviewDetail } = require("../applications/application_review"); // application review reads (slice 2)
@@ -3054,11 +3059,238 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   //     — a body actor_id can never override it on this door, and
   //   • the property wall enforced from the session scope: the tour must
   //     belong to the session's property (checked inside the service).
+  // ══════════════════════════════════════════════════════════════════
+  //  POST /operator/leasing/tours/:tourId/check-in — PHYSICAL PRESENCE.
+  //
+  //  The legacy door demanded `actor_id` in the body and refused without it,
+  //  calling check-in "a human truth point" — then believed whatever string
+  //  arrived. The browser filled it from a text box and refused to proceed
+  //  until an employee typed their own user ID before recording that they
+  //  were standing in the building.
+  //
+  //  The more consequential the attribution, the less it may come from the
+  //  body. Here it comes from the session, and the employee types nothing.
+  // ══════════════════════════════════════════════════════════════════
+  router.post("/operator/leasing/tours/:tourId/check-in", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasingTourService || typeof leasingTourService.checkInTourService !== "function") {
+      return res.status(503).json({ receipt: "Check-in is not wired on this deploy (leasingTourService.checkInTourService missing)." });
+    }
+    if (refuseClientAssertedAuthority(req, res)) return;
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await leasingTourService.checkInTourService(client, {
+        tourId: req.params.tourId,
+        actorUserId: req.operator.id,               // SERVER-DERIVED — never the body
+        enforcePropertyId: req.operator.property_id, // the session's wall
+      });
+      await client.query("commit");
+      return res.json({ ...out, checked_in_by_user_id: req.operator.id });
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
+      console.error("operator tour check-in:", e);
+      return res.status(500).json({ receipt: "Could not check in the tour.", error: e.message });
+    } finally { client.release(); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  //  THE LAST THREE TOUR LIFECYCLE VERBS. Same shape as check-in: the
+  //  canonical service already exists in leasingleads.js, the route is a
+  //  wrapper, and nothing about what these writes MEAN changes here.
+  //
+  //  POST /operator/leasing/tours/:tourId/confirm-prospect
+  //  Confirmation genuinely has two possible actors — the prospect replying,
+  //  or a staff member logging it. actor_type stays an input because it is a
+  //  leasing FACT. What the body may no longer do is name a human staff
+  //  identity: when this door records a human, that human is the session.
+  // ══════════════════════════════════════════════════════════════════
+  router.post("/operator/leasing/tours/:tourId/confirm-prospect", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasingTourService || typeof leasingTourService.confirmProspectTourService !== "function") {
+      return res.status(503).json({ receipt: "Prospect confirmation is not wired on this deploy (leasingTourService.confirmProspectTourService missing)." });
+    }
+    if (refuseClientAssertedAuthority(req, res)) return;
+    const b = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      //  A 'prospect' confirmation names no staff user at all — the prospect
+      //  is not a user row. A 'human' confirmation names the session.
+      const asProspect = b.actor_type === "prospect";
+      const out = await leasingTourService.confirmProspectTourService(client, {
+        tourId: req.params.tourId,
+        actorType: asProspect ? "prospect" : "human",
+        actorUserId: asProspect ? null : req.operator.id,   // SERVER-DERIVED
+        via: b.via || "manual",
+        enforcePropertyId: req.operator.property_id,        // the session's wall
+      });
+      await client.query("commit");
+      return res.json({ ...out, confirmed_by_user_id: asProspect ? null : req.operator.id });
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
+      console.error("operator tour confirm-prospect:", e);
+      return res.status(500).json({ receipt: "Could not record confirmation.", error: e.message });
+    } finally { client.release(); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  //  WITHHELD — TWO VERBS WHOSE CANONICAL WRITE CANNOT EXECUTE.
+  //
+  //  The authority chain on both doors below is complete and proven. The
+  //  canonical services underneath them cannot write, for reasons that
+  //  predate this packet:
+  //
+  //    reminder         recordTourEvent projects every event type into
+  //                     leasing_tours.status, and 'reminder_sent' is not a
+  //                     permitted status — correctly, since a tour that gets
+  //                     a reminder is still scheduled.
+  //                     → leasing_tours_status_check
+  //
+  //    correct-outcome  the service appends a tour_events row of type
+  //                     'outcome_corrected', which is not in
+  //                     tour_events_event_type_check.
+  //
+  //  Both are reproduced identically against the legacy shared-key doors at
+  //  this commit and before the service extraction
+  //  (tests/legacy_tour_verb_baseline_probe.js), so neither is an authority
+  //  defect and neither was introduced here.
+  //
+  //  UNTIL THE SCHEMA REPAIR IS AUTHORIZED, THESE REFUSE HONESTLY. A 500
+  //  carrying a Postgres constraint name is not an answer an operator can
+  //  act on, and attempting the write teaches the caller nothing it does not
+  //  already know. A typed refusal says the capability is unavailable and
+  //  why, and writes nothing. This is CONTAINMENT, not repair: the enums are
+  //  untouched and the services are unchanged.
+  //
+  //  REMOVAL CONDITION (Class 3, temporary): delete both guards when the
+  //  tour-ledger vocabularies admit 'reminder_sent' as a status projection
+  //  and 'outcome_corrected' as an event type, and the proofs below flip
+  //  from asserting the refusal to asserting the durable write.
+  //
+  //  The LEGACY shared-key doors are deliberately NOT guarded. They already
+  //  fail, their external consumers are unknown, and changing what they
+  //  return would be a contract change made blind.
+  // ══════════════════════════════════════════════════════════════════
+  const WITHHELD_TOUR_VERBS = Object.freeze({
+    reminder: {
+      error: "tour_reminder_unavailable",
+      receipt: "A reminder cannot be recorded through the current tour ledger.",
+      defect: "leasing_tours_status_check does not permit 'reminder_sent' as a tour status.",
+    },
+    correct_outcome: {
+      error: "tour_outcome_correction_unavailable",
+      receipt: "A completed tour outcome cannot currently be corrected through the tour ledger.",
+      defect: "tour_events_event_type_check does not permit 'outcome_corrected'.",
+    },
+  });
+  //  THE WITHHOLD RUNS LAST, AFTER THE WHOLE AUTHORITY CHAIN.
+  //
+  //  A first version returned the refusal as soon as the route was entered,
+  //  which short-circuited the property wall — that wall lives inside the
+  //  canonical service, and the service is no longer called. A session scoped
+  //  to another property was then told "unavailable" instead of "not yours",
+  //  which is both the wrong answer and a small disclosure: it confirms a
+  //  tour id exists to someone with no right to know.
+  //
+  //  So the wall is enforced here, in the route, before withholding. This is
+  //  authority, not business logic — the same shape the executed-lease door
+  //  already uses. 404 for a tour that does not exist, 403 for one that
+  //  belongs elsewhere, and only then the typed unavailability.
+  async function withholdAfterPropertyWall(req, res, which) {
+    const w = WITHHELD_TOUR_VERBS[which];
+    const tour = (await pool.query(
+      "select id, property_id from leasing_tours where id=$1", [req.params.tourId])).rows[0];
+    if (!tour) return res.status(404).json({ receipt: "No tour with that id." });
+    if (String(tour.property_id) !== String(req.operator.property_id)) {
+      return res.status(403).json({ receipt: "That tour belongs to another property." });
+    }
+    //  503, not 500: the request was well-formed and fully authorized. The
+    //  capability is unavailable. Nothing was written and nothing changed.
+    return res.status(503).json({
+      error: w.error, receipt: w.receipt, defect: w.defect,
+      recorded: false, capability: "withheld_pending_schema_repair",
+    });
+  }
+
+  //  POST /operator/leasing/tours/:tourId/reminder — the recorded actor stays
+  //  'system'. An employee tapping "Reminder logged" records that a send
+  //  happened; they are not claiming to be the sender. The session decides
+  //  whether the write may happen and against which property, not who sent.
+  router.post("/operator/leasing/tours/:tourId/reminder", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasingTourService || typeof leasingTourService.recordTourReminderService !== "function") {
+      return res.status(503).json({ receipt: "Reminder recording is not wired on this deploy (leasingTourService.recordTourReminderService missing)." });
+    }
+    if (refuseClientAssertedAuthority(req, res)) return;
+    //  AUTHORITY FIRST, THEN THE WITHHOLD. Ordering matters: a forged actor
+    //  must still be refused as a forged actor, and an unauthorized caller
+    //  must still be refused as unauthorized. Learning that a capability is
+    //  unavailable is not a right an unauthenticated caller has.
+    if (WITHHELD_TOUR_VERBS.reminder) return withholdAfterPropertyWall(req, res, "reminder");
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await leasingTourService.recordTourReminderService(client, {
+        tourId: req.params.tourId,
+        enforcePropertyId: req.operator.property_id,        // the session's wall
+      });
+      await client.query("commit");
+      return res.json(out);
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
+      console.error("operator tour reminder:", e);
+      return res.status(500).json({ receipt: "Could not record the reminder.", error: e.message });
+    } finally { client.release(); }
+  });
+
+  //  POST /operator/leasing/tours/:tourId/correct-outcome — a correction is
+  //  the write where attribution matters MOST: it says a recorded fact was
+  //  wrong. The original is never touched; the correction appends, carrying
+  //  the reason and the corrector. That corrector is the session.
+  router.post("/operator/leasing/tours/:tourId/correct-outcome", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasingTourService || typeof leasingTourService.correctTourOutcomeService !== "function") {
+      return res.status(503).json({ receipt: "Outcome correction is not wired on this deploy (leasingTourService.correctTourOutcomeService missing)." });
+    }
+    if (refuseClientAssertedAuthority(req, res)) return;
+    //  See WITHHELD_TOUR_VERBS above. Authority is enforced first.
+    if (WITHHELD_TOUR_VERBS.correct_outcome) return withholdAfterPropertyWall(req, res, "correct_outcome");
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await leasingTourService.correctTourOutcomeService(client, {
+        tourId: req.params.tourId,
+        b: req.body || {},
+        correctedBy: req.operator.id,                       // SERVER-DERIVED
+        enforcePropertyId: req.operator.property_id,        // the session's wall
+      });
+      await client.query("commit");
+      return res.json(out);
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
+      console.error("operator tour correct-outcome:", e);
+      return res.status(e.httpStatus || 500).json({ receipt: e.publicMessage || e.message });
+    } finally { client.release(); }
+  });
+
   router.post("/operator/leasing/tours/:tourId/complete", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     if (!leasingTourService || typeof leasingTourService.completeTour !== "function") {
       return res.status(503).json({ receipt: "Tour completion is not wired on this deploy (leasingTourService missing)." });
     }
+    //  A body actor was already INEFFECTIVE here (recordedByUserId is server-
+    //  derived). Silently ignoring it is still the wrong shape: a stale caller
+    //  that believes it is naming the recorder gets a 200 and never learns it
+    //  was overruled. Refuse it, same as deny / approve / check-in.
+    //  actual_tour_host_user_id and follow_up_owner_user_id are NOT refused —
+    //  those are BUSINESS FACTS (who gave the tour, who owns the follow-up),
+    //  not a claim about who is operating. Two meanings, two field names.
+    if (refuseClientAssertedAuthority(req, res)) return;
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -3110,6 +3342,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     if (!leasingTourService || typeof leasingTourService.completeTour !== "function") {
       return res.status(503).json({ receipt: "Tour completion is not wired on this deploy (leasingTourService missing)." });
     }
+    //  person_id / unit_id / occurred_at are business facts about the walk-in
+    //  and pass through. property_id and any actor field do not: the property
+    //  is the session's and the recorder is the session's.
+    if (refuseClientAssertedAuthority(req, res)) return;
     const b = req.body || {};
     const propertyId = req.operator.property_id;          // SERVER-DERIVED
     const client = await pool.connect();
@@ -3420,6 +3656,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     if (!conversionService || !conversionService.resolveRung) {
       return res.status(503).json({ error: "task resolution is not wired on this deploy (conversionService missing)" });
     }
+    //  Same standard as every other staff decision on this router. by_user_id
+    //  was already server-derived; a caller that believes otherwise now learns
+    //  it instead of getting a 200. resolution_basis / proof / result are
+    //  business inputs and pass untouched.
+    if (refuseClientAssertedAuthority(req, res)) return;
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -3451,6 +3692,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   // ── R3: shared property-wall + service-call shape for task actions ─────
   async function taskAction(req, res, fn) {
     if (!conversionService) return res.status(503).json({ error: "conversion service not wired on this deploy." });
+    //  One refusal covering reassign / reopen / change-due. to_user_id is NOT
+    //  refused: naming who work goes TO is a business decision. Naming who is
+    //  ACTING is authority, and that only ever comes from the session.
+    if (refuseClientAssertedAuthority(req, res)) return;
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -4244,6 +4489,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   // ══════════════════════════════════════════════════════════════════
   router.post("/operator/leasing/applications/:id/approve", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
+    //  This door never read body attribution, so a forged actor was already
+    //  INEFFECTIVE — but silently. The legacy key door accepts `approved_by`,
+    //  so a client migrating here would keep sending it and keep believing it
+    //  mattered. Now it fails visibly on the first call.
+    if (refuseClientAssertedAuthority(req, res)) return;
     if (!applicationsService || typeof applicationsService.approveApplication !== "function") {
       return res.status(503).json({ receipt: "Approve service not wired on this deploy (applicationsService missing). Deploy applications.js + the updated server.js together." });
     }
@@ -4301,6 +4551,120 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   // POST /operator/leasing/applications/:id/proposed-terms
   // Records the governed "management confirmed these proposed economics for
   // resident review" fact. Changes no status, creates no lease, satisfies no
+  // ══════════════════════════════════════════════════════════════════
+  //  POST /operator/leasing/applications/:id/deny — THE SESSION-GATED DENIAL.
+  //
+  //  An application rejection is a durable institutional decision, and until
+  //  now it was reachable ONLY through the shared portfolio-wide operator key,
+  //  which accepted `decided_by_user_id` FROM THE REQUEST BODY. The browser
+  //  read that value out of a hidden input backed by localStorage. So the
+  //  durable record of who declined an application was a string somebody typed
+  //  into a text box.
+  //
+  //  This door establishes identity, property scope and entitlement, then
+  //  calls THE SAME canonical service the legacy door calls. There is no
+  //  second denial implementation and this route contains no decision logic.
+  //
+  //  ATTRIBUTION IS SESSION-DERIVED, AND A BODY ACTOR IS REFUSED — not
+  //  ignored. A caller sending decided_by_user_id is either a stale client or
+  //  an attempt; silently substituting the session actor would let a stale app
+  //  keep sending a field it believes is honoured, and would leave nobody
+  //  aware the value is dead. 400 says so out loud.
+  //
+  //  Structure mirrors the approve door above deliberately: same middleware,
+  //  same property wall, same opaque refusal with a full stderr audit. Two
+  //  decisions on one object should not have two authority shapes.
+  // ══════════════════════════════════════════════════════════════════
+  //  ── ONE REFUSAL, USED BY EVERY MIGRATED STAFF DECISION ────────────
+  //  Written once. Two copies of one rule is a defect even while they agree,
+  //  and an authority rule is the last place to keep a second copy.
+  //
+  //  These names are refused because each one attempts to DECLARE something
+  //  the server owns: who acted, or which property authorises it. A field is
+  //  on this list only after being classified as an authority assertion — not
+  //  because its name contains user_id. `person_id`, `unit_id`, `space_id`
+  //  and the like are TARGETS of the operation and are deliberately absent.
+  //
+  //  REFUSED, NOT IGNORED. Silently substituting the session actor would let a
+  //  stale client keep sending a field it believes is honoured, with nobody
+  //  aware the value is dead. A 400 makes the staleness visible on the first
+  //  call instead of the first audit.
+  const STAFF_AUTHORITY_ASSERTION_FIELDS = Object.freeze([
+    "approved_by", "decided_by_user_id", "actor_user_id", "by_user_id",
+    "completed_by", "confirmed_by", "recorded_by", "created_by",
+    "user_id", "property_id", "actor_id",
+  ]);
+
+  function refuseClientAssertedAuthority(req, res) {
+    const b = req.body || {};
+    const asserted = STAFF_AUTHORITY_ASSERTION_FIELDS
+      .filter((f) => b[f] !== undefined && b[f] !== null);
+    if (!asserted.length) return null;
+    res.status(400).json({
+      error: "client_supplied_authority",
+      receipt: "This request tried to declare who acted or which property authorises it. "
+             + "Both come from your signed-in session. Remove: " + asserted.join(", ") + ".",
+      fields: asserted,
+    });
+    return asserted;
+  }
+
+  const DENY_BODY_AUTHORITY_FIELDS = STAFF_AUTHORITY_ASSERTION_FIELDS;
+
+  router.post("/operator/leasing/applications/:id/deny", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!submissionService || typeof submissionService.denyApplicationService !== "function") {
+      return res.status(503).json({ receipt: "Denial service is not wired on this deploy (submissionService.denyApplicationService missing)." });
+    }
+    const op = req.operator;
+    const b = req.body || {};
+
+    //  A body that tries to declare WHO acted, or WHICH property authorises
+    //  it, is refused before anything is read. One shared rule, not a copy.
+    if (refuseClientAssertedAuthority(req, res)) return;
+
+    const audit = (reason, appRow) => {
+      console.error("[operator/deny] REFUSED", JSON.stringify({
+        reason, user_id: op.id, session_property: op.property_id,
+        application_id: req.params.id,
+        application_property: appRow ? appRow.property_id : null,
+      }));
+    };
+
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      //  PROPERTY WALL — the ROW decides, not the request. Read before the
+      //  service runs so a neighbouring application is refused without the
+      //  denial transaction ever starting.
+      const app = (await client.query(
+        "select id, property_id from lease_applications where id=$1", [req.params.id])).rows[0];
+      if (!app) {
+        await client.query("rollback");
+        return res.status(404).json({ receipt: "No application with that id." });
+      }
+      if (String(app.property_id) !== String(op.property_id)) {
+        audit("property_mismatch", app);
+        await client.query("rollback");
+        return res.status(403).json({ error: "not_permitted" });
+      }
+
+      const out = await submissionService.denyApplicationService(client, {
+        applicationId: req.params.id,
+        body: { reason: b.reason, note: b.note },
+        decidedByUserId: op.id,          // SERVER-DERIVED — never the body
+      });
+      await client.query("commit");
+      return res.json({ ...out, decided_by_user_id: op.id, property_id: op.property_id });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      if (e.httpStatus) return res.status(e.httpStatus).json(e.body || { receipt: e.message });
+      if (e.status) return res.status(e.status).json({ receipt: e.message });
+      console.error("operator deny error", e);
+      return res.status(500).json({ receipt: "Could not record the decision.", error: e.message });
+    } finally { client.release(); }
+  });
+
   // terms-review input. Opaque refusal on authority/property (audited server-side).
   router.post("/operator/leasing/applications/:id/proposed-terms", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     const op = req.operator;
@@ -4595,6 +4959,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     if (!executedLease || typeof executedLease.verifyExecutedLease !== "function") {
       return res.status(503).json({ receipt: "Executed-lease intake is not wired on this deploy. Deploy executed_lease_service.js, operator.js and server.js together." });
     }
+    //  The lease terms, the document evidence and the signers are the FACTS of
+    //  the executed lease and pass through untouched. Who verified it is the
+    //  session, and a body that tries to say otherwise is refused, not ignored.
+    if (refuseClientAssertedAuthority(req, res)) return;
     const b = req.body || {};
     const client = await pool.connect();
     try {

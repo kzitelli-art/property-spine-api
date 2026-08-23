@@ -3577,6 +3577,9 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
   // the invitation service (applicationSubmission) — the session-gated operator
   // route calls its create/attest services; no duplicate invitation logic.
   applicationInvitations: __applicationSubmission._service,
+  // Same object, named for what the denial door uses it for: the ONE
+  // denyApplicationService. Two doors, one decision transaction.
+  submissionService: __applicationSubmission._service,
   // 067 follow-on: the session-authed leasing task queue resolves through the
   // conversion rail's ONE resolveRung service — no module reimplements closing.
   conversionService: __leasingConversion._service,
