@@ -844,3 +844,56 @@ column, migration, or runner path was added.
 No main merge, PR, deployment, migration, app or `index.html` change, Neon or
 Render contact, production read/write, real signing action, or carrier action
 occurred. Production and Mike Grivna's real activation state are unchanged.
+
+### 24 Aug 2026 — completed lease-signer evidence is immutable and exact retries are idempotent
+
+**`HTTP_PROVEN` in disposable branch CI; not deployed.** Migration 192 already
+installed a database trigger that freezes completed lease-field evidence. The
+public field-completion door nevertheless attempted the same update again when
+a signer retried an already-completed field with the same value. The database
+correctly rejected that write, but the human received HTTP 500 even though
+nothing had changed. A client retry could therefore look like a failed signing
+action after the signature had actually been retained.
+
+The canonical field writer now recognizes an exact retry only after resolving
+the current signer, requiring explicit signature intent, and applying the same
+typed-name consistency check as the first submission. If the stored completed
+value and normalized incoming value agree, it returns HTTP 200 with an
+idempotent receipt without rewriting the field or adding a second audit event.
+A conflicting repeat returns 409. The ordinary completion update remains
+guarded by `completed = false`; the migration-192 trigger remains the final
+database wall. No route, signer store, status, column, migration, alternate
+writer, or runner path was added.
+
+Run
+[#32768335894](https://github.com/kzitelli-art/property-spine-api/actions/runs/32768335894)
+tested baseline `26c98d2`, returned parent exit 0, hostile falsifications PASS,
+no NOT RUN, every later proof through the guarantor journey, and `ALL PROOFS
+PASSED`. The hostile assertion stayed intact while the product-side exact-retry
+return was disabled at `8b8cbb7`; run
+[#32768753533](https://github.com/kzitelli-art/property-spine-api/actions/runs/32768753533)
+then returned parent exit 1. Its exact evidence was retry HTTP 500 with no
+idempotent response while the database trigger preserved the completed row:
+`completed_at`, `field_value`, and the original `session_id` were unchanged,
+and the audit count stayed 1→1. This was a genuine HTTP-contract red; it was
+**not** an observed evidence rewrite. No NOT RUN was reported and every later
+top-level proof still passed.
+
+The exact guarded source was restored at `b7c806f`; run
+[#32769063555](https://github.com/kzitelli-art/property-spine-api/actions/runs/32769063555)
+returned parent exit 0, hostile falsifications PASS, no NOT RUN, every later
+proof through the terminal guarantor journey, and `ALL PROOFS PASSED`.
+Successful inner retry/session/audit assertion text is suppressed by the parent
+runner and is not quoted as observed.
+
+The migration-192 completed-evidence trigger is **Class 1 — permanent evidence
+primitive**. The source-level idempotency/refusal boundary is **Class 1 —
+permanent primitive**. The hostile retry proof is **Class 3 — test
+infrastructure**. This slice adds no temporary adapter or delete-on-activation
+scaffolding.
+
+No main merge, PR, deployment, migration, app or `index.html` change, Neon or
+Render contact, production read/write, real signing action, or carrier action
+occurred. Production remains API `61f99bf` at ledger 189 by the owner's last
+verified runtime receipt; this branch and migrations 190–192 remain unreleased.
+Mike Grivna's production activation state is unchanged.
