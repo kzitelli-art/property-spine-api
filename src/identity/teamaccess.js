@@ -61,15 +61,17 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridg
   const MAX_FAILED = 5;
 
   // Class 1 — the canonical usability reading for one staff invitation.
-  // Both OTP issuance and OTP verification consume this same answer so a
-  // terminal invite can never receive a code that the verifier must reject.
+  // Both OTP issuance and OTP verification consume this same answer, so a
+  // state observed as terminal at either public door is refused consistently.
   // Expiry is derived from the recorded clock as well as the stored lifecycle
-  // state; neither public door rewrites history merely by reading it.
+  // state; neither public door rewrites history merely by reading it. (Invite
+  // creation's concurrent-supersession invariant is a separate transaction
+  // question; this reader does not claim to serialize two requests.)
   function inviteLifecycleState(invite, at = new Date()) {
     if (invite.status === "accepted") return "accepted";
     if (invite.status === "revoked") return "revoked";
     if (invite.status === "superseded") return "superseded";
-    if (invite.status === "expired" || new Date(invite.expires_at) < at) return "expired";
+    if (invite.status === "expired" || new Date(invite.expires_at) <= at) return "expired";
     if (invite.status !== "active") return "inactive";
     if (Number(invite.failed_attempts || 0) >= MAX_FAILED) return "locked";
     return "active";
