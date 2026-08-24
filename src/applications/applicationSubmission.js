@@ -898,6 +898,30 @@ module.exports = function applicationSubmissionModule(deps) {
     }
   }
 
+  // V3 captures the guarantor identity once, inside the conditional contact
+  // block that validation just proved complete. The legacy top-level field is
+  // still accepted for V2 callers, but it cannot become a second authority for
+  // V3 packet composition. A contradictory duplicate is refused rather than
+  // silently choosing one claimant; an omitted duplicate is the normal V3
+  // shape and the captured contact supplies the persisted name.
+  function resolvePublicGuarantorName(captured, suppliedName) {
+    if (!captured || captured.application_form_version !== "tenant_v3") {
+      return suppliedName;
+    }
+    const capturedName = captured.guarantor_needed === "yes"
+      ? String(captured.guarantor_contact.name).trim()
+      : null;
+    const duplicateName = suppliedName == null || String(suppliedName).trim() === ""
+      ? null
+      : String(suppliedName).trim();
+    if (duplicateName !== null && duplicateName !== capturedName) {
+      throw httpErr(400,
+        "Guarantor name conflicts with the guarantor contact on this application. " +
+        "Correct the application and submit one identity.");
+    }
+    return capturedName;
+  }
+
   // 3) PUBLIC SUBMIT — invitation-bound. The applicant submits against a live
   //    valid token. Resolves identity/conversion FROM the token, runs the
   //    shared submission service, marks the invitation consumed. Idempotent:
@@ -937,6 +961,7 @@ module.exports = function applicationSubmissionModule(deps) {
       intended_move_in: inv.intended_move_in,
       application_options: validationProperty.lease_config && validationProperty.lease_config.application_options,
     });
+    const canonicalGuarantorName = resolvePublicGuarantorName(captured, guarantor_name);
 
     // resolve the applicant name: explicit, else the person on file
     let name = applicant_name;
@@ -1004,7 +1029,7 @@ module.exports = function applicationSubmissionModule(deps) {
       //  gap this build exists to close.
       space_id: inv.space_id,
       intended_move_in: inv.intended_move_in,
-      applicant_name: name, rent, deposit, guarantor_name, captured,
+      applicant_name: name, rent, deposit, guarantor_name: canonicalGuarantorName, captured,
       source: "applicant",
       conversion_id: inv.conversion_id,
       progress_obligation_id: inv.progress_obligation_id,
