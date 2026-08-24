@@ -231,6 +231,31 @@ const head = (t) => console.log(`\n── ${t} ${"─".repeat(Math.max(0, 58 - t
           `first=${first.status} retry=${retry.status} idempotent=${retry.body && retry.body.already_completed} ` +
           `before=${JSON.stringify(before)} after=${JSON.stringify(after)} audits=${auditsBefore}→${auditsAfter}`);
       }
+
+      const conflict = await api("POST", `/t/lease/${P.rawTok}/fields/${signature.id}/complete`, {
+        body: { value: `Not ${signerName}`, consent: true, session_id: "conflicting-session" },
+      });
+      const afterConflict = (await q(
+        `select completed, completed_at::text, field_value, session_id
+           from lease_packet_fields where id=$1`, [signature.id])).rows[0];
+      const auditsAfterConflict = Number((await q(
+        `select count(*)::int n from lease_packet_audit_events
+          where lease_packet_id=$1 and event_type='field_completed'
+            and event_json->>'field_key'=$2`, [P.packetId, signature.field_key])).rows[0].n);
+      if (conflict.status === 409 && conflict.body.error === "field_already_completed"
+          && afterConflict.completed === true
+          && before.completed_at === afterConflict.completed_at
+          && before.field_value === afterConflict.field_value
+          && afterConflict.session_id === "original-session"
+          && auditsBefore === 1 && auditsAfterConflict === 1) {
+        ok("conflicting completed signature refused without rewriting evidence",
+          `${conflict.body.error} · session ${afterConflict.session_id} · audits ${auditsBefore}→${auditsAfterConflict}`);
+      } else {
+        bad("conflicting completed signature refused without rewriting evidence",
+          `HTTP ${conflict.status} body=${JSON.stringify(conflict.body)} ` +
+          `before=${JSON.stringify(before)} after=${JSON.stringify(afterConflict)} ` +
+          `audits=${auditsBefore}→${auditsAfterConflict}`);
+      }
     }
   }
 
