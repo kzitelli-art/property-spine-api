@@ -37,7 +37,7 @@ function expect(condition, message, detail) {
   if (!condition) throw new Error(`${message}${detail ? ": " + detail : ""}`);
   pass(message, detail);
 }
-async function api(method, route, { token, key = true, body } = {}) {
+async function api(method, route, { token, key = false, body } = {}) {
   const headers = { "content-type": "application/json" };
   if (token) headers["x-staff-session"] = token;
   if (key) headers["x-operator-key"] = "e2e-key";
@@ -296,7 +296,7 @@ async function waitForStaffReply(providerMessageId) {
 
   const starts = new Date(Date.now() + 3 * 86400000);
   const ends = new Date(starts.getTime() + 60 * 60000);
-  const opened = requireOk(await api("POST", "/leasing/availability", { token: staffToken, body: {
+  const opened = requireOk(await api("POST", "/leasing/availability", { token: staffToken, key: true, body: {
     property_id: propertyId, starts_at: starts.toISOString(), ends_at: ends.toISOString(),
     unit_id: unit.id, leasing_agent_id: mike.id, capacity: 1,
     idempotency_key: `journey-slot-${suffix}`,
@@ -304,13 +304,13 @@ async function waitForStaffReply(providerMessageId) {
   expect(opened.slot && opened.slot.id, "native scheduler published a 60-minute Mike slot");
 
   const booked = requireOk(await api("POST", `/leasing/slots/${opened.slot.id}/book`, {
-    token: staffToken,
+    token: staffToken, key: true,
     body: { lead_id: intake.lead_id, idempotency_key: `journey-book-${suffix}` },
   }), "book native tour slot");
   expect(!!booked.tour_id && booked.slot_id === opened.slot.id, "prospect booked onto that exact slot");
 
   requireOk(await api("POST", `/leasing/tours/${booked.tour_id}/check-in`, {
-    body: { actor_id: mike.id },
+    key: true, body: { actor_id: mike.id },
   }), "tour check-in");
 
   const vagueSid = `SM_E2E_VAGUE_${suffix}`;
