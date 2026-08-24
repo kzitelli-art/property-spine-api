@@ -1177,6 +1177,123 @@ The restore was verified **by content, not by message**:
 
 ---
 
+## Build 4.1 — erratum (append-only; the entry above is not rewritten)
+
+**TWO HISTORICAL SENTENCES IN THE ENTRY ABOVE ARE WRONG AND ARE SUPERSEDED
+HERE. Nothing else in that entry is affected.** The superseded sentences, quoted
+verbatim:
+
+1. *"The first version of the falsification **could not fail** — measured, not
+   argued: with the bound deleted, the cost gate exited 0 and the
+   source-governance gates exited 0, because nothing tied the declaration to the
+   code."*
+2. *"The first cycle was run against a gate whose falsification could not reach
+   the assertion — the same trap Build 4.0 recorded."*
+
+Both describe the first cycle as a *failure to fail*. **It was not.** The first
+cycle reached the standing-cost assertion and turned the parent red, in CI, at
+an exact SHA:
+
+```text
+run 178 · 32765860935 · da6b1ed0e30d2caa3521b4f5c5e91039097e1d9b · push
+    parent exit 1 · /health commit_short da6b1ed
+    standing projection cost   FAIL
+    source governance gates    PASS
+    terminal: VERIFICATION FAILED
+```
+
+Its gate output, verbatim — note the scope wording, which is the whole of the
+difference:
+
+```text
+✘ 1 declaration(s) are STRUCTURAL because of a bound that is GONE.
+    from utility_statement_usage — expected fragment "statement_id = any($2"
+      in the scanned sources
+```
+
+### What was actually wrong with the first gate: scope, not sensitivity
+
+The first-cycle pin check, verbatim from `tests/gate_standing_projection_cost.js`
+at `558f371`:
+
+```js
+const found = SCANNED_SOURCES.some((file) =>
+  fs.readFileSync(path.join(ROOT, file), "utf8").includes(d.bounded_by_sql));
+```
+
+Raw `.includes()` over the **whole text** of **any of the eight** scanned
+sources. It goes red correctly when the fragment is absent everywhere — which is
+exactly what `da6b1ed` demonstrated. Its defect is the opposite failure mode: it
+could be **falsely satisfied**. A match in a comment, or in any of the seven
+files that do not own the read, would have kept it green while the bound was
+gone. The corrected check, at `7043e1f` and after, searches only
+comment-stripped `select` template literals from the single named owning file:
+
+```js
+const inOwner = sqlLiteralsOf(owner).some((lit) => lit.includes(fragment));
+```
+
+**So the honest reading is:** the first cycle is real but insufficient for the
+stronger claim. It proves the gate notices a bound that vanishes from the whole
+scanned surface. It does **not** prove the gate requires executable SQL in the
+owning file, because that requirement did not yet exist. The corrected cycle
+proves the stronger one.
+
+**The conclusion of the entry above survives; only its justification was false.**
+The second cycle is still the authoritative one — not because the first was
+inert, but because the first tests a weaker requirement.
+
+### Both cycles, as observed
+
+```text
+FIRST CYCLE — real, weaker requirement (fragment anywhere in scanned sources)
+  baseline green  558f371   run 177 · 32765568219   parent 0
+  product red     da6b1ed   run 178 · 32765860935   parent 1
+  restored green  0b66509   run 179 · 32765964034   parent 0
+
+CORRECTED AUTHORITATIVE CYCLE — executable SQL in the exact owning file
+  baseline green  7043e1f   run 181 · 32766993328   parent 0
+  product red     6ee9f65   run 182 · 32767279080   parent 1
+  restored green  3dee5be   run 183 · 32767586861   parent 0
+```
+
+Two complete green → red → green cycles, six runs, every SHA exact.
+
+### How the false sentences got written — a method finding, not an excuse
+
+The "exited 0 and exited 0" measurement was **real**, but it was taken against a
+**different artifact**: the gate as it stood *before* `bounded_by_sql` existed at
+all, when the declaration was a bare `STRUCTURAL` classification with nothing
+tying it to source. `558f371` — commit message *"the cost gate could not tell a
+bounded read from an unbounded one"* — is the commit that fixed precisely that.
+The measurement described the state that commit removed.
+
+Writing the entry, that true observation about the **pre-`bounded_by_sql`** gate
+was restated as if it were about the **first CI cycle**, which ran against the
+strengthened gate. It was then compounded by importing Build 4.0's phrase *"could
+not reach the assertion"* — accurate there, describing the inert product-side
+falsification of `newest()` — into a paragraph where it is not accurate at all.
+
+```text
+The measurement was true. The attribution was false.
+A real observation of artifact state A, restated as a claim about state B.
+```
+
+This is the same family as the meta-pattern this thread already recorded — *a
+measurement that only observes execution cannot see code that does not execute* —
+but the failure is one step later: not in what was measured, in **what the
+measurement was said to be about**. A receipt must name the artifact version a
+measurement was taken against, or a true number becomes a false claim the moment
+the artifact changes underneath it.
+
+It is the second time in this thread that a claim of mine about a falsification
+was wrong in the direction of self-criticism rather than self-flattery. That
+direction is not a defence: an unearned confession corrupts the record exactly as
+much as an unearned success, and this one would have discarded a real red run as
+worthless.
+
+---
+
 ## ⛔ CLOSING A THREAD — DO THIS BEFORE YOU STOP
 
 **This file goes stale the moment a thread ships something and does not say so.**
