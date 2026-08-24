@@ -373,10 +373,41 @@ const DECLARED = [
     why: "effective-dated entity relationships current at as_of" },
   { match: "from tax_obligation_applicability", kind: "STRUCTURAL",
     why: "effective-dated applicability current at as_of" },
+  /*  ── BLOCKED, AND THE BOUND WAS BUILT TO FIND OUT ─────────────────
+      This said "NEEDS: open obligations only". That bound was written and
+      run against the real read. It changes the ANSWER.
+
+      A date bound is wrong and the read says so itself — "a two-year-old
+      unpaid bill does not stop being a problem because it got old". So
+      the bound has to be by STATE. But nothing records that an obligation
+      is SETTLED. There is no status column and deliberately none:
+      settlement is DERIVED by evaluate() against milestones that
+      rules.milestonesFor() computes, and THOSE DUE DATES ARE NOT IN THE
+      DATABASE.
+
+      The strongest state signal SQL can see is "a liability says the
+      City's balance is zero". Correct for nine obligations out of eleven,
+      wrong for one, and the one is ordinary: someone checks the City
+      account in JANUARY, nothing is due yet, balance zero — then the
+      annual bill comes due on 31 March and is never paid. evaluate()
+      gets it right because cityClear requires
+      `city_balance_cents === 0 && balance_as_of >= m.due`, and `>= m.due`
+      is the whole ballgame. Putting that in SQL means a SECOND DEFINITION
+      of when a tax is due, beside philadelphia_tax_rules.js — which is
+      how §40.5's `filed ≠ paid` wall collapses quietly.
+
+      Measured, not argued: tests/tax_obligation_state_bound.db.js runs
+      the read twice on one database and the bounded one reports a
+      property with an unpaid 2018 bill as CURRENT.
+
+      NEEDS: a durable settlement fact written by the canonical writer —
+      a schema change, and migrations are frozen. Counted until then.   */
   { match: "from tax_obligations", kind: "HISTORY_WALK",
-    why: "NO date filter — every obligation ever recorded for the property. " +
-         "NEEDS: a bounded read for standing (open obligations only); the full " +
-         "set belongs to the detail projection." },
+    why: "every obligation ever recorded — one per period per tax type, and U&O " +
+         "is MONTHLY, so it arrives with the calendar. BLOCKED, not unexamined: " +
+         "the state bound was built and it reports an unpaid bill as current, " +
+         "because 'settled' is derived in JS against a calendar SQL has never " +
+         "seen. Needs a durable settlement fact first." },
   { match: "from tax_clearances", kind: "STRUCTURAL", why: "order by … limit 1" },
 
   /*  ── FOUND BY THE SOURCE SCAN, NOT BY OBSERVATION ─────────────────

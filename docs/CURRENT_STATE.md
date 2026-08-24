@@ -835,6 +835,65 @@ frozen, and the remaining walks are fixed against it.
 
 ---
 
+## Build 3.8 — `tax_obligations` is BLOCKED, and the bound was built to prove it
+
+`tests/tax_obligation_state_bound.db.js` (new, Class 3) · real Postgres ·
+50/50 source-governance gates green · **ceiling stays 9** · no live read changed
+
+The declaration said *"NEEDS: open obligations only"*. That bound was written
+and run against the real read on one database. **It changes the answer.**
+
+```text
+the read as it is          overall = overdue
+                           "Real Estate Tax — 2018 — City balance outstanding…"
+with the candidate bound   overall = current          ← an unpaid bill, gone
+```
+
+| Finding | Rung |
+|---|---|
+| A **date** bound is wrong and the read says so itself — *"a two-year-old unpaid bill does not stop being a problem because it got old."* So the bound must be by **state**. | Confirmed in source |
+| **Nothing records that an obligation is settled.** No status column, and deliberately none: settlement is derived by `evaluate()` against milestones `rules.milestonesFor()` computes, and **those due dates are not in the database.** | Confirmed in schema |
+| The strongest state signal SQL can see is *"a liability says the City's balance is zero"*. Correct for 9 of 11 obligations. Wrong for one — and the one is ordinary. | HTTP_PROVEN |
+| **The counterexample is not exotic.** Someone checks the City account in **January**, nothing is due yet, balance zero. The annual bill then comes due 31 March and is never paid. `evaluate()` gets this right because `cityClear` requires `city_balance_cents === 0 && balance_as_of >= m.due`. | HTTP_PROVEN |
+| The settled year and the unpaid year carry the **identical** `city_balance_cents = 0`. They differ only in `balance_as_of` **relative to that period's own due date** — a rules value. Putting `>= m.due` into SQL is a **second definition of when a tax is due**, which is how §40.5's `filed ≠ paid` wall collapses quietly. | HTTP_PROVEN |
+| Falsified two ways: dating the 2018 observation *after* its due date (the premise dies, file goes red) and neutering the candidate bound so it drops nothing. | HTTP_PROVEN |
+
+**NEEDS: a durable settlement fact written by the canonical writer.** That is a
+schema change and migrations are frozen at 191. **No SQL is owed** — writing it
+is not the problem; the fact it would filter on does not exist.
+
+**Removal condition on the new file:** when that settlement fact exists, this
+becomes an *equivalence* proof like `debt_observation_bound_equivalence.db.js`.
+Deleting it before then deletes the reason the walk is still counted.
+
+### Two traps inside my own test, both caught by it going red
+
+- The first fixture left BIRT/NPT/U&O applicability unconfirmed, so **both**
+  reads returned `not_established` for an unrelated reason — which would have
+  read as *the bound is safe*. All four taxes are now determined.
+- The due-date comparison paired **2017's observation against 2018's due
+  date**. A milestone date is a function of its period; borrowing one period's
+  date for another is the same class of mistake as borrowing one obligation's
+  evidence for another.
+- One assertion was `ok(..., true)` with a sentence attached — a claim wearing
+  an assertion's clothes. Replaced with a real row-to-row comparison.
+
+### Also this build
+
+| What | Rung |
+|---|---|
+| **`COMPUTE_WALK` declared** — a category this gate cannot measure. It counts **queries**; a read can be perfectly bounded in SQL and still walk history in JavaScript. Named rather than instrumented: no compute-measuring gate was built. **Not counted toward the ceiling** — a ratchet over a number nothing measures is theatre. One instance: `position()` derives the full 120-row amortization schedule on every call and `standingProjection()` reads `projected_principal` out of it. | Declared |
+| Each `COMPUTE_WALK` names **source pins** the gate asserts, so the hand-written claim cannot rot into a lie. Falsified twice — removing the `deriveSchedule()` call, and stopping `standingProjection()` reading the derived value. | HTTP_PROVEN |
+| **§40.6 is standing PLUS detail, never standing INSTEAD OF detail** — stated as a rule in the gate header. The failure it prevents will not appear in a test run: a built-but-dormant capability with no `src/` caller can be destroyed by a cost optimisation and **nothing goes red**. Rule: *bound the standing path, keep the series reachable by name.* | Doctrine |
+| A stale header paragraph corrected — it still described the LIMIT/aggregate heuristic replaced three commits earlier, the one that would have had me truncate truth to pass this gate. | Corrected |
+
+**This is now the third appearance of one blind spot:** the runner that stopped
+at first failure, the fixture that never provoked a read, and a gate that
+counts queries but not compute. *A measurement that only observes one channel
+cannot see what happens in another.*
+
+---
+
 ## ⛔ CLOSING A THREAD — DO THIS BEFORE YOU STOP
 
 **This file goes stale the moment a thread ships something and does not say so.**
