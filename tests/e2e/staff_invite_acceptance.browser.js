@@ -328,4 +328,3 @@ async function waitForSms(predicate, label) {
   try { await pool.end(); } catch (_) {}
   process.exit(1);
 });
-
