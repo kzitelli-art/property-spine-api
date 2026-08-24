@@ -260,7 +260,7 @@ async function waitForStaffReply(providerMessageId) {
   expect(accepted.person_id === mikePerson.id && accepted.role_key === "leasing_agent",
     "one acceptance returns Mike's confirmed identity and canonical leasing role");
 
-  const me = requireOk(await api("GET", "/operator/me", {}), "operator session");
+  const me = requireOk(await api("GET", "/operator/me", { token: staffToken }), "operator session");
   expect(me.property_id === propertyId, "accepted staff session is bound to the fixture property");
   const acceptedIdentity = (await q(
     `select u.person_id, pta.primary_for_modules,
