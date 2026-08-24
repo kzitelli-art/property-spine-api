@@ -589,3 +589,46 @@ Review and all three database proofs passed and the same parent printed
 This continuously re-exercises existing local HTTP/browser/database evidence;
 it does not establish a Render deploy, a Neon migration release, a live carrier
 interaction, or a real resident/guarantor signing journey.
+
+---
+
+## Mike Grivna staff-invite link repair — 2026-08-24
+
+**`REPORTED` production defect; source cause established.** Mike received the
+real Skyline staff-invitation SMS, but its link answered `Missing or wrong
+x-operator-key.` The invitation writer built `APP_BASE_URL + /join/{token}`.
+The API had no route at that path and the global gate did not classify it as a
+public door; no app branch consumed `/join/{token}` either. The existing
+end-to-end proof extracted the token from the API response and posted it
+directly to `/auth/sms/start` and `/auth/sms/verify`, so it proved the canonical
+acceptance transaction while stepping around the link the human actually
+received.
+
+**`LOCALLY_EXERCISED` in disposable branch CI; not deployed.** Newly issued
+staff invitations now name `/auth/join/{token}`, inside the already-public
+`/auth/` boundary. That mobile page asks the invitee to request and enter the
+six-digit code, then delegates to the existing start/verify endpoints; it owns
+no OTP, identity, access, assignment, or session writer. The Skyline journey
+also opens the literal returned URL over real HTTP before it may extract the
+token. A dedicated real-Chromium proof starts from the exact invitation URL,
+requests the fake-carrier OTP through the page, verifies through the page, and
+rereads the accepted invite, person bridge, staff context, property-team
+access, and leasing work assignment from disposable Postgres.
+
+The new runner entry was falsified independently. An impossible browser
+selector made only `browser: staff invite accepts` fail; the later
+invite-to-guarantor journey still passed, the parent printed `VERIFICATION
+FAILED`, and GitHub Actions preserved exit code 1 at `f93147b` ([red run
+128](https://github.com/kzitelli-art/property-spine-api/actions/runs/32728182465)).
+The exact browser-test bytes were restored at `50b6f08`, and the full parent
+returned `ALL PROOFS PASSED` ([clean run
+129](https://github.com/kzitelli-art/property-spine-api/actions/runs/32728457693)).
+
+`src/identity/staff_invite_acceptance_page.js` is **Class 2 — temporary
+adapter**. Removal condition: the canonical staff app has its own
+browser-verified invite-token entry screen. Until this branch is deliberately
+reconciled and deployed, Mike's production link remains broken; do not issue a
+replacement invitation merely to send the same old URL again. After release,
+create one new canonical invite because the prior link both points to the old
+door and has a 72-hour expiry, then observe Mike's real acceptance and reread
+the four production identity/access records before claiming activation.
