@@ -57,7 +57,13 @@ function readReadTranscript(payload) {
         block_ordinal: index + 1,
       };
     }
-    parsed.push({ speaker, words, startMillis });
+    parsed.push({
+      ordinal: index + 1,
+      speaker,
+      words,
+      startMillis,
+      provider_start_time: String(block.start_time),
+    });
   }
 
   const providerStartMillis = timestampMillis(root.start_time);
@@ -73,6 +79,13 @@ function readReadTranscript(payload) {
     occurred_at_source: "provider_recorded",
     source_kind: "read_ai_webhook_transcript",
     segment_count: parsed.length,
+    blocks: parsed.map((block) => ({
+      provider_block_ordinal: block.ordinal,
+      provider_start_time: block.provider_start_time,
+      provider_timestamp: elapsedLabel(block.startMillis, baseMillis),
+      speaker_label: block.speaker,
+      text: block.words,
+    })),
   };
 }
 

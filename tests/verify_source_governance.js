@@ -161,6 +161,8 @@ const GATES = [
     what: "Interval tenancy: closed-interval arithmetic, which rights count, honest refusals, and the line it does not cross" },
   { file: "meeting_evidence_ingress.test.js",
     what: "Meeting Evidence: Read AI raw-byte ingress, immutable inbox shape, and no Ask Spine/transcript fan-out" },
+  { file: "meeting_passage_scope.test.js",
+    what: "Meeting Evidence mixed scope: exact passage addressing, partial-turn splits, server-derived property, and HTTP refusals" },
   { file: "meeting_receipt_v0.test.js",
     what: "Meeting Receipt v0: doctrine decomposition, transcript segments, validation, deterministic receipt, review ledger" },
   { file: "meeting_receipt_extractor_v0.test.js",

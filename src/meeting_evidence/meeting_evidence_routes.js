@@ -3,6 +3,7 @@
 const express = require("express");
 const staffSessions = require("../identity/staff_session_service");
 const service = require("./meeting_evidence_service");
+const passageScopeService = require("./meeting_passage_scope_service");
 const receiptService = require("./meeting_receipt_service");
 const receiptWorkflow = require("./meeting_receipt_workflow");
 const { createAnthropicMeetingReceiptExtractor } = require("./anthropic_meeting_receipt_extractor");
@@ -101,12 +102,14 @@ function operatorRoutes({
   extractorOverride = null,
   receiptServiceOverride = null,
   receiptWorkflowOverride = null,
+  passageScopeServiceOverride = null,
 } = {}) {
   requirePool(pool);
   const router = express.Router();
   const gate = [requireOperatorFactory(pool), requireMeetingEvidenceAccess, refuseClientProperty];
   const receipts = receiptServiceOverride || receiptService;
   const workflow = receiptWorkflowOverride || receiptWorkflow;
+  const passageScopes = passageScopeServiceOverride || passageScopeService;
   const extractor = extractorOverride || (anthropic
     ? createAnthropicMeetingReceiptExtractor({ anthropic })
     : null);
@@ -125,6 +128,64 @@ function operatorRoutes({
         authorized_at: row.authorized_at,
         connection_status: row.connection_status,
       });
+    } catch (err) {
+      return mapError(res, err);
+    }
+  });
+
+  router.post("/operator/meeting-evidence/provider-meetings/:id/scope-classifications", ...gate, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const row = await passageScopes.classifyProviderMeetingScope(pool, {
+        providerMeetingId: req.params.id,
+        scopeMode: body.scope_mode,
+        classificationBasis: body.classification_basis,
+        classifiedByUserId: req.operator.id,
+      });
+      return res.status(row.deduplicated ? 200 : 201).json(row);
+    } catch (err) {
+      return mapError(res, err);
+    }
+  });
+
+  router.get("/operator/meeting-evidence/provider-meetings/:id/deliveries/:deliveryId/scope-workspace", ...gate, async (req, res) => {
+    try {
+      return res.json(await passageScopes.readScopeWorkspace(pool, {
+        providerMeetingId: req.params.id,
+        providerDeliveryId: req.params.deliveryId,
+        actorUserId: req.operator.id,
+      }));
+    } catch (err) {
+      return mapError(res, err);
+    }
+  });
+
+  router.post("/operator/meeting-evidence/provider-meetings/:id/deliveries/:deliveryId/passage-scope-sets", ...gate, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const out = await passageScopes.replacePassageScopeSet(pool, {
+        providerMeetingId: req.params.id,
+        providerDeliveryId: req.params.deliveryId,
+        propertyId: req.operator.property_id,
+        scopedByUserId: req.operator.id,
+        scopeBasis: body.scope_basis,
+        scopeReviewCoverage: body.scope_review_coverage,
+        passages: body.passages,
+      });
+      return res.status(out.deduplicated ? 200 : 201).json(out);
+    } catch (err) {
+      return mapError(res, err);
+    }
+  });
+
+  router.get("/operator/meeting-evidence/provider-meetings/:id/deliveries/:deliveryId/property-passage-preview", ...gate, async (req, res) => {
+    try {
+      return res.json(await passageScopes.readPropertyPassagePreview(pool, {
+        providerMeetingId: req.params.id,
+        providerDeliveryId: req.params.deliveryId,
+        propertyId: req.operator.property_id,
+        actorUserId: req.operator.id,
+      }));
     } catch (err) {
       return mapError(res, err);
     }
