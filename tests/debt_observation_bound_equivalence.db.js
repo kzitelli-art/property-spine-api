@@ -1,6 +1,6 @@
 /* ════════════════════════════════════════════════════════════════════
    debt_observation_bound_equivalence.db.js — THE BOUND CHANGED THE COST
-   AND NOTHING ELSE.
+   AND NOTHING ELSE. And where it would have changed more, it was reverted.
 
    `loadHistory()` read `select * from debt_payment_observations where
    instrument_id = $1 order by observed_as_of` — every payment ever
@@ -96,7 +96,7 @@ async function loadHistoryUnbounded(db, instrumentId) {
 /*  Counts statements AND rows. Cost is the point of the change, so it is
     measured rather than asserted in prose. */
 function counting(db) {
-  const stat = { queries: 0, paymentRows: 0 };
+  const stat = { queries: 0, paymentRows: 0, balanceRows: 0 };
   return {
     stat,
     client: {
@@ -104,6 +104,7 @@ function counting(db) {
         const r = await db.query(sql, params);
         stat.queries++;
         if (/debt_payment_observations/.test(String(sql))) stat.paymentRows += r.rows.length;
+        if (/debt_balance_observations/.test(String(sql))) stat.balanceRows += r.rows.length;
         return r;
       },
     },
@@ -192,10 +193,51 @@ function counting(db) {
       `select count(*)::int n from debt_payment_observations`)).rows[0].n;
     ok(`${total} payment observations recorded — a series, not a row`, total === 36);
 
+    /*  ── THE BALANCE SERIES, WITH THE TWO CASES THAT BREAK A NAIVE BOUND
+        A quarterly series, plus:
+          · TWO observations on the SAME DATE. position()'s sort returns -1
+            for equal keys, so which one wins depends on input order. A
+            bound that changes the input order changes the answer.
+          · TWO payoff statements, early and late. W1 uses `.find` on an
+            ASCENDING array, so it takes the EARLIEST. With one payoff
+            statement — every other fixture in this repo — a "latest row"
+            bound looks correct and is not.                              */
+    for (let qtr = 0; qtr < 20; qtr++) {
+      const y = 2021 + Math.floor(qtr / 4);
+      const mm = String((qtr % 4) * 3 + 1).padStart(2, "0");
+      await svc.recordBalanceObservation(db, { instrument_id: inst.id,
+        observed_balance_cents: 2800000000 - qtr * 1000000, as_of_date: `${y}-${mm}-01`,
+        observation_source: "lender_statement", source_authority: "governed_read",
+        source_artifact_id: ART, recorded_by_user_id: U });
+    }
+    //  A SECOND observation on an existing date — the tie.
+    await svc.recordBalanceObservation(db, { instrument_id: inst.id,
+      observed_balance_cents: 2699999999, as_of_date: "2025-10-01",
+      observation_source: "borrower_record", source_authority: "governed_read",
+      source_artifact_id: ART, recorded_by_user_id: U });
+    //  TWO payoff statements. The earliest is the one W1 must keep reporting.
+    await svc.recordBalanceObservation(db, { instrument_id: inst.id,
+      observed_balance_cents: 2750000000, as_of_date: "2022-05-01",
+      observation_source: "payoff_statement", source_authority: "governed_read",
+      source_artifact_id: ART, recorded_by_user_id: U });
+    await svc.recordBalanceObservation(db, { instrument_id: inst.id,
+      observed_balance_cents: 2600000000, as_of_date: "2025-05-01",
+      observation_source: "payoff_statement", source_authority: "governed_read",
+      source_artifact_id: ART, recorded_by_user_id: U });
+    const btotal = (await db.query(
+      `select count(*)::int n from debt_balance_observations`)).rows[0].n;
+    ok(`${btotal} balance observations — including a same-date tie and TWO payoff statements`,
+       btotal === 24);
+
     /*  ── THE DATES ────────────────────────────────────────────────────
         Chosen to break a "latest row" bound if it is wrong anywhere. */
     const DATES = [
-      ["2022-06-15", "before EVERY observation — both must find nothing"],
+      ["2021-01-01", "before every PAYMENT observation; on the first balance"],
+      ["2022-04-30", "one day before the FIRST payoff statement"],
+      ["2022-05-01", "exactly ON the first payoff statement"],
+      ["2022-06-15", "after the first payoff, before every payment observation"],
+      ["2025-05-02", "after BOTH payoff statements — W1 must still report the EARLIEST"],
+      ["2025-10-01", "exactly ON the same-date tie"],
       ["2023-01-03", "exactly ON the first observation date (boundary, inclusive)"],
       ["2023-01-02", "one day BEFORE it (boundary, exclusive)"],
       ["2024-05-20", "between two observations, mid-series"],
@@ -223,17 +265,65 @@ function counting(db) {
       } catch (e) { projSame = false; detail = detail || String(e.message).slice(0, 300); }
 
       console.log(`  ${asOf}    ${posSame ? "IDENTICAL " : "  DIFFERS "}  ${projSame ? "   IDENTICAL       " : "     DIFFERS       "}  ` +
-                  `${String(m.stat.paymentRows).padStart(2)} (was ${oldHist.payment_observations.length})`);
+                  `pay ${String(m.stat.paymentRows).padStart(2)}/${oldHist.payment_observations.length}  ` +
+                  `bal ${String(m.stat.balanceRows).padStart(2)}/${oldHist.balance_observations.length}`);
       ok(`${asOf} — ${why}`, posSame && projSame, detail);
 
       //  The cost claim, measured at every date rather than asserted once.
       ok(`  …and it read at most ONE payment row (${m.stat.paymentRows})`,
          m.stat.paymentRows <= 1, `read ${m.stat.paymentRows}`);
+      /*  ⚠ BALANCES ARE STILL UNBOUNDED, ON PURPOSE. See the section at
+          the end: a bound is correct at every date here EXCEPT the
+          same-date tie, and the tie is a pre-existing undefined answer,
+          not a bound failure. This asserts the CURRENT cost so the day it
+          changes, this line says so. */
+      ok(`  …and read the whole balance series (${m.stat.balanceRows}) — still unbounded`,
+         m.stat.balanceRows === oldHist.balance_observations.length);
     }
 
     /*  ── THE MISSING ARGUMENT MUST BREAK LOUDLY ──────────────────────
         A default of today() would have made a future-dated read silently
         wrong. The refusal is the design, so it is proved. */
+    /*  ══ WHY debt_balance_observations IS STILL A WALK ═══════════════
+        Not because a bound is hard. Because the read's answer is already
+        undefined in a case the bound makes visible.                     */
+    console.log("\n  the balance tie — a defect a bound would have been blamed for");
+    console.log("  " + "-".repeat(66));
+    const tied = (await db.query(
+      `select count(*)::int n from debt_balance_observations where as_of_date = '2025-10-01'`
+    )).rows[0].n;
+    ok("two balance observations share one as_of_date", tied === 2);
+
+    const hAt = await loadHistoryUnbounded(db, inst.id);
+    /*  ⚠ node-pg hands a DATE column back as a JS Date, so
+        String(row.as_of_date) is "Wed Oct 01 2025 …" and slicing ten
+        characters off it yields "Wed Oct 01". The first version of this
+        filter did exactly that, matched nothing, and reported the tie as
+        absent — a test that would have quietly said "no conflict here".
+        And toISOString() is the other half of the same trap: the Date is
+        built at LOCAL midnight and read back in UTC. Format the parts. */
+    const ymd = (v) => (v instanceof Date
+      ? `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, "0")}-${String(v.getDate()).padStart(2, "0")}`
+      : String(v).slice(0, 10));
+    const atTie = hAt.balance_observations.filter((b) => ymd(b.as_of_date) === "2025-10-01");
+    ok("the tie is visible to this test at all (the Date-formatting trap)",
+       atTie.length === 2, `matched ${atTie.length} rows`);
+    const posTie = read.position(hAt, "2025-10-01");
+    ok("…from DIFFERENT sources — this is a conflict, not a duplicate",
+       new Set(atTie.map((b) => b.observation_source)).size === 2);
+    ok("…and the read picks ONE of them",
+       atTie.some((b) => Number(b.observed_balance_cents)
+                         === posTie.principal_position.observed.value_cents));
+    /*  The verdict: position()'s comparator returns -1 for EQUAL keys, so
+        the winner is whichever row arrived first in the array — and
+        `order by as_of_date` does not order equal dates. Nothing in the
+        query or the reader decides this. */
+    ok("…WITHOUT recording that a second observation for that date exists",
+       posTie.principal_position.observed.conflict === undefined
+       && posTie.principal_position.observed.truth_state === undefined,
+       "if a conflict key has since been added, this walk can be bounded — "
+       + "re-run the bound and lower the ceiling");
+
     console.log("\n  the required as_of");
     console.log("  " + "-".repeat(66));
     let threw = null;
@@ -249,8 +339,12 @@ function counting(db) {
     console.log("\n" + "=".repeat(70));
     console.log(`  ${pass} green   ${fail} failed`);
     if (fail === 0) {
-      console.log("\n  Identical output at eight dates including both sides of every");
-      console.log("  boundary, and one payment row read instead of thirty-six.\n");
+      console.log("\n  PAYMENTS: identical output at fourteen dates including both sides of");
+      console.log("  every boundary, and one row read instead of thirty-six.");
+      console.log("  BALANCES: still unbounded, deliberately. A bound was built and");
+      console.log("  reverted — correct at every date except the same-date tie, where");
+      console.log("  the read's answer is already arbitrary. That is a conflict the");
+      console.log("  writer must record, not a cost the reader can bound away.\n");
     }
   } finally {
     await db.query(`drop schema if exists ${SCHEMA} cascade`).catch(() => {});

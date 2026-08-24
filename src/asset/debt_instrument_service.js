@@ -308,6 +308,30 @@ async function loadHistory(db, instrumentId, asOf) {
     parties: await q(`select * from debt_instrument_parties where instrument_id = $1 order by effective_from`),
     collateral: await q(`select * from debt_instrument_properties where instrument_id = $1 order by effective_from`),
     reserves: await q(`select * from debt_reserve_requirements where instrument_id = $1 order by effective_from`),
+    /*  ── NOT BOUNDED, AND THE REASON IS A DEFECT, NOT A COST ─────────
+     *  A bound was built for this and REVERTED. It was correct at every
+     *  date except one, and the one is not about the bound.
+     *
+     *  Two consumers reach this array:
+     *    W7/W8  `latest`  — newest observation on or before as_of
+     *    W1     `payoff`  — `balances.find(source === "payoff_statement")`,
+     *                       and `.find` on an ASCENDING array takes the
+     *                       EARLIEST payoff statement, not the latest
+     *
+     *  Both survive a bound. What does not is a TIE: two observations
+     *  recorded for the SAME as_of_date. position() sorts with a
+     *  comparator that returns -1 for equal keys, so the winner is decided
+     *  by input order — and `order by as_of_date` does not determine input
+     *  order among equal dates. The answer today is arbitrary. A bound
+     *  changes which arbitrary row wins, which looks like a regression and
+     *  is really a pre-existing undefined answer becoming visible.
+     *
+     *  Two balances observed for one date from different sources is a
+     *  CONFLICT. §5 says the honest answer is to say so, not to pick. That
+     *  is a product ruling and a writer question, not a cost change, so
+     *  this statement stays unbounded and the walk stays counted.
+     *
+     *  Demonstrated in tests/debt_observation_bound_equivalence.db.js.  */
     balance_observations: await q(`select * from debt_balance_observations where instrument_id = $1 order by as_of_date`),
 
     /*  ── BOUNDED · §40.6 ──────────────────────────────────────────────

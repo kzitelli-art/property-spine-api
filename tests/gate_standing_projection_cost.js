@@ -277,11 +277,21 @@ const DECLARED = [
          "contracted_service_terms a walk. NEEDS: the term governing as_of for " +
          "standing; the amendment chain is detail. " +
          "LIVES IN src/asset/debt_instrument_service.js:270 (loadHistory)." },
+  /*  ── A BOUND WAS BUILT FOR THIS AND REVERTED ──────────────────────
+      It was correct at every date except one: two observations recorded
+      for the SAME as_of_date. position() sorts with a comparator that
+      returns -1 for equal keys, so the winner is input order, and
+      `order by as_of_date` does not order equal dates. The answer is
+      already arbitrary; a bound only changes WHICH arbitrary row wins.
+
+      Two balances for one date from different sources is a CONFLICT, and
+      §5 says say so rather than pick. That is a writer ruling, not a cost
+      change. BLOCKED on it, and counted until then.                     */
   { match: "from debt_balance_observations", kind: "HISTORY_WALK",
-    why: "every balance ever observed on this instrument, ordered by as_of_date, " +
-         "no bound. Accrues per reporting cycle forever, independent of how many " +
-         "instruments exist. NEEDS: the latest observation for standing. " +
-         "LIVES IN src/asset/debt_instrument_service.js:274." },
+    why: "every balance ever observed, no bound. BLOCKED, not unexamined: the " +
+         "bound is proved correct at every date except a same-date tie, where the " +
+         "current read's answer is undefined. Needs a conflict verdict first. " +
+         "LIVES IN src/asset/debt_instrument_service.js." },
   /*  ── FIXED ────────────────────────────────────────────────────────
       Was `select * from debt_payment_observations where instrument_id=$1
       order by observed_as_of` — every payment ever observed, every column,
