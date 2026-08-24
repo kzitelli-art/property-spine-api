@@ -44,7 +44,17 @@
 const path = require("path");
 const { Pool } = require("pg");
 
-const API = (process.env.ARC_BASE || "https://property-spine-api.onrender.com").replace(/\/+$/, "");
+//  ⚠ NO PRODUCTION DEFAULT. This line used to fall back to the live
+//  production URL, so running this file with no environment set drove the
+//  whole lease lifecycle against real production data — silently. Recorded
+//  as defect #4 in docs/CURRENT_STATE.md. It now refuses instead: point it
+//  somewhere deliberately, or it does not run.
+if (!process.env.ARC_BASE) {
+  console.error("REFUSED: set ARC_BASE explicitly (e.g. http://localhost:3000).");
+  console.error("There is deliberately no default — this harness drives a full lease lifecycle.");
+  process.exit(2);
+}
+const API = process.env.ARC_BASE.replace(/\/+$/, "");
 const PROPERTY_ID = process.env.ARC_PROPERTY_ID || "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
 const PHONE = process.env.ARC_PHONE || "";
 const NAME = process.env.ARC_NAME || `Arc Prospect ${String(Date.now()).slice(-6)}`;

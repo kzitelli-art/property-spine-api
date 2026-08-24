@@ -30,11 +30,27 @@ That rule is the entire point. Follow it and drift can't happen again.
   written down as code**. It was built from your repo schema plus a live
   inspection of Neon, so it matches production exactly — no guesses. Applying
   it to your real database is harmless (everything already exists, so it just
-  confirms). Applying it to a fresh empty database builds the whole thing.
+  confirms). ⚠ **Applying it to a fresh empty database does NOT build the whole
+  thing** — measured 2026-08-20, the chain halts at
+  `083_terms_review_and_packet_versioning.sql`. The documented from-scratch
+  rebuild path does not currently work. Recorded as defect #22 in
+  `docs/CURRENT_STATE.md`.
 
-- **`migrate.js`** — the apply script. It looks at the files here, checks the
-  ledger, and runs whatever hasn't run yet. Safe to run as many times as you
-  want; it never runs the same migration twice.
+- **`migrate.js`** — ⚠ **NOT an apply script by default. It VERIFIES.**
+  This description was written at migration 001 and was wrong for years.
+  With no flags it compares the ledger against the files in BOTH directions
+  and **refuses to start the service** on any mismatch — it applies nothing.
+  `prestart` runs it in exactly this mode on every deploy, so shipping a
+  migration and hitting deploy produces a *failed deploy*, not a migration.
+  Releasing schema is a separate, deliberate act:
+
+  ```
+  MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<read from the ledger> \
+    EXPECTED_SHA=<deployed sha> node migrations/migrate.js --apply
+  ```
+
+  `EXPECTED_LEDGER_CEILING` exists so a release cannot be run by someone who
+  has not read the ledger.
 
 - **`neon_introspection_round2.sql`** — the next set of "inspect the database"
   queries, for building migration `002` (see below). Not urgent.
