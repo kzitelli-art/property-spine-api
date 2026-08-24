@@ -70,12 +70,9 @@ const bad = (n, d) => { fail++; console.log(`  ✗ ${n}  — ${d}`); };
     }
     if (!acted) break;
   }
-  const signer = (await q(
-    `select display_name from lease_packet_signers
-      where lease_packet_id=$1 and signer_role='tenant'`, [P.packetId]
-  )).rows[0];
+  const signer = (await q("select name from persons where id=$1", [P.person])).rows[0];
   try {
-    await page.fill('input[aria-label="Full legal name"]', signer.display_name);
+    await page.fill('input[aria-label="Full legal name"]', signer.name);
     await page.click('button:has-text("Sign")');
     clicked++;
   } catch (e) { errors.push("signature: " + e.message.slice(0, 90)); }
