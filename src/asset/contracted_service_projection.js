@@ -45,12 +45,34 @@ function current(rows, asOf) {
   return heads(rows).filter((row) => activeAt(row, asOf));
 }
 
+/*  ── COMPARING TWO RECORDED VALUES · CLASS 1 ─────────────────────────
+ *  A projection primitive, not a second owner of contract-term authority.
+ *  Which term governs is decided by evaluateTerm() below and by nothing
+ *  else; this only answers "which of these two values is later".
+ *
+ *  It has to, because node-pg hands back `date` and `timestamptz` columns
+ *  as JS **Date** objects and this repo installs no type parser. Coercing
+ *  one with String() yields "Wed Jan 07 2026 00:00:00 GMT+0000 (…)", which
+ *  sorts on the WEEKDAY NAME first — so a January term outranked a March
+ *  one and the wrong contract governed. Proven on real Postgres by
+ *  tests/contracted_service_latest_term_ordering.db.js.
+ *
+ *  Dates are compared as instants; everything else keeps the previous
+ *  string ordering, so uuids and text sort exactly as before.            */
+function compareValues(a, b) {
+  const aDate = a instanceof Date;
+  const bDate = b instanceof Date;
+  if (aDate && bDate) return a.getTime() - b.getTime();
+  const av = aDate ? a.toISOString() : String(a === null || a === undefined ? "" : a);
+  const bv = bDate ? b.toISOString() : String(b === null || b === undefined ? "" : b);
+  return av < bv ? -1 : av > bv ? 1 : 0;
+}
+
 function newest(rows, fields = ["recorded_at", "id"]) {
   return [...(rows || [])].sort((a, b) => {
     for (const field of fields) {
-      const left = String(a[field] || "");
-      const right = String(b[field] || "");
-      if (left !== right) return left < right ? 1 : -1;
+      const comparison = compareValues(a[field], b[field]);
+      if (comparison !== 0) return -comparison;   // descending: newest first
     }
     return 0;
   })[0] || null;
