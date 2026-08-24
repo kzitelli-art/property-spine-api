@@ -228,6 +228,28 @@ async function waitForSms(predicate, label) {
   const browser = await chromium.launch({
     executablePath: process.env.CHROMIUM || "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
   });
+  const supersededBrowserInvite = await seedInvite(C, { status: "superseded" });
+  const supersededPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const supersededBefore = await inviteRow(supersededBrowserInvite.id);
+  const supersededWireBefore = messagesTo(supersededBrowserInvite.phone_number).length;
+  await supersededPage.goto(`http://localhost:3000/auth/join/${supersededBrowserInvite.token}`,
+    { waitUntil: "networkidle" });
+  await supersededPage.click("#sendCode");
+  await supersededPage.waitForFunction(() => /replaced/i.test(document.querySelector("#status")?.textContent || ""));
+  const supersededReceipt = await supersededPage.locator("#status").innerText();
+  const supersededAfter = await inviteRow(supersededBrowserInvite.id);
+  const supersededWireAfter = messagesTo(supersededBrowserInvite.phone_number).length;
+  if (/replaced/i.test(supersededReceipt)
+      && JSON.stringify(supersededBefore) === JSON.stringify(supersededAfter)
+      && supersededWireBefore === supersededWireAfter) {
+    ok("the browser shows that a replaced link is inert");
+  } else {
+    bad("the browser shows that a replaced link is inert",
+        JSON.stringify({ supersededReceipt, supersededBefore, supersededAfter,
+          supersededWireBefore, supersededWireAfter }));
+  }
+  await supersededPage.close();
+
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   const productErrors = [];
   page.on("pageerror", (error) => productErrors.push(error.message));
