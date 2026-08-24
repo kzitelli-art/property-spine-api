@@ -58,6 +58,31 @@ function normalizedStatus(lease) {
 function leaseIsValid(lease) {
   return !!lease && !TERMINAL_LEASE_STATUSES.has(normalizedStatus(lease));
 }
+/*  CANONICAL DAY KEY — 'YYYY-MM-DD' or null.
+ *
+ *  The only safe basis for comparing two dates in this file. Accepts the
+ *  canonical string the loader produces (json_build_object serialises a
+ *  Postgres `date` as 'YYYY-MM-DD'), an ISO timestamp, or a JS Date.
+ *  Anything it cannot place on a calendar day returns null, and every
+ *  caller must decide what null means rather than letting it compare.
+ *
+ *  A Date is read through its LOCAL components, never toISOString().
+ *  node-postgres parses a DATE column to local midnight; west of UTC
+ *  toISOString() then reports the PREVIOUS day, which is a one-day
+ *  possession error that only appears in some deployments.             */
+function dateKey(value) {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, "0");
+    const d = String(value.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value));
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
+
 function datesSpan(lease, asOf) {
   return !!(lease && lease.start_date && lease.start_date <= asOf && (!lease.end_date || lease.end_date >= asOf));
 }
@@ -185,7 +210,55 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     && !CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease))
     && !ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease)));
 
-  const events = row.possession_events || [];
+  /*  ── A POSITION AT as_of D MAY ONLY USE EVENTS EFFECTIVE BY D ──────
+   *
+   *  This filter is the temporal boundary of the possession axis, and it
+   *  is the ONE place that owns it. Until it existed, `ins`/`outs` below
+   *  took the GLOBALLY latest possession events and `asOf` never entered
+   *  the computation — it governed the lease arms (datesSpan / isFuture)
+   *  and the opening baseline (openingBaselineAsOf bounds itself with
+   *  `as_of_date <= $2::date`) while possession ran unbounded.
+   *
+   *  Observed, not inferred, on real Postgres — a move_in effective
+   *  2026-09-15 read at as_of 2026-08-24 returned:
+   *
+   *      current_possession { since: "2026-09-15" }
+   *      possession_state   "delivered"
+   *
+   *  Possession claimed to have begun 22 days AFTER the date asked about.
+   *  That is confident-wrong (§5), not a rounding error: it is the system
+   *  narrating a tenancy that had not started.
+   *
+   *  ONE FILTER, BOTH DIRECTIONS. It sits before the move_in/move_out
+   *  split on purpose. The mirror defect is a move_out effective after
+   *  asOf ending possession early in a historical answer, and bounding
+   *  the shared list closes both. Filtering only `ins` would fix the
+   *  louder half and leave the quieter half, which is worse — a bed
+   *  reported empty while someone lived in it.
+   *
+   *  IT DOES NOT BELONG IN THE LOADER. loadSpaceRows is shared by the
+   *  single-date read and the interval reader, which need DIFFERENT
+   *  bounds; pushing the filter down there is how a second filtered
+   *  loader gets born. classifyPositionForInterval is unaffected either
+   *  way — it reads leases only and never touches possession events.
+   *
+   *  NOT String(Date). A JS Date stringifies to weekday form
+   *  ("Tue Sep 15 2026"), which compares lexically against 'YYYY-MM-DD'
+   *  as garbage — silently, and in a direction nobody predicts. Every
+   *  side of every comparison here is a canonical YYYY-MM-DD key.       */
+  const asOfKey = dateKey(asOf);
+  const allEvents = row.possession_events || [];
+  /*  asOf ABSENT (or itself unusable) → behave exactly as before. This
+   *  filter narrows a dated question; with no usable date to narrow to
+   *  there is nothing to apply, and inventing a refusal here would change
+   *  an answer this repair was not asked to touch.                      */
+  const events = asOfKey === null ? allEvents : allEvents.filter((e) => {
+    const k = dateKey(e && e.effective_date);
+    /*  AN UNUSABLE EVENT DATE IS NOT CURRENT POSSESSION. Spine cannot
+     *  place it in time, so it cannot say it had happened by asOf. It is
+     *  dropped rather than admitted — honest blank over confident wrong. */
+    return k !== null && k <= asOfKey;
+  });
   const ins = events.filter((e) => e.event_type === "move_in");
   const outs = events.filter((e) => e.event_type === "move_out");
   const lastIn = ins.length ? ins[ins.length - 1] : null;

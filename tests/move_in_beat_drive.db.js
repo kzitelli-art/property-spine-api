@@ -54,7 +54,7 @@ if (!/@(127\.0\.0\.1|localhost)[:/]/.test(URL)) {
 
 const ROOT = path.join(__dirname, "..");
 const econ = require(path.join(ROOT, "src/tenancy/economic_tenancy_service.js"));
-const { spacePosition } = require(path.join(ROOT, "src/tenancy/space_position.js"));
+const { spacePosition, recordEffectivePossession } = require(path.join(ROOT, "src/tenancy/space_position.js"));
 const tenancy = require(path.join(ROOT, "src/tenancy/tenancy_position_read.js"));
 
 const P    = "cab10001-0000-4000-8000-000000000001"; // property
@@ -257,6 +257,117 @@ const posFor = async (pool, asOf) => {
     // ── possession is a separate axis and must NOT be implied ────────
     if (!p1.current_possession) ok("D6 · possession remains PENDING — activation is economic, not physical (§29)");
     else bad("D6 · activation invented physical possession", "no move_in event was recorded");
+
+    /* ══ D7/D8 · THE TEMPORAL BOUNDARY OF THE POSSESSION AXIS ═══════════
+     *
+     *  A position at as_of D may use only possession events effective on
+     *  or before D. position_classifier.js used to take the GLOBALLY
+     *  latest move_in/move_out and never consult asOf, so a historical
+     *  answer could describe possession that had not happened yet — and,
+     *  in the mirror direction, could end possession that had not ended.
+     *
+     *  These two cases exist to hold ONE filter honest in BOTH directions.
+     *  A repair proved in only one direction is half a repair, and the
+     *  half left behind here is the quieter, worse one: a bed reported
+     *  empty while someone is living in it.
+     *
+     *  ── THE WRITER IS NOT UNDER TEST ────────────────────────────────
+     *  recordEffectivePossession accepts future-effective events, and
+     *  that is deliberate — a scheduled move-in is a legitimate record.
+     *  The defect was never the write; it was historical READS consuming
+     *  it too early. So the events below go in through the canonical
+     *  writer, unchanged, and only the read is asserted.
+     *
+     *  ── CONTROLS BEFORE CLAIMS ──────────────────────────────────────
+     *  D7a and D8b read from dates where the event IS in the past and
+     *  require the expected answer. E3 in the bed-grain harness went red
+     *  against a correct system by using the wrong control; the mirror
+     *  risk here is a red that looks temporal but is really a write that
+     *  never landed. The controls rule that out first.
+     */
+    const MOVE_IN_AT  = "2026-09-15";
+    const MOVE_OUT_AT = "2026-10-15";
+    const BEFORE_IN   = AS_OF;          // 2026-08-24 — before the move-in
+    const BETWEEN     = "2026-09-20";   // in possession: after in, before out
+    const AFTER_OUT   = "2026-10-20";   // after the move-out
+
+    const possessionAt = async (asOf) => {
+      const p = await posFor(pool, asOf);
+      return {
+        as_of: asOf,
+        current_possession: p.current_possession,
+        possession_state: p.possession_state,
+        availability_state: p.availability_state,
+        economic_tenancy_state: p.economic_tenancy_state,
+      };
+    };
+
+    // ── D7 · a FUTURE MOVE-IN must not appear in an earlier answer ────
+    c = await pool.connect();
+    try {
+      await c.query("begin");
+      await recordEffectivePossession(c, {
+        kind: "move_in", lease_id: LEASE, effective_date: MOVE_IN_AT,
+        actor: USER, source: "cabin_asof_probe",
+      });
+      await c.query("commit");
+      ok(`D7 · move_in effective ${MOVE_IN_AT} recorded through the canonical writer`);
+    } catch (e) {
+      await c.query("rollback").catch(() => {});
+      bad(`D7 · the canonical writer refused a future-dated move_in`, (e.body && e.body.error) || e.message);
+    } finally { c.release(); }
+
+    const inSeen = await possessionAt(BETWEEN);
+    if (inSeen.current_possession && String(inSeen.current_possession.since) === MOVE_IN_AT)
+      ok(`D7a · CONTROL — at ${BETWEEN} possession reads delivered since ${MOVE_IN_AT}`);
+    else bad(`D7a · CONTROL FAILED — the move_in did not land or is not readable at ${BETWEEN}`,
+             JSON.stringify(inSeen));
+
+    const beforeIn = await possessionAt(BEFORE_IN);
+    console.log("\n  " + JSON.stringify(beforeIn));
+    if (beforeIn.current_possession === null)
+      ok(`D7b · at ${BEFORE_IN} there is NO possession from an event effective ${MOVE_IN_AT}`);
+    else bad(`D7b · FUTURE MOVE-IN LEAK — ${BEFORE_IN} reports possession since ${beforeIn.current_possession.since}`,
+             `possession claimed to begin ${beforeIn.current_possession.since}, AFTER the date asked about`);
+    if (beforeIn.possession_state === "pending")
+      ok(`D7c · and possession_state is "pending" at ${BEFORE_IN}, not "delivered"`);
+    else bad(`D7c · possession_state is "${beforeIn.possession_state}" at ${BEFORE_IN}`,
+             `a move_in effective ${MOVE_IN_AT} treated as delivered three weeks earlier`);
+
+    // ── D8 · the MIRROR: a future MOVE-OUT must not end it early ──────
+    c = await pool.connect();
+    try {
+      await c.query("begin");
+      await recordEffectivePossession(c, {
+        kind: "move_out", lease_id: LEASE, effective_date: MOVE_OUT_AT,
+        actor: USER, source: "cabin_asof_probe",
+      });
+      await c.query("commit");
+      ok(`D8 · move_out effective ${MOVE_OUT_AT} recorded through the canonical writer`);
+    } catch (e) {
+      await c.query("rollback").catch(() => {});
+      bad(`D8 · the canonical writer refused a future-dated move_out`, (e.body && e.body.error) || e.message);
+    } finally { c.release(); }
+
+    /*  THE MIRROR ASSERTION. On ${BETWEEN} the resident had moved in and
+     *  had not moved out. An unbounded classifier sees the later move_out
+     *  and concludes possession already ended — reporting a bed as empty
+     *  on a date someone was living in it. Quieter than the D7b leak and
+     *  worse, because "empty" is what gets offered to a prospect.        */
+    const between = await possessionAt(BETWEEN);
+    console.log("  " + JSON.stringify(between));
+    if (between.current_possession && String(between.current_possession.since) === MOVE_IN_AT
+        && between.possession_state === "delivered")
+      ok(`D8a · at ${BETWEEN} possession is STILL delivered — a move_out effective ${MOVE_OUT_AT} does not end it early`);
+    else bad(`D8a · FUTURE MOVE-OUT LEAK — ${BETWEEN} lost possession to an event effective ${MOVE_OUT_AT}`,
+             JSON.stringify(between));
+
+    const afterOut = await possessionAt(AFTER_OUT);
+    console.log("  " + JSON.stringify(afterOut));
+    if (afterOut.current_possession === null && afterOut.possession_state === "pending")
+      ok(`D8b · CONTROL — at ${AFTER_OUT} possession is no longer delivered; the move_out is honoured once it is past`);
+    else bad(`D8b · CONTROL FAILED — possession survived a move_out effective ${MOVE_OUT_AT}`,
+             JSON.stringify(afterOut));
   } catch (e) {
     bad("harness died", e.message);
     console.error(e);
