@@ -1885,7 +1885,7 @@ module.exports = function leasePacketsModule(deps) {
             receipt: "This signing link does not name its signer. Contact the leasing office before signing.",
           });
         }
-        if (false && normalizeSignatureName(value) !== expectedName) { // deliberate product-side falsification
+        if (normalizeSignatureName(value) !== expectedName) {
           await client.query("rollback");
           return res.status(400).json({
             error: "signature_name_mismatch",
