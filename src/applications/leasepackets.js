@@ -1877,21 +1877,6 @@ module.exports = function leasePacketsModule(deps) {
             receipt: "Type your full legal name and intentionally choose Sign.",
           });
         }
-        const expectedName = normalizeSignatureName(signer.display_name);
-        if (!expectedName) {
-          await client.query("rollback");
-          return res.status(409).json({
-            error: "signer_identity_unavailable",
-            receipt: "This signing link does not name its signer. Contact the leasing office before signing.",
-          });
-        }
-        if (normalizeSignatureName(value) !== expectedName) {
-          await client.query("rollback");
-          return res.status(400).json({
-            error: "signature_name_mismatch",
-            receipt: "The typed name does not match the signer named on this lease package. Type the full legal name shown for this signing link.",
-          });
-        }
       }
 
       // Completion is evidence, not an editable draft. An exact retry after a
@@ -1916,6 +1901,24 @@ module.exports = function leasePacketsModule(deps) {
           already_completed: true,
           packet: signerPacket(bundle, signer),
         });
+      }
+
+      if (targetField.field_type === "signature") {
+        const expectedName = normalizeSignatureName(signer.display_name);
+        if (!expectedName) {
+          await client.query("rollback");
+          return res.status(409).json({
+            error: "signer_identity_unavailable",
+            receipt: "This signing link does not name its signer. Contact the leasing office before signing.",
+          });
+        }
+        if (normalizeSignatureName(value) !== expectedName) {
+          await client.query("rollback");
+          return res.status(400).json({
+            error: "signature_name_mismatch",
+            receipt: "The typed name does not match the signer named on this lease package. Type the full legal name shown for this signing link.",
+          });
+        }
       }
 
       const field = (await client.query(
