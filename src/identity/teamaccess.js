@@ -925,4 +925,3 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridg
 
   return router;
 };
-
