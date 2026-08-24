@@ -159,8 +159,35 @@ const head = (t) => console.log(`\n── ${t} ${"─".repeat(Math.max(0, 58 - t
     } else bad("supersession happened", `v2=${v2} superseded_at=${old && old.superseded_at}`);
   }
 
-  // ═══ 10 · EXACTLY ONE TENANCY ANCHOR PER CLEAN ADMISSION ════════
-  head("10 · a clean admission produces exactly one tenancy anchor");
+  // ═══ 10 · TYPED SIGNATURE MUST MATCH THE NAMED SIGNER ═══════════
+  head("10 · a typed signature cannot contradict the named signer");
+  {
+    const P = await toPacket(C, { bed: C.bedA });
+    const view = await api("GET", `/t/lease/${P.rawTok}/data`);
+    const packet = view.body && view.body.packet;
+    const signature = packet && packet.fields
+      && packet.fields.find((f) => f.required && f.field_type === "signature");
+    const signerName = packet && packet.current_signer && packet.current_signer.display_name;
+    if (!signature || !signerName) {
+      bad("contradictory typed signature refused", "the packet exposed no named signer signature control");
+    } else {
+      const r = await api("POST", `/t/lease/${P.rawTok}/fields/${signature.id}/complete`, {
+        body: { value: `Not ${signerName}`, consent: true, session_id: "hostile-name" },
+      });
+      const stored = (await q(
+        "select completed, field_value from lease_packet_fields where id=$1", [signature.id])).rows[0];
+      if (r.status === 400 && r.body.error === "signature_name_mismatch"
+          && stored && stored.completed === false && stored.field_value == null) {
+        ok("contradictory typed signature refused before evidence write", r.body.error);
+      } else {
+        bad("contradictory typed signature refused",
+          `${r.status} ${JSON.stringify(r.body).slice(0,90)} · stored=${JSON.stringify(stored)}`);
+      }
+    }
+  }
+
+  // ═══ 11 · EXACTLY ONE TENANCY ANCHOR PER CLEAN ADMISSION ════════
+  head("11 · a clean admission produces exactly one tenancy anchor");
   {
     const rows = (await q(`select application_id, count(*)::int n from leases
                             where property_id=$1 group by application_id having count(*) > 1`, [C.prop])).rows;
