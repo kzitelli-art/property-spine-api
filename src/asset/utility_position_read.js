@@ -61,8 +61,9 @@ async function loadStatementUsage(client, { property_id, statement_ids } = {}) {
   if (!statement_ids || !statement_ids.length) return [];
   const rows = (await client.query(
     `select * from ${TABLES.statement_usage}
-      where property_id = $1`,
-    [property_id])).rows;
+      where property_id = $1
+        and statement_id = any($2::uuid[])`,
+    [property_id, statement_ids])).rows;
   return assertOwned(rows, property_id, TABLES.statement_usage);
 }
 
