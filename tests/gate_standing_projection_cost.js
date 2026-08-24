@@ -717,6 +717,7 @@ const DECLARED = [
       tests/utility_statement_usage_bound_equivalence.db.js: identical
       standing AND detail, 6 rows read instead of 18.                    */
   { match: "from utility_statement_usage", kind: "STRUCTURAL",
+    bounded_by_sql: "statement_id = any($2",
     why: "BOUNDED — usage of the surviving statements only, by id. Ceiling is " +
          "accounts x lines-per-statement; it does not grow with time. The full " +
          "series is reachable through loadAllStatementUsage() as detail." },
@@ -1006,6 +1007,39 @@ const DOMAINS = [
   for (const m of seen) counted.set(m, "issued by the fixture");
   for (const [m, where] of scanned) if (!counted.has(m)) counted.set(m, `found in ${where}`);
 
+  /*  ── A STRUCTURAL CLAIM THAT RESTS ON A BOUND MUST NAME THE BOUND ──
+   *
+   *  ⚠ THIS GATE CLASSIFIES BY TABLE NAME. `from utility_statement_usage`
+   *  matched its declaration whether or not the statement still carried
+   *  the bound that made it structural. Measured, not argued: restoring
+   *  the unbounded query and running this gate returned exit 0, and the
+   *  50-gate source-governance runner returned exit 0 too. A product-side
+   *  falsification of that bound was therefore UNDETECTABLE — the gate
+   *  would have certified an unbounded read as STRUCTURAL.
+   *
+   *  So a declaration whose STRUCTURAL kind is earned by a bound carries
+   *  `bounded_by_sql`, and the gate requires that fragment to be present
+   *  in the source that reads the table.
+   *
+   *  ⚠ CHECKED AGAINST THE SOURCE, NOT AGAINST ISSUED SQL. The empty
+   *  measurement property records no statements, so the bounded loader
+   *  short-circuits and never issues its query — a runtime check would
+   *  never fire, which is the same empty-fixture blind spot this file has
+   *  already been caught by twice.                                      */
+  /*  ⚠ THE TABLE NAME IS NOT IN THE SOURCE. These reads build SQL as
+   *  `select * from ${TABLES.statement_usage} …`, so the literal
+   *  `from utility_statement_usage` appears nowhere in the file — the
+   *  scan only ever saw it in the ISSUED statement. A first version of
+   *  this check looked for the table name beside the fragment and went
+   *  red on correct code. The fragment alone is what carries the claim. */
+  const unpinnedBounds = [];
+  for (const d of DECLARED) {
+    if (!d.bounded_by_sql) continue;
+    const found = SCANNED_SOURCES.some((file) =>
+      fs.readFileSync(path.join(ROOT, file), "utf8").includes(d.bounded_by_sql));
+    if (!found) unpinnedBounds.push({ match: d.match, fragment: d.bounded_by_sql });
+  }
+
   /*  ── COMPUTE_WALK · REPORTED, PINNED, NOT COUNTED ────────────────  */
   const rottedPins = [];
   for (const cw of COMPUTE_WALKS) {
@@ -1096,6 +1130,16 @@ const DOMAINS = [
     L("      the literal payment history §40.6 forbids walking.");
   } else {
     L("  ✔ every `from <table>` in the scanned sources is declared, fired or not");
+  }
+  if (unpinnedBounds.length) {
+    failed++;
+    L(`  ✘ ${unpinnedBounds.length} declaration(s) are STRUCTURAL because of a bound that is GONE.`);
+    L("      The kind was earned by a bound in the SQL. Without it the statement");
+    L("      walks history again while this gate still calls it structural —");
+    L("      which is a green that certifies the opposite of the truth.");
+    for (const u of unpinnedBounds) {
+      L(`      ${u.match} — expected fragment ${JSON.stringify(u.fragment)} in the scanned sources`);
+    }
   }
   if (rottedPins.length) {
     failed++;
