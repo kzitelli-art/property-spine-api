@@ -632,3 +632,50 @@ replacement invitation merely to send the same old URL again. After release,
 create one new canonical invite because the prior link both points to the old
 door and has a 72-hour expiry, then observe Mike's real acceptance and reread
 the four production identity/access records before claiming activation.
+
+### 24 Aug 2026 — staff-invite terminal-state hardening evidence stop
+
+The canonical staff-invite start door could issue an OTP after an invitation
+had become `superseded`. The verify door then refused that same invitation.
+The human therefore received fresh-looking evidence from a lifecycle state
+that could never complete. The same source review found inconsistent terminal
+receipts between start and verify, no invitation-expiry check at verify, and a
+fifth wrong code reported as retryable even though it had just locked the
+invitation.
+
+Current branch source now routes both `/auth/sms/start` and
+`/auth/sms/verify` through one lifecycle classifier. Only `active` invitations
+may reach OTP issuance or comparison. Accepted, revoked, superseded, expired,
+locked, and unknown states stop with explicit receipts; the fifth wrong code
+returns the locked receipt immediately. The existing browser proof was
+extended to exercise every terminal state, preservation of the invite row,
+absence of carrier sends and user provisioning, inert GET behavior, lockout,
+successful acceptance, and accepted-invite replay. It remains invoked by the
+existing end-to-end runner; the runner was not reordered or restructured.
+
+**NO EXECUTION CLAIM RUNG EARNED IN THIS SESSION.** Node parsed the two changed
+files and the static team-access session-boundary test passed. The local source
+governance parent stopped before this proof because this laptop has no
+installed `express` dependency; it printed parent exit 1 and marked the later
+tests NOT RUN. Commits written through the GitHub connector did not dispatch a
+branch-push Actions run, and the available browser controller stopped on an
+environment error. No green execution was observed, so no deliberate red/green
+falsification was attempted and no `LOCALLY_EXERCISED`, `HTTP_PROVEN`,
+`BROWSER_VERIFIED`, `DEPLOYED`, or `PRODUCTION_PROVEN` claim is made. Neon,
+Render, the SMS carrier, and production were not contacted.
+
+The shared lifecycle classifier is **Class 1 — permanent primitive**. The
+expanded proof is **Class 3 — test infrastructure**. The existing public
+acceptance page remains **Class 2 — temporary adapter**, removable only when
+the canonical staff app owns a browser-verified invite-token entry screen.
+This slice does not claim to serialize concurrent invitation creation and
+supersession; that transaction question needs its own observed stop and
+contract before changing the writer. The forbidden second path remains a new
+OTP store, status vocabulary, provisioning writer, app entry path, or
+property-specific branch.
+
+Next evidence step: dispatch the branch workflow through an authenticated
+human Git push or manual Actions run; inspect the exact terminal-state browser
+output; then deliberately break one lifecycle assertion, require parent exit
+1, restore the exact bytes, and require a clean parent run. Append any earned
+rung here afterward; do not rewrite this stopped receipt.
