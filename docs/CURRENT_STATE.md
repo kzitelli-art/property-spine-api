@@ -1029,6 +1029,39 @@ gates` PASS · `standing projection cost` PASS · `property name resolution` PAS
 
 ---
 
+## Build 4.0 — errata (append-only; the entry above is not rewritten)
+
+**RUNG CORRECTED. "DB-PROVEN" is not a project rung and must not be read as
+one.** The correct rung for the weekday-name ordering defect and its correction
+is **`LOCALLY_EXERCISED`**:
+
+- real Postgres, real migration-169-backed `date` columns
+- real governed read (`readStanding` through `utility_projection.js`)
+- local product-side falsification against the **verbatim original bytes**, and
+  local restoration
+- **not** HTTP-proven · **not** browser-verified
+- the harness `tests/utility_latest_statement_ordering.db.js` is **not
+  CI-wired** (`tests/e2e/verify_all.sh` is CABIN-owned)
+
+Everywhere the Build 4.0 entry above reads *"DB-PROVEN"*, read
+**`LOCALLY_EXERCISED`**.
+
+**RUN-COUNT WORDING CORRECTED.** The entry's *"13 consecutive failures"* and its
+*"99→139"* shorthand were both wrong. Two precise counts — and the run numbers
+are **not contiguous**; intervening numbers belong to other branches:
+
+```text
+At 1eb622197913bbb069fc9304081a99fa245f6361 — 12 enumerated red runs:
+    99 · 100 · 110 · 115 · 119 · 122 · 128 · 130 · 133 · 135 · 137 · 139
+
+Run 155, on 3e3910cf19c70f2aa20829b16fff96effd88be70, is the THIRTEENTH.
+
+Last green before the sequence: run 98 / 9e62948 / 2026-08-22T15:13:06Z.
+Branch totals at that point: 18 runs — 5 green, 13 red, 0 other.
+```
+
+---
+
 ## ⛔ CLOSING A THREAD — DO THIS BEFORE YOU STOP
 
 **This file goes stale the moment a thread ships something and does not say so.**
