@@ -54,7 +54,7 @@ if (!/@(127\.0\.0\.1|localhost)[:/]/.test(URL)) {
 
 const ROOT = path.join(__dirname, "..");
 const econ = require(path.join(ROOT, "src/tenancy/economic_tenancy_service.js"));
-const { spacePosition } = require(path.join(ROOT, "src/tenancy/space_position.js"));
+const { spacePosition, recordEffectivePossession } = require(path.join(ROOT, "src/tenancy/space_position.js"));
 const tenancy = require(path.join(ROOT, "src/tenancy/tenancy_position_read.js"));
 
 const P    = "cab10001-0000-4000-8000-000000000001"; // property
@@ -257,6 +257,96 @@ const posFor = async (pool, asOf) => {
     // ── possession is a separate axis and must NOT be implied ────────
     if (!p1.current_possession) ok("D6 · possession remains PENDING — activation is economic, not physical (§29)");
     else bad("D6 · activation invented physical possession", "no move_in event was recorded");
+
+    /* ══ D7 · A POSITION AT as_of D MAY ONLY USE EVENTS EFFECTIVE BY D ══
+     *
+     *  position_classifier.js takes the GLOBALLY latest possession events:
+     *
+     *      const ins  = events.filter((e) => e.event_type === "move_in");
+     *      const lastIn = ins.length ? ins[ins.length - 1] : null;
+     *      const possessed = !!lastIn && (!lastOut || …);
+     *
+     *  `asOf` never enters that computation. It governs the LEASE arms
+     *  (datesSpan / isFuture) and the opening baseline — openingBaselineAsOf
+     *  bounds itself correctly with `as_of_date <= $2::date` — but the
+     *  possession axis is unbounded. loadSpaceRows does not bound it either:
+     *  its json_agg filters on space_id, event_type and status, never date.
+     *
+     *  So a historical answer may describe possession that had not happened
+     *  yet on the date being asked about.
+     *
+     *  ── WHY THIS IS DRIVEN THROUGH THE CANONICAL WRITER ─────────────
+     *  A raw INSERT would prove only that a hand-made row confuses the
+     *  classifier. recordEffectivePossession is asked to accept the
+     *  future-dated move_in itself, so if a canonical boundary already
+     *  refuses one, THAT is the finding and there is no leak to chase.
+     *  It validates that effective_date is PRESENT, never what it says.
+     *
+     *  ── THE CONTROL COMES FIRST, ON PURPOSE ─────────────────────────
+     *  E3 in the bed-grain harness went red against a correct system
+     *  because it used the wrong control. The mirror risk here is a red
+     *  that looks like a temporal leak but is really a write that never
+     *  landed. So D7a reads at a date AFTER the event and requires
+     *  possession to be delivered there. Only once the event is proven
+     *  real and readable does a red at the EARLIER date mean what it says.
+     */
+    const MOVE_IN_AT = "2026-09-15";   // three weeks AFTER AS_OF
+    const AFTER      = "2026-09-20";   // a date from which the move-in is past
+
+    let posEvent = null;
+    c = await pool.connect();
+    try {
+      await c.query("begin");
+      posEvent = await recordEffectivePossession(c, {
+        kind: "move_in",
+        lease_id: LEASE,
+        effective_date: MOVE_IN_AT,
+        actor: USER,
+        source: "cabin_asof_probe",
+      });
+      await c.query("commit");
+      ok(`D7 · the canonical writer ACCEPTS a move_in effective ${MOVE_IN_AT} — ` +
+         "no boundary refuses a future-dated possession event");
+    } catch (e) {
+      await c.query("rollback").catch(() => {});
+      /*  If this refuses, the historical leak is unreachable through the
+       *  canonical path and there is nothing to force. Report and stop. */
+      ok(`D7 · REFUSED by a canonical boundary — ${(e.body && e.body.error) || e.code || e.message}`);
+      note("D7 · a future-dated possession event cannot be written; the as-of leak is not reachable here");
+      posEvent = null;
+    } finally { c.release(); }
+
+    if (posEvent) {
+      // ── D7a · CONTROL: after the event date, possession is real ────
+      const pAfter = await posFor(pool, AFTER);
+      if (pAfter.current_possession && String(pAfter.current_possession.since) === MOVE_IN_AT)
+        ok(`D7a · CONTROL — at as_of ${AFTER} possession reads delivered since ${MOVE_IN_AT}`);
+      else bad(`D7a · CONTROL FAILED — the event did not land or is not readable at ${AFTER}`,
+               JSON.stringify({ possession: pAfter.current_possession, state: pAfter.possession_state }));
+
+      // ── D7b · THE PROBE: at the earlier date it must not exist ─────
+      const pBefore = await posFor(pool, AS_OF);
+      console.log("\n  POSITION AT as_of " + AS_OF + " (move_in effective " + MOVE_IN_AT + "):");
+      console.log("    " + JSON.stringify({
+        as_of: AS_OF,
+        move_in_effective_date: MOVE_IN_AT,
+        current_possession: pBefore.current_possession,
+        possession_state: pBefore.possession_state,
+        availability_state: pBefore.availability_state,
+        economic_tenancy_state: pBefore.economic_tenancy_state,
+        reason: pBefore.reason,
+      }, null, 0) + "\n");
+
+      if (pBefore.current_possession === null)
+        ok(`D7b · at as_of ${AS_OF} there is NO current possession from an event effective ${MOVE_IN_AT}`);
+      else bad(`D7b · HISTORICAL LEAK — as_of ${AS_OF} reports possession since ${pBefore.current_possession.since}`,
+               `possession is claimed to have begun ${pBefore.current_possession.since}, which is AFTER the date asked about (${AS_OF})`);
+
+      if (pBefore.possession_state === "pending")
+        ok(`D7c · and possession_state is "pending" at ${AS_OF}, not "delivered"`);
+      else bad(`D7c · possession_state is "${pBefore.possession_state}" at ${AS_OF}`,
+               `a move_in effective ${MOVE_IN_AT} has been treated as delivered three weeks earlier`);
+    }
   } catch (e) {
     bad("harness died", e.message);
     console.error(e);
