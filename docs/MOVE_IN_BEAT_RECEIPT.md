@@ -274,3 +274,74 @@ leaves `turnover_service` writing the same wrong grain.
 
 **None.** No migration number assigned, nothing applied. The correction under
 discussion is a write-grain question, not a schema question.
+
+---
+
+# ⛔ CORRECTION, appended 2026-08-24 — the rung above is overstated
+
+**Everything above is left exactly as written.** It is the original receipt and
+stays visible as history. Where it and this section disagree, **this section is
+correct**.
+
+## The rung
+
+The body above reports the move-in beat, the bed-grain spill observation and the
+product-wall falsification at **`HTTP_PROVEN`**. That is wrong.
+
+`docs/CURRENT_STATE.md` defines `HTTP_PROVEN` as **one test carrying real
+Postgres *and* a real router** — `require("pg")` plus `listen()` in the same
+file. These harnesses have the first and not the second. Measured, not asserted:
+
+```
+tests/move_in_beat_drive.db.js          http-markers=0   requires-pg=1
+tests/bed_grain_occupancy_spill.db.js   http-markers=0   requires-pg=1
+```
+
+> ### The honest rung is `LOCALLY_EXERCISED`.
+
+They used **real Postgres at the service boundary** — schema built from the real
+migration chain to ledger 192, canonical services called directly — and **did not
+traverse an HTTP route**. **No `HTTP_PROVEN` rung was earned.**
+
+The same correction applies to the two Slice 1 harnesses in
+`docs/TENANCY_STANDING_COST_RECEIPT.md`, which have the identical shape and the
+identical zero HTTP markers. Recorded in `CURRENT_STATE.md`'s correction section.
+
+## The fixture boundary, restated as a limit on the claim
+
+The body above already states that the harness seeds confirm-term's durable
+output rather than driving confirm-term. Stated here as a **rung** limit rather
+than a footnote:
+
+**`confirmTermService` was never executed and is not proven.** The beat is
+established *from the anchor onward*, at the service boundary only.
+
+## What the CI run proves
+
+https://github.com/kzitelli-art/property-spine-api/actions/runs/32758785833 ·
+SHA `ea8b5a97c328cdfddfe6039b831520ecef745292` · parent exit **0** · **NOT RUN:
+none** · later proofs executed.
+
+It proves the **existing 17-step branch baseline only**. **Neither harness in this
+receipt is declared in `tests/e2e/verify_all.sh`**, so that green run does not
+prove either of them in CI. The runner never invoked them.
+
+## What the falsification was
+
+A **local working-tree falsification** based on commit
+`41c1aa6129f5346435096e48d969311e4ea75137`, evidenced by blob identity
+(`acd1388b6a1690793a41cd635025c14a3e8787c0` →
+`3275f60c36553cc5cddeb82494f77c233972365e` → restored to `acd1388b…`) and by
+**exit 1 → exit 0**.
+
+**It was NOT an exact committed red SHA, and NOT a GitHub red run.** No red
+commit and no red CI run exist for it.
+
+## What is unchanged
+
+- The **refuted resident-carry gap** and the **latent bed-grain spill** stand as
+  observations. Only the rung naming them is corrected.
+- Both harnesses remain **Class 3**, no removal condition. Tenancy primitives
+  remain **Class 1**. **No adapter exists.**
+- The unit-grain writer was not changed. `server.js:1557` remains **`REPORTED`**
+  and outside the CABIN lane.

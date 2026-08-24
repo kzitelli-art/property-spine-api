@@ -610,3 +610,90 @@ container restart and is rebuilt from `tests/e2e/apply_migrations.sh` each time
 (ceiling 192, zero stops). Nothing durable lives outside the pushed branch. The
 four `.db.js` harnesses are **not wired into any runner** — nothing runs them
 automatically, same condition as the other 68 `.db.js` proofs.
+
+---
+
+## ⛔ CORRECTION — CABIN rungs overstated. Slices 1 and 2 are `LOCALLY_EXERCISED`.
+
+Appended 2026-08-24, after the rows above. **Nothing above is rewritten, reordered
+or deleted** — the original wording stays visible as history, and this section is
+the authority where the two disagree.
+
+**What I claimed and what was true.** Rows above record CABIN work at
+`HTTP_PROVEN`. That was wrong against this file's own vocabulary, which requires
+*real Postgres **and** a real router* — `require("pg")` **plus** `listen()` in the
+same file. My harnesses have the first and not the second.
+
+Measured across all four CABIN harnesses, not asserted:
+
+```
+tests/opening_truth_standing_bound.db.js    http-markers=0   requires-pg=1
+tests/space_rows_lease_relevance.db.js      http-markers=0   requires-pg=1
+tests/move_in_beat_drive.db.js              http-markers=0   requires-pg=1
+tests/bed_grain_occupancy_spill.db.js       http-markers=0   requires-pg=1
+```
+
+(`http-markers` counts `listen(` · `require("http")` · `supertest` · `fetch(` ·
+`express`.) **Zero HTTP traversal in any of them.**
+
+| Claim | Corrected rung |
+|---|---|
+| Move-in beat, anchor → live occupancy | **`LOCALLY_EXERCISED`** |
+| Bed-grain occupancy spill observation | **`LOCALLY_EXERCISED`** |
+| Product-wall falsification | **`LOCALLY_EXERCISED`** |
+| `openingTruth` standing bound (**Slice 1**) | **`LOCALLY_EXERCISED`** |
+| `from spaces s` lease-relevance measurement (**Slice 1**) | **`LOCALLY_EXERCISED`** |
+
+⚠ **The last two are a correction I was not asked for, and I am making it
+anyway.** The instruction named the Slice 2 items. Slice 1's rows carry the
+*identical* defect — same harness shape, same zero HTTP markers — and leaving a
+row I now know to be false, because the correction notice did not enumerate it,
+is precisely the decay this file exists to stop.
+
+**They used real Postgres at the service boundary and did not traverse an HTTP
+route. No `HTTP_PROVEN` rung was earned by any CABIN work.**
+
+### What the harnesses did and did not establish
+
+- **Real Postgres, real migration chain.** Schema built by
+  `tests/e2e/apply_migrations.sh` to ledger ceiling 192, zero stops. The canonical
+  services were called directly.
+- **The harness seeded confirm-term's durable output** — a `pending` lease linked
+  to a verified `executed_lease_record`. **`confirmTermService` itself was never
+  executed and is not proven.** The beat is proven *from the anchor onward*, and
+  only at the service boundary.
+- The refuted resident-carry gap and the latent bed-grain finding **stand as
+  observations**; only the rung naming them is corrected.
+
+### What run 32758785833 does and does not prove
+
+https://github.com/kzitelli-art/property-spine-api/actions/runs/32758785833 ·
+SHA `ea8b5a97c328cdfddfe6039b831520ecef745292` · parent exit **0** · **NOT RUN:
+none**.
+
+It proves the **existing 17-step branch baseline only**. **Neither Slice 2
+harness — nor either Slice 1 harness — is declared in `tests/e2e/verify_all.sh`,
+so that green run does not prove any of them in CI.** A green run over a runner
+that never invokes a harness is evidence about the runner, not the harness.
+
+### What the falsification was, exactly
+
+It was a **local working-tree falsification** based on commit
+`41c1aa6129f5346435096e48d969311e4ea75137`, identified by changed/restored blob
+evidence (`acd1388b6a1690793a41cd635025c14a3e8787c0` →
+`3275f60c36553cc5cddeb82494f77c233972365e` → restored to `acd1388b…`) and by
+**exit 1 → exit 0**.
+
+**It was NOT an exact committed red SHA and NOT a GitHub red run.** No red commit
+exists; no red CI run exists. The distinction matters because a falsification
+nobody else can re-execute from a SHA is weaker evidence than one they can.
+
+### Classes — unchanged
+
+`tests/move_in_beat_drive.db.js` and `tests/bed_grain_occupancy_spill.db.js`
+remain **Class 3** test infrastructure (as do both Slice 1 harnesses), no removal
+condition. Every tenancy primitive remains **Class 1**. **No adapter exists**, so
+there is no Class 2 removal condition to track.
+
+The unit-grain writer is unchanged and its finding remains **locally exercised
+and latent**. `server.js:1557` remains **`REPORTED`** and outside the CABIN lane.
