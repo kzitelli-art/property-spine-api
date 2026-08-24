@@ -747,3 +747,100 @@ standing/review comparison, and resident browser signing stop on
 Codex-owned application and lease helpers. This is recorded as integration
 drift requiring an owner reconciliation ruling after the bounded branches
 close, not as a source collision and not as authority to expand this slice.
+
+### 24 Aug 2026 — public V3 guarantor identity has one submission authority
+
+**`HTTP_PROVEN` in disposable branch CI; not deployed.** The V3 public
+application validator already required a complete
+`captured.guarantor_contact` when the applicant selected that a guarantor was
+needed. The same request separately accepted top-level `guarantor_name`, and
+the canonical application birth persisted that independent value. Packet
+generation later decided whether a guarantor signer was required from
+`!!lease_applications.guarantor_name`. A crafted request could therefore pass
+the complete V3 capture contract while omitting or contradicting the value
+that controlled the signer rail.
+
+The public V3 door now derives the persisted guarantor name from the validated
+captured contact. An omitted legacy duplicate is the normal V3 shape; a
+non-empty duplicate that contradicts the captured name returns 400 before the
+invitation is consumed or an application is born. V2 and internal/import
+callers keep their existing contracts. No route, service, status, column,
+migration, packet branch, or client-side authority was added.
+
+The exact evidence cycle ran automatically on GitHub. Run
+[#32763311993](https://github.com/kzitelli-art/property-spine-api/actions/runs/32763311993)
+tested `5f5f212`, returned parent exit 0 with no NOT RUN, and the terminal
+invite-to-guarantor journey plus every earlier proof passed. The test stayed
+intact while only the product-side contradiction refusal was disabled at
+`068b7a5`; run
+[#32763661967](https://github.com/kzitelli-art/property-spine-api/actions/runs/32763661967)
+stopped that journey at `a contradictory V3 guarantor name is refused before
+application birth` and returned parent exit 1. Because that fail-closed
+assertion stopped its journey, the subsequent omission/derivation assertions
+did not execute on the red run; no broader red claim is inferred. The exact
+product source blob was restored at `cf7fcade`; run
+[#32763940585](https://github.com/kzitelli-art/property-spine-api/actions/runs/32763940585)
+returned parent exit 0, no NOT RUN, every later proof through the terminal
+guarantor journey, and `ALL PROOFS PASSED`. Successful individual assertion
+lines are suppressed by the parent runner and are not quoted as observed.
+
+The V3 public-submission authority guard is **Class 1 — permanent primitive**.
+The extended real-HTTP/Postgres journey is **Class 3 — test infrastructure**.
+`tests/e2e/verify_all.sh` was not changed. Separately, Codex aligned three
+Codex-owned lease proof helpers on CAMP with the already-required intentional
+signature contract; exact CAMP head `40f84f0` returned full-parent green in
+run
+[#32764307766](https://github.com/kzitelli-art/property-spine-api/actions/runs/32764307766)
+with no NOT RUN. That compatibility repair was Class 3 only and changed no
+CAMP product source.
+
+No main merge, PR, deployment, migration, app or `index.html` change, Neon or
+Render contact, production read/write, or carrier action occurred. Production
+and Mike Grivna's real activation state are unchanged.
+
+### 24 Aug 2026 — typed lease signature must match the named packet signer
+
+**`HTTP_PROVEN` in disposable branch CI; not deployed.** The public lease
+field writer already resolved the current packet signer from the token,
+required explicit signature consent, and server-authored the resident or
+packet-signer linkage. It nevertheless accepted any trimmed signature value
+of two characters or more. A token holder could type a contradictory name and
+Spine would mark the signature complete while attributing it to the packet's
+named resident or guarantor.
+
+Signature completion now normalizes Unicode compatibility form, surrounding
+and repeated whitespace, and case for both the typed value and the signer's
+frozen `display_name`. A missing signer name returns 409; a contradictory
+typed name returns 400 before the field update. The normal e2e helper types the
+signer name returned by the same public packet read. This is a consistency
+guard, not identity verification: the packet signer name remains a claim, and
+the change does not silently promote a guarantor into a durable Person.
+
+Run
+[#32764970080](https://github.com/kzitelli-art/property-spine-api/actions/runs/32764970080)
+tested baseline head `4d451190`, returned parent exit 0, hostile
+falsifications PASS, no NOT RUN, every later proof through the guarantor
+journey, and `ALL PROOFS PASSED`. The hostile proof stayed intact while only
+the product mismatch predicate was disabled at `393f9cb`; run
+[#32765268066](https://github.com/kzitelli-art/property-spine-api/actions/runs/32765268066)
+captured `contradictory typed signature refused — HTTP 200` and
+`stored={"completed":true,"field_value":"Not Probe Tester ..."}`, reported
+hostile proofs 12 passed / 1 failed, and returned parent exit 1. No NOT RUN was
+reported and every later top-level proof still passed. The exact guarded
+product blob was restored at `6a7754c`; run
+[#32765554773](https://github.com/kzitelli-art/property-spine-api/actions/runs/32765554773)
+returned parent exit 0, hostile falsifications PASS, no NOT RUN, every later
+proof through the guarantor journey, and `ALL PROOFS PASSED`. Successful
+individual hostile assertions are suppressed and are inferred only from the
+containing fail-closed proof result; the product-side red supplies the direct
+observed evidence that both the HTTP and database walls can turn the parent
+red.
+
+The signature-name consistency guard is **Class 1 — permanent primitive**.
+The hostile refusal and normal helper alignment are **Class 3 — test
+infrastructure**. No second signer store, identity path, route, status,
+column, migration, or runner path was added.
+
+No main merge, PR, deployment, migration, app or `index.html` change, Neon or
+Render contact, production read/write, real signing action, or carrier action
+occurred. Production and Mike Grivna's real activation state are unchanged.
