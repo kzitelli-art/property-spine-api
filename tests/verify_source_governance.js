@@ -134,6 +134,14 @@ const GATES = [
     what: "Ask Spine: answers only from reads, names them, and an outage never reads as good news" },
   { file: "gate_ask_spine_readers.js",
     what: "Ask Spine: every canonical standing domain is registered, pending, or explicitly waived" },
+  //  ── docs/CURRENT_STATE.md CANNOT SILENTLY LOSE COVERAGE ────────────
+  //  That file exists because threads kept rebuilding what already existed.
+  //  Until 2026-08-20 the only thing keeping it true was people remembering
+  //  to update it — which is exactly what docs/CODEBASE_STATE.md relied on
+  //  before it was silently wrong two weeks later. Coverage only: this gate
+  //  does not and cannot verify that any row is TRUE.
+  { file: "gate_current_state.js",
+    what: "CURRENT_STATE.md: every src/ domain is named, rungs use the controlled vocabulary, defect numbering has not collided" },
   //  The gate above is the §40.2 enforcement, so it is the one gate whose
   //  own failure modes must be demonstrated rather than trusted. It ran
   //  green for months while scanning one directory and missing Tenancy
