@@ -102,6 +102,11 @@ else
 fi
 fi
 
+step "cabin: opening-truth standing bound"  env SLICE1_DATABASE_URL="$E2E_DATABASE_URL" node tests/opening_truth_standing_bound.db.js
+step "cabin: space-rows lease relevance"    env SLICE1_DATABASE_URL="$E2E_DATABASE_URL" node tests/space_rows_lease_relevance.db.js
+step "cabin: move-in beat"                   env CABIN_DATABASE_URL="$E2E_DATABASE_URL" node tests/move_in_beat_drive.db.js
+step "cabin: bed-grain occupancy spill"      env CABIN_DATABASE_URL="$E2E_DATABASE_URL" node tests/bed_grain_occupancy_spill.db.js
+
 echo "════════════════════════════════════════════════════════════"
 [ -n "$SKIPPED" ] && echo "  ⚠ NOT RUN: $SKIPPED — this is not a pass."
 if [ "$FAILED" = "0" ]; then echo "  ALL PROOFS PASSED"; else echo "  ✗ VERIFICATION FAILED"; fi
