@@ -1899,7 +1899,7 @@ module.exports = function leasePacketsModule(deps) {
       // not rewrite when/how the signer acted or append a second audit event.
       // A different value is a correction request and needs a governed new
       // packet rather than silently replacing signed evidence in place.
-      if (false && targetField.completed) { // deliberate product-side falsification
+      if (targetField.completed) {
         const sameValue = targetField.field_type === "signature"
           ? normalizeSignatureName(targetField.field_value) === normalizeSignatureName(value)
           : String(targetField.field_value || "").trim() === value;
@@ -1927,6 +1927,7 @@ module.exports = function leasePacketsModule(deps) {
                 signed_by_packet_signer_id = case when field_type='signature'
                                                   then $8::uuid else signed_by_packet_signer_id end
           where id=$1 and lease_packet_id=$2 and required=true and signer_role=$9
+            and completed=false
           returning *`,
         [req.params.field_id, pk.id, value, req.body?.session_id || null, clientIp(req),
          req.headers["user-agent"] || null, signerPersonId, packetSignerId,
