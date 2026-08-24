@@ -118,11 +118,7 @@ const forwardShape = async (pool) =>
   const pool = new Pool({ connectionString: URL });
   console.log("\nLEASE RELEVANCE — what loadSpaceRows' unbounded array is actually read for\n");
   try {
-    //  DELIBERATE FALSIFICATION — proof cycle B. The seed call is removed
-    //  so this harness once again creates nothing of its own. If it can
-    //  still pass, the fix did nothing and the runner order is still
-    //  carrying it. REVERTED IN THE NEXT COMMIT.
-    // await fixture.seed(pool);
+    await fixture.seed(pool);
 
     const baseAsOf = await asOfShape(pool);
     const baseFwd  = await forwardShape(pool);
