@@ -43,6 +43,7 @@ echo "════════════════════════�
 # ── proofs that need no database ────────────────────────────────────
 step "source governance gates"   node tests/verify_source_governance.js
 step "next-action oracle"        node src/shared/proof_next_action_resolver.js
+step "application review actions" node tests/application_review_action_contract.test.js
 
 # ── build the schema from the REAL chain ────────────────────────────
 psql "$ADMIN" -q -c "drop database if exists $(basename "${E2E_DATABASE_URL%%\?*}")" >/dev/null 2>&1
@@ -51,6 +52,14 @@ step "schema from the migration chain"  ./tests/e2e/apply_migrations.sh
 step "property fixture"     psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/property_fixture.sql
 step "pricing fixture"      psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/fixtures.sql
 step "instrument fixture"   node tests/e2e/instrument_fixture.js
+
+# ── lease / guarantor database proofs ───────────────────────────────
+# These use the repository's production-refusing harness boundary. CI's
+# E2E database is disposable and becomes the explicit harness target;
+# there is no fallback to DATABASE_URL.
+step "governing lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/governing_lease_execution.db.js
+step "canonical lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/spine_lease_execution.db.js
+step "lease guarantor signing"   env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/lease_guarantor_signing.db.js
 
 # ── the real server, the real HTTP door ─────────────────────────────
 #  ASK BEFORE LAUNCHING. Polling /health afterwards cannot distinguish
