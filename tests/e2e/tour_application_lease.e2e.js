@@ -519,6 +519,48 @@ async function waitForStaffReply(providerMessageId) {
   expect(!!leaseToken && !!guarantorToken && leaseToken !== guarantorToken,
     "one package issues separate resident and guarantor secrets");
 
+  const residentBeforeRoleProbe = requireOk(await api("GET", `/t/lease/${leaseToken}/data`, {
+    key: false,
+  }), "resident packet before signer-role isolation probe");
+  const guarantorBeforeRoleProbe = requireOk(await api("GET", `/t/lease/${guarantorToken}/data`, {
+    key: false,
+  }), "guarantor packet before signer-role isolation probe");
+  const residentSignerName = residentBeforeRoleProbe.packet
+    && residentBeforeRoleProbe.packet.current_signer
+    && residentBeforeRoleProbe.packet.current_signer.display_name;
+  const guarantorSignature = guarantorBeforeRoleProbe.packet
+    && (guarantorBeforeRoleProbe.packet.fields || [])
+      .find((field) => field.required && field.field_type === "signature");
+  expect(!!residentSignerName && !!guarantorSignature,
+    "both signer names and the guarantor signature field exist before completion");
+  const crossRoleCompletion = await api(
+    "POST", `/t/lease/${leaseToken}/fields/${guarantorSignature.id}/complete`, {
+      key: false,
+      body: {
+        value: residentSignerName, consent: true,
+        session_id: `resident-cross-role-${suffix}`,
+      },
+    }
+  );
+  const crossRoleStored = (await q(
+    `select field_key,completed,field_value,signed_by_person_id,signed_by_packet_signer_id
+       from lease_packet_fields where id=$1`, [guarantorSignature.id]
+  )).rows[0];
+  const crossRoleAudits = Number((await q(
+    `select count(*)::int n from lease_packet_audit_events
+      where lease_packet_id=$1 and event_type='field_completed'
+        and event_json->>'field_key'=$2`, [packetId, crossRoleStored.field_key]
+  )).rows[0].n);
+  expect(crossRoleCompletion.status === 404
+      && crossRoleStored.completed === false
+      && crossRoleStored.field_value == null
+      && crossRoleStored.signed_by_person_id == null
+      && crossRoleStored.signed_by_packet_signer_id == null
+      && crossRoleAudits === 0,
+    "a resident token cannot complete the guarantor's required signature field",
+    `HTTP ${crossRoleCompletion.status} body=${JSON.stringify(crossRoleCompletion.body)} ` +
+      `stored=${JSON.stringify(crossRoleStored)} audits=${crossRoleAudits}`);
+
   const residentSigning = await completeLeaseSigner({
     token: leaseToken, name, initials: "SJ", sessionId: `resident-${suffix}`,
   });
