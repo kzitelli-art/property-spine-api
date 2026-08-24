@@ -130,8 +130,8 @@ async function seed(pool) {
    *  `where not exists` guard is needed. Any failure propagates to the
    *  outer try/catch, which reports "harness died" and exits non-zero.  */
   await pool.query(
-    `insert into properties (id, name, address, leasing_basis, occupancy_status)
-     values ($1,'Slice1 Bound Fixture','1 Bound Way','unit','unknown')`, [PROPERTY]);
+    `insert into properties (id, name, address, leasing_basis)
+     values ($1,'Slice1 Bound Fixture','1 Bound Way','unit')`, [PROPERTY]);
 
   await pool.query(`insert into persons (id, name) values ($1,'Bound Resident')
                     on conflict (id) do nothing`, [PERSON]);
