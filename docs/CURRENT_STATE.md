@@ -552,3 +552,40 @@ It is upgraded only when the next proof rung has been observed.**
 
 *Supporting detail — full capability tables, per-claim adversarial verification
 reasoning, and the re-runnable research scripts — is in `docs/current-state-build/`.*
+
+---
+
+## Append-only runtime correction and lease-CI receipt — 2026-08-24
+
+**`REPORTED` runtime correction — supersedes rows 35 and 36 for current-state
+use.** The owner independently re-verified on 2026-08-24 that production is API
+`61f99bf` with migration-ledger ceiling **189**. The later-looking 2026-08-22
+claims in rows 35 and 36 that ceilings 191 and 192 were deployed are therefore
+not current runtime truth. Those rows remain untouched as history under this
+file's append-only rule. This laptop session did not contact Render or Neon and
+does not claim an independent runtime observation. Treat migrations 190–192 and
+the lease/guarantor working heads as unreleased until the owner performs the
+deliberate reconciliation and release.
+
+**`LOCALLY_EXERCISED` in disposable branch CI; no production rung moved.** Four
+lease/guarantor proofs that existed but were invoked by no CI path are now
+appended to the existing `tests/e2e/verify_all.sh` command: the pure Application
+Review action contract before database setup, then the governing-instrument,
+canonical-execution, and guarantor-signing database proofs after the real
+migration chain and fixtures. The database proofs receive CI's disposable
+`E2E_DATABASE_URL` only through their production-refusing
+`HARNESS_DATABASE_URL` boundary. This is **Class 3 — test infrastructure**; it
+adds no business-logic path and has no activation removal condition.
+
+The connection was falsified, not inferred. A deliberate wrong application ID
+made the Application Review proof fail while all three newly connected database
+proofs still ran and passed; the parent runner printed `VERIFICATION FAILED`
+and GitHub Actions recorded exit code 1 at commit `c16c34b` ([red run
+124](https://github.com/kzitelli-art/property-spine-api/actions/runs/32723805211)).
+The exact original test bytes were restored. At commit `b160287`, Application
+Review and all three database proofs passed and the same parent printed
+`ALL PROOFS PASSED` ([clean run
+125](https://github.com/kzitelli-art/property-spine-api/actions/runs/32724076888)).
+This continuously re-exercises existing local HTTP/browser/database evidence;
+it does not establish a Render deploy, a Neon migration release, a live carrier
+interaction, or a real resident/guarantor signing journey.
