@@ -1863,8 +1863,8 @@ module.exports = function leasePacketsModule(deps) {
 
       const targetField = (await client.query(
         `select field_type, signer_role, completed, field_value from lease_packet_fields
-          where id=$1 and lease_packet_id=$2 and required=true`,
-        [req.params.field_id, pk.id])).rows[0];
+          where id=$1 and lease_packet_id=$2 and required=true and signer_role=$3`,
+        [req.params.field_id, pk.id, signer.signer_role])).rows[0];
       if (!targetField) {
         await client.query("rollback");
         return res.status(404).json({ receipt: "No such field on this packet." });
@@ -1929,11 +1929,12 @@ module.exports = function leasePacketsModule(deps) {
                                            then $7::uuid else signed_by_person_id end,
                 signed_by_packet_signer_id = case when field_type='signature'
                                                   then $8::uuid else signed_by_packet_signer_id end
-          where id=$1 and lease_packet_id=$2 and required=true
+          where id=$1 and lease_packet_id=$2 and required=true and signer_role=$9
             and completed=false
           returning *`,
         [req.params.field_id, pk.id, value, req.body?.session_id || null, clientIp(req),
-         req.headers["user-agent"] || null, signerPersonId, packetSignerId])).rows[0];
+         req.headers["user-agent"] || null, signerPersonId, packetSignerId,
+         signer.signer_role])).rows[0];
       if (!field) { await client.query("rollback"); return res.status(404).json({ receipt: "No such field on this packet." }); }
 
       //  A signature with no identifiable signer is evidence of nothing. Fail
