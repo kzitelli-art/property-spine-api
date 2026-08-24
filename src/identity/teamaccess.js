@@ -60,6 +60,21 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridg
   const RESEND_FLOOR_SEC = 60;
   const MAX_FAILED = 5;
 
+  // Class 1 — the canonical usability reading for one staff invitation.
+  // Both OTP issuance and OTP verification consume this same answer so a
+  // terminal invite can never receive a code that the verifier must reject.
+  // Expiry is derived from the recorded clock as well as the stored lifecycle
+  // state; neither public door rewrites history merely by reading it.
+  function inviteLifecycleState(invite, at = new Date()) {
+    if (invite.status === "accepted") return "accepted";
+    if (invite.status === "revoked") return "revoked";
+    if (invite.status === "superseded") return "superseded";
+    if (invite.status === "expired" || new Date(invite.expires_at) < at) return "expired";
+    if (invite.status !== "active") return "inactive";
+    if (Number(invite.failed_attempts || 0) >= MAX_FAILED) return "locked";
+    return "active";
+  }
+
   // ── shared helpers, mirrored from tenantlink.js ──────────────────────
   const newToken = () => crypto.randomBytes(18).toString("base64url");
   const otpHash = (code, token) =>
@@ -343,10 +358,13 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridg
         inviteRow = (await pool.query(
           `select * from team_invites where token=$1`, [b.token])).rows[0];
         if (!inviteRow) return res.status(404).json({ receipt: "That invite link isn't valid." });
-        if (inviteRow.status === "revoked") return res.status(410).json({ receipt: "That invite was revoked." });
-        if (inviteRow.status === "accepted") return res.status(409).json({ receipt: "That invite was already used." });
-        if (new Date(inviteRow.expires_at) < new Date()) return res.status(410).json({ receipt: "That invite link expired. Ask for a new one." });
-        if (inviteRow.failed_attempts >= MAX_FAILED) return res.status(423).json({ receipt: "Too many wrong codes. Ask for a new invite." });
+        const lifecycle = inviteLifecycleState(inviteRow);
+        if (lifecycle === "accepted") return res.status(409).json({ receipt: "That invite was already used." });
+        if (lifecycle === "revoked") return res.status(410).json({ receipt: "That invite was revoked." });
+        if (lifecycle === "superseded") return res.status(410).json({ receipt: "That invite was replaced. Use the newest link." });
+        if (lifecycle === "expired") return res.status(410).json({ receipt: "That invite link expired. Ask for a new one." });
+        if (lifecycle === "locked") return res.status(423).json({ receipt: "Too many wrong codes. Ask for a new invite." });
+        if (lifecycle !== "active") return res.status(410).json({ receipt: "That invite is no longer active." });
         phone = inviteRow.phone_number;
       } else {
         // ── RE-LOGIN for an already-onboarded staff member ──────────────
@@ -511,16 +529,31 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridg
       await client.query("begin");
       const inv = (await client.query(`select * from team_invites where token=$1 for update`, [b.token])).rows[0];
       if (!inv) { await client.query("rollback"); return res.status(404).json({ receipt: "That invite link isn't valid." }); }
-      if (inv.status === "accepted") { await client.query("rollback"); return res.status(409).json({ receipt: "Already used." }); }
-      if (inv.status === "revoked" || inv.status === "superseded") { await client.query("rollback"); return res.status(410).json({ receipt: "That invite is no longer active." }); }
+      const lifecycle = inviteLifecycleState(inv);
+      if (lifecycle === "accepted") { await client.query("rollback"); return res.status(409).json({ receipt: "Already used." }); }
+      if (lifecycle === "revoked" || lifecycle === "superseded" || lifecycle === "inactive") {
+        await client.query("rollback"); return res.status(410).json({ receipt: "That invite is no longer active." });
+      }
+      if (lifecycle === "expired") {
+        await client.query("rollback"); return res.status(410).json({ receipt: "That invite expired. Ask for a new one." });
+      }
+      if (lifecycle === "locked") {
+        await client.query("rollback"); return res.status(423).json({ receipt: "Too many wrong codes. Ask for a new invite." });
+      }
       if (!inv.otp_hash || !inv.otp_expires_at || new Date(inv.otp_expires_at) < new Date()) {
         await client.query("rollback"); return res.status(410).json({ receipt: "That code expired. Request a new one." });
       }
-      if (inv.failed_attempts >= MAX_FAILED) { await client.query("rollback"); return res.status(423).json({ receipt: "Too many wrong codes. Ask for a new invite." }); }
 
       if (otpHash(String(b.code).trim(), inv.token) !== inv.otp_hash) {
-        await client.query(`update team_invites set failed_attempts = failed_attempts + 1 where id=$1`, [inv.id]);
+        const attempts = (await client.query(
+          `update team_invites
+              set failed_attempts = failed_attempts + 1
+            where id=$1
+            returning failed_attempts`, [inv.id])).rows[0].failed_attempts;
         await client.query("commit");
+        if (Number(attempts) >= MAX_FAILED) {
+          return res.status(423).json({ receipt: "Too many wrong codes. Ask for a new invite." });
+        }
         return res.status(401).json({ receipt: "That code didn't match. Try again." });
       }
 
@@ -892,3 +925,4 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridg
 
   return router;
 };
+
