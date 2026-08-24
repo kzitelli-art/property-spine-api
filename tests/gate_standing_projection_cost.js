@@ -46,6 +46,7 @@
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
 
+const fs = require("fs");
 const path = require("path");
 const { Client } = require("pg");
 
@@ -65,6 +66,83 @@ const contractShape = require(path.join(ROOT, "src/shared/standing_projection.js
 const adapter = require(path.join(ROOT, "src/shared/domain_standing_projections.js"));
 
 const PROPERTY = "b2000000-0000-4000-8000-000000000001";
+
+/*  ── THE FIXTURE UNDER-PROVOKES, SO THE SOURCE IS SCANNED TOO ────────
+ *
+ *  The measurement runs on an EMPTY property, which makes every number a
+ *  floor. That was known. What was NOT known is that emptiness does not
+ *  merely shrink the numbers — it makes whole statements never fire, and
+ *  a statement that never fires cannot be classified by observation.
+ *
+ *  compliance_facts was caught by eye. Then tax_liabilities, tax_filings,
+ *  tax_payments and tax_appeals turned out to sit behind
+ *  `oblIds.length ? … : []` in exactly the same way, and NOTHING would
+ *  have caught those — they are the literal "payment history" §40.6
+ *  names, and the gate measuring §40.6 could not see them.
+ *
+ *  So the gate no longer trusts what it observed. It reads the SOURCE of
+ *  every file below and requires each `from <table>` in it to be
+ *  declared, fired or not. Observation still classifies; the scan is what
+ *  makes the declaration complete.
+ *
+ *  ── THE SCOPE, STATED (CLAUDE.md: "a gate must scan the same scope as
+ *     the claim it asserts") ─────────────────────────────────────────
+ *  These files and no others. The reads reached THROUGH them —
+ *  src/tenancy/dated_positions.js and space_position.js — are outside
+ *  this thread's lane and are covered by observation only. That is a
+ *  known gap, and naming it here is the point.                          */
+const SCANNED_SOURCES = [
+  "src/asset/insurance_position_read.js",
+  "src/asset/tax_position_read.js",
+  "src/asset/utility_position_read.js",
+  "src/asset/contracted_service_position_read.js",
+  "src/asset/compliance_read.js",
+  "src/tenancy/tenancy_position_read.js",
+  "src/asset/equity_position_service.js",
+  "src/asset/debt_instrument_service.js",
+];
+
+/*  Comments are stripped before scanning. CLAUDE.md: "A mention is not a
+    guard" — a `from foo` inside a comment must not satisfy the scan, and
+    a `from foo` inside a comment must not alarm it either. */
+function sqlTablesIn(file) {
+  const src = fs.readFileSync(path.join(ROOT, file), "utf8");
+  const found = new Map();
+
+  /*  ONLY TEMPLATE LITERALS. Every SQL statement in this repo lives in
+      backticks, and nothing else does. Scanning the whole file instead
+      found `"…the source this property was established from did not
+      carry."` — English prose in a user-facing string — and reported a
+      table called "did not". A scan that reports prose as schema will be
+      silenced by the next person, and a silenced scan is worse than none. */
+  for (const raw of src.match(/`[^`]*`/g) || []) {
+    if (!/\bselect\b/i.test(raw)) continue;
+    /*  SQL comments inside the statement are prose too. `--  participation,
+        not from allocations: a policy covering three` reported a table
+        called "allocations". Same rule as above, one level in. */
+    const lit = raw.replace(/--[^\n]*/g, " ").replace(/\/\*[\s\S]*?\*\//g, " ");
+
+    /*  CTE names are not tables. `with allocations as (…) select … from
+        allocations` reads a name this statement just defined; declaring
+        it would be declaring a variable. */
+    const ctes = new Set();
+    const cteRe = /(?:\bwith\b|,)\s*([a-z_][a-z0-9_]*)\s+as\s*\(/gi;
+    let cm;
+    while ((cm = cteRe.exec(lit))) ctes.add(cm[1].toLowerCase());
+
+    const re = /\bfrom\s+([a-z_][a-z0-9_]*)\s*(?:\b([a-z][a-z0-9_]*)\b)?/gi;
+    let m;
+    while ((m = re.exec(lit))) {
+      const table = m[1].toLowerCase();
+      if (ctes.has(table)) continue;
+      const alias = m[2] && !/^(where|join|left|inner|order|group|limit|on|as|and|or|select|union|having|cross|full|right|for|offset|natural)$/i.test(m[2])
+        ? m[2].toLowerCase() : null;
+      const key = alias ? `from ${table} ${alias}` : `from ${table}`;
+      if (!found.has(key)) found.set(key, file);
+    }
+  }
+  return found;
+}
 
 /*  A recording wrapper around a REAL client. It does not fake results —
     every statement reaches Postgres and returns Postgres's answer. It
@@ -121,19 +199,21 @@ function recorder(client) {
  *  The gate fails if the count RISES. It does not pretend the remaining
  *  walks are acceptable; it makes them un-regressable while they are
  *  fixed one at a time, and every one is named below with what it needs.  */
-/*  The REAL number, which is OBSERVED + HIDDEN.
+/*  THE REAL NUMBER = ISSUED ∪ FOUND IN THE SOURCE.
  *
- *  Eight walks are issued against the empty measurement property. A ninth
- *  — compliance_facts — is real and simply never fires here, because
- *  compliance_read short-circuits when the property has no items. An
- *  earlier receipt reported "eight" and that number invited being read as
- *  the ceiling. It is not. The ceiling counts every walk this gate can
- *  name, whether or not the fixture happens to provoke it.
+ *  The first version of this ceiling counted only what the empty property
+ *  provoked, and reported eight. That number invited being read as the
+ *  ceiling. It was not one — it was the subset of walks the fixture
+ *  happened to reach.
  *
- *  A declaration carrying `hidden_by_fixture` is counted without being
- *  observed — and if the fixture ever DOES provoke it, the gate fails
- *  until the flag is removed, so the two never both count it.          */
-const HISTORY_WALK_CEILING = 8;
+ *  Four walks are never issued here at all: the property has no
+ *  compliance item and no debt instrument, so compliance_read and
+ *  debt_instrument_service.loadHistory() short-circuit. compliance_facts
+ *  was caught by eye. The three debt walks — including
+ *  debt_payment_observations, which is payment history in the plainest
+ *  sense §40.6 has — were caught by nothing until the source scan
+ *  existed, and that is the whole argument for the scan.               */
+const HISTORY_WALK_CEILING = 11;
 
 /*  Every statement each read issues, classified. `match` is a distinctive
     fragment of the statement. An issued statement matching NOTHING here
@@ -152,6 +232,67 @@ const DECLARED = [
          "NEEDS: a bounded read for standing (open obligations only); the full " +
          "set belongs to the detail projection." },
   { match: "from tax_clearances", kind: "STRUCTURAL", why: "order by … limit 1" },
+
+  /*  ── FOUND BY THE SOURCE SCAN, NOT BY OBSERVATION ─────────────────
+      Everything below sits behind an emptiness guard and never fired
+      against the empty measurement property. tax_filings and tax_payments
+      are the literal payment history §40.6 forbids walking, and the gate
+      built to measure §40.6 could not see them.                        */
+  { match: "from tax_liabilities l", kind: "DERIVED_BOUND",
+    bounded_by: "from tax_obligations",
+    why: "one live liability per obligation (supersession-filtered). Grows with " +
+         "obligations and with nothing else; that curve is counted there." },
+  { match: "from tax_liabilities s", kind: "DERIVED_BOUND",
+    bounded_by: "from tax_obligations",
+    why: "the supersession NOT EXISTS inside the statement above" },
+  { match: "from tax_filings", kind: "DERIVED_BOUND",
+    bounded_by: "from tax_obligations",
+    why: "EVERY filing for every obligation loaded — but the obligation set is " +
+         "the driver, and a period carries a fixed number of filings. Counted " +
+         "under tax_obligations. NOTE: if tax_obligations is ever bounded, this " +
+         "one loses its bound and the gate will say so." },
+  { match: "from tax_payments", kind: "DERIVED_BOUND",
+    bounded_by: "from tax_obligations",
+    why: "same shape as filings — payment rows per obligation, fixed per period. " +
+         "This is the statement §40.6 names by name, and it is uncounted ONLY " +
+         "because its driver is counted." },
+  { match: "from tax_appeals", kind: "STRUCTURAL",
+    why: "`and closed_on is null` — open appeals only. Bounded at the database." },
+  { match: "from compliance_fact_evidence e", kind: "DERIVED_BOUND",
+    bounded_by: "from compliance_facts",
+    why: "evidence rows per fact. The fact walk is the driver and is counted." },
+  { match: "from insurance_coverages c", kind: "STRUCTURAL",
+    why: "coverages live in the period — coverage_period_start/end filtered" },
+  { match: "from insurance_coverage_properties o", kind: "STRUCTURAL",
+    why: "a count of properties named on one policy" },
+  { match: "from insurance_coverage_properties cp", kind: "STRUCTURAL",
+    why: "policies naming this property, period-filtered" },
+
+  /*  ── DEBT'S loadHistory() — the name is the finding ────────────────
+      Six statements, none observed, because the empty property has no
+      instrument. Two of them are unbounded observation series. */
+  { match: "from debt_terms", kind: "HISTORY_WALK",
+    why: "every term amendment on this instrument, effective-dated, no bound. " +
+         "§40.6 names amendment history explicitly — the same ruling that made " +
+         "contracted_service_terms a walk. NEEDS: the term governing as_of for " +
+         "standing; the amendment chain is detail. " +
+         "LIVES IN src/asset/debt_instrument_service.js:270 (loadHistory)." },
+  { match: "from debt_balance_observations", kind: "HISTORY_WALK",
+    why: "every balance ever observed on this instrument, ordered by as_of_date, " +
+         "no bound. Accrues per reporting cycle forever, independent of how many " +
+         "instruments exist. NEEDS: the latest observation for standing. " +
+         "LIVES IN src/asset/debt_instrument_service.js:274." },
+  { match: "from debt_payment_observations", kind: "HISTORY_WALK",
+    why: "every payment ever observed. This is PAYMENT HISTORY in the plainest " +
+         "sense §40.6 has. NEEDS: the latest observation for standing; the series " +
+         "is detail. LIVES IN src/asset/debt_instrument_service.js:275." },
+  { match: "from debt_instrument_parties", kind: "STRUCTURAL",
+    why: "who is on the loan. Effective-dated rows accumulate with assignments, " +
+         "not with operating events." },
+  { match: "from debt_instrument_properties", kind: "STRUCTURAL",
+    why: "the collateral named by this instrument" },
+  { match: "from debt_reserve_requirements", kind: "STRUCTURAL",
+    why: "reserve covenants the instrument imposes" },
   { match: "from utility_providers", kind: "STRUCTURAL",
     why: "providers referenced by THIS property, via exists(). Grows with providers." },
   { match: "from contracted_service_providers", kind: "STRUCTURAL",
@@ -184,12 +325,11 @@ const DECLARED = [
     why: "the licences and requirements this property holds. Append-only, so " +
          "retired items accumulate — but slowly, with structure, not per event." },
   { match: "from compliance_facts", kind: "HISTORY_WALK",
-    hidden_by_fixture:
-      "compliance_read short-circuits when the property has no compliance items, " +
-      "so this statement is never ISSUED against the empty measurement property. " +
-      "It is counted anyway. The canonical property holds one compliance record " +
-      "today; the walk arrives with the second.",
-    why: "EVERY fact ever recorded for every item, plus every evidence row, plus " +
+    why: "NEVER ISSUED against the empty property — compliance_read short-circuits " +
+         "with no items, so this is counted from the SOURCE SCAN. The canonical " +
+         "property holds one compliance record today; the walk arrives with the " +
+         "second." +
+         " EVERY fact ever recorded for every item, plus every evidence row, plus " +
          "an awaited mintReference PER EVIDENCE ROW. The clearest walk of the set. " +
          "NEEDS: distinct-on(item_id) latest non-superseded fact for standing; the " +
          "full chain is detail." },
@@ -369,54 +509,97 @@ const DOMAINS = [
     }
   }
 
-  /*  The hidden ones: declared walks the fixture never provokes. Named
-      here so the printed number is the real number, not the observable
-      one. */
+  /*  ── THE COUNT IS OBSERVED ∪ SCANNED ─────────────────────────────
+      An earlier version counted only what the fixture provoked, and
+      carried a hand-written `hidden_by_fixture` flag for the one walk I
+      happened to notice. That was the bug in miniature: the count was my
+      memory, not a measurement. Three debt walks were sitting behind an
+      emptiness guard the whole time and no flag named them.
+
+      Now a walk counts if the fixture issued it OR the source scan found
+      it. Neither channel can be quietly switched off: an observed walk
+      cannot be un-declared (the undeclared check), and a declared walk
+      that appears in NEITHER channel is dead code and must be removed. */
   /*  DERIVED_BOUND — a statement whose growth is entirely inherited from
       another declared walk. It is NOT counted (that would be the same
-      curve twice) and it is NOT free: `bounded_by` must name a declaration
-      that is itself a HISTORY_WALK. If that walk is ever fixed or
-      reclassified, this one loses its bound and the gate goes red until
-      someone re-examines it. That is what stops DERIVED_BOUND from being
-      the quiet place to put an inconvenient walk. */
+      curve twice) and it is NOT free: `bounded_by` must name a
+      declaration that is itself a HISTORY_WALK. If that walk is ever
+      fixed or reclassified, this one loses its bound and the gate goes
+      red until someone re-examines it. That is what stops DERIVED_BOUND
+      from being the quiet place to put an inconvenient walk. */
   const derived = DECLARED.filter((d) => d.kind === "DERIVED_BOUND");
   const badlyBound = derived.filter((d) => {
     const target = DECLARED.find((x) => x.match === d.bounded_by);
     return !target || target.kind !== "HISTORY_WALK";
   });
+
+  const scanned = new Map();
+  for (const file of SCANNED_SOURCES) {
+    for (const [key, where] of sqlTablesIn(file)) {
+      const c = classify(key);
+      if (c && c.kind === "HISTORY_WALK" && !scanned.has(c.match)) scanned.set(c.match, where);
+    }
+  }
+  const counted = new Map();
+  for (const m of seen) counted.set(m, "issued by the fixture");
+  for (const [m, where] of scanned) if (!counted.has(m)) counted.set(m, `found in ${where}`);
+
   if (derived.length) {
     L("DERIVED — growth inherited from another declared walk, counted there");
     L("-".repeat(74));
-    for (const d of derived) {
-      L(`  ${d.match}   →   bounded by   ${d.bounded_by}`);
-      L(`    ${d.why.replace(/(.{66})\s/g, "$1\n    ")}`);
-      L("");
-    }
+    for (const d of derived) L(`  ${d.match.padEnd(38)} →  ${d.bounded_by}`);
+    L("");
   }
 
-  const hidden = DECLARED.filter((d) => d.kind === "HISTORY_WALK" && d.hidden_by_fixture);
-  const hiddenUnseen = hidden.filter((d) => !seen.has(d.match));
-  const hiddenButSeen = hidden.filter((d) => seen.has(d.match));
-  if (hidden.length) {
-    L("HIDDEN BY THE FIXTURE — real walks this measurement cannot provoke");
+  const notObserved = [...counted].filter(([m]) => !seen.has(m));
+  if (notObserved.length) {
+    L("COUNTED BUT NEVER ISSUED — the empty property does not provoke these");
     L("-".repeat(74));
-    for (const d of hidden) {
-      L(`  ${d.match}${seen.has(d.match) ? "   ⚠ ISSUED — no longer hidden" : ""}`);
-      L(`    ${d.hidden_by_fixture.replace(/(.{66})\s/g, "$1\n    ")}`);
-      L(`    ${d.why.replace(/(.{66})\s/g, "$1\n    ")}`);
-      L("");
-    }
+    for (const [m, where] of notObserved) L(`  ${m.padEnd(44)} ${where}`);
+    L("");
   }
 
-  const walkCount = seen.size + hiddenUnseen.length;
+  /*  A declared walk in neither channel is stale: the statement it names
+      is gone. Left in place it inflates the ceiling forever, which is
+      headroom under another name. */
+  const deadDeclarations = DECLARED.filter((d) => d.kind === "HISTORY_WALK"
+    && !seen.has(d.match) && !scanned.has(d.match));
+
+  const walkCount = counted.size;
   const total = results.reduce((a, r) => a + r.queries, 0);
   L("=".repeat(74));
   L(`  ${results.length} domains · ${total} queries to gather all of them ONCE, on an EMPTY property`);
-  L(`  ${walkCount} distinct history walk(s) — ${seen.size} observed + ${hiddenUnseen.length} hidden by the fixture ` +
-    `· ceiling ${HISTORY_WALK_CEILING}`);
+  L(`  ${walkCount} distinct history walk(s) — ${seen.size} issued by the fixture + ` +
+    `${notObserved.length} found only by the source scan · ceiling ${HISTORY_WALK_CEILING}`);
   L("");
 
+  /*  ── THE SCAN ────────────────────────────────────────────────────
+      Every `from <table>` in the scanned sources must be declared,
+      whether or not the empty fixture provoked it. */
+  const unscanned = [];
+  for (const file of SCANNED_SOURCES) {
+    for (const [key, where] of sqlTablesIn(file)) {
+      if (classify(key)) continue;
+      unscanned.push({ key, where });
+    }
+  }
+  if (unscanned.length) {
+    L("IN THE SOURCE BUT NOT DECLARED — statements the fixture never provoked");
+    L("-".repeat(74));
+    for (const u of unscanned) L(`  ${u.key.padEnd(48)} ${u.where}`);
+    L("");
+  }
+
   let failed = 0;
+  if (unscanned.length) {
+    failed++;
+    L(`  ✘ ${unscanned.length} statement(s) exist in the scanned sources and are not declared.`);
+    L("      An empty property does not provoke every read. Undeclared AND");
+    L("      unobserved is the blind spot that hid tax_filings and tax_payments —");
+    L("      the literal payment history §40.6 forbids walking.");
+  } else {
+    L("  ✔ every `from <table>` in the scanned sources is declared, fired or not");
+  }
   if (badlyBound.length) {
     failed++;
     L(`  ✘ ${badlyBound.length} DERIVED_BOUND declaration(s) do not name a live HISTORY_WALK.`);
@@ -424,12 +607,12 @@ const DOMAINS = [
     L("      elsewhere. If that elsewhere is gone, it is counted NOWHERE.");
     for (const d of badlyBound) L(`      ${d.match} → bounded_by "${d.bounded_by}"`);
   }
-  if (hiddenButSeen.length) {
+  if (deadDeclarations.length) {
     failed++;
-    L(`  ✘ ${hiddenButSeen.length} declaration(s) claim to be hidden by the fixture but were ISSUED.`);
-    L("      A hidden walk is counted without being observed. Once it is observed");
-    L("      it would be counted twice, or the claim is simply stale. Remove");
-    L("      `hidden_by_fixture` from: " + hiddenButSeen.map((d) => d.match).join(", "));
+    L(`  ✘ ${deadDeclarations.length} declared history walk(s) appear in NEITHER the run nor the scan.`);
+    L("      The statement is gone. A declaration outliving its statement holds");
+    L("      the ceiling up forever, which is headroom wearing a reason.");
+    for (const d of deadDeclarations) L(`      ${d.match}`);
   }
   if (undeclared.length) {
     failed++;
