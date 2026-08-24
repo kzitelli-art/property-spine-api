@@ -119,7 +119,18 @@ function nextMilestone(positions, asOf) {
  */
 async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
   if (!property_id) throw new Error("readTenancyStanding requires property_id");
-  const dp = await datedPropertyPositions(pool, { property_id, as_of });
+  /*  ── §40.6: THE STANDING SCOPE, NOT THE RECEIPT ───────────────────
+   *  This read uses exactly one field of opening_truth —
+   *  `latest_confirmed_source`, for `established_from` below. Asking for
+   *  the detail scope pulled EVERY import batch the property has ever
+   *  taken, unbounded and growing forever, on the path that is supposed to
+   *  be cheap enough to gather on every question.
+   *
+   *  The full receipt is not lost and was not shortened: openingTruth()
+   *  is untouched and still answers the four Rent Roll surfaces. This
+   *  asks for the two rows this projection actually reads.
+   *  Proved output-identical in tests/opening_truth_standing_bound.db.js. */
+  const dp = await datedPropertyPositions(pool, { property_id, as_of, opening_truth_scope: "standing" });
   const positions = dp.positions || [];
 
   const base = {
@@ -297,7 +308,10 @@ async function readTenancyTermStanding(pool, { property_id, requested_start, req
     e.code = "INTERVAL_REQUIRED";
     throw e;
   }
-  const iv = await intervalPropertyPositions(pool, { property_id, requested_start, requested_end });
+  //  Same §40.6 scope as readTenancyStanding above. This read never touches
+  //  opening_truth at all, so it has even less reason to gather the receipt.
+  const iv = await intervalPropertyPositions(pool, {
+    property_id, requested_start, requested_end, opening_truth_scope: "standing" });
 
   const base = {
     contract_version: TERM_CONTRACT_VERSION,

@@ -650,7 +650,109 @@ async function openingTruth(pool, property_id) {
   };
 }
 
-async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) {
+/*  ── THE SAME TWO ANSWERS, WITHOUT THE RECEIPT ───────────────────────
+ *
+ *  §40.6 asks a domain to answer its standing projection "without walking
+ *  its full payment, amendment or event history". openingTruth() above is
+ *  a history walk by that definition: every rent-roll import ever run
+ *  against the property, unbounded, growing with each import forever.
+ *
+ *  It is on the standing path. readTenancyStanding — the registered Ask
+ *  Spine projection, contract `tenancy_standing.v1` — reaches it through
+ *  datedPropertyPositions and then reads exactly ONE field of the result,
+ *  `latest_confirmed_source`, to populate `established_from`.
+ *
+ *  ⚠ THE OBVIOUS FIX IS THE WRONG ONE. Putting a LIMIT on openingTruth
+ *  would truncate a receipt an operator reads. `sources` is a DETAIL
+ *  contract with four live consumers — rent_roll_unit_view,
+ *  future_rent_roll_facts, rent_roll_institutional, rent_roll_canonical —
+ *  and tests/rent_roll_canonical_proof.js asserts the array is non-empty
+ *  and that EVERY element keeps its attribution. The header above says the
+ *  contract out loud: the history must not collapse into one batch and one
+ *  document. Bounding it is the same mistake as putting a LIMIT on "the
+ *  coverages on this property" (§5).
+ *
+ *  So this is §40.6's actual shape — STANDING **plus** DETAIL, never
+ *  standing instead of detail. openingTruth() is untouched and remains the
+ *  detail read. This answers the standing path with two bounded statements.
+ *
+ *  ── WHAT THIS BOUNDS, AND WHAT IT HONESTLY DOES NOT ─────────────────
+ *  It bounds the ROW SET: two rows instead of every batch, so neither the
+ *  transfer nor the JS mapping grows with import history. It does NOT make
+ *  the statement O(1) — there is no index on
+ *  (property_id, source_as_of_date, loaded_at), so Postgres still sorts the
+ *  property's batches to find the top row. Saying otherwise would be the
+ *  over-claim this repository keeps paying for. The growth that mattered
+ *  for §40.6 — the payload gathered on every question — is gone; the sort
+ *  is a smaller, separate cost and an index is a schema change, which this
+ *  thread is not taking.
+ *
+ *  ── THE ORDERING IS COPIED, NOT REINVENTED ──────────────────────────
+ *  `order by source_as_of_date desc nulls last, loaded_at desc` is repeated
+ *  verbatim from the walk above, because the answer must be the row the
+ *  unbounded read would have found — including the loaded_at tie-break on
+ *  two batches sharing an as_of_date, and `nulls last` on a batch with no
+ *  as_of_date that was loaded most recently. Both are proved equal to the
+ *  unbounded read in tests/opening_truth_standing_bound.db.js.
+ *
+ *  CLASS 1 — permanent product primitive.
+ */
+const OPENING_TRUTH_COLUMNS =
+  `id, source_type, source_file,
+   to_char(source_as_of_date, 'YYYY-MM-DD') as source_as_of_date,
+   confidence, status, leasing_model, loaded_at, notes`;
+const OPENING_TRUTH_ORDER = `order by source_as_of_date desc nulls last, loaded_at desc`;
+
+const shapeSource = (b) => (b ? {
+  batch_id: b.id,
+  source_type: b.source_type,
+  source_file: b.source_file || null,
+  source_as_of_date: b.source_as_of_date || null,
+  confidence: b.confidence || null,
+  status: b.status || null,
+  leasing_model: b.leasing_model || null,
+  attribution: { loaded_at: b.loaded_at, notes: b.notes || null },
+} : null);
+
+async function openingTruthStanding(pool, property_id) {
+  const [confirmed, reconciliation] = await Promise.all([
+    pool.query(
+      `select ${OPENING_TRUTH_COLUMNS}
+         from import_batches
+        where property_id=$1
+          and status = 'committed'
+          and source_type <> 'rent_roll_reconciliation'
+        ${OPENING_TRUTH_ORDER}
+        limit 1`, [property_id]),
+    //  NO status filter here, deliberately — the walk above does not apply
+    //  one to the reconciliation, and this must answer identically.
+    pool.query(
+      `select ${OPENING_TRUTH_COLUMNS}
+         from import_batches
+        where property_id=$1
+          and source_type = 'rent_roll_reconciliation'
+        ${OPENING_TRUTH_ORDER}
+        limit 1`, [property_id]),
+  ]);
+  return {
+    /*  NULL, NOT []. An empty array is a claim — "this property has taken
+     *  no governed source" — and it would be a false one on every property
+     *  that has taken several. The standing read does not gather the
+     *  receipt, so it says it did not gather the receipt (§5, §40.7:
+     *  NOT_ESTABLISHED and "not read here" are different silences).
+     *  openingTruth() is the read that answers this. */
+    sources: null,
+    sources_omitted: "standing projection — the full receipt is a detail read (openingTruth)",
+    latest_confirmed_source: shapeSource(confirmed.rows[0]),
+    latest_reconciliation: shapeSource(reconciliation.rows[0]),
+  };
+}
+
+/*  `opening_truth_scope` is "detail" for every operator surface and
+ *  "standing" only for the compact projection. It DEFAULTS to detail, so a
+ *  caller that says nothing keeps the full receipt — a new option must
+ *  never quietly shorten an existing read. */
+async function datedPropertyPositions(pool, { property_id, as_of = null, opening_truth_scope = "detail" } = {}) {
   if (!property_id) throw new Error("datedPropertyPositions requires property_id");
   const asOf = as_of || new Date().toISOString().slice(0, 10);
 
@@ -815,7 +917,9 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
     //  tenancy is attached to inventory this read is hiding — an Exposure,
     //  never a tidy zero.
     retired_excluded: await retiredExclusion(pool, property_id),
-    opening_truth: await openingTruth(pool, property_id),
+    opening_truth: opening_truth_scope === "standing"
+      ? await openingTruthStanding(pool, property_id)
+      : await openingTruth(pool, property_id),
     /*  WHICH BASELINE ANSWERED FOR THIS DATE, or null.
      *
      *  Null is a PROPERTY-level fact: no opening tenancy position has been
@@ -870,6 +974,9 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
 // ════════════════════════════════════════════════════════════════════
 async function intervalPropertyPositions(pool, {
   property_id, requested_start = null, requested_end = null,
+  //  Defaults to detail, exactly like datedPropertyPositions — see the note
+  //  on openingTruthStanding. A caller that says nothing keeps the receipt.
+  opening_truth_scope = "detail",
 } = {}) {
   if (!property_id) throw new Error("intervalPropertyPositions requires property_id");
   if (!requested_start) throw new Error("intervalPropertyPositions requires requested_start");
@@ -976,7 +1083,9 @@ async function intervalPropertyPositions(pool, {
     //  Same contract as datedPropertyPositions: a read that excludes rows
     //  says so, and says whether anything is attached to what it hid.
     retired_excluded: await retiredExclusion(pool, property_id),
-    opening_truth: await openingTruth(pool, property_id),
+    opening_truth: opening_truth_scope === "standing"
+      ? await openingTruthStanding(pool, property_id)
+      : await openingTruth(pool, property_id),
     totals: {
       contractually_free: inState("contractually_free"),
       //  ⚠ THESE KEYS ARE A CONTRACT and were renamed once, deliberately,
@@ -1004,7 +1113,7 @@ async function intervalPropertyPositions(pool, {
 }
 
 module.exports = {
-  datedPropertyPositions, intervalPropertyPositions, openingTruth,
+  datedPropertyPositions, intervalPropertyPositions, openingTruth, openingTruthStanding,
   tenancyState, evidenceState, economicsState, contributesTrustedRent,
   //  Exported so every surface that shows Occupied/Pending/Open/Needs
   //  Review shows the SAME four numbers. A second implementation of "what

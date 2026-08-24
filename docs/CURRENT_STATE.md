@@ -552,3 +552,30 @@ It is upgraded only when the next proof rung has been observed.**
 
 *Supporting detail — full capability tables, per-claim adversarial verification
 reasoning, and the re-runnable research scripts — is in `docs/current-state-build/`.*
+
+---
+
+## Tenancy standing-projection cost — `src/tenancy/` (thread: docs-philosophy-review-s5yalc)
+
+Appended 2026-08-24. Base `7e67f50` (ledger 192), **not** `main`. One row per read
+this thread actually touched; nothing else re-surveyed.
+
+| Capability | Rung | Files / note |
+|---|---|---|
+| `openingTruth()` on the tenancy standing path — the `import_batches` history walk | **`HTTP_PROVEN`** (real Postgres, real chain to ledger 192) | **Bounded, and the bound is NOT on `openingTruth`.** `readTenancyStanding` (contract `tenancy_standing.v1`, registered with Ask Spine) reached `datedPropertyPositions` → `openingTruth()`, which issues `select … from import_batches where property_id=$1 order by source_as_of_date desc nulls last, loaded_at desc` — every rent-roll import ever run, unbounded — and then reads exactly ONE field of it, `latest_confirmed_source`. New `openingTruthStanding()` in `src/tenancy/dated_positions.js` answers with two `limit 1` statements; `datedPropertyPositions`/`intervalPropertyPositions` take `opening_truth_scope`, **defaulting to `detail`** so no existing caller shortens. Proof: `tests/opening_truth_standing_bound.db.js`, 8/8 |
+| `opening_truth.sources` — why the obvious bound was refused | `REPORTED` (read, not re-proved by me) | A LIMIT on `openingTruth` would have been **wrong output**: `sources` is a detail contract with four live consumers — `rent_roll_unit_view.js:261`, `future_rent_roll_facts.js:134`, `rent_roll_institutional.js:166`, `rent_roll_canonical.js:122` — and `tests/rent_roll_canonical_proof.js:116-120` asserts the array is non-empty and that *"every source keeps attribution"*. `openingTruth`'s own header: *"the contract must not collapse that history into 'one batch and one document'."* Verified post-change that both reachable surfaces still receive all 5 seeded sources |
+| `from spaces s` correlated walk — `space_position.js` `loadSpaceRows` | **`REPORTED` — examined, NOT bounded, and the reason is the finding** | See `docs/TENANCY_STANDING_COST_RECEIPT.md`. Not deferred for time: the `leases` array is consumed by `position_classifier.js` for an **arbitrary** `asOf` (`datesSpan`, `isFuture`), for the **successor** search, and for the **double-let contest guard** (`leases.filter(datesSpan)` → `>= 2 distinct operative leases`). A count- or recency-bound changes output and can offer an occupied bed as free. **Reclassified, not fixed** |
+| Equivalence harness | `HTTP_PROVEN` · **falsified 3×** | `tests/opening_truth_standing_bound.db.js`. CLASS 3. Went red on the baseline run (function absent), red again with the reconciliation exclusion removed (3 fails), red again with `nulls last` removed (2 fails), green on restore. **Not wired into any runner** — nothing runs it automatically, same as the other 68 `.db.js` proofs (defect #17) |
+
+**Ceiling note for the standing-projection cost gate** (`tests/gate_standing_projection_cost.js`,
+other thread's lane, not on this base): its `from import_batches` entry — *"NEEDS: the latest
+establishing batch for standing; the series is detail"* — is now satisfied on the standing path.
+That entry can move `HISTORY_WALK` → `STRUCTURAL` and `HISTORY_WALK_CEILING` ratchet 9 → 8.
+**I did not edit that gate.** Its `from spaces s` entry must stay a walk — see the row above.
+
+**Honest limit on what "bounded" means here:** the ROW SET is bounded (two rows, not every
+batch), so neither transfer nor JS mapping grows with import history. The statement is **not**
+O(1) — there is no index on `(property_id, source_as_of_date, loaded_at)`, so Postgres still
+sorts the property's batches. An index is a schema change and this thread assigned no migration
+number. Also a real trade, stated rather than hidden: the standing path now issues **two**
+bounded statements where it issued **one** unbounded walk.
