@@ -145,6 +145,14 @@ const head = (t) => console.log(`\n── ${t} ${"─".repeat(Math.max(0, 58 - t
     const v2 = re.body.packet && re.body.packet.id;
     const old = (await q("select status, superseded_at from lease_packets where id=$1", [P.packetId])).rows[0];
     if (v2 && String(v2) !== String(P.packetId) && old.superseded_at) {
+      const oldRead = await api("GET", `/t/lease/${P.rawTok}/data`);
+      if (oldRead.status === 404) ok("superseded resident link cannot read the old packet", oldRead.status);
+      else bad("superseded resident read refused", `accepted ${oldRead.status}`);
+
+      const oldSubmit = await api("POST", `/t/lease/${P.rawTok}/submit`, { body: {} });
+      if (oldSubmit.status === 404) ok("superseded resident link cannot submit the old packet", oldSubmit.status);
+      else bad("superseded resident submit refused", `accepted ${oldSubmit.status}`);
+
       const r = await api("POST", `/operator/leasing/lease-packets/${P.packetId}/company-sign`, { token: C.token, key: "e2e-key", body: {} });
       if (r.status >= 400) ok("superseded packet refused", `${r.status} ${r.body.error || ""}`);
       else bad("superseded packet refused", `accepted ${r.status}`);
