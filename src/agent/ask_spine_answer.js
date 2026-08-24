@@ -836,7 +836,7 @@ async function gatherFacts(db, {
       } else {
         const instruments = [];
         for (const id of ids) {
-          const history = await debtService.loadHistory(db, id);
+          const history = await debtService.loadHistory(db, id, asOf);
           if (!history) throw new Error("governed Debt instrument history is unavailable");
           instruments.push(debtRead.standingProjection(debtRead.position(history, asOf)));
         }

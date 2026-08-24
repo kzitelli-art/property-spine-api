@@ -101,7 +101,7 @@ module.exports = function debtRoutes(deps) {
 
       const instruments = [];
       for (const id of ids) {
-        const hist = await svc.loadHistory(pool, id);
+        const hist = await svc.loadHistory(pool, id, asOf);
         if (hist) instruments.push(read.position(hist, asOf));
       }
       return res.json({
@@ -133,7 +133,7 @@ module.exports = function debtRoutes(deps) {
         });
       }
 
-      const hist = await svc.loadHistory(pool, req.params.id);
+      const hist = await svc.loadHistory(pool, req.params.id, asOf);
       if (!hist) return res.status(404).json({ error: "No such debt instrument for this property." });
 
       const position = read.position(hist, asOf);

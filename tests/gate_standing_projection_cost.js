@@ -213,7 +213,7 @@ function recorder(client) {
  *  debt_payment_observations, which is payment history in the plainest
  *  sense §40.6 has — were caught by nothing until the source scan
  *  existed, and that is the whole argument for the scan.               */
-const HISTORY_WALK_CEILING = 11;
+const HISTORY_WALK_CEILING = 10;
 
 /*  Every statement each read issues, classified. `match` is a distinctive
     fragment of the statement. An issued statement matching NOTHING here
@@ -282,10 +282,23 @@ const DECLARED = [
          "no bound. Accrues per reporting cycle forever, independent of how many " +
          "instruments exist. NEEDS: the latest observation for standing. " +
          "LIVES IN src/asset/debt_instrument_service.js:274." },
-  { match: "from debt_payment_observations", kind: "HISTORY_WALK",
-    why: "every payment ever observed. This is PAYMENT HISTORY in the plainest " +
-         "sense §40.6 has. NEEDS: the latest observation for standing; the series " +
-         "is detail. LIVES IN src/asset/debt_instrument_service.js:275." },
+  /*  ── FIXED ────────────────────────────────────────────────────────
+      Was `select * from debt_payment_observations where instrument_id=$1
+      order by observed_as_of` — every payment ever observed, every column,
+      no bound, on the standing-read path. Now the newest observation on or
+      before as_of, eight named columns, `limit 1`.
+
+      The full series did not disappear: loadPaymentObservations() is the
+      detail read §40.6 calls for, and paidOverPeriod() — built-but-dormant,
+      called by nothing in src/ — uses it. Bounding the shared loader would
+      have broken a working capability with nothing in src/ to go red.
+
+      Equivalence proved at eight dates in
+      tests/debt_observation_bound_equivalence.db.js, including both sides
+      of every boundary, against the unbounded loader preserved verbatim. */
+  { match: "from debt_payment_observations", kind: "STRUCTURAL",
+    why: "BOUNDED — the newest observation on or before as_of, limit 1. The " +
+         "series is reachable through loadPaymentObservations() as a detail read." },
   { match: "from debt_instrument_parties", kind: "STRUCTURAL",
     why: "who is on the loan. Effective-dated rows accumulate with assignments, " +
          "not with operating events." },
@@ -450,7 +463,7 @@ const DOMAINS = [
       const read = require(path.join(ROOT, "src/asset/debt_position_read.js"));
       const ids = await svc.listInstrumentsForProperty(db, PROPERTY);
       if (!ids.length) return null;
-      const h = await svc.loadHistory(db, ids[0]);
+      const h = await svc.loadHistory(db, ids[0], "2026-08-22");
       return read.standingProjection(read.position(h, "2026-08-22"));
     } },
 ];

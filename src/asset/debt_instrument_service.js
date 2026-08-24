@@ -261,8 +261,45 @@ async function listInstrumentsForProperty(db, propertyId, asOf) {
 //  Fetches the governed history for one instrument. It composes NOTHING —
 //  it hands rows to debt_position_read.position(), which is pure and
 //  imports nothing so the economic derivation cannot reach funding.
-async function loadHistory(db, instrumentId) {
-  const q = async (sql) => (await db.query(sql, [instrumentId])).rows;
+/*  ── as_of IS REQUIRED, AND IT THROWS ─────────────────────────────────
+ *  It was not a parameter at all until the payment-observation bound
+ *  needed it. Defaulting it to today() would have been the friendlier
+ *  change and the wrong one: a caller reading as of a FUTURE date would
+ *  silently get a series bounded at today, and position() would report
+ *  NOT_ESTABLISHED for a payment that is recorded and readable. A missing
+ *  argument must break loudly at the call site, not quietly in the answer.
+ */
+function requireAsOf(asOf, who) {
+  if (typeof asOf !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(asOf)) {
+    throw new Error(
+      `${who} requires as_of as YYYY-MM-DD — the observation series is bounded at it`);
+  }
+  return asOf;
+}
+
+/*  ── THE DETAIL READ, KEPT WHOLE ──────────────────────────────────────
+ *  §40.6's shape is a compact standing projection PLUS detail as a second
+ *  read — not a standing projection that quietly deletes the detail. The
+ *  bound below belongs to the standing path. Anything that genuinely needs
+ *  the series — paidOverPeriod() computes amounts paid across a period and
+ *  cannot answer from one row — asks for it here, explicitly.
+ *
+ *  ⚠ paidOverPeriod() is BUILT-BUT-DORMANT: exported, proven in
+ *  tests/debt_institutional_acceptance.db.js, and called by nothing in
+ *  src/. That is exactly why this function exists rather than being left
+ *  implicit in loadHistory(). Bounding the shared loader would have broken
+ *  a working capability that no production caller was holding open, and
+ *  nothing would have gone red in src/ to say so.                        */
+async function loadPaymentObservations(db, instrumentId) {
+  return (await db.query(
+    `select * from debt_payment_observations
+      where instrument_id = $1
+      order by observed_as_of`, [instrumentId])).rows;
+}
+
+async function loadHistory(db, instrumentId, asOf) {
+  requireAsOf(asOf, "loadHistory");
+  const q = async (sql, params = [instrumentId]) => (await db.query(sql, params)).rows;
   const inst = await db.query(`select * from debt_instruments where id = $1`, [instrumentId]);
   if (!inst.rows[0]) return null;
   return {
@@ -272,7 +309,33 @@ async function loadHistory(db, instrumentId) {
     collateral: await q(`select * from debt_instrument_properties where instrument_id = $1 order by effective_from`),
     reserves: await q(`select * from debt_reserve_requirements where instrument_id = $1 order by effective_from`),
     balance_observations: await q(`select * from debt_balance_observations where instrument_id = $1 order by as_of_date`),
-    payment_observations: await q(`select * from debt_payment_observations where instrument_id = $1 order by observed_as_of`),
+
+    /*  ── BOUNDED · §40.6 ──────────────────────────────────────────────
+     *  This was `select * from debt_payment_observations where
+     *  instrument_id = $1 order by observed_as_of` — every payment ever
+     *  observed, every column, no bound, on the standing-read path. It is
+     *  payment history in the plainest sense §40.6 has.
+     *
+     *  position() uses EXACTLY ONE of these rows: the newest observation
+     *  on or before as_of (`payObs[0]`). Every other row is loaded,
+     *  sorted and discarded. So the bound is the read's own semantics
+     *  moved into SQL, not a new rule — and the columns are the eight
+     *  paymentStanding actually reads, so `select *` goes with it.
+     *
+     *  ⚠ THE ORDER IS STILL ASCENDING. position() re-sorts descending and
+     *  takes [0], and with one row that is the same row either way — but
+     *  handing it a differently-ordered array would make this bound
+     *  depend on a sort it does not own. Equivalence is proved in
+     *  tests/debt_observation_bound_equivalence.db.js against the
+     *  unbounded loader, on the real 4125 specimen.                     */
+    payment_observations: await q(
+      `select id, instrument_id, observed_as_of, observation_source, source_authority,
+              amount_due_cents, amount_received_cents, amount_remaining_cents
+         from debt_payment_observations
+        where instrument_id = $1
+          and observed_as_of <= $2::date
+        order by observed_as_of desc
+        limit 1`, [instrumentId, asOf]),
   };
 }
 
@@ -303,4 +366,5 @@ module.exports = {
   listInstrumentsForProperty,
   addReserveRequirement, recordBalanceObservation, recordPaymentObservation,
   loadHistory,
+  loadPaymentObservations,
 };

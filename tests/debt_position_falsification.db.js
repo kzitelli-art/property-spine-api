@@ -195,7 +195,9 @@ const c = (d) => Math.round(d * 100);
 
     /*  ══ THE 120-ROW DERIVATION PROOF ═══════════════════════════════ */
     console.log("\n  ── the derivation reproduces the servicer's published schedule ──");
-    const hist = await svc.loadHistory(db, inst.id);
+    //  as_of is required now: the payment-observation series is bounded at
+    //  it. "2026-08-12" is the same AS_OF the W1–W9 block below reads at.
+    const hist = await svc.loadHistory(db, inst.id, "2026-08-12");
     const sched = read.deriveSchedule(hist.terms, hist.instrument);
 
     ok("the derivation produces exactly 120 payments", sched.length === 120,
@@ -310,7 +312,7 @@ const c = (d) => Math.round(d * 100);
       spread_bp: 300, rate_floor_bp: 400, day_count_convention: "actual_360",
       payment_frequency: "monthly", amortization_kind: "interest_only",
       maturity_date: "2026-01-01", recorded_by_user_id: U });
-    const fpos = read.position(await svc.loadHistory(db, f.id), AS_OF);
+    const fpos = read.position(await svc.loadHistory(db, f.id, AS_OF), AS_OF);
     ok("W4 · a formula with no index observation yields NOT_ESTABLISHED",
        fpos.rate_position.effective_rate_bp === NE
        && fpos.rate_position.index_name === "SOFR" && fpos.rate_position.spread_bp === 300);

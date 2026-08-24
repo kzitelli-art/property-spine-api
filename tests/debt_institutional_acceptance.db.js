@@ -144,7 +144,13 @@ const $ = (cents) => cents == null ? "—" : "$" + (cents / 100).toLocaleString(
       provenance_note: "Lument statement 2025-08-01: PRINCIPAL PAID YTD / INTEREST PAID YTD",
       source_artifact_id: ART, recorded_by_user_id: U });
 
-    const hist = await svc.loadHistory(db, inst.id);
+    const hist = await svc.loadHistory(db, inst.id, "2026-08-12");
+    //  ⚠ THE SERIES, ON PURPOSE. loadHistory() now bounds payment
+    //  observations to the one row the STANDING read uses. paidOverPeriod()
+    //  answers about a whole period and needs every row in it, so it asks
+    //  for the detail read by name. This line is the distinction §40.6
+    //  draws, made visible.
+    hist.payment_observations = await svc.loadPaymentObservations(db, inst.id);
     const pos = read.position(hist, "2026-08-12");
     const sched = read.deriveSchedule(hist.terms, hist.instrument);
 
