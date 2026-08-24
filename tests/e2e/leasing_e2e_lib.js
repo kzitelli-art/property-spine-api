@@ -97,7 +97,11 @@ async function residentSigns(rawTok) {
   const required = ((view.body.packet && view.body.packet.fields) || []).filter((f) => f.required);
   for (const f of required) {
     const r = await api("POST", `/t/lease/${rawTok}/fields/${f.id}/complete`, {
-      body: {\n        value: f.field_type === "signature" ? "Hostile Tester" : "HT",\n        consent: f.field_type === "signature",\n        session_id: "hostile",\n      } });
+      body: {
+        value: f.field_type === "signature" ? "Hostile Tester" : "HT",
+        consent: f.field_type === "signature",
+        session_id: "hostile",
+      } });
     if (r.status >= 400) throw new Error("field: " + JSON.stringify(r.body));
   }
   return api("POST", `/t/lease/${rawTok}/submit`, { body: {} });
