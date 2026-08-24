@@ -381,6 +381,23 @@ function recorder(client) {
  *  bearing for a consumer that was not the one I was looking at. Find
  *  every consumer of the array before you bound the query.
  *
+ *  ── WHAT THE CEILING IS NOT ─────────────────────────────────────────
+ *  IT COUNTS CURVES, NOT COST. Six statements are DERIVED_BOUND today —
+ *  four in Tax alone — and each of them really does read rows. Four
+ *  statements reading N rows is 4N rows, and the ceiling records that as
+ *  zero.
+ *
+ *  That is deliberate and it is a LIMIT, not a feature. The ratchet
+ *  answers "how many things must be fixed", and the fix for all four Tax
+ *  statements is one fix: bound tax_obligations and the other three stop
+ *  walking on the same day. Counting them separately would make the
+ *  number look like work that does not exist.
+ *
+ *  What it costs: this gate cannot tell you a read is expensive because
+ *  it walks one curve four times. Nothing here measures that, and no
+ *  instrument is proposed for it — see the COMPUTE_WALK note for why a
+ *  fourth measuring instrument is not the answer to a third blind spot.
+ *
  *  ── THE RATCHET ─────────────────────────────────────────────────────
  *  HISTORY_WALK_CEILING is the number of history walks tolerated today.
  *  The gate fails if the count RISES. It does not pretend the remaining
@@ -400,7 +417,7 @@ function recorder(client) {
  *  debt_payment_observations, which is payment history in the plainest
  *  sense §40.6 has — were caught by nothing until the source scan
  *  existed, and that is the whole argument for the scan.               */
-const HISTORY_WALK_CEILING = 9;
+const HISTORY_WALK_CEILING = 10;
 
 /*  ══ COMPUTE_WALK — A CATEGORY THIS GATE CANNOT MEASURE ═════════════
  *
@@ -617,12 +634,17 @@ const DECLARED = [
       where l.obligation_id = o.id and l.property_id = $1)`), so its row
       count is the LINK count, never the obligation count.
 
-      And the link count is the TERM count: migration 171 makes links
-      append-only, FK'd to (term_id, property_id, engagement_id), and one
-      is written per governing decision — so links arrive with amendments
-      and with nothing else. That growth is already counted, once, under
-      contracted_service_terms. Counting it here counts the same curve
-      twice.
+      ⚠ AND THE SECOND HALF OF THAT ARGUMENT WAS WRONG. It said the link
+      count IS the term count, so the curve was already counted under
+      contracted_service_terms. A later self-audit checked the writer:
+      linkDecision() defaults term_id to NULL and nothing caps links per
+      engagement. Links are their own curve, and they are now declared as
+      one directly above. This statement is still DERIVED — its rows are
+      the link rows — but it derives from LINKS, not from terms.
+
+      The correction raised the ceiling. That is the honest direction, and
+      it is the second time a self-audit has raised it rather than lowered
+      it.
 
       Bounding it by status would have been the "obvious" fix and would
       have been WRONG OUTPUT: decisionOwner() looks the obligation up BY
@@ -630,7 +652,7 @@ const DECLARED = [
       would lose its owner and report UNASSIGNED — a confident-wrong owner
       on a screen (§5), bought to make this gate green.                  */
   { match: "from obligations o", kind: "DERIVED_BOUND",
-    bounded_by: "from contracted_service_terms",
+    bounded_by: "from contracted_service_decision_links",
     why: "scoped by EXISTS on contracted_service_decision_links, which are " +
          "written one per governing decision and therefore grow with terms, " +
          "not with operating events. The curve is counted under terms." },
@@ -697,7 +719,28 @@ const DECLARED = [
   { match: "from contracted_service_scopes", kind: "STRUCTURAL", why: "scope of each engagement" },
   { match: "from contracted_service_locations", kind: "STRUCTURAL", why: "where each applies" },
   { match: "from contracted_service_price_components", kind: "STRUCTURAL", why: "price structure" },
-  { match: "from contracted_service_decision_links", kind: "STRUCTURAL", why: "decision links" },
+  /*  ── RECLASSIFIED UP, BY A SELF-AUDIT ─────────────────────────────
+      Declared STRUCTURAL with the reason "decision links", which is a
+      label, not an argument. It is a HISTORY_WALK.
+
+      linkDecision() takes `term_id = null` AS ITS DEFAULT and the route
+      passes whatever the body carries, so a link need not reference a
+      term at all. Nothing in the schema or the service caps links per
+      engagement — `decision_kind` says there are several kinds, and the
+      table is append-only. Links arrive when operators DECIDE, which is
+      an operating cadence.
+
+      I had claimed the opposite in writing: "links arrive with amendments
+      and with nothing else", used to justify not counting the obligations
+      read. That claim was never checked against the writer. It is wrong.
+
+      NEEDS: the newest link per (engagement, term) for standing — which
+      is exactly what decisionOwner() already computes in JS after loading
+      all of them. The full log is detail.                              */
+  { match: "from contracted_service_decision_links", kind: "HISTORY_WALK",
+    why: "one row per governing DECISION, append-only, term_id nullable so " +
+         "nothing caps them per engagement. Arrives with operations. " +
+         "NEEDS: newest link per (engagement, term); the log is detail." },
   { match: "from opening_tenancy_positions", kind: "STRUCTURAL",
     why: "one CURRENT opening position per property — migration 157 enforces it" },
   { match: "from units where property_id", kind: "STRUCTURAL", why: "units marked down" },

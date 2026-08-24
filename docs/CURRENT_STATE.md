@@ -894,6 +894,64 @@ cannot see what happens in another.*
 
 ---
 
+## Build 3.9 — a critical pass on the instrument. The ceiling went UP again.
+
+`tests/gate_standing_projection_cost.js` · **ceiling 9 → 10** · no live read
+changed · 50/50 source-governance gates green
+
+A self-audit of my own work rather than of the reads. **It found four defects
+in the measuring instrument and one false claim in a previous receipt.** The
+count did not go up because anything got worse.
+
+| Defect | What it meant |
+|---|---|
+| **Classification was ORDER-DEPENDENT.** `classify()` matched a declaration against the whole statement, first hit wins — but a statement mentions several tables. Four live statements match declarations of *different kinds*. All four resolved correctly **by luck**: reordering the declarations, an edit with no apparent meaning, reclassifies the `spaces` correlated walk as STRUCTURAL and drops it from the count. Now the **outer table** decides, and order-independence is **asserted** by classifying everything again against a reversed list. |
+| **My first check for this gave false comfort.** It tested whether one declaration's match string contains another's — "no shadowing", green. That is a different question from whether one *statement* matches two declarations. The real check found four cases immediately. |
+| **The outer table is not the first `from` in the text.** The order-dependence assertion caught my own fix, on the one statement where it mattered: `space_position.js` carries a correlated `json_agg` **in the SELECT list**. The outer FROM is the first at **paren depth zero**. |
+| **Two sequential regexes cannot strip SQL comments.** These literals carry block comments with `--` lines inside them; stripping `--` first deletes the line the closing marker sits on, so the non-greedy block regex ran to the *next* comment and ate the SQL between. Measured: **41/41 parens before, 3/0 after.** Now one left-to-right pass — string literals skipped, block comments depth-counted (they nest in Postgres), whitespace collapsed **last**. |
+| **The capture itself normalised too early.** `recorder()` did `sql.replace(/\s+/g," ")` — written in Build 2, never revisited. It deleted every newline before anything read the statement, so the first `--` swallowed the rest: **5,131 characters in, 219 characters of SQL out.** Invisible while classification was a substring search; it surfaced only once classification cared about *structure*, and it surfaced as "this statement has no FROM", which reads like a parser bug rather than a capture bug. |
+
+### A false claim in the Build 3.6 receipt, corrected
+
+I wrote that `contracted_service_decision_links` "arrive with amendments and
+with nothing else", and used it to justify not counting the `obligations` read.
+**That was never checked against the writer.** `linkDecision()` takes
+`term_id = null` as its *default*, the route passes whatever the body carries,
+and nothing caps links per engagement. Links arrive when operators **decide** —
+an operating cadence.
+
+`contracted_service_decision_links` is now a **HISTORY_WALK**; `obligations`
+remains DERIVED_BOUND but derives from *links*, not from terms. **Ceiling 9 →
+10.** Second time a self-audit has raised the number rather than lowered it.
+
+### ⚠ Stated limit: the ceiling counts CURVES, not COST
+
+Six statements are `DERIVED_BOUND` — four in Tax alone — and each really does
+read rows. Four statements reading N rows is 4N rows, recorded as zero. That is
+deliberate: the ratchet answers *"how many things must be fixed"*, and one fix
+to `tax_obligations` stops all four walking on the same day. **What it costs:**
+this gate cannot tell you a read is expensive because it walks one curve four
+times, and no instrument is proposed for it.
+
+### Prose mistaken for schema — three times in one build
+
+```text
+"…established from did not carry."       → a table called "did not"
+"-- not from allocations: a policy…"     → a table called "allocations"
+"…different from total. … the opening…"  → a table called "total."
+```
+
+One helper now, so it cannot be fixed in one place and left broken in another.
+
+### A gap in process, not in code
+
+`debt_routes.js` was changed in `38b2a84` and `debt_routes_http.db.js` was never
+run. Run now — 23/23 green, along with `debt_establishment_tool` and
+`debt_schema_falsification`. The code was fine; **I did not know that when I
+pushed it.**
+
+---
+
 ## ⛔ CLOSING A THREAD — DO THIS BEFORE YOU STOP
 
 **This file goes stale the moment a thread ships something and does not say so.**
