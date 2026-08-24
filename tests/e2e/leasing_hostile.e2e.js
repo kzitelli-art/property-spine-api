@@ -186,8 +186,56 @@ const head = (t) => console.log(`\n── ${t} ${"─".repeat(Math.max(0, 58 - t
     }
   }
 
-  // ═══ 11 · EXACTLY ONE TENANCY ANCHOR PER CLEAN ADMISSION ════════
-  head("11 · a clean admission produces exactly one tenancy anchor");
+  // ═══ 11 · COMPLETED SIGNER EVIDENCE IS IMMUTABLE ═══════════════
+  head("11 · an exact retry cannot rewrite completed signer evidence");
+  {
+    const P = await toPacket(C, { bed: C.bedA });
+    const view = await api("GET", `/t/lease/${P.rawTok}/data`);
+    const packet = view.body && view.body.packet;
+    const signature = packet && packet.fields
+      && packet.fields.find((f) => f.required && f.field_type === "signature");
+    const signerName = packet && packet.current_signer && packet.current_signer.display_name;
+    if (!signature || !signerName) {
+      bad("completed signer evidence stayed immutable", "the packet exposed no named signer signature control");
+    } else {
+      const first = await api("POST", `/t/lease/${P.rawTok}/fields/${signature.id}/complete`, {
+        body: { value: signerName, consent: true, session_id: "original-session" },
+      });
+      const before = (await q(
+        `select completed, completed_at::text, field_value, session_id
+           from lease_packet_fields where id=$1`, [signature.id])).rows[0];
+      const auditsBefore = Number((await q(
+        `select count(*)::int n from lease_packet_audit_events
+          where lease_packet_id=$1 and event_type='field_completed'
+            and event_json->>'field_key'=$2`, [P.packetId, signature.field_key])).rows[0].n);
+      const retry = await api("POST", `/t/lease/${P.rawTok}/fields/${signature.id}/complete`, {
+        body: { value: signerName, consent: true, session_id: "replacement-session" },
+      });
+      const after = (await q(
+        `select completed, completed_at::text, field_value, session_id
+           from lease_packet_fields where id=$1`, [signature.id])).rows[0];
+      const auditsAfter = Number((await q(
+        `select count(*)::int n from lease_packet_audit_events
+          where lease_packet_id=$1 and event_type='field_completed'
+            and event_json->>'field_key'=$2`, [P.packetId, signature.field_key])).rows[0].n);
+      if (first.status === 200 && retry.status === 200 && retry.body.already_completed === true
+          && before.completed === true && after.completed === true
+          && before.completed_at === after.completed_at
+          && before.field_value === after.field_value
+          && before.session_id === "original-session" && after.session_id === "original-session"
+          && auditsBefore === 1 && auditsAfter === 1) {
+        ok("completed signer evidence stayed immutable on exact retry",
+          `session ${after.session_id} · audits ${auditsBefore}→${auditsAfter}`);
+      } else {
+        bad("completed signer evidence stayed immutable",
+          `first=${first.status} retry=${retry.status} idempotent=${retry.body && retry.body.already_completed} ` +
+          `before=${JSON.stringify(before)} after=${JSON.stringify(after)} audits=${auditsBefore}→${auditsAfter}`);
+      }
+    }
+  }
+
+  // ═══ 12 · EXACTLY ONE TENANCY ANCHOR PER CLEAN ADMISSION ════════
+  head("12 · a clean admission produces exactly one tenancy anchor");
   {
     const rows = (await q(`select application_id, count(*)::int n from leases
                             where property_id=$1 group by application_id having count(*) > 1`, [C.prop])).rows;
