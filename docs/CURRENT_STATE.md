@@ -755,6 +755,84 @@ this is 0.
 
 ---
 
+## Build 3.7 — first walks actually fixed · ceiling 11 → 9
+
+`src/asset/debt_instrument_service.js` · `tests/debt_observation_bound_equivalence.db.js`
+· real Postgres, ledger 191 · 50/50 source-governance gates green
+
+| What | Rung |
+|---|---|
+| **`debt_payment_observations` BOUNDED.** Was `select *`, every payment ever observed, no bound, on the standing-read path. Now eight named columns, newest on or before `as_of`, `limit 1`. **36 rows → 1.** | HTTP_PROVEN |
+| Identical output proved at 14 dates by deep structural equality against the unbounded loader kept verbatim — both sides of every boundary, exactly ON observations, mid-series, past maturity. Falsified four ways (ascending order · bound ignores as_of · `<` for `<=` · a dropped column). | HTTP_PROVEN |
+| `loadHistory(db, id, asOf)` — `as_of` **required, throws**. A `today()` default would make a future-dated read silently report `NOT_ESTABLISHED` for a recorded payment. | HTTP_PROVEN |
+| `loadPaymentObservations()` added — the detail read §40.6 asks for beside the compact projection. `paidOverPeriod()` is **built-but-dormant** (exported, proven, no `src/` caller); bounding the shared loader would have broken it with nothing in `src/` to go red. | BUILT_BUT_DORMANT |
+| **`debt_balance_observations` — bound BUILT then REVERTED.** Correct at every date except a same-date tie, where `position()`'s comparator returns −1 for equal keys so the winner is input order and `order by as_of_date` does not order equal dates. **The answer is already arbitrary.** Two balances for one date from different sources is a conflict; §5 says say so, not pick. Writer ruling, not a cost change. Still counted. | Disproved |
+| **`debt_terms` reclassified STRUCTURAL.** `addTerm()` has one caller — an operator recording a regime from the governing document. Rows arrive at origination and modification, like `capital_stack_positions`. `contracted_service_terms` stays a walk because a service contract *renews on a cadence*; a loan modification does not. | HTTP_PROVEN |
+
+### Recorded, not fixed: a compute walk this gate cannot see
+
+`position()` derives the full **120-row amortization schedule on every call**,
+and `standingProjection()` reads `projected_principal` out of it — so the
+*compact* projection pays for the whole schedule. That is a compute walk, not a
+query walk, and the cost gate counts queries. It is the next real cost in Debt
+and nothing else names it.
+
+### ⚠ THE PATTERN — a measurement that only observes execution cannot see code that does not execute
+
+Not three incidents. One class, three times in one build, and it is the same
+failure as a green gate never shown able to go red — applied to the measuring
+instrument itself:
+
+```text
+the runner that stops at first failure   22 gates reported NOT RUN, read as "fine"
+the fixture that never provokes a read   compliance short-circuits when empty
+a gate blind to guarded code             everything behind `if (oblIds.length)`
+```
+
+**The remedy is always the same: add a channel that does not depend on the code
+running.** For the cost gate that is the source scan; the count is now
+ISSUED ∪ FOUND IN THE SOURCE.
+
+### ⚠ THREE TIMES THE OBVIOUS BOUND WOULD HAVE TRADED TRUTH FOR A NUMBER
+
+Worked examples are in the header of `tests/gate_standing_projection_cost.js`.
+None was caught by a test failing — all three were caught by reading what the
+consumer does with the rows.
+
+1. **`obligations`** — "restrict to open obligations". `decisionOwner()` looks
+   the obligation up *by id* from the newest decision link, so a link pointing
+   at a closed obligation reports **UNASSIGNED**: a contract with a real
+   accountable owner rendering as having none.
+2. **`debt_balance_observations`** — "take the latest row". W1 does
+   `.find(source === "payoff_statement")` on an **ascending** array, so it takes
+   the *earliest* payoff statement. With one payoff statement — every fixture in
+   this repo — the two are the same row and nothing goes red.
+3. **`debt_payment_observations`** — bounding the *shared* loader breaks
+   `paidOverPeriod()`, which no production caller holds open.
+
+**The common shape:** the SQL looked wasteful, and the waste was load-bearing
+for a consumer that was not the one being looked at. Find every consumer of the
+array before bounding the query.
+
+### The nine that remain
+
+```text
+tax_obligations                              src/asset/tax_position_read.js
+utility_statements · utility_statement_usage src/asset/utility_position_read.js
+contracted_service_financial_observations
+contracted_service_terms                     src/asset/contracted_service_position_read.js
+compliance_facts            scan-only        src/asset/compliance_read.js
+debt_balance_observations   BLOCKED on a conflict verdict
+spaces (correlated)         out of lane      src/tenancy/space_position.js
+import_batches              out of lane      src/tenancy/dated_positions.js
+```
+
+**The count may still be low** and the scan does not reach files called
+*through* the eight it reads. Recorded rather than re-measured: the number is
+frozen, and the remaining walks are fixed against it.
+
+---
+
 ## ⛔ CLOSING A THREAD — DO THIS BEFORE YOU STOP
 
 **This file goes stale the moment a thread ships something and does not say so.**

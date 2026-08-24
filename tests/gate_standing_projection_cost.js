@@ -85,6 +85,22 @@ const PROPERTY = "b2000000-0000-4000-8000-000000000001";
  *  declared, fired or not. Observation still classifies; the scan is what
  *  makes the declaration complete.
  *
+ *  ── THE PATTERN, NOT THREE INCIDENTS ────────────────────────────
+ *  A MEASUREMENT THAT ONLY OBSERVES EXECUTION CANNOT SEE CODE THAT DOES
+ *  NOT EXECUTE.
+ *
+ *  Same class, three times in one build:
+ *    the runner that stops at first failure   22 gates reported NOT RUN,
+ *                                             which read as "fine"
+ *    the fixture that never provokes a read   compliance short-circuits
+ *                                             on an empty property
+ *    this gate, blind to guarded code         everything behind
+ *                                             `if (oblIds.length)`
+ *
+ *  It is the same failure as a green gate never shown able to go red,
+ *  applied to the measuring instrument. The remedy is always the same:
+ *  add a channel that does not depend on the code running.
+ *
  *  ── THE SCOPE, STATED (CLAUDE.md: "a gate must scan the same scope as
  *     the claim it asserts") ─────────────────────────────────────────
  *  These files and no others. The reads reached THROUGH them —
@@ -194,6 +210,39 @@ function recorder(client) {
  *  This is §40.5's shape — "declared as data, as part of its read
  *  contract" — applied to cost instead of to truth walls.
  *
+ *  ── THREE TIMES THE OBVIOUS BOUND WOULD HAVE TRADED TRUTH FOR A
+ *     NUMBER. READ THESE BEFORE BOUNDING ANYTHING. ──────────────────
+ *
+ *  Each of these looked like a fix, would have made this gate greener,
+ *  and would have put a wrong answer on an operator's screen. None was
+ *  caught by a test failing — all three were caught by reading what the
+ *  consumer actually does with the rows.
+ *
+ *  1  `select * from obligations o` — "restrict to open obligations".
+ *     decisionOwner() looks the obligation up BY ID from the newest
+ *     decision link. A link pointing at a CLOSED obligation would find
+ *     nothing and report UNASSIGNED — a contract with a real accountable
+ *     owner rendering as having none. §5, in the direction that looks
+ *     like diligence.
+ *
+ *  2  `select * from debt_balance_observations` — "take the latest row".
+ *     There are TWO consumers. W1 does
+ *     `balances.find(source === "payoff_statement")` on an ASCENDING
+ *     array, which takes the EARLIEST payoff statement. A latest-row
+ *     bound silently changes W1 — and on an instrument with one payoff
+ *     statement, which is every fixture in this repo, the two are the
+ *     same row and nothing goes red.
+ *
+ *  3  `select * from debt_payment_observations` — bounding the SHARED
+ *     loader. paidOverPeriod() needs the series and is called by nothing
+ *     in src/: built-but-dormant. The bound would have broken a working
+ *     capability with no production caller to go red. §40.6 is standing
+ *     PLUS detail, not standing INSTEAD of detail.
+ *
+ *  The common shape: the SQL looked wasteful, and the waste was load-
+ *  bearing for a consumer that was not the one I was looking at. Find
+ *  every consumer of the array before you bound the query.
+ *
  *  ── THE RATCHET ─────────────────────────────────────────────────────
  *  HISTORY_WALK_CEILING is the number of history walks tolerated today.
  *  The gate fails if the count RISES. It does not pretend the remaining
@@ -213,7 +262,7 @@ function recorder(client) {
  *  debt_payment_observations, which is payment history in the plainest
  *  sense §40.6 has — were caught by nothing until the source scan
  *  existed, and that is the whole argument for the scan.               */
-const HISTORY_WALK_CEILING = 10;
+const HISTORY_WALK_CEILING = 9;
 
 /*  Every statement each read issues, classified. `match` is a distinctive
     fragment of the statement. An issued statement matching NOTHING here
@@ -271,12 +320,34 @@ const DECLARED = [
   /*  ── DEBT'S loadHistory() — the name is the finding ────────────────
       Six statements, none observed, because the empty property has no
       instrument. Two of them are unbounded observation series. */
-  { match: "from debt_terms", kind: "HISTORY_WALK",
-    why: "every term amendment on this instrument, effective-dated, no bound. " +
-         "§40.6 names amendment history explicitly — the same ruling that made " +
-         "contracted_service_terms a walk. NEEDS: the term governing as_of for " +
-         "standing; the amendment chain is detail. " +
-         "LIVES IN src/asset/debt_instrument_service.js:270 (loadHistory)." },
+  /*  ── RECLASSIFIED, AND I MAY BE WRONG ─────────────────────────────
+      I declared this a HISTORY_WALK on §40.6's phrase "amendment
+      history". Looking at what writes it: addTerm() has ONE caller, an
+      operator recording a regime from the governing document. Rows arrive
+      at origination and at modification. A ten-year loan carries two to
+      four. That is the same curve as capital_stack_positions, which is
+      declared STRUCTURAL two lines up for the same reason — it grows with
+      financings, not with operating events.
+
+      contracted_service_terms stays a walk and the difference is real: a
+      service contract RENEWS on a cadence, so its term rows arrive with
+      the calendar. A loan modification does not.
+
+      It also could not be bounded even if it were a walk. deriveSchedule()
+      calls inForce(terms, due) for EVERY due date from origination to
+      maturity, and line 324 asks whether ANY term is an exercised
+      extension. Both need every regime.
+
+      ⚠ WHICH SURFACES THE COST THIS GATE DOES NOT MEASURE. position()
+      derives the full 120-row amortization schedule on every call, and
+      standingProjection() reads projected_principal out of it — so the
+      COMPACT projection pays for the whole schedule. That is a compute
+      walk, not a query walk, and this gate counts queries. Recorded here
+      because it is the next real cost in Debt and nothing else names it. */
+  { match: "from debt_terms", kind: "STRUCTURAL",
+    why: "the governing document's regimes. Arrives at origination and at " +
+         "modification — with financings, not with operating events. Cannot be " +
+         "bounded regardless: deriveSchedule() needs every regime." },
   /*  ── A BOUND WAS BUILT FOR THIS AND REVERTED ──────────────────────
       It was correct at every date except one: two observations recorded
       for the SAME as_of_date. position() sorts with a comparator that
