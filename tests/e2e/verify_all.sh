@@ -101,6 +101,7 @@ else
   step "ask spine facts"             node tests/e2e/leasing_ask_spine.e2e.js
 
   if [ -x "${CHROMIUM:-/opt/pw-browsers/chromium-1194/chrome-linux/chrome}" ]; then
+    step "browser: staff invite accepts" node tests/e2e/staff_invite_acceptance.browser.js
     step "browser: resident signs"   node tests/e2e/resident_signing.browser.js
   else
     echo "── browser: resident signs            SKIPPED (no Chromium)"

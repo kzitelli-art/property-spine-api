@@ -38,6 +38,7 @@ const crypto = require("crypto");
 
 const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("./staff_identity_resolver.js");
+const { renderStaffInviteAcceptancePage } = require("./staff_invite_acceptance_page.js");
 
 module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridgeService = null }) {
   const router = express.Router();
@@ -76,6 +77,29 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridg
     return null; // not a US number we can normalize — reject honestly
   }
   const maskPhone = (p) => (p ? p.replace(/^(\+1)(\d{3})(\d{3})(\d{2})(\d{2})$/, "$1 ($2) ***-**$5") : null);
+
+  // ── GET /auth/join/:token — public human door for staff invite acceptance ─
+  // /auth/* already sits inside the explicit public prefix because every
+  // mutation behind this page authenticates its own one-time token and OTP.
+  // The page is only an adapter; /start and /verify remain the one business
+  // path and the only writers.
+  router.get("/auth/join/:token", (req, res) => {
+    const token = String(req.params.token || "");
+    if (!/^[A-Za-z0-9_-]{24}$/.test(token)) {
+      return res.status(404).type("text/plain").send("That invite link isn't valid.");
+    }
+    res.set({
+      "Cache-Control": "no-store",
+      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+    });
+    return res.status(200).type("html").send(renderStaffInviteAcceptancePage({
+      token,
+      appOrigin: process.env.OPERATOR_APP_ORIGIN,
+    }));
+  });
 
   // sanitize a requested module list to the known set, preserving order, deduped.
   const cleanModules = (arr) => {
@@ -271,8 +295,8 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridg
           [inv.id, prior.map(p => p.id)]);
       }
 
-      const base = process.env.APP_BASE_URL || `https://${req.headers.host}`;
-      const link = `${base}/join/${token}`;
+      const base = String(process.env.APP_BASE_URL || `https://${req.headers.host}`).replace(/\/+$/, "");
+      const link = `${base}/auth/join/${token}`;
       const smsText = `You've been added to ${prop.name} on Property Spine. Tap to set up your access: ${link}`;
 
       // COMMUNICATIONS BOUNDARY: staff-invite is explicitly classified

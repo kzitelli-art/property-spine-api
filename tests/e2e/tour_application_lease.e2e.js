@@ -235,6 +235,12 @@ async function waitForStaffReply(providerMessageId) {
   );
   expect(!!inviteToken && inviteText.to === mikePhone,
     "the fake carrier records the exact invite without reaching a phone");
+  const joinResponse = await fetch(invited.link, { redirect: "error" });
+  const joinHtml = await joinResponse.text();
+  expect(joinResponse.status === 200
+      && /Set up your Property Spine access/i.test(joinHtml)
+      && !/Missing or wrong x-operator-key/i.test(joinHtml),
+    "the literal text link reaches the public staff acceptance door without an operator key");
 
   const otpStarted = requireOk(await api("POST", "/auth/sms/start", {
     body: { token: inviteToken },
