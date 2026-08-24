@@ -23,6 +23,63 @@ function requireProperty(propertyId) {
   if (!propertyId) throw new Error("utility_position_read requires property_id");
 }
 
+/*  Every loader runs the same foreign-row check, including the bounded
+    usage loader below. A second loading path that skipped it would be a
+    second scope boundary, and the weaker one would be the real one. */
+function assertOwned(rows, propertyId, table) {
+  if (rows.some((row) => String(row.property_id) !== String(propertyId))) {
+    const error = new Error(`utility_position_read received a foreign-property row from ${table}`);
+    error.code = "PROPERTY_SCOPE_VIOLATION";
+    throw error;
+  }
+  return rows;
+}
+
+/*  ── STATEMENT USAGE IS LOADED SEPARATELY, AND BOUNDED · §40.6 ────────
+ *  `utility_statement_usage` is the fastest-growing table this read
+ *  touches: rows arrive per meter, per line, per statement, per billing
+ *  cycle, forever. It used to be loaded in full by the generic TABLES
+ *  loop below.
+ *
+ *  Only ONE thing ever reads them. utility_projection.js passes the array
+ *  to statementView() exactly once — for the LATEST statement of each
+ *  account — and statementView filters it with
+ *  `usageRows.filter((u) => u.statement_id === row.id)`. Every other row
+ *  was loaded, held in memory and discarded. detail.recent_statements is
+ *  built from those same already-built views, not from raw statements, so
+ *  no surface reaches usage for any other statement.
+ *
+ *  ⚠ THE SELECTION IS NOT REPRODUCED HERE. Which statement is "latest",
+ *  what supersedes what, and how as_of applies are owned by
+ *  utility_projection.js and by nothing else. This module asks that
+ *  module which statements survived, then loads usage for exactly those
+ *  ids. There is no date comparison and no supersession rule in this file
+ *  or in SQL — a second selection path is precisely the defect this
+ *  shape exists to avoid.                                               */
+async function loadStatementUsage(client, { property_id, statement_ids } = {}) {
+  requireProperty(property_id);
+  if (!statement_ids || !statement_ids.length) return [];
+  const rows = (await client.query(
+    `select * from ${TABLES.statement_usage}
+      where property_id = $1
+        and statement_id = any($2::uuid[])`,
+    [property_id, statement_ids])).rows;
+  return assertOwned(rows, property_id, TABLES.statement_usage);
+}
+
+/*  THE FULL SERIES, REACHABLE BY NAME. Nothing in src/ needs it today —
+ *  which is exactly why it exists rather than being deleted. §40.6 is
+ *  standing PLUS detail; bounding the standing path is not permission to
+ *  make the series unreachable, and a caller that appears later must not
+ *  have to reintroduce an unbounded load in the standing read to get it. */
+async function loadAllStatementUsage(client, { property_id } = {}) {
+  requireProperty(property_id);
+  const rows = (await client.query(
+    `select * from ${TABLES.statement_usage} where property_id = $1`,
+    [property_id])).rows;
+  return assertOwned(rows, property_id, TABLES.statement_usage);
+}
+
 async function readSnapshot(client, { property_id } = {}) {
   requireProperty(property_id);
   const snapshot = { property_id };
@@ -45,20 +102,43 @@ async function readSnapshot(client, { property_id } = {}) {
         [property_id])).rows;
       continue;
     }
+    if (key === "statement_usage") {
+      //  Bounded, and only once the projection has said which statements
+      //  survive. Empty here so the provisional pass is honest about it.
+      snapshot[key] = [];
+      continue;
+    }
     const rows = (await client.query(
       `select * from ${table} where property_id = $1`, [property_id])).rows;
-    if (rows.some((row) => String(row.property_id) !== String(property_id))) {
-      const error = new Error(`utility_position_read received a foreign-property row from ${table}`);
-      error.code = "PROPERTY_SCOPE_VIOLATION";
-      throw error;
-    }
-    snapshot[key] = rows;
+    snapshot[key] = assertOwned(rows, property_id, table);
   }
   return snapshot;
 }
 
+/*  ── TWO PASSES THROUGH ONE CANONICAL PROJECTION ──────────────────────
+ *  The provisional pass issues NO queries — project() is pure. It exists
+ *  only to ask the canonical owner which statements survived into the
+ *  position, so the bounded usage query can name them.
+ *
+ *  ⚠ THE SAME as_of GOES INTO BOTH PASSES. Threading a different one —
+ *  or letting the provisional pass default to today while the caller
+ *  asked for a historical date — would select usage for one set of
+ *  statements and render another. `as_of` is passed through unchanged,
+ *  null included, so both passes resolve it identically inside the
+ *  projection.                                                          */
 async function readPosition(client, { property_id, as_of = null } = {}) {
   const snapshot = await readSnapshot(client, { property_id });
+
+  const provisional = projection.project(snapshot, { as_of });
+  const statementIds = [...new Set(
+    ((provisional.detail && provisional.detail.recent_statements) || [])
+      .map((statement) => statement && statement.id)
+      .filter(Boolean)
+      .map(String))];
+
+  snapshot.statement_usage = await loadStatementUsage(client, {
+    property_id, statement_ids: statementIds,
+  });
   return projection.project(snapshot, { as_of });
 }
 
@@ -77,6 +157,8 @@ async function readDetail(client, input = {}) {
 module.exports = {
   TABLES,
   readSnapshot,
+  loadStatementUsage,
+  loadAllStatementUsage,
   readPosition,
   readOpening,
   readStanding,

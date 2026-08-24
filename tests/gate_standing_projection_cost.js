@@ -417,7 +417,7 @@ function recorder(client) {
  *  debt_payment_observations, which is payment history in the plainest
  *  sense §40.6 has — were caught by nothing until the source scan
  *  existed, and that is the whole argument for the scan.               */
-const HISTORY_WALK_CEILING = 10;
+const HISTORY_WALK_CEILING = 9;
 
 /*  ══ COMPUTE_WALK — A CATEGORY THIS GATE CANNOT MEASURE ═════════════
  *
@@ -692,9 +692,34 @@ const DECLARED = [
   { match: "from utility_statements", kind: "HISTORY_WALK",
     why: "every provider statement this property has ever received, unbounded. " +
          "NEEDS: latest statement per account for standing; the series is detail." },
-  { match: "from utility_statement_usage", kind: "HISTORY_WALK",
-    why: "every usage row of every statement. Grows fastest of anything here. " +
-         "NEEDS: it does not belong in a standing projection at all." },
+  /*  ── FIXED ────────────────────────────────────────────────────────
+      Was `select * from utility_statement_usage where property_id = $1`
+      in the generic TABLES loop — every usage row on the property,
+      forever. Rows arrive per meter, per line, per statement, per cycle:
+      the fastest-growing table the standing read touched.
+
+      Now loaded only for the statements the projection says survive:
+      `and statement_id = any($2::uuid[])`. The ceiling is
+      accounts x lines-per-statement — structural, and it does not grow
+      with time. Ten years of operation adds nothing.
+
+      ⚠ THE SELECTION IS NOT REPRODUCED IN SQL. utility_projection.js
+      stays the only owner of latest/supersession/as_of. The read makes a
+      provisional pass through that same projection to learn which
+      statement ids survive, then names them. No second selection path,
+      no date comparison in SQL, and the SAME as_of goes into both passes.
+
+      The full series stays reachable by name via loadAllStatementUsage()
+      — §40.6 is standing PLUS detail.
+
+      Equivalence proved at four as_of values (two historical) with usage
+      seeded on statements that must be dropped, in
+      tests/utility_statement_usage_bound_equivalence.db.js: identical
+      standing AND detail, 6 rows read instead of 18.                    */
+  { match: "from utility_statement_usage", kind: "STRUCTURAL",
+    why: "BOUNDED — usage of the surviving statements only, by id. Ceiling is " +
+         "accounts x lines-per-statement; it does not grow with time. The full " +
+         "series is reachable through loadAllStatementUsage() as detail." },
   { match: "from contracted_service_financial_observations", kind: "HISTORY_WALK",
     why: "observed amounts accumulate per invoice/period. NEEDS: latest per " +
          "engagement for standing." },
