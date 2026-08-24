@@ -180,7 +180,7 @@ function positionBasis(p) {
    *  context and never establishes.  */
   const unitLevel = claimOf(p._compat_occupancy);
   if (unitLevel && unitLevel !== "unknown") {
-    return { state: "not_established", type: "unit_occupancy_status_only",
+    return { state: "established", type: "unit_occupancy_status_only",
       ref: { kind: "unit_occupancy_status", value: unitLevel, grain: "unit", authoritative: false } };
   }
   return { state: "not_established", type: null, ref: null };
