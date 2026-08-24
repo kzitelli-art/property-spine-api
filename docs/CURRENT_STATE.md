@@ -952,6 +952,83 @@ pushed it.**
 
 ---
 
+## Build 4.0 — "latest statement" was chosen by WEEKDAY NAME
+
+`src/asset/utility_projection.js` (Class 1) ·
+`tests/utility_latest_statement_ordering.db.js` (Class 3, new) ·
+real Postgres from migration 169 · 50/50 source-governance gates green
+
+Found while investigating whether `utility_statement_usage` could be bounded.
+It could not be reasoned about, because the "latest statement" it hangs off was
+being selected wrongly.
+
+```js
+const av = String(a[field] || "");        // bill_date is a `date` column
+if (av !== bv) return av < bv ? 1 : -1;   // descending
+```
+
+node-pg returns a `date` as a **JS Date** and this repo installs no type parser,
+so the comparison ran on `"Sat Aug 01 2026 00:00:00 GMT+0000 (…)"` — which sorts
+on the **weekday name** first: `Fri < Mon < Sat < Sun < Thu < Tue < Wed`.
+Descending, so **any Wednesday outranked any non-Wednesday, whatever its year.**
+
+| Evidence | Rung |
+|---|---|
+| Three ordinary consecutive monthly bills — Jun/Jul/Aug 2026 — reported **July** as latest, with July's **$120.00**, while August's $130.00 was recorded and readable. | **DB-PROVEN** (real Postgres, real read, real migration) |
+| A **2019-01-02** bill outranked **2026-08-21** — seven years stale, because 2019-01-02 was a Wednesday. | DB-PROVEN |
+| Fixed by comparing Dates as instants (`getTime()`), strings as strings. Falsified by restoring the **verbatim** original: three assertions red. | DB-PROVEN |
+| ⚠ The first falsification attempt was **inert** — deleting the `getTime()` branch left the `toISOString()` path, which is also chronologically correct, so it stayed green. The same "break that does not reach the assertion" trap seen in the Codex lease-CI runs #124/#125. Redone against the original bytes. | Recorded |
+
+**Three decisions rode on this, not one.** `newest()` also selects, on
+`effective_from`: the **applicability** declaration (is this service present at
+all) and the **arrangement** (who pays, and how residents are recovered). The
+statement figure is the one that was *proved*; the other two share the defect
+and are fixed by the same correction.
+
+**Why `getTime()` and not the existing `day()` helper:** `day()` renders via
+`toISOString()`, which is correct for display in UTC and wrong as a *sort input*
+west of it — a `date` column arrives at LOCAL midnight and `toISOString()` then
+reports the previous day. Ordering by instant never converts to a calendar day,
+so it cannot inherit that shift. **`day()` itself is untouched and that latent
+shift is REPORTED, not fixed.**
+
+### Adjacent, recorded not fixed
+
+| Finding | Status |
+|---|---|
+| `src/asset/contracted_service_projection.js:48` carries a **byte-equivalent `newest()`** with the same `String()` comparison, used on `commencement_date` (a `date`) — it selects **which contract term governs**. Same defect class, different domain, **no observed stop yet**. | `REPORTED` |
+| `tests/utility_ask_spine.test.js` **fails at HEAD** (`TypeError: Cannot read properties of undefined (reading 'messages')`) and is **referenced by no runner** — not `verify_source_governance.js`, not `verify_all.sh`, not `package.json`. An orphan failing test nothing executes. Wiring it in would change shared runner behaviour → **ruling requested, not taken.** | `REPORTED` |
+
+### ⚠ This branch's CI has been RED for 13 consecutive pushes
+
+Runs 99→139 on `claude/github-docs-review-5hr4jt` all `failure`; last green was
+run 98 / `9e62948` (22 Aug 15:13Z). **Prior receipts in this file claiming
+"50/50 gates green" were reporting LOCAL runs and never opened CI.** Same
+class as the empty fixture and the first-failure runner: *a measurement that
+only observes one channel.*
+
+**Not caused by work on this branch.** Single root cause, five steps:
+
+```
+{"error":"signature_intent_required"}  at residentSigns (tests/e2e/leasing_e2e_lib.js:101)
+  → leasing clean path · hostile falsifications · cross-surface reconciliation
+  → standing vs review · browser: resident signs
+```
+
+The guard is in `src/applications/leasepackets.js` (forbidden file), introduced
+by `abcb28e` — authored by Kameron 22 Aug 10:21, present on **three** branches
+including two Codex branches, and it changed **only** the server file, never the
+harness. `codex/skyline-guarantor-agent-20260822` carries the matching harness
+update (adds `consent: f.field_type === "signature"`); this branch does not.
+**Fix belongs in `tests/e2e/leasing_e2e_lib.js` — Codex's lane. Lane-collision
+stop.**
+
+**Steps covering this lane are GREEN in that same red run:** `source governance
+gates` PASS · `standing projection cost` PASS · `property name resolution` PASS
+· `ask spine facts` PASS. **No NOT RUN entries.**
+
+---
+
 ## ⛔ CLOSING A THREAD — DO THIS BEFORE YOU STOP
 
 **This file goes stale the moment a thread ships something and does not say so.**

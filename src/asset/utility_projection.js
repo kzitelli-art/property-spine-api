@@ -23,12 +23,51 @@ function current(rows, asOf) {
   return heads(rows).filter((r) => activeAt(r, asOf));
 }
 
+/*  ── "NEWEST" MEANT "LATEST WEEKDAY NAME" ─────────────────────────────
+ *
+ *  This compared String(a[field]). Every field it is called with is a
+ *  `date` or `timestamptz` column, and node-pg returns those as JS Dates
+ *  — this repo installs no type parser. So the comparison ran on
+ *
+ *      "Sat Aug 01 2026 00:00:00 GMT+0000 (Coordinated Universal Time)"
+ *
+ *  which sorts on the WEEKDAY NAME first: Fri < Mon < Sat < Sun < Thu <
+ *  Tue < Wed. The sort is descending, so ANY Wednesday outranked ANY
+ *  non-Wednesday whatever its year.
+ *
+ *  Not an edge case. Three ordinary consecutive monthly bills — June,
+ *  July, August 2026 — reported JULY as the latest statement, with
+ *  July's amount, while August was recorded and readable. A 2019 bill
+ *  beat a 2026 bill by seven years. Proved against real Postgres in
+ *  tests/utility_latest_statement_ordering.db.js.
+ *
+ *  ⚠ THREE DECISIONS RODE ON THIS, NOT ONE:
+ *      declarations  ["effective_from", …]  → is this service APPLICABLE
+ *      arrangements  ["effective_from", …]  → WHO PAYS, and how residents
+ *                                             are recovered
+ *      statements    ["bill_date", …]       → the figure an operator sees
+ *
+ *  ── WHY getTime() AND NOT day() ──────────────────────────────────────
+ *  day() renders a Date with toISOString(), which is correct for display
+ *  in UTC and wrong as a sort input west of it: a `date` column arrives
+ *  at LOCAL midnight, and toISOString() then reports the PREVIOUS day.
+ *  Ordering by the instant avoids converting to a calendar day at all,
+ *  so the comparison cannot inherit that shift. Strings still compare as
+ *  strings, because some callers sort on `id`.                          */
+function compareValues(a, b) {
+  const aDate = a instanceof Date;
+  const bDate = b instanceof Date;
+  if (aDate && bDate) return a.getTime() - b.getTime();
+  const av = aDate ? a.toISOString() : String(a === null || a === undefined ? "" : a);
+  const bv = bDate ? b.toISOString() : String(b === null || b === undefined ? "" : b);
+  return av < bv ? -1 : av > bv ? 1 : 0;
+}
+
 function newest(rows, fields) {
   return [...(rows || [])].sort((a, b) => {
     for (const field of fields) {
-      const av = String(a[field] || "");
-      const bv = String(b[field] || "");
-      if (av !== bv) return av < bv ? 1 : -1;
+      const c = compareValues(a[field], b[field]);
+      if (c !== 0) return -c;          // descending: newest first
     }
     return 0;
   })[0] || null;
