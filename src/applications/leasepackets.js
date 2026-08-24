@@ -1695,7 +1695,7 @@ module.exports = function leasePacketsModule(deps) {
          from lease_packet_signers s
          join lease_packets pk on pk.id=s.lease_packet_id
         where s.token_hash=$1 and s.token_expires_at>now()
-          and pk.status<>'voided' and pk.superseded_at is null${suffix}`,
+          and pk.status<>'voided'${suffix}`,
       [tokenHash])).rows[0];
 
     // Rollout compatibility for a link issued before 192. Migration 192
