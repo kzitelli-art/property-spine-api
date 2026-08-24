@@ -1062,6 +1062,121 @@ Branch totals at that point: 18 runs — 5 green, 13 red, 0 other.
 
 ---
 
+## Build 4.1 — `utility_statement_usage` bounded · ceiling 10 → 9 · the gate learned to go red
+
+`src/asset/utility_position_read.js` (Class 1) ·
+`tests/gate_standing_projection_cost.js` (Class 3) ·
+`tests/utility_statement_usage_bound_equivalence.db.js` (Class 3, new) ·
+`tests/utility_position_read.test.js` (Class 3)
+
+The walk this unblocked was the one Build 4.0 could not reason about: usage
+could not be bounded to "the latest statements" while "latest" was being chosen
+by weekday name. With `newest()` fixed, the bound became statable.
+
+### What was built
+
+**Bounded latest-statement usage loading.** `readPosition()` now projects once
+provisionally, takes the statement ids the projection itself selected, and loads
+usage for only those:
+
+```sql
+select * from utility_statement_usage
+ where property_id = $1
+   and statement_id = any($2::uuid[])
+```
+
+The ids are **server-derived** — they come out of the canonical projection, never
+from a caller. `utility_projection.js` remains the single owner of
+latest/current/supersession selection; no date comparison or supersession logic
+moved into SQL or into the read.
+
+| Evidence | Rung |
+|---|---|
+| 18 usage rows seeded across statements that must be dropped; 6 read. `standing` **and** `detail` compared by `assert.deepStrictEqual` against a verbatim-preserved `readPositionUnbounded()`, at four `as_of` values including two historical. | **LOCALLY_EXERCISED** (real Postgres, real governed read) |
+| Contract test: unconditional tables read exactly once; **no** usage read at all when there are no statements; with 2 accounts × 2 statements the bound requests exactly the two latest ids. | LOCALLY_EXERCISED |
+| Walk ceiling ratcheted **10 → 9**, one read, one commit. | CI-wired (`standing projection cost`) |
+
+**The `as_of` single-resolution correction.** `readPosition()` resolved the
+effective day twice — once for the provisional projection, once for the final —
+so a read spanning midnight UTC could project against two different days and
+return a `detail` that disagreed with its own `standing`. It now resolves once
+through the canonical exported `day()` and passes that same non-null value to
+both projections. The contract test spies on `project()` and asserts both calls
+receive an identical resolved day, and that a historical `as_of` is preserved
+rather than collapsed to today.
+
+**The cost-gate correction: a bound is pinned to executable SQL in its owning
+file.** The first version of the falsification **could not fail** — measured,
+not argued: with the bound deleted, the cost gate exited 0 *and* the
+source-governance gates exited 0, because nothing tied the declaration to the
+code. The declaration now names both the owning file and the required
+executable fragment:
+
+```js
+{ match: "from utility_statement_usage", kind: "STRUCTURAL",
+  bounded_in_file: "src/asset/utility_position_read.js",
+  bounded_by_sql: "statement_id = any($2", … }
+```
+
+The gate searches **only template-literal SQL from that exact file**, through
+its existing comment-aware parser. A comment cannot satisfy it, and neither can
+the same fragment appearing in a different scanned file — both cases were
+locally falsified. An intermediate version of this check went red on *correct*
+code by looking for the table name beside the fragment; these reads build SQL as
+`${TABLES.statement_usage}`, so the literal table name appears nowhere.
+
+**`loadAllStatementUsage()` is a Class 1 detail primitive with NO PRODUCT
+CALLER.** §40.6 is standing **plus** detail, never standing instead of detail, so
+the full usage series stays reachable by name. State its activation honestly:
+the function is defined and exported in `src/asset/utility_position_read.js` and
+is called only by `tests/utility_statement_usage_bound_equivalence.db.js` and
+named by `tests/gate_standing_projection_cost.js`. **No product path calls it.**
+It is `BUILT_BUT_DORMANT` as a detail surface, `LOCALLY_EXERCISED` as a
+function. Do not read this row as a live detail read.
+
+### Two proof cycles. The second is the authoritative one.
+
+The first cycle was run against a gate whose falsification could not reach the
+assertion — the same trap Build 4.0 recorded. It is retained as history, not as
+evidence. The **corrected authoritative cycle**, at exact SHAs:
+
+```text
+baseline green  7043e1f                                    run 32766993328  parent exit 0
+product red     6ee9f6562de6c0418eb73047f5ded15da94f8d4b   run 32767279080  parent exit 1
+restored green  3dee5bebce6b8b1d6f681ab0bdcbf7137f0cb33a   run 32767586861  parent exit 0
+```
+
+The red run failed on `standing projection cost` and on **nothing else**:
+`source governance gates` PASS, zero SKIPPED, zero NOT RUN, and all 12 later
+proofs executed and passed — the break reached the assertion rather than
+aborting the run ahead of it. Gate output, verbatim:
+
+```text
+✘ 1 declaration(s) are STRUCTURAL because of a bound that is GONE.
+    from utility_statement_usage — expected "statement_id = any($2" in executable SQL
+      owning file: src/asset/utility_position_read.js
+      not found in any scanned source
+```
+
+The restore was verified **by content, not by message**:
+`git hash-object src/asset/utility_position_read.js` →
+`84f21df316a466aeb00dcde5997b1a2ff2fad288`, byte-identical to `7043e1f`.
+
+### What is proven and what is not — say it precisely
+
+- The **CI-wired cost gate** has now demonstrated **red-then-green sensitivity**
+  at exact SHAs. It is the only artefact here with that evidence.
+- The **service-level equivalence and contract harnesses**
+  (`utility_statement_usage_bound_equivalence.db.js`,
+  `utility_position_read.test.js`, `utility_latest_statement_ordering.db.js`)
+  remain **`LOCALLY_EXERCISED`**. They are not wired into
+  `tests/e2e/verify_all.sh`, which is not this thread's to edit. A green CI run
+  is **not** evidence that those harnesses ran.
+- Nothing here is HTTP-proven as a product surface or browser-verified, and no
+  Ask Spine rung moved.
+
+---
+
 ## ⛔ CLOSING A THREAD — DO THIS BEFORE YOU STOP
 
 **This file goes stale the moment a thread ships something and does not say so.**
