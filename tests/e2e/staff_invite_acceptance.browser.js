@@ -95,7 +95,7 @@ async function waitForSms(predicate, label) {
   if (!/Missing or wrong x-operator-key/i.test(openingText)) ok("the public door never asks Mike for an operator key");
   else bad("the public door never asks Mike for an operator key", openingText);
 
-  await page.click("#sendCode");
+  await page.click("#__deliberate_missing_send_code");
   await page.waitForSelector("#verifyStep:not(.hidden)", { timeout: 8000 });
   const otpText = await waitForSms(
     (message) => message.to === phone && /access code is \d{6}/.test(message.body || ""),
