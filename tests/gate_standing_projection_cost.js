@@ -85,16 +85,151 @@ function recorder(client) {
   return { wrapped, log };
 }
 
-/*  Bounded = the result size does not grow with the property's history. */
-function isBounded(sql) {
-  const s = sql.toLowerCase();
-  if (!/^\s*(select|with)/.test(s)) return true;            // not a read
-  if (/\blimit\s+\d+/.test(s)) return true;                 // explicitly capped
-  if (/\bselect\s+count\s*\(/.test(s)) return true;         // aggregate
-  if (/\bselect\s+(max|min|sum|avg)\s*\(/.test(s)) return true;
-  if (/\bwhere\s+\w*\.?id\s*=\s*\$\d/.test(s)) return true; // pk lookup
-  if (/\bexists\s*\(/.test(s) && /\blimit\b/.test(s)) return true;
-  return false;
+/*  ── STRUCTURE vs HISTORY, AND WHY THE FIRST THREE ATTEMPTS FAILED ───
+ *  §40.6 forbids a standing projection that walks "its full payment,
+ *  amendment or event history". It does NOT forbid reading the property's
+ *  current shape. Those are different growth curves and only one is the
+ *  defect:
+ *
+ *      STRUCTURAL    grows with what the property IS — units, coverages,
+ *                    instruments, providers, legal entities. Bounded by
+ *                    the deal's size, which is small and does not grow
+ *                    just because time passed.
+ *      HISTORY_WALK  grows with what has HAPPENED — facts, payments,
+ *                    amendments, superseded rows, events. Unbounded in
+ *                    the only sense that matters: it grows forever.
+ *
+ *  Three mechanical classifiers were tried and each was partly right,
+ *  which is the finding:
+ *
+ *    1  "no LIMIT"        — flags every structural read. Would have had
+ *                           me add LIMIT to "coverages on this property",
+ *                           silently truncating truth (§5) to pass a gate.
+ *    2  walk-signal regex — missed plain `select *` walks entirely.
+ *    3  append-only table — closer, but `capital_stack_positions` carries
+ *                           no append-only trigger and still accumulates
+ *                           superseded rows, while `compliance_items`
+ *                           carries one and is structural.
+ *
+ *  So the classification is DECLARED per statement, with a reason, and
+ *  the gate's job is to keep the declaration honest rather than to guess.
+ *  This is §40.5's shape — "declared as data, as part of its read
+ *  contract" — applied to cost instead of to truth walls.
+ *
+ *  ── THE RATCHET ─────────────────────────────────────────────────────
+ *  HISTORY_WALK_CEILING is the number of history walks tolerated today.
+ *  The gate fails if the count RISES. It does not pretend the remaining
+ *  walks are acceptable; it makes them un-regressable while they are
+ *  fixed one at a time, and every one is named below with what it needs.  */
+/*  MEASURED, on an EMPTY property — so it is a FLOOR. compliance_facts
+    does not even appear here, because compliance short-circuits when it
+    has no items; the walk is real and hidden by the empty fixture, and
+    the declaration says so. */
+const HISTORY_WALK_CEILING = 8;
+
+/*  Every statement each read issues, classified. `match` is a distinctive
+    fragment of the statement. An issued statement matching NOTHING here
+    is a gate failure — that is how a new unbounded read cannot arrive
+    unnoticed. */
+const DECLARED = [
+  { match: "from insurance_property_allocations", kind: "STRUCTURAL",
+    why: "allocations LIVE IN THE PERIOD — effective_from/effective_to filtered and " +
+         "supersession filtered. Grows with coverages, not with time." },
+  { match: "from legal_entity_properties", kind: "STRUCTURAL",
+    why: "effective-dated entity relationships current at as_of" },
+  { match: "from tax_obligation_applicability", kind: "STRUCTURAL",
+    why: "effective-dated applicability current at as_of" },
+  { match: "from tax_obligations", kind: "HISTORY_WALK",
+    why: "NO date filter — every obligation ever recorded for the property. " +
+         "NEEDS: a bounded read for standing (open obligations only); the full " +
+         "set belongs to the detail projection." },
+  { match: "from tax_clearances", kind: "STRUCTURAL", why: "order by … limit 1" },
+  { match: "from utility_providers", kind: "STRUCTURAL",
+    why: "providers referenced by THIS property, via exists(). Grows with providers." },
+  { match: "from contracted_service_providers", kind: "STRUCTURAL",
+    why: "providers referenced by THIS property, via exists()" },
+  { match: "from obligations o", kind: "HISTORY_WALK",
+    why: "obligations accumulate as the property is operated; no status or date " +
+         "bound. NEEDS: restrict to open obligations for the standing read." },
+  { match: "from compliance_items", kind: "STRUCTURAL",
+    why: "the licences and requirements this property holds. Append-only, so " +
+         "retired items accumulate — but slowly, with structure, not per event." },
+  { match: "from compliance_facts", kind: "HISTORY_WALK",
+    why: "EVERY fact ever recorded for every item, plus every evidence row, plus " +
+         "an awaited mintReference PER EVIDENCE ROW. The clearest walk of the set. " +
+         "NEEDS: distinct-on(item_id) latest non-superseded fact for standing; the " +
+         "full chain is detail. Fires only when items exist, so an empty property " +
+         "hides it." },
+  { match: "from spaces s", kind: "HISTORY_WALK",
+    why: "structural at the top (spaces × units) but carries correlated json_agg " +
+         "subqueries pulling EVERY lease and EVERY move-in/move-out event per space. " +
+         "NEEDS: work in src/shared/dated_positions.js + space_position.js — the " +
+         "most depended-on primitive in the repo, and OUTSIDE this thread's lane." },
+  { match: "from capital_stack_positions", kind: "STRUCTURAL",
+    why: "positions in the capital stack. Effective-dated and superseded rows do " +
+         "accumulate, but with financings, not with operating events." },
+  { match: "from debt_instruments", kind: "STRUCTURAL",
+    why: "instruments attached to this property, effective-dated" },
+  { match: "from properties", kind: "STRUCTURAL", why: "the property row itself" },
+  { match: "from users", kind: "STRUCTURAL", why: "an identity lookup" },
+  //  ── utility's 14-table loop, and contracted_service's 10 ───────────
+  //  Both issue `select * from <table> where property_id = $1` for every
+  //  table in a fixed TABLES map. Most are structural — the property's
+  //  meters, service points, accounts. Two families are not: provider
+  //  STATEMENTS and their usage rows arrive every billing cycle forever,
+  //  and financial observations and term amendments accumulate the same
+  //  way. The loop makes no distinction, which is why declaring each one
+  //  matters more here than anywhere else in this file.
+  { match: "from utility_statements", kind: "HISTORY_WALK",
+    why: "every provider statement this property has ever received, unbounded. " +
+         "NEEDS: latest statement per account for standing; the series is detail." },
+  { match: "from utility_statement_usage", kind: "HISTORY_WALK",
+    why: "every usage row of every statement. Grows fastest of anything here. " +
+         "NEEDS: it does not belong in a standing projection at all." },
+  { match: "from contracted_service_financial_observations", kind: "HISTORY_WALK",
+    why: "observed amounts accumulate per invoice/period. NEEDS: latest per " +
+         "engagement for standing." },
+  { match: "from contracted_service_terms", kind: "HISTORY_WALK",
+    why: "term amendments accumulate — §40.6 names amendment history explicitly. " +
+         "NEEDS: current term per engagement for standing." },
+  { match: "from utility_services", kind: "STRUCTURAL", why: "service classes at this property" },
+  { match: "from utility_service_declarations", kind: "STRUCTURAL", why: "declared applicability" },
+  { match: "from utility_service_providers", kind: "STRUCTURAL", why: "provider relationships" },
+  { match: "from utility_arrangements", kind: "STRUCTURAL", why: "who pays which service" },
+  { match: "from utility_provider_accounts", kind: "STRUCTURAL", why: "accounts held" },
+  { match: "from utility_account_services", kind: "STRUCTURAL", why: "account↔service links" },
+  { match: "from utility_service_points", kind: "STRUCTURAL", why: "physical service points" },
+  { match: "from utility_meters", kind: "STRUCTURAL", why: "meters installed" },
+  { match: "from utility_meter_service_points", kind: "STRUCTURAL", why: "meter↔point links" },
+  { match: "from utility_account_service_points", kind: "STRUCTURAL", why: "account↔point links" },
+  { match: "from utility_account_meters", kind: "STRUCTURAL", why: "account↔meter links" },
+  { match: "from contracted_service_coverage_reviews", kind: "STRUCTURAL", why: "one current review" },
+  { match: "from contracted_service_requirements", kind: "STRUCTURAL", why: "requirements declared" },
+  { match: "from contracted_service_engagements", kind: "STRUCTURAL", why: "engagements held" },
+  { match: "from contracted_service_documents", kind: "STRUCTURAL", why: "documents attached" },
+  { match: "from contracted_service_scopes", kind: "STRUCTURAL", why: "scope of each engagement" },
+  { match: "from contracted_service_locations", kind: "STRUCTURAL", why: "where each applies" },
+  { match: "from contracted_service_price_components", kind: "STRUCTURAL", why: "price structure" },
+  { match: "from contracted_service_decision_links", kind: "STRUCTURAL", why: "decision links" },
+  { match: "from opening_tenancy_positions", kind: "STRUCTURAL",
+    why: "one CURRENT opening position per property — migration 157 enforces it" },
+  { match: "from units where property_id", kind: "STRUCTURAL", why: "units marked down" },
+  { match: "from inventory_retirements", kind: "STRUCTURAL", why: "an aggregate count" },
+  { match: "from import_batches", kind: "HISTORY_WALK",
+    why: "every rent-roll import ever run against this property, no bound. " +
+         "NEEDS: the latest establishing batch for standing; the series is detail." },
+  { match: "from capital_stack_conflicts", kind: "STRUCTURAL",
+    why: "recorded conflicts on the cap table — resolved ones stay, but they " +
+         "arrive with financings, not with operating events" },
+  { match: "from common_equity_class_terms", kind: "STRUCTURAL",
+    why: "the equity classes this deal defines, effective-dated. Grows with " +
+         "financings, not with operating events." },
+];
+
+function classify(sql) {
+  const s = sql.toLowerCase().replace(/\s+/g, " ");
+  const hit = DECLARED.find((d) => s.includes(d.match.toLowerCase()));
+  return hit || null;
 }
 
 /*  ── THE SEVEN, and how each is actually invoked ─────────────────────
@@ -156,54 +291,84 @@ const DOMAINS = [
   L("  One EMPTY property. Every number is a FLOOR — a property with real");
   L("  history costs more, never less.");
   L("");
-  L("  " + "domain".padEnd(20) + "queries  unbounded  outcome");
+  L("  " + "domain".padEnd(20) + "queries  hist-walk  outcome");
   L("  " + "-".repeat(70));
 
   const results = [];
+  const undeclared = [];
   for (const d of DOMAINS) {
     const { wrapped, log } = recorder(client);
     let outcome = "ok";
     try {
       const out = await d.run(wrapped);
-      //  ⚠ THE MAPPINGS ARE PROVEN HERE, ON REAL READINGS.
-      //  Validating adapter.project(domain, null) proves only the
-      //  NOT_ESTABLISHED branch. Every read above returns a REAL reading
-      //  from a REAL database, so mapping it is the only evidence that
-      //  the ESTABLISHED branch is shaped correctly too.
       const subject = (out && out.rich !== undefined) ? out.rich : out;
       const projected = adapter.project(d.domain, subject, d.extra ? d.extra(out) : undefined);
       const probs = contractShape.validate(projected);
       if (probs.length) outcome = "INVALID SHAPE: " + probs.join("; ").slice(0, 60);
+    } catch (e) { outcome = "threw: " + String(e.message).slice(0, 40); }
+
+    const walks = [];
+    for (const q of log) {
+      const c = classify(q);
+      if (!c) { undeclared.push({ domain: d.domain, sql: q.slice(0, 120) }); continue; }
+      if (c.kind === "HISTORY_WALK") walks.push(c);
     }
-    catch (e) { outcome = "threw: " + String(e.message).slice(0, 40); }
-    const unbounded = log.filter((q) => !isBounded(q));
-    results.push({ domain: d.domain, queries: log.length, unbounded: unbounded.length, outcome, sample: unbounded[0] });
+    results.push({ domain: d.domain, queries: log.length, walks, outcome });
     L("  " + d.domain.padEnd(20) +
-      String(log.length).padStart(5) + String(unbounded.length).padStart(10) + "  " + outcome);
+      String(log.length).padStart(5) + String(walks.length).padStart(10) + "  " + outcome);
   }
+
+  L("");
+  L("HISTORY WALKS — the reads §40.6 actually forbids, and what each needs");
+  L("-".repeat(74));
+  const seen = new Set();
+  for (const r of results) {
+    for (const w of r.walks) {
+      if (seen.has(w.match)) continue;
+      seen.add(w.match);
+      L(`  ${r.domain} · ${w.match}`);
+      L(`    ${w.why.replace(/(.{66})\s/g, "$1\n    ")}`);
+      L("");
+    }
+  }
+
+  const walkCount = seen.size;
+  const total = results.reduce((a, r) => a + r.queries, 0);
+  L("=".repeat(74));
+  L(`  ${results.length} domains · ${total} queries to gather all of them ONCE, on an EMPTY property`);
+  L(`  ${walkCount} distinct history walk(s) · ceiling ${HISTORY_WALK_CEILING}`);
+  L("");
+
+  let failed = 0;
+  if (undeclared.length) {
+    failed++;
+    L(`  ✘ ${undeclared.length} statement(s) issued that this gate does not classify.`);
+    L("      An unclassified read is how a new history walk arrives unnoticed.");
+    for (const u of undeclared.slice(0, 5)) L(`      ${u.domain}: ${u.sql}`);
+  } else {
+    L("  ✔ every statement issued is declared and classified");
+  }
+  if (walkCount > HISTORY_WALK_CEILING) {
+    failed++;
+    L(`  ✘ history walks ROSE to ${walkCount}; the ceiling is ${HISTORY_WALK_CEILING}.`);
+    L("      The ceiling is a ratchet. It may fall. It may never rise.");
+  } else if (walkCount < HISTORY_WALK_CEILING) {
+    failed++;
+    L(`  ✘ history walks FELL to ${walkCount} — lower the ceiling to ${walkCount}.`);
+    L("      A ceiling above the real number stops being a ratchet and starts");
+    L("      being headroom, which is how the count creeps back up.");
+  } else {
+    L(`  ✔ history walks are at the declared ceiling of ${HISTORY_WALK_CEILING}, not above it`);
+  }
+  L("");
+  L(`  This is a RATCHET, not a pass. ${walkCount} reads still walk history and each`);
+  L("  is named above with what it needs. §40.6 is not satisfied until this is 0,");
+  L("  and Build 4 (delete the regex router) stays blocked until it is.");
+  L("");
 
   await client.query("delete from properties where id = $1", [PROPERTY]).catch(() => {});
   await client.end();
 
   L("");
-  L("UNBOUNDED STATEMENTS — the walks §40.6 forbids");
-  L("-".repeat(74));
-  for (const r of results.filter((x) => x.unbounded)) {
-    L(`  ${r.domain}`);
-    L(`    ${String(r.sample).slice(0, 150)}`);
-  }
-
-  const walkers = results.filter((r) => r.unbounded > 0);
-  const total = results.reduce((a, r) => a + r.queries, 0);
-  L("");
-  L("=".repeat(74));
-  L(`  ${results.length} domains · ${total} queries to gather all of them ONCE, on an EMPTY property`);
-  L(`  ${walkers.length} issue at least one unbounded read: ${walkers.map((w) => w.domain).join(", ")}`);
-  L("");
-  L("  This is the number that decides whether Ask Spine can gather every");
-  L("  entitled domain per question. While it is this high, a router is");
-  L("  load-bearing — and §40.6 forbids the router. That is the tension");
-  L("  Build 2 measures and does not, on its own, resolve.");
-  L("");
-  process.exit(0);
+  process.exit(failed === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });

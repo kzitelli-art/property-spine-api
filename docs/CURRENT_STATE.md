@@ -531,6 +531,73 @@ Compliance is worse — its failure path leaves `facts.compliance` undefined wit
 
 ---
 
+## Build 3.5 — the standing-read cost ratchet · INCOMPLETE AGAINST ITS TARGET
+
+Appended 2026-08-24. **The target was 8 unbounded reads → 0. It is not met.**
+What was delivered is a correct classification and a ratchet. Said first, plainly.
+
+**The target rested on my own crude proxy, and the proxy was wrong.** Build 2's
+gate called a statement "unbounded" if it lacked a `LIMIT`. §40.6 forbids walking
+*"payment, amendment or event history"* — it does not forbid reading the
+property's current shape. Those are different growth curves:
+
+```text
+STRUCTURAL    grows with what the property IS — units, coverages, meters,
+              instruments, providers. Bounded by the deal's size.
+HISTORY_WALK  grows with what has HAPPENED — facts, statements, amendments,
+              superseded rows. Grows forever.
+```
+
+Acting on the proxy would have meant adding `LIMIT` to *"coverages on this
+property"* — silently truncating truth (§5) to pass a gate.
+
+**Three mechanical classifiers were tried; each was partly right, which is the
+finding.** No-LIMIT flags every structural read. A walk-signal regex misses plain
+`select *`. Append-only-trigger is closer, but `capital_stack_positions` carries
+no such trigger and still accumulates, while `compliance_items` carries one and is
+structural. So classification is now **declared per statement with a reason** —
+§40.5's shape (*"declared as data, as part of its read contract"*) applied to cost.
+
+**Measured, on an EMPTY property, so it is a floor:**
+
+```text
+42 queries to gather eight domains once
+8 distinct HISTORY WALKS — declared, named, each with what it needs
+```
+
+`compliance_facts` does not even appear in that run: compliance short-circuits
+with no items, so the empty fixture **hides** its walk. The declaration says so.
+
+**The ratchet.** `HISTORY_WALK_CEILING = 8`. The gate fails if the count rises,
+**and equally if it falls without the ceiling being lowered** — a ceiling above
+the real number is headroom, which is how a count creeps back. It also fails on
+any statement it does not classify, so a new walk cannot arrive unnoticed.
+Falsified three ways: an undeclared read, a raised ceiling, and a walk
+relabelled `STRUCTURAL` to make it vanish — all three go red.
+
+**The eight walks, and where they sit:**
+
+| Walk | Lane |
+|---|---|
+| `tax_obligations` — no date filter | mine |
+| `obligations` (contracted service) — no status bound | mine |
+| `utility_statements`, `utility_statement_usage` | mine |
+| `contracted_service_financial_observations`, `_terms` | mine |
+| `spaces` correlated json_agg — every lease and event per space | **`src/shared/dated_positions.js` + `space_position.js` — outside this lane** |
+| `import_batches` — every rent-roll import ever | **`src/shared/` — outside this lane** |
+
+Six of eight are in this thread's lane and **were not fixed** — each changes a
+live read consumed by Asset Management surfaces, and doing six badly is worse
+than doing none. Two are outside it entirely.
+
+**No index is required by anything found so far**, so no migration SQL is owed.
+Every walk named above is fixed by *bounding the query* — latest-per-parent, or
+open-only — not by making an unbounded scan faster.
+
+**Build 4 remains blocked.** §40.6 is not satisfied at 8.
+
+---
+
 ## Gates wired into the runners — 2026-08-24
 
 Four gates from Q5, Build 2 and Build 3 were written, run by hand, reported green,
