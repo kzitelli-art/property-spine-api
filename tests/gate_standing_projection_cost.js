@@ -121,11 +121,19 @@ function recorder(client) {
  *  The gate fails if the count RISES. It does not pretend the remaining
  *  walks are acceptable; it makes them un-regressable while they are
  *  fixed one at a time, and every one is named below with what it needs.  */
-/*  MEASURED, on an EMPTY property — so it is a FLOOR. compliance_facts
-    does not even appear here, because compliance short-circuits when it
-    has no items; the walk is real and hidden by the empty fixture, and
-    the declaration says so. */
-const HISTORY_WALK_CEILING = 8;
+/*  The REAL number, which is OBSERVED + HIDDEN.
+ *
+ *  Eight walks are issued against the empty measurement property. A ninth
+ *  — compliance_facts — is real and simply never fires here, because
+ *  compliance_read short-circuits when the property has no items. An
+ *  earlier receipt reported "eight" and that number invited being read as
+ *  the ceiling. It is not. The ceiling counts every walk this gate can
+ *  name, whether or not the fixture happens to provoke it.
+ *
+ *  A declaration carrying `hidden_by_fixture` is counted without being
+ *  observed — and if the fixture ever DOES provoke it, the gate fails
+ *  until the flag is removed, so the two never both count it.          */
+const HISTORY_WALK_CEILING = 9;
 
 /*  Every statement each read issues, classified. `match` is a distinctive
     fragment of the statement. An issued statement matching NOTHING here
@@ -155,16 +163,21 @@ const DECLARED = [
     why: "the licences and requirements this property holds. Append-only, so " +
          "retired items accumulate — but slowly, with structure, not per event." },
   { match: "from compliance_facts", kind: "HISTORY_WALK",
+    hidden_by_fixture:
+      "compliance_read short-circuits when the property has no compliance items, " +
+      "so this statement is never ISSUED against the empty measurement property. " +
+      "It is counted anyway. The canonical property holds one compliance record " +
+      "today; the walk arrives with the second.",
     why: "EVERY fact ever recorded for every item, plus every evidence row, plus " +
          "an awaited mintReference PER EVIDENCE ROW. The clearest walk of the set. " +
          "NEEDS: distinct-on(item_id) latest non-superseded fact for standing; the " +
-         "full chain is detail. Fires only when items exist, so an empty property " +
-         "hides it." },
+         "full chain is detail." },
   { match: "from spaces s", kind: "HISTORY_WALK",
     why: "structural at the top (spaces × units) but carries correlated json_agg " +
          "subqueries pulling EVERY lease and EVERY move-in/move-out event per space. " +
-         "NEEDS: work in src/shared/dated_positions.js + space_position.js — the " +
-         "most depended-on primitive in the repo, and OUTSIDE this thread's lane." },
+         "LIVES IN src/tenancy/space_position.js:323 (loadSpaceRows), reached via " +
+         "src/tenancy/dated_positions.js. NOT src/shared/ — an earlier receipt said " +
+         "so and was wrong. src/tenancy/ is in no declared lane; it waits." },
   { match: "from capital_stack_positions", kind: "STRUCTURAL",
     why: "positions in the capital stack. Effective-dated and superseded rows do " +
          "accumulate, but with financings, not with operating events." },
@@ -217,7 +230,10 @@ const DECLARED = [
   { match: "from inventory_retirements", kind: "STRUCTURAL", why: "an aggregate count" },
   { match: "from import_batches", kind: "HISTORY_WALK",
     why: "every rent-roll import ever run against this property, no bound. " +
-         "NEEDS: the latest establishing batch for standing; the series is detail." },
+         "LIVES IN src/tenancy/dated_positions.js:633. NOT src/shared/ — an earlier " +
+         "receipt said so and was wrong. src/tenancy/ is in no declared lane; it " +
+         "waits. NEEDS: the latest establishing batch for standing; the series is " +
+         "detail." },
   { match: "from capital_stack_conflicts", kind: "STRUCTURAL",
     why: "recorded conflicts on the cap table — resolved ones stay, but they " +
          "arrive with financings, not with operating events" },
@@ -332,14 +348,39 @@ const DOMAINS = [
     }
   }
 
-  const walkCount = seen.size;
+  /*  The hidden ones: declared walks the fixture never provokes. Named
+      here so the printed number is the real number, not the observable
+      one. */
+  const hidden = DECLARED.filter((d) => d.kind === "HISTORY_WALK" && d.hidden_by_fixture);
+  const hiddenUnseen = hidden.filter((d) => !seen.has(d.match));
+  const hiddenButSeen = hidden.filter((d) => seen.has(d.match));
+  if (hidden.length) {
+    L("HIDDEN BY THE FIXTURE — real walks this measurement cannot provoke");
+    L("-".repeat(74));
+    for (const d of hidden) {
+      L(`  ${d.match}${seen.has(d.match) ? "   ⚠ ISSUED — no longer hidden" : ""}`);
+      L(`    ${d.hidden_by_fixture.replace(/(.{66})\s/g, "$1\n    ")}`);
+      L(`    ${d.why.replace(/(.{66})\s/g, "$1\n    ")}`);
+      L("");
+    }
+  }
+
+  const walkCount = seen.size + hiddenUnseen.length;
   const total = results.reduce((a, r) => a + r.queries, 0);
   L("=".repeat(74));
   L(`  ${results.length} domains · ${total} queries to gather all of them ONCE, on an EMPTY property`);
-  L(`  ${walkCount} distinct history walk(s) · ceiling ${HISTORY_WALK_CEILING}`);
+  L(`  ${walkCount} distinct history walk(s) — ${seen.size} observed + ${hiddenUnseen.length} hidden by the fixture ` +
+    `· ceiling ${HISTORY_WALK_CEILING}`);
   L("");
 
   let failed = 0;
+  if (hiddenButSeen.length) {
+    failed++;
+    L(`  ✘ ${hiddenButSeen.length} declaration(s) claim to be hidden by the fixture but were ISSUED.`);
+    L("      A hidden walk is counted without being observed. Once it is observed");
+    L("      it would be counted twice, or the claim is simply stale. Remove");
+    L("      `hidden_by_fixture` from: " + hiddenButSeen.map((d) => d.match).join(", "));
+  }
   if (undeclared.length) {
     failed++;
     L(`  ✘ ${undeclared.length} statement(s) issued that this gate does not classify.`);
