@@ -76,6 +76,8 @@ module.exports = function leasePacketsModule(deps) {
   const sha256 = (v) => crypto.createHash("sha256").update(String(v)).digest("hex");
   const stableHash = (v) => sha256(JSON.stringify(v ?? {}));
   const makeToken = () => crypto.randomBytes(32).toString("base64url");
+  const normalizeSignatureName = (v) => String(v || "")
+    .normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
   const clientIp = (req) => {
     const f = req.headers["x-forwarded-for"];
     if (typeof f === "string" && f.length) return f.split(",")[0].trim();
@@ -1873,6 +1875,21 @@ module.exports = function leasePacketsModule(deps) {
           return res.status(400).json({
             error: "signature_intent_required",
             receipt: "Type your full legal name and intentionally choose Sign.",
+          });
+        }
+        const expectedName = normalizeSignatureName(signer.display_name);
+        if (!expectedName) {
+          await client.query("rollback");
+          return res.status(409).json({
+            error: "signer_identity_unavailable",
+            receipt: "This signing link does not name its signer. Contact the leasing office before signing.",
+          });
+        }
+        if (normalizeSignatureName(value) !== expectedName) {
+          await client.query("rollback");
+          return res.status(400).json({
+            error: "signature_name_mismatch",
+            receipt: "The typed name does not match the signer named on this lease package. Type the full legal name shown for this signing link.",
           });
         }
       }
