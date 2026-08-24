@@ -700,6 +700,61 @@ Re-runnable research: `docs/current-state-build/wave1_new_domains.js`,
 
 ---
 
+## Build 3.6 — the cost measurement was wrong twice, in the same direction
+
+`tests/gate_standing_projection_cost.js` · Class 3 · real Postgres, ledger 191
+· 50/50 source-governance gates green · **no live read changed**
+
+The Build 3.5 receipt said eight history walks. **The number is eleven**, and
+neither correction came from the walks getting worse.
+
+| What changed | Rung |
+|---|---|
+| `from obligations o` **reclassified** — not a history walk. It reads only obligations reachable through `contracted_service_decision_links`, so its row count is the LINK count, and links arrive with amendments. That curve is already counted under `contracted_service_terms`. | HTTP_PROVEN |
+| Bounding it by status would have been **wrong output**: `decisionOwner()` looks the obligation up BY ID from the newest link, so a link pointing at a closed obligation would report `UNASSIGNED` — a screen showing no accountable owner for a contract that has one (§5). | Disproved |
+| New declaration kind `DERIVED_BOUND` — uncounted because its growth is counted elsewhere; `bounded_by` must name a live `HISTORY_WALK` or the gate goes red. Not a hiding place. | HTTP_PROVEN |
+| **The empty measurement fixture was hiding walks.** Emptiness does not only shrink numbers — whole statements never fire, and a statement that never fires cannot be classified by observation. | Disproved |
+| All six statements of `debt_instrument_service.loadHistory()` were invisible. Three are walks: `debt_payment_observations`, `debt_balance_observations`, `debt_terms`. The first is payment history in the plainest sense §40.6 has, and **the gate built to measure §40.6 could not see it.** | HTTP_PROVEN |
+| The gate now counts **ISSUED ∪ FOUND IN THE SOURCE** — it scans eight named files and requires every `from <table>` to be declared, fired or not. The hand-written `hidden_by_fixture` flag is deleted; a hand flag for a thing a scan can find is the memory this file exists to replace. | HTTP_PROVEN |
+| Falsified: a new unbounded read that never fires on an empty property · a declaration deleted while its statement remains · a scan-only walk relabelled `STRUCTURAL` · a declared walk in neither channel (dead declaration) · four `DERIVED_BOUND` attacks. Red on each. | HTTP_PROVEN |
+
+**Scope of the scan is stated in the file.** `src/tenancy/dated_positions.js`
+and `space_position.js` are reached *through* the scanned files and are covered
+by observation only — a known gap, named rather than papered over.
+
+**Attribution corrected from the Build 3.5 receipt.** The two walks reported as
+living in `src/shared/` do not:
+
+```text
+spaces correlated json_agg   src/tenancy/space_position.js:323 (loadSpaceRows)
+import_batches               src/tenancy/dated_positions.js:633
+```
+
+`src/tenancy/` is in no declared lane. Both wait until one is assigned.
+
+**Still true: no migration is owed.** Every walk is fixed by bounding the
+query, not by adding an index.
+
+**The eleven, and where they live:**
+
+```text
+tax_obligations                              src/asset/tax_position_read.js
+utility_statements · utility_statement_usage src/asset/utility_position_read.js
+contracted_service_financial_observations
+contracted_service_terms                     src/asset/contracted_service_position_read.js
+compliance_facts            scan-only        src/asset/compliance_read.js
+debt_terms                  scan-only
+debt_balance_observations   scan-only
+debt_payment_observations   scan-only        src/asset/debt_instrument_service.js
+spaces (correlated)         out of lane      src/tenancy/space_position.js
+import_batches              out of lane      src/tenancy/dated_positions.js
+```
+
+Build 4 (delete the regex router) stays blocked. §40.6 is not satisfied until
+this is 0.
+
+---
+
 ## ⛔ CLOSING A THREAD — DO THIS BEFORE YOU STOP
 
 **This file goes stale the moment a thread ships something and does not say so.**
