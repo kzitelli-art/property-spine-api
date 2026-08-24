@@ -246,12 +246,19 @@ function classifyPosition(row, { asOf, personNames } = {}) {
    *  ("Tue Sep 15 2026"), which compares lexically against 'YYYY-MM-DD'
    *  as garbage — silently, and in a direction nobody predicts. Every
    *  side of every comparison here is a canonical YYYY-MM-DD key.       */
-  /*  DELIBERATE FALSIFICATION — the old UNBOUNDED behaviour, restored so
-   *  the temporal boundary is shown able to go red. dateKey() is left
-   *  defined and unused: only the BEHAVIOUR is reverted, so the red that
-   *  follows is attributable to the missing bound and nothing else.
-   *  REVERTED IN THE NEXT COMMIT.                                       */
-  const events = row.possession_events || [];
+  const asOfKey = dateKey(asOf);
+  const allEvents = row.possession_events || [];
+  /*  asOf ABSENT (or itself unusable) → behave exactly as before. This
+   *  filter narrows a dated question; with no usable date to narrow to
+   *  there is nothing to apply, and inventing a refusal here would change
+   *  an answer this repair was not asked to touch.                      */
+  const events = asOfKey === null ? allEvents : allEvents.filter((e) => {
+    const k = dateKey(e && e.effective_date);
+    /*  AN UNUSABLE EVENT DATE IS NOT CURRENT POSSESSION. Spine cannot
+     *  place it in time, so it cannot say it had happened by asOf. It is
+     *  dropped rather than admitted — honest blank over confident wrong. */
+    return k !== null && k <= asOfKey;
+  });
   const ins = events.filter((e) => e.event_type === "move_in");
   const outs = events.filter((e) => e.event_type === "move_out");
   const lastIn = ins.length ? ins[ins.length - 1] : null;
