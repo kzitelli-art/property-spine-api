@@ -136,6 +136,79 @@ const SCANNED_SOURCES = [
   "src/asset/debt_instrument_service.js",
 ];
 
+/*  ── ONE PLACE WHERE PROSE IS REMOVED FROM SQL ───────────────────────
+ *  CLAUDE.md: "Strip comments before scanning. A mention is not a guard."
+ *  This build broke that rule THREE times, in three different places,
+ *  each time producing a table name out of English:
+ *
+ *    "…established from did not carry."          → a table called "did not"
+ *    "-- not from allocations: a policy…"        → a table called "allocations"
+ *    "…different from total. … the opening…"     → a table called "total."
+ *
+ *  The third one was the expensive one: it made outerTableOf() fail on
+ *  the ONE statement whose classification actually moved, so the `spaces`
+ *  correlated walk went on being classified by list order after I had
+ *  "fixed" exactly that.
+ *
+ *  ⚠ AND TWO SEQUENTIAL REGEXES CANNOT DO THIS. That was the fourth
+ *  version, and it was the worst, because it FAILED SILENTLY IN THE
+ *  DIRECTION OF LOOKING FINE.
+ *
+ *  These SQL literals carry `/* … *\/` blocks with `--` lines inside
+ *  them. Stripping `--` first deletes the line the closing `*\/` sits on,
+ *  leaving the block comment unterminated — so the non-greedy
+ *  `/\*[\s\S]*?\*\//` ran on to the NEXT block comment and ate every
+ *  statement in between. Measured on the real runtime statement:
+ *
+ *      41 open parens / 41 close   before stripping
+ *       3 open parens /  0 close   after
+ *
+ *  outerTableOf() then found no `from` at depth zero and returned null,
+ *  and the statement fell through to the order-dependent path I had just
+ *  written this helper to remove. The bug hid the fix for the bug.
+ *
+ *  So: ONE left-to-right pass. String literals are skipped, because
+ *  `--` and `(` inside a literal are data. Block comments NEST in
+ *  Postgres, so the depth is counted. Whitespace collapses LAST — a `--`
+ *  comment ends at a NEWLINE, and collapsing first deletes the very
+ *  character that terminates it.                                       */
+function sqlOnly(text) {
+  const src = String(text);
+  let out = "";
+  let i = 0;
+  while (i < src.length) {
+    const two = src.slice(i, i + 2);
+
+    //  A STRING LITERAL IS NOT SYNTAX. '--' and '(' inside one are data.
+    if (src[i] === "'") {
+      out += " ";
+      i++;
+      while (i < src.length) {
+        if (src[i] === "'" && src[i + 1] === "'") { i += 2; continue; }   // '' escape
+        if (src[i] === "'") { i++; break; }
+        i++;
+      }
+      continue;
+    }
+    if (two === "--") { while (i < src.length && src[i] !== "\n") i++; out += " "; continue; }
+    if (two === "/*") {
+      //  Postgres block comments NEST. Counting is not optional.
+      let depth = 1;
+      i += 2;
+      while (i < src.length && depth > 0) {
+        if (src.slice(i, i + 2) === "/*") { depth++; i += 2; continue; }
+        if (src.slice(i, i + 2) === "*/") { depth--; i += 2; continue; }
+        i++;
+      }
+      out += " ";
+      continue;
+    }
+    out += src[i];
+    i++;
+  }
+  return out.replace(/\s+/g, " ").toLowerCase();
+}
+
 /*  Comments are stripped before scanning. CLAUDE.md: "A mention is not a
     guard" — a `from foo` inside a comment must not satisfy the scan, and
     a `from foo` inside a comment must not alarm it either. */
@@ -151,10 +224,9 @@ function sqlTablesIn(file) {
       silenced by the next person, and a silenced scan is worse than none. */
   for (const raw of src.match(/`[^`]*`/g) || []) {
     if (!/\bselect\b/i.test(raw)) continue;
-    /*  SQL comments inside the statement are prose too. `--  participation,
-        not from allocations: a policy covering three` reported a table
-        called "allocations". Same rule as above, one level in. */
-    const lit = raw.replace(/--[^\n]*/g, " ").replace(/\/\*[\s\S]*?\*\//g, " ");
+    //  Same rule, one level in — and from the SAME helper, so it cannot
+    //  be fixed in one place and left broken in the other again.
+    const lit = sqlOnly(raw);
 
     /*  CTE names are not tables. `with allocations as (…) select … from
         allocations` reads a name this statement just defined; declaring
@@ -187,7 +259,26 @@ function recorder(client) {
   const wrapped = {
     async query(text, params) {
       const sql = typeof text === "string" ? text : (text && text.text) || "";
-      log.push(sql.replace(/\s+/g, " ").trim());
+      /*  ⚠ RAW. THIS USED TO BE `sql.replace(/\s+/g, " ").trim()` AND THAT
+          NORMALISATION AT CAPTURE TIME WAS A DEFECT.
+
+          These statements carry `--` comments. A `--` comment ends at a
+          NEWLINE, and collapsing whitespace here deleted every newline in
+          the statement before anything had read it — so the first `--`
+          swallowed the entire rest of the query. Measured on
+          space_position.js's correlated read: 5,131 characters in, 219
+          characters of SQL left after comment removal.
+
+          Nothing noticed while classification was a substring search over
+          the whole text, because the fragment it looked for usually
+          survived. It surfaced the moment classification started caring
+          about STRUCTURE — paren depth, outer FROM — and it surfaced as
+          "this statement has no FROM at all", which read like a parser
+          bug rather than a capture bug.
+
+          Normalisation belongs in sqlOnly(), once, AFTER comments are
+          removed. The recorder's only job is to record.               */
+      log.push(sql);
       return client.query(text, params);
     },
     async connect() { return wrapped; },
@@ -625,10 +716,81 @@ const DECLARED = [
          "financings, not with operating events." },
 ];
 
+/*  Classify ONE `from <table>` key. Unambiguous by construction — the
+    caller has already isolated a single table reference. */
 function classify(sql) {
-  const s = sql.toLowerCase().replace(/\s+/g, " ");
+  const s = sqlOnly(sql);
   const hit = DECLARED.find((d) => s.includes(d.match.toLowerCase()));
   return hit || null;
+}
+
+/*  ── CLASSIFY A WHOLE STATEMENT BY ITS OUTER TABLE ────────────────────
+ *  ⚠ THIS WAS `classify(wholeStatement)` AND THAT WAS ORDER-DEPENDENT.
+ *
+ *  A statement mentions more than one table. `select p.id from
+ *  contracted_service_providers p where exists (select 1 from
+ *  contracted_service_financial_observations f …)` contains BOTH a
+ *  STRUCTURAL table and a HISTORY_WALK one, and `DECLARED.find` returned
+ *  whichever I happened to have typed higher in the list.
+ *
+ *  Four live statements are ambiguous that way. All four resolved
+ *  correctly — and only by luck. Reordering the declarations, an edit
+ *  with no apparent meaning, would have reclassified the `spaces`
+ *  correlated walk as STRUCTURAL and dropped it from the count.
+ *
+ *  So the OUTER table decides, and that is a property of the statement
+ *  rather than of my typing order. A walk hiding in a subquery is not
+ *  lost by this: the SOURCE SCAN reads every `from` in the file,
+ *  subqueries included, and the count is ISSUED UNION SCANNED.
+ *
+ *  Order-independence is then ASSERTED below by classifying everything a
+ *  second time against a reversed DECLARED and requiring the same kind.
+ *  A property this file depends on is not left to inspection.          */
+/*  ⚠ THE FIRST `from` IN THE TEXT IS NOT THE OUTER ONE.
+ *
+ *  The first version of this took the first regex match and the
+ *  order-dependence assertion below caught it immediately, on the one
+ *  statement where it mattered most: space_position.js's read carries a
+ *  correlated json_agg subquery IN THE SELECT LIST, so the first `from`
+ *  in the text belongs to the subquery. The outer table was never
+ *  reached, the fallback ran, and the `spaces` walk still classified by
+ *  list order — reversing the list turned it STRUCTURAL and dropped it
+ *  from the count.
+ *
+ *  The outer FROM is the first one at PAREN DEPTH ZERO. That also skips
+ *  a CTE body for free, since a CTE body is parenthesised: in
+ *  `with x as (select … from a) select … from x` the first depth-zero
+ *  `from` is `from x`, which is what reads the CTE.                    */
+function outerTableOf(sql) {
+  const s = sqlOnly(sql);
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "(") { depth++; continue; }
+    if (ch === ")") { depth--; continue; }
+    if (depth !== 0) continue;
+    if (ch !== "f" || !/\bfrom\s/.test(s.slice(i, i + 5))) continue;
+    if (i > 0 && /[a-z0-9_]/.test(s[i - 1])) continue;        // mid-identifier
+    const m = /^from\s+([a-z_][a-z0-9_]*)\s*(?:\b([a-z][a-z0-9_]*)\b)?/.exec(s.slice(i));
+    if (!m) continue;
+    const alias = m[2] && !/^(where|join|left|inner|order|group|limit|on|as|and|or|select|union|having|cross|full|right|for|offset|natural)$/.test(m[2])
+      ? m[2] : null;
+    return alias ? `from ${m[1]} ${alias}` : `from ${m[1]}`;
+  }
+  return null;
+}
+
+function classifyStatement(sql, declared = DECLARED) {
+  const outer = outerTableOf(sql);
+  if (outer) {
+    const s = outer.toLowerCase();
+    const hit = declared.find((d) => s.includes(d.match.toLowerCase()));
+    if (hit) return hit;
+  }
+  //  No declared outer table — fall back to the whole statement so a
+  //  genuinely undeclared read is reported as undeclared, not misfiled.
+  const w = sqlOnly(sql);
+  return declared.find((d) => w.includes(d.match.toLowerCase())) || null;
 }
 
 /*  ── THE SEVEN, and how each is actually invoked ─────────────────────
@@ -695,6 +857,7 @@ const DOMAINS = [
 
   const results = [];
   const undeclared = [];
+  const orderDependent = [];
   for (const d of DOMAINS) {
     const { wrapped, log } = recorder(client);
     let outcome = "ok";
@@ -708,8 +871,17 @@ const DOMAINS = [
 
     const walks = [];
     for (const q of log) {
-      const c = classify(q);
-      if (!c) { undeclared.push({ domain: d.domain, sql: q.slice(0, 120) }); continue; }
+      const c = classifyStatement(q);
+      if (!c) { undeclared.push({ domain: d.domain, sql: sqlOnly(q).slice(0, 120) }); continue; }
+      /*  The same statement, classified against a REVERSED declaration
+          list. If the answer moves, classification depends on my typing
+          order and the count means nothing. */
+      const flipped = classifyStatement(q, [...DECLARED].reverse());
+      if (!flipped || flipped.kind !== c.kind) {
+        orderDependent.push({ domain: d.domain, chose: c.match, kind: c.kind,
+          flipped: flipped ? `${flipped.match} (${flipped.kind})` : "nothing",
+          sql: sqlOnly(q).slice(0, 110) });
+      }
       if (c.kind === "HISTORY_WALK") walks.push(c);
     }
     results.push({ domain: d.domain, queries: log.length, walks, outcome });
@@ -837,6 +1009,17 @@ const DOMAINS = [
   }
 
   let failed = 0;
+  if (orderDependent.length) {
+    failed++;
+    L(`  ✘ ${orderDependent.length} statement(s) classify differently against a reversed list.`);
+    L("      Classification would depend on the ORDER declarations are typed in,");
+    L("      so the walk count would move on an edit with no apparent meaning.");
+    L("      The OUTER table must decide, not the list position.");
+    for (const o of orderDependent) {
+      L(`      ${o.domain}: chose ${o.chose} (${o.kind}), reversed gives ${o.flipped}`);
+      L(`        ${o.sql}`);
+    }
+  }
   if (unscanned.length) {
     failed++;
     L(`  ✘ ${unscanned.length} statement(s) exist in the scanned sources and are not declared.`);
