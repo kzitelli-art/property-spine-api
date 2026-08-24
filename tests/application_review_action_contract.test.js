@@ -32,7 +32,7 @@ try {
   console.error(err.message || err);
   process.exit(1);
 }
-const app={id:'__deliberate_wrong_id__'};
+const app={id:'app-1'};
 let out=sandbox.executionPrimaryAction(app,{present:false}) || {};
 ok('absent evidence authors verify POST',out.action==='verify_executed_lease'&&out.method==='POST');
 ok('verify endpoint exact application',out.endpoint==='/operator/leasing/applications/app-1/executed-lease/verify');
