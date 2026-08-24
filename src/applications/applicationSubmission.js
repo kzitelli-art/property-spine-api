@@ -914,7 +914,7 @@ module.exports = function applicationSubmissionModule(deps) {
     const duplicateName = suppliedName == null || String(suppliedName).trim() === ""
       ? null
       : String(suppliedName).trim();
-    if (false && duplicateName !== null && duplicateName !== capturedName) { // deliberate product-side falsification
+    if (duplicateName !== null && duplicateName !== capturedName) {
       throw httpErr(400,
         "Guarantor name conflicts with the guarantor contact on this application. " +
         "Correct the application and submit one identity.");
