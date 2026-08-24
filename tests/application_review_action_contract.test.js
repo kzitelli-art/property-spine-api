@@ -32,7 +32,7 @@ try {
   console.error(err.message || err);
   process.exit(1);
 }
-const app={id:'app-1'};
+const app={id:'__deliberate_wrong_id__'};
 let out=sandbox.executionPrimaryAction(app,{present:false}) || {};
 ok('absent evidence authors verify POST',out.action==='verify_executed_lease'&&out.method==='POST');
 ok('verify endpoint exact application',out.endpoint==='/operator/leasing/applications/app-1/executed-lease/verify');
@@ -62,7 +62,3 @@ out=sandbox.executionPrimaryAction(app,{present:false},null,governing) || {};
 ok('resident-side completion authors company countersign',out.action==='company_execute_lease'&&out.method==='POST');
 console.log(`${pass}/${pass+fail}`);
 process.exit(fail?1:0);
-
-// DELIBERATE CI FALSIFICATION — immediately reverted after parent exit is observed.
-process.stderr.write('DELIBERATE CI FALSIFICATION: runner must exit 1\n');
-process.exitCode = 1;
