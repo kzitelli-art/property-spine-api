@@ -133,7 +133,7 @@ function recorder(client) {
  *  A declaration carrying `hidden_by_fixture` is counted without being
  *  observed — and if the fixture ever DOES provoke it, the gate fails
  *  until the flag is removed, so the two never both count it.          */
-const HISTORY_WALK_CEILING = 9;
+const HISTORY_WALK_CEILING = 8;
 
 /*  Every statement each read issues, classified. `match` is a distinctive
     fragment of the statement. An issued statement matching NOTHING here
@@ -156,9 +156,30 @@ const DECLARED = [
     why: "providers referenced by THIS property, via exists(). Grows with providers." },
   { match: "from contracted_service_providers", kind: "STRUCTURAL",
     why: "providers referenced by THIS property, via exists()" },
-  { match: "from obligations o", kind: "HISTORY_WALK",
-    why: "obligations accumulate as the property is operated; no status or date " +
-         "bound. NEEDS: restrict to open obligations for the standing read." },
+  /*  RECLASSIFIED — this was declared a HISTORY_WALK and is not one.
+      The statement does NOT read the property's obligations. It reads only
+      obligations reachable through contracted_service_decision_links
+      (`and exists (select 1 from contracted_service_decision_links l
+      where l.obligation_id = o.id and l.property_id = $1)`), so its row
+      count is the LINK count, never the obligation count.
+
+      And the link count is the TERM count: migration 171 makes links
+      append-only, FK'd to (term_id, property_id, engagement_id), and one
+      is written per governing decision — so links arrive with amendments
+      and with nothing else. That growth is already counted, once, under
+      contracted_service_terms. Counting it here counts the same curve
+      twice.
+
+      Bounding it by status would have been the "obvious" fix and would
+      have been WRONG OUTPUT: decisionOwner() looks the obligation up BY
+      ID from the newest link, so a link pointing at a CLOSED obligation
+      would lose its owner and report UNASSIGNED — a confident-wrong owner
+      on a screen (§5), bought to make this gate green.                  */
+  { match: "from obligations o", kind: "DERIVED_BOUND",
+    bounded_by: "from contracted_service_terms",
+    why: "scoped by EXISTS on contracted_service_decision_links, which are " +
+         "written one per governing decision and therefore grow with terms, " +
+         "not with operating events. The curve is counted under terms." },
   { match: "from compliance_items", kind: "STRUCTURAL",
     why: "the licences and requirements this property holds. Append-only, so " +
          "retired items accumulate — but slowly, with structure, not per event." },
@@ -351,6 +372,28 @@ const DOMAINS = [
   /*  The hidden ones: declared walks the fixture never provokes. Named
       here so the printed number is the real number, not the observable
       one. */
+  /*  DERIVED_BOUND — a statement whose growth is entirely inherited from
+      another declared walk. It is NOT counted (that would be the same
+      curve twice) and it is NOT free: `bounded_by` must name a declaration
+      that is itself a HISTORY_WALK. If that walk is ever fixed or
+      reclassified, this one loses its bound and the gate goes red until
+      someone re-examines it. That is what stops DERIVED_BOUND from being
+      the quiet place to put an inconvenient walk. */
+  const derived = DECLARED.filter((d) => d.kind === "DERIVED_BOUND");
+  const badlyBound = derived.filter((d) => {
+    const target = DECLARED.find((x) => x.match === d.bounded_by);
+    return !target || target.kind !== "HISTORY_WALK";
+  });
+  if (derived.length) {
+    L("DERIVED — growth inherited from another declared walk, counted there");
+    L("-".repeat(74));
+    for (const d of derived) {
+      L(`  ${d.match}   →   bounded by   ${d.bounded_by}`);
+      L(`    ${d.why.replace(/(.{66})\s/g, "$1\n    ")}`);
+      L("");
+    }
+  }
+
   const hidden = DECLARED.filter((d) => d.kind === "HISTORY_WALK" && d.hidden_by_fixture);
   const hiddenUnseen = hidden.filter((d) => !seen.has(d.match));
   const hiddenButSeen = hidden.filter((d) => seen.has(d.match));
@@ -374,6 +417,13 @@ const DOMAINS = [
   L("");
 
   let failed = 0;
+  if (badlyBound.length) {
+    failed++;
+    L(`  ✘ ${badlyBound.length} DERIVED_BOUND declaration(s) do not name a live HISTORY_WALK.`);
+    L("      A derived statement is uncounted because its growth is counted");
+    L("      elsewhere. If that elsewhere is gone, it is counted NOWHERE.");
+    for (const d of badlyBound) L(`      ${d.match} → bounded_by "${d.bounded_by}"`);
+  }
   if (hiddenButSeen.length) {
     failed++;
     L(`  ✘ ${hiddenButSeen.length} declaration(s) claim to be hidden by the fixture but were ISSUED.`);
