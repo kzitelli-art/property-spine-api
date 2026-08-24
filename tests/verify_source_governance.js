@@ -150,6 +150,22 @@ const GATES = [
     what: "staff line transfer: one atomic owner change, preserved history, fixed posture, server-derived authority" },
   { file: "personal_attention_convergence.test.js",
     what: "personal attention: dashboard and SMS share one person-scoped read using recorded accountability only" },
+  //  ── Added 2026-08-24, and the reason is a finding about myself ─────
+  //  Q5, Build 2 and Build 3 each shipped a gate to tests/, each was run
+  //  by hand, each reported green — and none was wired to anything. The
+  //  wave-3 audit landed the same night and found 255 of 292 top-level
+  //  test files invoked by nothing. These four were four of them: proof
+  //  infrastructure sitting in the pile the audit calls unproven.
+  //
+  //  Only the two that need NO database are here. The other two
+  //  (gate_standing_projection_cost.js, gate_property_name_resolution.js)
+  //  run from tests/e2e/verify_all.sh, which provisions one — putting
+  //  them here would make this suite depend on a database it does not
+  //  create, and this runner stops at the first failure.
+  { file: "gate_standing_projection_contract.js",
+    what: "every governed domain maps into the one §40.6 standing-projection shape" },
+  { file: "gate_four_silences.js",
+    what: "NOT_ESTABLISHED, READ_FAILED, READ_TIMED_OUT and QUIET never collapse (§40.7)" },
   { file: "gate_ask_spine_readers.js",
     what: "Ask Spine: every canonical standing domain is registered, pending, or explicitly waived" },
   //  The gate above is the §40.2 enforcement, so it is the one gate whose

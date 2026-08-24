@@ -50,7 +50,12 @@ const path = require("path");
 const { Client } = require("pg");
 
 const ROOT = path.join(__dirname, "..");
-const URL = process.env.B2_DATABASE_URL || "postgres://postgres@127.0.0.1:55434/b2";
+/*  Takes the harness database when run from tests/e2e/verify_all.sh,
+    and a hand-made disposable one otherwise. Still refuses anything
+    that is not localhost — a gate that can reach production is a
+    gate that will, eventually, on someone's laptop. */
+const URL = process.env.B2_DATABASE_URL || process.env.E2E_DATABASE_URL
+  || "postgres://postgres@127.0.0.1:55434/b2";
 if (!/@(127\.0\.0\.1|localhost)[:/]/.test(URL)) {
   console.error("\n  ✗ REFUSED: this gate runs only against a local disposable database.\n");
   process.exit(2);

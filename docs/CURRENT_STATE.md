@@ -531,6 +531,39 @@ Compliance is worse — its failure path leaves `facts.compliance` undefined wit
 
 ---
 
+## Gates wired into the runners — 2026-08-24
+
+Four gates from Q5, Build 2 and Build 3 were written, run by hand, reported green,
+and **wired to nothing** — four of the 255 of 292 top-level test files defect #17
+found invoked by nothing. Caught while reading that audit. Now:
+
+| Gate | Runner | Needs a database |
+|---|---|---|
+| `gate_standing_projection_contract.js` | `verify_source_governance.js` (now **50**) | no |
+| `gate_four_silences.js` | `verify_source_governance.js` | no |
+| `gate_standing_projection_cost.js` | `tests/e2e/verify_all.sh`, after the migration chain | yes |
+| `gate_property_name_resolution.js` | `tests/e2e/verify_all.sh` | yes |
+
+**The contract gate needed a change to be wireable, and it is worth knowing why.**
+Its "Ask Spine routes to one domain" assertion was RED ON PURPOSE as a Build 4
+handoff. `verify_source_governance.js` stops at the first failure and reports the
+rest NOT RUN — so a deliberate red would have silently suppressed unrelated
+evidence. It is now a **declared PENDING** with an owner and a `clears` condition,
+matching the shape `gate_ask_spine_readers.js` already uses for Insurance and Tax.
+Printed loudly; not a skip, not green. The gate also asserts the declaration stays
+honest: if the router disappears, it goes red demanding the pending entry be
+removed.
+
+**Both database gates take `E2E_DATABASE_URL`** so the harness drives them, and
+both still refuse any URL that is not localhost.
+
+**Proven, not assumed:** two deliberate breaks — a domain losing its contract
+mapping, and a failed read claiming the property has nothing — each took the whole
+runner to `PARENT EXIT 1`. A gate wired in but unable to fail the suite is the same
+false green it exists to prevent.
+
+---
+
 ## The four silences — `src/agent/ask_spine_answer.js`
 
 Appended 2026-08-22 (Build 3). Product code changed; no migration, no database write.

@@ -51,6 +51,19 @@ step "property fixture"     psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f te
 step "pricing fixture"      psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/fixtures.sql
 step "instrument fixture"   node tests/e2e/instrument_fixture.js
 
+#  ── DATABASE-BACKED GATES ───────────────────────────────────────────
+#  These two need a real schema and cannot live in
+#  tests/verify_source_governance.js, which provisions nothing. They run
+#  here, after the migration chain, against the database this script just
+#  built — and they refuse any URL that is not localhost.
+#
+#  Added 2026-08-24 with their two pure siblings. All four had been
+#  written, run by hand, reported green, and wired to NOTHING, which put
+#  them among the 255 of 292 test files the wave-3 audit found invoked by
+#  nothing. A gate nobody runs is not a gate.
+step "standing projection cost"  node tests/gate_standing_projection_cost.js
+step "property name resolution"  node tests/gate_property_name_resolution.js
+
 # ── the real server, the real HTTP door ─────────────────────────────
 #  ASK BEFORE LAUNCHING. Polling /health afterwards cannot distinguish
 #  our server from a stale one — see tests/e2e/port_guard.sh.

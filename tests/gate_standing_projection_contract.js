@@ -192,19 +192,50 @@ function ok(name, cond, detail = "") {
   L("  database, which is the only form of that claim worth making.");
   L("");
 
-  L("THE CONSEQUENCE — the router §40.6 forbids by name");
+  L("PENDING — the router §40.6 forbids by name");
   L("-".repeat(70));
   const answerSrc = fs.readFileSync(path.join(ROOT, "src/agent/ask_spine_answer.js"), "utf8");
   const routerGuards = (answerSrc.match(/if \(subject === /g) || []).length;
   const hasRouter = /function questionSubject\s*\(/.test(answerSrc);
-  L(`  questionSubject() present: ${hasRouter}`);
-  L(`  gathers gated on a chosen subject: ${routerGuards}`);
-  ok("Ask Spine gathers every entitled domain rather than routing to one",
-     !hasRouter && routerGuards === 0,
-     "a regex intent router picks ONE domain per question. §40.6 says the standing\n" +
-     "      projection exists precisely so this is unnecessary — and it is only\n" +
-     "      necessary while the projections are too expensive to gather routinely.\n" +
-     "      Deleting the router is Build 4; making that possible is this build.");
+
+  /*  ── WHY THIS IS PENDING AND NOT A FAILURE ──────────────────────────
+   *  This was written as a hard assertion and it was RED ON PURPOSE, as a
+   *  Build 4 handoff. That is fine for a gate run by hand and wrong for a
+   *  gate in the runner: `verify_source_governance.js` stops at the first
+   *  failure and reports the rest NOT RUN, so a deliberate red here would
+   *  have halted every gate after it — a known, ruled, not-yet-started
+   *  item silently suppressing unrelated evidence.
+   *
+   *  The repo already has a shape for "eligible, not yet wired":
+   *  gate_ask_spine_readers.js declares `state: "pending"` with an owner
+   *  and a `clears` condition (Insurance and Tax sit there today). Same
+   *  shape, same reason. A pending item is DECLARED and printed loudly —
+   *  it is not a skip, and it is not green.                             */
+  const PENDING = {
+    what: "Ask Spine gathers every entitled domain rather than routing to one",
+    owner: "Build 4",
+    clears: "questionSubject() and its `if (subject === …)` guards are gone, and " +
+            "gatherFacts collects every entitled domain's standing projection. " +
+            "BLOCKED ON COST: gate_standing_projection_cost.js measures 42 queries " +
+            "for 8 domains on an EMPTY property, 8 of them unbounded. §40.6 says " +
+            "the projection exists so this router is unnecessary; it is only " +
+            "necessary while the projections are this expensive.",
+  };
+  L(`  ⏳ PENDING  ${PENDING.what}`);
+  L(`     owner   ${PENDING.owner}`);
+  L(`     state   questionSubject() present: ${hasRouter} · subject guards: ${routerGuards}`);
+  L(`     clears  ${PENDING.clears.replace(/(.{62})\s/g, "$1\n             ")}`);
+  L("");
+  //  The one thing that IS asserted: a pending item must still be honest
+  //  about itself. If the router disappears, this declaration is stale
+  //  debt and the gate says so rather than quietly staying pending.
+  ok("the pending declaration still describes reality",
+     hasRouter === (routerGuards > 0),
+     "questionSubject() and its guards disagree — the declaration above is stale");
+  ok("…and if the router is gone, this pending entry must be removed",
+     hasRouter || routerGuards > 0,
+     "the router is GONE — Build 4 landed. Delete this pending block; a pending " +
+     "item outliving its condition is exactly the stale debt it exists to prevent");
   L("");
 
   L("THE ESTABLISHED BRANCH — proven on representative readings");
