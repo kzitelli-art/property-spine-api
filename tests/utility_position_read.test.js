@@ -5,7 +5,13 @@ const read = require("../src/asset/utility_position_read.js");
 
 const PROPERTY = "property-a";
 let pass = 0;
-function ok(label, fn) { fn(); pass++; console.log(`  ok    ${label}`); }
+function ok(label, fn) {
+  //  Accepts a thunk that throws, or a plain boolean.
+  if (typeof fn === "function") fn();
+  else if (fn === false) throw new Error(`assertion failed: ${label}`);
+  pass++;
+  console.log(`  ok    ${label}`);
+}
 
 function fakeClient(rowsByTable, calls) {
   return {
@@ -149,6 +155,50 @@ async function main() {
   ok("…and only for the LATEST statement of each account", () => {
     assert.deepStrictEqual([...usageCall.params[1]].sort(), ["stmt-1-new", "stmt-2-new"]);
   });
+
+  /*  ══ as_of IS RESOLVED ONCE AND REACHES BOTH PROJECTIONS THE SAME ══
+      readPosition() runs the projection TWICE — a provisional pass to
+      learn which statements survive, then the final one. project()
+      resolves its own default (`day(as_of) || today`), so handing null to
+      both would let each ask the clock independently: across UTC midnight
+      the provisional pass could select usage for one day and the final
+      pass render another.
+
+      This spies on project() to record the as_of each call actually
+      received. It does not assert the resolved value equals any
+      particular date — that would be a clock test. It asserts the two
+      calls AGREE, and that the value is a real resolved day rather than
+      null.                                                              */
+  const proj = require("../src/asset/utility_projection.js");
+  const realProject = proj.project;
+  const seen = [];
+  proj.project = (snapshot, opts) => { seen.push(opts && opts.as_of); return realProject(snapshot, opts); };
+  try {
+    seen.length = 0;
+    await read.readPosition(fakeClient(busyRows, []), { property_id: PROPERTY });
+    ok("an omitted as_of still reaches BOTH projections", seen.length === 2);
+    ok("…as the same resolved value, not null", () => {
+      assert.strictEqual(seen[0], seen[1]);
+      assert(seen[0] !== null && seen[0] !== undefined, "as_of was null/undefined");
+      assert(/^\d{4}-\d{2}-\d{2}$/.test(String(seen[0])), `not a resolved day: ${seen[0]}`);
+    });
+
+    seen.length = 0;
+    await read.readPosition(fakeClient(busyRows, []), { property_id: PROPERTY, as_of: null });
+    ok("an explicit null behaves identically", () => {
+      assert.strictEqual(seen.length, 2);
+      assert.strictEqual(seen[0], seen[1]);
+      assert(/^\d{4}-\d{2}-\d{2}$/.test(String(seen[0])));
+    });
+
+    seen.length = 0;
+    await read.readPosition(fakeClient(busyRows, []), { property_id: PROPERTY, as_of: "2026-07-15" });
+    ok("an explicit historical as_of is preserved unchanged in both passes", () => {
+      assert.deepStrictEqual(seen, ["2026-07-15", "2026-07-15"]);
+    });
+  } finally {
+    proj.project = realProject;
+  }
 
   console.log(`\n${pass} assertions passed\n`);
 }

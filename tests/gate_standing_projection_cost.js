@@ -717,6 +717,7 @@ const DECLARED = [
       tests/utility_statement_usage_bound_equivalence.db.js: identical
       standing AND detail, 6 rows read instead of 18.                    */
   { match: "from utility_statement_usage", kind: "STRUCTURAL",
+    bounded_in_file: "src/asset/utility_position_read.js",
     bounded_by_sql: "statement_id = any($2",
     why: "BOUNDED — usage of the surviving statements only, by id. Ceiling is " +
          "accounts x lines-per-statement; it does not grow with time. The full " +
@@ -784,6 +785,16 @@ const DECLARED = [
     why: "the equity classes this deal defines, effective-dated. Grows with " +
          "financings, not with operating events." },
 ];
+
+/*  The comment-stripped SQL of ONE file's template literals. Same
+    sqlOnly() the scan uses, so a fragment inside a `--` or block comment
+    is not SQL here either. */
+function sqlLiteralsOf(file) {
+  const src = fs.readFileSync(path.join(ROOT, file), "utf8");
+  return (src.match(/`[^`]*`/g) || [])
+    .filter((lit) => /\bselect\b/i.test(lit))
+    .map((lit) => sqlOnly(lit));
+}
 
 /*  Classify ONE `from <table>` key. Unambiguous by construction — the
     caller has already isolated a single table reference. */
@@ -1032,12 +1043,43 @@ const DOMAINS = [
    *  scan only ever saw it in the ISSUED statement. A first version of
    *  this check looked for the table name beside the fragment and went
    *  red on correct code. The fragment alone is what carries the claim. */
+  /*  ⚠ THE FIRST VERSION OF THIS CHECK WAS `.includes()` OVER THE RAW
+   *  TEXT OF EVERY SCANNED FILE, AND THAT IS NOT A BOUND CHECK.
+   *  It was satisfied by the fragment appearing ANYWHERE — inside a
+   *  comment, or in some unrelated file that never reads this table. A
+   *  declaration could then claim STRUCTURAL while the executable SQL in
+   *  the reader had no bound at all.
+   *
+   *  So the declaration names its OWNING FILE, and the fragment must
+   *  appear in EXECUTABLE SQL from that file: template literals only,
+   *  comments stripped by the same sqlOnly() the scan uses. A comment
+   *  cannot satisfy it, and neither can another scanned source.        */
   const unpinnedBounds = [];
   for (const d of DECLARED) {
     if (!d.bounded_by_sql) continue;
-    const found = SCANNED_SOURCES.some((file) =>
-      fs.readFileSync(path.join(ROOT, file), "utf8").includes(d.bounded_by_sql));
-    if (!found) unpinnedBounds.push({ match: d.match, fragment: d.bounded_by_sql });
+    const owner = d.bounded_in_file;
+    if (!owner) {
+      unpinnedBounds.push({ match: d.match, fragment: d.bounded_by_sql,
+        why: "declares bounded_by_sql without bounded_in_file — the owning file must be named" });
+      continue;
+    }
+    const fragment = d.bounded_by_sql.toLowerCase();
+    const inOwner = sqlLiteralsOf(owner).some((lit) => lit.includes(fragment));
+    if (!inOwner) {
+      //  Say WHERE it turned up instead, so a fragment sitting in a
+      //  comment or in the wrong file reads as the mistake it is.
+      const strays = [];
+      for (const f of SCANNED_SOURCES) {
+        const raw = fs.readFileSync(path.join(ROOT, f), "utf8");
+        if (!raw.includes(d.bounded_by_sql)) continue;
+        strays.push(sqlLiteralsOf(f).some((lit) => lit.includes(fragment))
+          ? `${f} (executable SQL, but not the owning file)`
+          : `${f} (present, but NOT in executable SQL — a comment)`);
+      }
+      unpinnedBounds.push({ match: d.match, fragment: d.bounded_by_sql, owner,
+        why: strays.length ? `found instead in: ${strays.join("; ")}`
+                           : "not found in any scanned source" });
+    }
   }
 
   /*  ── COMPUTE_WALK · REPORTED, PINNED, NOT COUNTED ────────────────  */
@@ -1138,7 +1180,9 @@ const DOMAINS = [
     L("      walks history again while this gate still calls it structural —");
     L("      which is a green that certifies the opposite of the truth.");
     for (const u of unpinnedBounds) {
-      L(`      ${u.match} — expected fragment ${JSON.stringify(u.fragment)} in the scanned sources`);
+      L(`      ${u.match} — expected ${JSON.stringify(u.fragment)} in executable SQL`);
+      L(`        owning file: ${u.owner || "(none declared)"}`);
+      L(`        ${u.why}`);
     }
   }
   if (rottedPins.length) {

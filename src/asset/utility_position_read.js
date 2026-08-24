@@ -67,11 +67,17 @@ async function loadStatementUsage(client, { property_id, statement_ids } = {}) {
   return assertOwned(rows, property_id, TABLES.statement_usage);
 }
 
-/*  THE FULL SERIES, REACHABLE BY NAME. Nothing in src/ needs it today —
- *  which is exactly why it exists rather than being deleted. §40.6 is
- *  standing PLUS detail; bounding the standing path is not permission to
- *  make the series unreachable, and a caller that appears later must not
- *  have to reintroduce an unbounded load in the standing read to get it. */
+/*  THE FULL SERIES, REACHABLE BY NAME.
+ *
+ *  ⚠ ACTIVATION, STATED HONESTLY: this is a CLASS 1 detail primitive with
+ *  NO PRODUCT CALLER. Nothing in src/ invokes it. It is exercised only by
+ *  tests/utility_statement_usage_bound_equivalence.db.js. It is NOT a live
+ *  detail surface and must not be described as one.
+ *
+ *  It exists rather than being deleted because §40.6 is standing PLUS
+ *  detail: bounding the standing path is not permission to make the series
+ *  unreachable, and a caller that appears later must not have to
+ *  reintroduce an unbounded load in the standing read to get it.        */
 async function loadAllStatementUsage(client, { property_id } = {}) {
   requireProperty(property_id);
   const rows = (await client.query(
@@ -129,7 +135,21 @@ async function readSnapshot(client, { property_id } = {}) {
 async function readPosition(client, { property_id, as_of = null } = {}) {
   const snapshot = await readSnapshot(client, { property_id });
 
-  const provisional = projection.project(snapshot, { as_of });
+  /*  ── as_of IS RESOLVED ONCE, HERE, AND IT IS NEVER NULL DOWNSTREAM ──
+   *  ⚠ PASSING null TO BOTH PASSES IS NOT THE SAME AS PASSING ONE VALUE.
+   *  project() resolves its own default — `day(as_of) || today` — so two
+   *  calls with null each ask the clock independently. A read that
+   *  straddles UTC midnight would then discover the surviving statements
+   *  for one day and render the position for the next: usage attached to
+   *  statements the final pass never selected.
+   *
+   *  Resolved through the CANONICAL exported helper, and today through the
+   *  same helper rather than a second copy of the expression — so this
+   *  cannot drift from what project() would have computed. An explicit
+   *  as_of is passed through untouched.                                 */
+  const asOf = projection.day(as_of) || projection.day(new Date());
+
+  const provisional = projection.project(snapshot, { as_of: asOf });
   const statementIds = [...new Set(
     ((provisional.detail && provisional.detail.recent_statements) || [])
       .map((statement) => statement && statement.id)
@@ -139,7 +159,7 @@ async function readPosition(client, { property_id, as_of = null } = {}) {
   snapshot.statement_usage = await loadStatementUsage(client, {
     property_id, statement_ids: statementIds,
   });
-  return projection.project(snapshot, { as_of });
+  return projection.project(snapshot, { as_of: asOf });
 }
 
 async function readOpening(client, input = {}) {
