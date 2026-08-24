@@ -200,7 +200,27 @@ or a successor starting at/after a governing lease that itself spans `asOf`. So 
 date-relevance predicate (`end_date is null or end_date >= $asOf`) is a candidate
 that a count-bound is not.
 
-**It was not built, for two reasons and neither is time:**
+**This is now observed, not inferred.** `tests/space_rows_lease_relevance.db.js`
+(5/5) mutates the fixture and compares full position output:
+
+| probe | result |
+|---|---|
+| **B1** remove the lease that ENDED before `as_of` | output **identical** — past leases are not read at a single `as_of`, so a date-relevance predicate is a real candidate |
+| **B2** remove the lease that SPANS `as_of` | output changes: `active` → `forward`, `current_lease_position` → `null` |
+| **B3** remove the FUTURE lease | the **forward** read changes — "latest" is wrong for the interval consumer in the opposite direction from B2 |
+
+B2 and B3 are what give B1 teeth; a probe that only shows the safe deletion is
+safe has demonstrated nothing.
+
+> **I predicted B2 would yield `none` and the database said `forward`.** The
+> corrected answer is the sharper one. The 2027 lease is still on the bed, so
+> the classifier falls through to `future` and the bed reads as *empty now,
+> someone coming later*. A bed someone is living in today, offered as available
+> today **with a story attached**, is a more convincing double-let than a blank
+> would be. Recorded rather than smoothed over, because the wrong prediction is
+> the part that would have shipped.
+
+**It was still not built, for two reasons and neither is time:**
 
 1. `loadSpaceRows(pool, property_id, baseline_id)` does not receive `asOf` at
    all — the date is applied by the classifier afterward. Threading it in is a
