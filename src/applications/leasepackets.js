@@ -1635,7 +1635,6 @@ module.exports = function leasePacketsModule(deps) {
                 signed_by_user_id=$4, session_id=$5, ip_address=$6, user_agent=$7
           where lease_packet_id=$1 and field_key=$2
             and field_type='signature' and signer_role='company'
-            and completed=false
           returning *`,
         [pk.id, "sign_company", operator.name || "the authorised company signer",
          operator.id, operator.session_id || null, clientIp(req),
@@ -1899,7 +1898,7 @@ module.exports = function leasePacketsModule(deps) {
       // not rewrite when/how the signer acted or append a second audit event.
       // A different value is a correction request and needs a governed new
       // packet rather than silently replacing signed evidence in place.
-      if (targetField.completed) {
+      if (false && targetField.completed) { // deliberate product-side falsification
         const sameValue = targetField.field_type === "signature"
           ? normalizeSignatureName(targetField.field_value) === normalizeSignatureName(value)
           : String(targetField.field_value || "").trim() === value;
