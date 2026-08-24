@@ -579,3 +579,34 @@ O(1) — there is no index on `(property_id, source_as_of_date, loaded_at)`, so 
 sorts the property's batches. An index is a schema change and this thread assigned no migration
 number. Also a real trade, stated rather than hidden: the standing path now issues **two**
 bounded statements where it issued **one** unbounded walk.
+
+---
+
+## Move-in beat — `src/tenancy/` (CABIN thread, Slice 2)
+
+Appended 2026-08-24. Base `7e67f50` (ledger 192), **not** `main`. Rows for what
+this thread personally observed; nothing else re-surveyed. Full §41 receipt:
+`docs/MOVE_IN_BEAT_RECEIPT.md`.
+
+| Capability | Rung | Files / note |
+|---|---|---|
+| **Move-in beat, anchor → live occupancy** | **`HTTP_PROVEN`** (real Postgres, real chain to ledger 192; **service-level, not through the HTTP door**) | `tests/move_in_beat_drive.db.js` **12/12**. pending lease → `confirmMoveInChargeSet` → payments applied → `attemptEconomicTenancyActivation` → occupancy, with the resident named at both ends and possession correctly still PENDING. ⚠ **Rung limit stated:** the harness seeds the *durable output* of confirm-term (a `pending` lease + verified `executed_lease_record`) because confirm-term lives in `operator.js` behind `dormantWriteGuard`, outside this lane. **It does not prove confirm-term** |
+| **"rent roll is unit-keyed with no `person_id`" — the handed-down gap** | **REFUTED, observed** | The read is unit-keyed at the top and carries the person down: `tenancy_anchor_service` writes `tenant_ids=[app.person_id]` → `loadSpaceRows` aggregates it → `spacePosition` resolves `persons` → classifier emits `tenants[]`. Named at pending AND at active. My first assertion looked for `.resident` and went red against a payload that plainly held `tenants[{person_id,name}]` — the wrong field name manufactures a defect |
+| `'signed'` as a lease status | **`NOT_FOUND` in any writer** | `ACTIVATION_PENDING_STATUSES={"pending","signed"}` in `position_classifier.js`, but **nothing in `src/` or `server.js` writes `'signed'`**. Inserts are `'pending'` (`tenancy_anchor_service`), `'active'` (`onboarding/activation_service`; `identity/activation.js` — dead, never mounted), `'cancelled'` (`lease_void_service`). Defensive vocabulary, not a stop. I predicted this WAS the stop; running it disproved that |
+| **Bed-grain occupancy spill — unit-grain write for a space-grain fact** | **`HTTP_PROVEN` as a measurement · LATENT, not active** | `attemptEconomicTenancyActivation` ends `update units set occupancy_status='occupied' where id=lease.unit_id`. On a real 3-bed unit, activating **one** bed flips the column `unknown→occupied` and both unleased siblings inherit `occupancy_claim='occupied'`. **Every reported number is identical** with and without it (isolated by holding activation constant) — `positionBasis()` refuses the unit-level column as a basis, naming it `unit_occupancy_status_only`, `authoritative:false`. Checked rent roll, standing projection and `leasing_inventory.availableUnits`; none moves. **The write was NOT changed** — no observed red, and §30 says preserve the primitive |
+| **The wall that makes that write harmless** | **`HTTP_PROVEN` · falsified PRODUCT-SIDE** | `tests/bed_grain_occupancy_spill.db.js` **6/6**. The invariant was held by a comment and one string literal. Falsified at SHA `41c1aa6129f5346435096e48d969311e4ea75137` by flipping `positionBasis()`'s unit-level arm `not_established`→`established` (blob `acd1388b…`→`3275f60c…`): **4 passed, 2 failed, exit 1**; `not_established` collapsed 2→0 and two unleased beds gained an established basis. Bytes restored to `acd1388b…` (verified identical), **6/6 exit 0** |
+| ⚠ **A second, ungoverned writer of `lease_status='active'`** | **`REPORTED` — read, not exercised** | `server.js:1557` — a bare inline approve/reject route: `update leases set lease_status=$1` with **no** move-in funds gate, no economic-tenancy record, no activation event. It bypasses every guard the beat proves above. **Not touched** — `server.js` is outside the CABIN lane. If it is reachable in production, it is a hole in the move-in beat |
+| `docs/CURRENT_STATE.md` on `main` attributes confirm-term to the wrong file | `REPORTED` | Its row says *"Confirm hard-codes `lease_status='active'` (`activation_service.js:696`)"*. That file is `onboarding/activation_service.js` — the **opening rent-roll import**. Confirm-term is `tenancy_anchor_service.js` and correctly writes `'pending'`. Not edited by me: shared, append-only, and I did not re-verify the row's original context |
+
+**Ruling requested** (in the receipt, not decided here): the unit-grain write is
+wrong at the grain and currently harmless, and `turnover_service.js` writes
+`'vacant'` to the same column with the same structural problem in the opposite
+direction. Options are leave-it-with-the-gate, guard the write to single-space
+units, or retire the column as a basis. Recommended: the first now, the third
+eventually — the middle option leaves `turnover_service` writing the same wrong grain.
+
+**Local-only state, at risk:** none. The disposable Postgres does not survive a
+container restart and is rebuilt from `tests/e2e/apply_migrations.sh` each time
+(ceiling 192, zero stops). Nothing durable lives outside the pushed branch. The
+four `.db.js` harnesses are **not wired into any runner** — nothing runs them
+automatically, same condition as the other 68 `.db.js` proofs.
