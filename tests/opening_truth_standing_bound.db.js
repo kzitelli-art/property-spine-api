@@ -103,15 +103,35 @@ async function seed(pool) {
   await pool.query(`delete from properties where id=$1`, [PROPERTY]);
   await pool.query(`delete from persons where id=$1`, [PERSON]);
 
+  /*  ── THE CANONICAL PROPERTY INSERT, AND NO FALLBACK ────────────────
+   *
+   *  This block used to name `occupancy_status` on `properties` and wrap
+   *  the statement in a broad `.catch()` that retried a DIFFERENT insert.
+   *  `occupancy_status` does not exist on `properties` — it is a UNIT-level
+   *  column, confirmed against the live schema at ledger 192:
+   *
+   *      information_schema.columns where column_name='occupancy_status'
+   *        → units
+   *
+   *  So the first statement failed on EVERY run, the catch quietly ran the
+   *  correct one, and the harness went green while a real SQL error sat in
+   *  the Postgres log. It was visible in the container logs of CI runs
+   *  32769539866, 32770074062 and 32770517275 and nothing went red.
+   *
+   *  ⚠ THE FALLBACK WAS THE ACTUAL DEFECT, not the column name. A broad
+   *  catch around fixture setup swallows whatever fails next — a constraint
+   *  change, a renamed column, a genuinely broken seed — and hands the
+   *  assertions a half-built fixture to pass against. A harness that hides
+   *  its own setup failure is the "confident wrong" §5 forbids, pointed at
+   *  the proof instead of the product.
+   *
+   *  Now: one canonical statement, no catch. The seed deletes this property
+   *  by id immediately above, so a plain INSERT is deterministic — no
+   *  `where not exists` guard is needed. Any failure propagates to the
+   *  outer try/catch, which reports "harness died" and exits non-zero.  */
   await pool.query(
-    `insert into properties (id, name, address, leasing_basis, occupancy_status)
-     select $1,'Slice1 Bound Fixture','1 Bound Way','unit','unknown'
-      where not exists (select 1 from properties where id=$1)`,
-    [PROPERTY]).catch(async () => {
-      await pool.query(
-        `insert into properties (id, name, address, leasing_basis)
-         values ($1,'Slice1 Bound Fixture','1 Bound Way','unit')`, [PROPERTY]);
-    });
+    `insert into properties (id, name, address, leasing_basis)
+     values ($1,'Slice1 Bound Fixture','1 Bound Way','unit')`, [PROPERTY]);
 
   await pool.query(`insert into persons (id, name) values ($1,'Bound Resident')
                     on conflict (id) do nothing`, [PERSON]);
