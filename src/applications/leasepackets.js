@@ -1862,7 +1862,7 @@ module.exports = function leasePacketsModule(deps) {
       const packetSignerId = signer.id || null;
 
       const targetField = (await client.query(
-        `select field_type, signer_role from lease_packet_fields
+        `select field_type, signer_role, completed, field_value from lease_packet_fields
           where id=$1 and lease_packet_id=$2 and required=true and signer_role=$3`,
         [req.params.field_id, pk.id, signer.signer_role])).rows[0];
       if (!targetField) {
@@ -1894,6 +1894,30 @@ module.exports = function leasePacketsModule(deps) {
         }
       }
 
+      // Completion is evidence, not an editable draft. An exact retry after a
+      // lost response is harmless and returns the current packet, but it does
+      // not rewrite when/how the signer acted or append a second audit event.
+      // A different value is a correction request and needs a governed new
+      // packet rather than silently replacing signed evidence in place.
+      if (targetField.completed) {
+        const sameValue = targetField.field_type === "signature"
+          ? normalizeSignatureName(targetField.field_value) === normalizeSignatureName(value)
+          : String(targetField.field_value || "").trim() === value;
+        await client.query("rollback");
+        if (!sameValue) {
+          return res.status(409).json({
+            error: "field_already_completed",
+            receipt: "This field already carries completed evidence and cannot be rewritten. Contact the leasing office if the package needs correction.",
+          });
+        }
+        const bundle = await getBundle(pool, pk.id);
+        return res.json({
+          receipt: "This field was already completed; the original evidence is unchanged.",
+          already_completed: true,
+          packet: signerPacket(bundle, signer),
+        });
+      }
+
       const field = (await client.query(
         `update lease_packet_fields
             set completed=true, completed_at=now(),
@@ -1903,6 +1927,7 @@ module.exports = function leasePacketsModule(deps) {
                 signed_by_packet_signer_id = case when field_type='signature'
                                                   then $8::uuid else signed_by_packet_signer_id end
           where id=$1 and lease_packet_id=$2 and required=true and signer_role=$9
+            and completed=false
           returning *`,
         [req.params.field_id, pk.id, value, req.body?.session_id || null, clientIp(req),
          req.headers["user-agent"] || null, signerPersonId, packetSignerId,
