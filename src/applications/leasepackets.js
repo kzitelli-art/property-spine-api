@@ -2069,7 +2069,7 @@ module.exports = function leasePacketsModule(deps) {
 
       const satisfied = [];
       const alreadyDone = [];
-      if (signer.signer_role === "tenant") {
+      if (true) {
         try {
           await satisfyObligation(client, {
             obligation_id: app.terms_review_obligation_id,
