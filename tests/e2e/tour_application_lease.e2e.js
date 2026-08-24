@@ -454,9 +454,22 @@ async function waitForStaffReply(providerMessageId) {
     applicant_accuracy_certified: true,
     electronic_delivery_consent: true,
   };
+  const conflictingGuarantor = await api("POST", "/applications/submit-public", {
+    key: false,
+    body: {
+      token: applicationToken,
+      applicant_name: name,
+      guarantor_name: `Wrong Guarantor ${suffix}`,
+      captured,
+    },
+  });
+  expect(conflictingGuarantor.status === 400
+      && /conflicts with the guarantor contact/.test(
+        String(conflictingGuarantor.body && conflictingGuarantor.body.receipt || "")),
+    "a contradictory V3 guarantor name is refused before application birth");
   const submitted = requireOk(await api("POST", "/applications/submit-public", {
     key: false,
-    body: { token: applicationToken, applicant_name: name, guarantor_name: guarantorName, captured },
+    body: { token: applicationToken, applicant_name: name, captured },
   }), "public application submit");
   const appId = submitted.application && submitted.application.id;
   const appRow = (await q(
@@ -469,7 +482,7 @@ async function waitForStaffReply(providerMessageId) {
     "the tenant application persists exact Bed B");
   expect((await q("select guarantor_name from lease_applications where id=$1", [appId])).rows[0].guarantor_name
       === guarantorName,
-    "the application carries the named guarantor into lease preparation");
+    "the application derives the named guarantor from the validated V3 capture");
 
   const mikeApproval = await api("POST", `/operator/leasing/applications/${appId}/approve`, {
     token: staffToken, body: {},
