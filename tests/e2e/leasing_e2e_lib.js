@@ -95,10 +95,13 @@ async function toPacket(C, { bed, rent = 1025, name = null } = {}) {
 async function residentSigns(rawTok) {
   const view = await api("GET", `/t/lease/${rawTok}/data`);
   const required = ((view.body.packet && view.body.packet.fields) || []).filter((f) => f.required);
+  const signerName = view.body.packet && view.body.packet.current_signer
+    && view.body.packet.current_signer.display_name;
+  if (!signerName) throw new Error("packet: current signer name is missing");
   for (const f of required) {
     const r = await api("POST", `/t/lease/${rawTok}/fields/${f.id}/complete`, {
       body: {
-        value: f.field_type === "signature" ? "Hostile Tester" : "HT",
+        value: f.field_type === "signature" ? signerName : "HT",
         consent: f.field_type === "signature",
         session_id: "hostile",
       } });
