@@ -1635,6 +1635,7 @@ module.exports = function leasePacketsModule(deps) {
                 signed_by_user_id=$4, session_id=$5, ip_address=$6, user_agent=$7
           where lease_packet_id=$1 and field_key=$2
             and field_type='signature' and signer_role='company'
+            and completed=false
           returning *`,
         [pk.id, "sign_company", operator.name || "the authorised company signer",
          operator.id, operator.session_id || null, clientIp(req),
@@ -1926,7 +1927,6 @@ module.exports = function leasePacketsModule(deps) {
                 signed_by_packet_signer_id = case when field_type='signature'
                                                   then $8::uuid else signed_by_packet_signer_id end
           where id=$1 and lease_packet_id=$2 and required=true and signer_role=$9
-            and completed=false
           returning *`,
         [req.params.field_id, pk.id, value, req.body?.session_id || null, clientIp(req),
          req.headers["user-agent"] || null, signerPersonId, packetSignerId,
