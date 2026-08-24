@@ -41,8 +41,28 @@
    threading asOf into the shared loader is safe — see the receipt's
    second reason, the unfiltered `ins[ins.length - 1]` possession read.
 
+   ── THIS HARNESS USED TO CREATE NOTHING ─────────────────────────────
+   It read a property that opening_truth_standing_bound.db.js had built
+   and left behind, and it hand-copied that file's lease dates, statuses
+   and rents into its own restore path. Two consequences, both measured
+   on a freshly migrated database rather than argued:
+
+       alone on a clean database            → FAIL, exit 1, 0 passed
+       after the other harness had run      → PASS, 5/5
+       delete the retained leases, re-run   → FAIL, exit 1
+
+   It was not an independent proof. It was an echo, and it would have
+   gone red for a reason that has nothing to do with lease relevance —
+   which is the worst kind of red, because someone would go looking in
+   the classifier.
+
+   It now seeds and cleans up for itself through the shared definition in
+   tests/tenancy_position_fixture.js, and the restore path reads the
+   lease values from there instead of carrying a copy that could drift.
+
    CLASS 3 — test infrastructure. REMOVAL CONDITION: none.
-   Mutates and restores ONLY the ids it created. Local database only.
+   Creates, mutates and removes ONLY the ids the fixture owns.
+   Local database only.
 
      SLICE1_DATABASE_URL=postgres://postgres@127.0.0.1:55434/spine_slice1 \
        node tests/space_rows_lease_relevance.db.js
@@ -62,41 +82,29 @@ if (!/@(127\.0\.0\.1|localhost)[:/]/.test(URL)) {
 const ROOT = path.join(__dirname, "..");
 const { spacePosition } = require(path.join(ROOT, "src/tenancy/space_position.js"));
 const { intervalPropertyPositions } = require(path.join(ROOT, "src/tenancy/dated_positions.js"));
+const fixture = require(path.join(__dirname, "tenancy_position_fixture.js"));
 
-const PROPERTY = "51ce0001-0000-4000-8000-000000000001";
-const LEASE_PAST    = "51ce0001-0000-4000-8000-0000000001a1"; // 2024-01-01 → 2024-12-31, ended
-const LEASE_CURRENT = "51ce0001-0000-4000-8000-0000000001a2"; // 2025-01-01 → 2026-12-31, active
-const LEASE_FUTURE  = "51ce0001-0000-4000-8000-0000000001a3"; // 2027-01-01 → 2027-12-31, signed
+const PROPERTY      = fixture.IDS.PROPERTY;
+const LEASE_PAST    = fixture.IDS.LEASE_PAST;    // 2024-01-01 → 2024-12-31, ended
+const LEASE_CURRENT = fixture.IDS.LEASE_CURRENT; // 2025-01-01 → 2026-12-31, active
+const LEASE_FUTURE  = fixture.IDS.LEASE_FUTURE;  // 2027-01-01 → 2027-12-31, signed
 const AS_OF = "2026-08-24";
 
 let pass = 0, fail = 0;
 const ok  = (l) => { pass++; console.log(`  ok    ${l}`); };
 const bad = (l, d) => { fail++; console.log(`  FAIL  ${l}${d ? "\n        " + d : ""}`); };
 
-/*  Hide a lease by moving it out of the property rather than deleting it,
-    so the row — and every id this harness did not create — survives. */
+/*  Hide a lease by deleting it and putting it back from the fixture's own
+    definition. The space_id is read off the row FIRST, because the bed it
+    sits on may be a trigger-minted space whose id the fixture did not
+    choose — restoring it to a guessed space would put the lease somewhere
+    it never was and quietly change what the next probe measures. */
 async function withLeaseHidden(pool, leaseId, fn) {
-  await pool.query(`update leases set space_id = space_id, lease_status = lease_status
-                     where id=$1`, [leaseId]); // touch, so a failure here surfaces early
   const saved = (await pool.query(`select space_id from leases where id=$1`, [leaseId])).rows[0];
-  if (!saved) throw new Error(`fixture lease ${leaseId} not found — run the bound harness first`);
+  if (!saved) throw new Error(`fixture lease ${leaseId} missing after seed — the fixture did not build`);
   await pool.query(`delete from leases where id=$1`, [leaseId]);
   try { return await fn(); }
-  finally {
-    //  Restored from the seed definition in opening_truth_standing_bound.db.js.
-    const rows = {
-      [LEASE_PAST]:    ["2024-01-01", "2024-12-31", "ended",  900],
-      [LEASE_CURRENT]: ["2025-01-01", "2026-12-31", "active", 1000],
-      [LEASE_FUTURE]:  ["2027-01-01", "2027-12-31", "signed", 1100],
-    }[leaseId];
-    await pool.query(
-      `insert into leases (id, property_id, space_id, tenant_ids, rent, balance,
-                           start_date, end_date, lease_status)
-       values ($1,$2,$3,$4::uuid[],$5,0,$6,$7,$8)
-       on conflict (id) do nothing`,
-      [leaseId, PROPERTY, saved.space_id,
-       ["51ce0001-0000-4000-8000-0000000000c1"], rows[3], rows[0], rows[1], rows[2]]);
-  }
+  finally { await fixture.restoreLease(pool, leaseId, saved.space_id); }
 }
 
 const asOfShape = async (pool) =>
@@ -110,6 +118,8 @@ const forwardShape = async (pool) =>
   const pool = new Pool({ connectionString: URL });
   console.log("\nLEASE RELEVANCE — what loadSpaceRows' unbounded array is actually read for\n");
   try {
+    await fixture.seed(pool);
+
     const baseAsOf = await asOfShape(pool);
     const baseFwd  = await forwardShape(pool);
     console.log(`  baseline captured at as_of=${AS_OF} and forward 2027-03-01..2027-06-30\n`);
@@ -154,11 +164,25 @@ const forwardShape = async (pool) =>
     // ── restoration is part of the proof ──────────────────────────────
     if (await asOfShape(pool) === baseAsOf && await forwardShape(pool) === baseFwd)
       ok("restored — both reads match the baseline again");
-    else bad("restoration failed", "the fixture is now dirty; re-run the bound harness to reseed");
+    else bad("restoration failed", "a probe put the fixture back wrong; the B-results above are not trustworthy");
   } catch (e) {
     bad("harness died", e.message);
     console.error(e);
   } finally {
+    /*  CLEANUP IS ADDITIVE, NEVER SUBSTITUTIVE. A cleanup failure adds a
+        failure; it cannot clear or overwrite one the assertions already
+        recorded, and it cannot turn a red run green. The residue sweep
+        runs only if cleanup itself returned, because counting rows after
+        a failed delete would report a leak whose cause is already known. */
+    try {
+      await fixture.cleanup(pool);
+      const left = await fixture.residue(pool);
+      if (left.total === 0) ok(`fixture removed — 0 rows across ${left.scanned} scanned tables`
+                              + (left.skipped.length ? `, ${left.skipped.length} NOT SCANNED: ${left.skipped.join(", ")}` : ""));
+      else bad(`fixture LEAKED ${left.total} row(s)`, JSON.stringify(left.byTable));
+    } catch (e) {
+      bad("fixture cleanup FAILED — the next run starts dirty", e.message);
+    }
     await pool.end();
   }
   console.log(`\n  ${pass} passed, ${fail} failed\n`);

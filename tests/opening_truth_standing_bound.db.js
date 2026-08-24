@@ -53,6 +53,18 @@
    A5 is the one that can regress silently, so it is measured rather
    than asserted from the diff.
 
+   ── THE FIXTURE MOVED OUT OF THIS FILE ──────────────────────────────
+   This harness used to DEFINE the property, person, units, spaces,
+   leases, event and import batches inline, and it was the only file
+   that did. tests/space_rows_lease_relevance.db.js read the same rows
+   and created none of them, so it passed only when this file had run
+   first and left its rows committed — one proof and one echo of it.
+
+   The definition now lives in tests/tenancy_position_fixture.js and
+   both harnesses call seed() and cleanup() for themselves. Nothing
+   about what this file ASSERTS changed; what changed is that it no
+   longer leaves a database behind for someone else to depend on.
+
    CLASS 3 — test infrastructure. REMOVAL CONDITION: none.
 
    Local disposable database only; refuses anything else.
@@ -75,15 +87,9 @@ if (!/@(127\.0\.0\.1|localhost)[:/]/.test(URL)) {
 const ROOT = path.join(__dirname, "..");
 const dp = require(path.join(ROOT, "src/tenancy/dated_positions.js"));
 const tenancy = require(path.join(ROOT, "src/tenancy/tenancy_position_read.js"));
+const fixture = require(path.join(__dirname, "tenancy_position_fixture.js"));
 
-/*  IDs this harness created, and the only ones it will ever delete. */
-const PROPERTY = "51ce0001-0000-4000-8000-000000000001";
-const UNIT_A   = "51ce0001-0000-4000-8000-0000000000a1";
-const UNIT_B   = "51ce0001-0000-4000-8000-0000000000b1";
-const SPACE_A1 = "51ce0001-0000-4000-8000-0000000000a2";
-const SPACE_A2 = "51ce0001-0000-4000-8000-0000000000a3";
-const SPACE_B1 = "51ce0001-0000-4000-8000-0000000000b2";
-const PERSON   = "51ce0001-0000-4000-8000-0000000000c1";
+const PROPERTY = fixture.IDS.PROPERTY;
 
 let pass = 0, fail = 0;
 const ok  = (l) => { pass++; console.log(`  ok    ${l}`); };
@@ -92,118 +98,6 @@ const eq  = (l, a, b) => {
   const A = JSON.stringify(a), B = JSON.stringify(b);
   if (A === B) ok(l); else bad(l, `expected ${B}\n        actual   ${A}`);
 };
-
-async function seed(pool) {
-  //  Scoped teardown: only the ids above, never property-wide.
-  await pool.query(`delete from unit_events where property_id=$1`, [PROPERTY]);
-  await pool.query(`delete from leases where property_id=$1`, [PROPERTY]);
-  await pool.query(`delete from spaces where unit_id = any($1::uuid[])`, [[UNIT_A, UNIT_B]]);
-  await pool.query(`delete from units where property_id=$1`, [PROPERTY]);
-  await pool.query(`delete from import_batches where property_id=$1`, [PROPERTY]);
-  await pool.query(`delete from properties where id=$1`, [PROPERTY]);
-  await pool.query(`delete from persons where id=$1`, [PERSON]);
-
-  /*  ── THE CANONICAL PROPERTY INSERT, AND NO FALLBACK ────────────────
-   *
-   *  This block used to name `occupancy_status` on `properties` and wrap
-   *  the statement in a broad `.catch()` that retried a DIFFERENT insert.
-   *  `occupancy_status` does not exist on `properties` — it is a UNIT-level
-   *  column, confirmed against the live schema at ledger 192:
-   *
-   *      information_schema.columns where column_name='occupancy_status'
-   *        → units
-   *
-   *  So the first statement failed on EVERY run, the catch quietly ran the
-   *  correct one, and the harness went green while a real SQL error sat in
-   *  the Postgres log. It was visible in the container logs of CI runs
-   *  32769539866, 32770074062 and 32770517275 and nothing went red.
-   *
-   *  ⚠ THE FALLBACK WAS THE ACTUAL DEFECT, not the column name. A broad
-   *  catch around fixture setup swallows whatever fails next — a constraint
-   *  change, a renamed column, a genuinely broken seed — and hands the
-   *  assertions a half-built fixture to pass against. A harness that hides
-   *  its own setup failure is the "confident wrong" §5 forbids, pointed at
-   *  the proof instead of the product.
-   *
-   *  Now: one canonical statement, no catch. The seed deletes this property
-   *  by id immediately above, so a plain INSERT is deterministic — no
-   *  `where not exists` guard is needed. Any failure propagates to the
-   *  outer try/catch, which reports "harness died" and exits non-zero.  */
-  await pool.query(
-    `insert into properties (id, name, address, leasing_basis)
-     values ($1,'Slice1 Bound Fixture','1 Bound Way','unit')`, [PROPERTY]);
-
-  await pool.query(`insert into persons (id, name) values ($1,'Bound Resident')
-                    on conflict (id) do nothing`, [PERSON]);
-
-  for (const [id, n] of [[UNIT_A, "101"], [UNIT_B, "102"]]) {
-    await pool.query(
-      `insert into units (id, property_id, unit_number) values ($1,$2,$3)`, [id, PROPERTY, n]);
-  }
-  //  ensure_unit_space may already have made one space per unit; take what
-  //  exists and add a second to unit A so the fixture is bed-grain there.
-  const existing = (await pool.query(
-    `select s.id, s.unit_id from spaces s join units u on u.id=s.unit_id
-      where u.property_id=$1 order by u.unit_number`, [PROPERTY])).rows;
-  const spaceOf = new Map(existing.map((r) => [String(r.unit_id), String(r.id)]));
-  const a1 = spaceOf.get(UNIT_A) || SPACE_A1;
-  const b1 = spaceOf.get(UNIT_B) || SPACE_B1;
-  if (!spaceOf.has(UNIT_A)) {
-    await pool.query(`insert into spaces (id, unit_id, space_label) values ($1,$2,'A')`, [a1, UNIT_A]);
-  } else {
-    await pool.query(`update spaces set space_label='A' where id=$1`, [a1]);
-  }
-  if (!spaceOf.has(UNIT_B)) {
-    await pool.query(`insert into spaces (id, unit_id, space_label) values ($1,$2,'A')`, [b1, UNIT_B]);
-  } else {
-    await pool.query(`update spaces set space_label='A' where id=$1`, [b1]);
-  }
-  await pool.query(`insert into spaces (id, unit_id, space_label) values ($1,$2,'B')
-                    on conflict (id) do nothing`, [SPACE_A2, UNIT_A]);
-
-  /*  LEASE HISTORY, on purpose. A past terminal lease, a current one, and
-      a future one — the shape that makes a naive "latest row" bound on the
-      spaces loader change the answer. */
-  const L = (id, space, start, end, status, rent) => pool.query(
-    `insert into leases (id, property_id, space_id, tenant_ids, rent, balance,
-                         start_date, end_date, lease_status)
-     values ($1,$2,$3,$4::uuid[],$5,0,$6,$7,$8)`,
-    [id, PROPERTY, space, [PERSON], rent, start, end, status]);
-  await L("51ce0001-0000-4000-8000-0000000001a1", a1, "2024-01-01", "2024-12-31", "ended", 900);
-  await L("51ce0001-0000-4000-8000-0000000001a2", a1, "2025-01-01", "2026-12-31", "active", 1000);
-  await L("51ce0001-0000-4000-8000-0000000001a3", a1, "2027-01-01", "2027-12-31", "signed", 1100);
-  await L("51ce0001-0000-4000-8000-0000000001b1", b1, "2025-06-01", "2026-05-31", "active", 950);
-
-  await pool.query(
-    `insert into unit_events (id, unit_id, property_id, event_type, effective_date,
-                              payload, status, space_id, lease_id)
-     values ($1,$2,$3,'move_in','2025-01-02','{}'::jsonb,'actioned',$4,$5)`,
-    ["51ce0001-0000-4000-8000-0000000002a1", UNIT_A, PROPERTY, a1,
-     "51ce0001-0000-4000-8000-0000000001a2"]);
-
-  /*  ── THE POPULATION UNDER TEST ───────────────────────────────────
-      Four batches, arranged so the ORDER BY has real work to do:
-        · two committed rent rolls sharing one as_of_date, so the
-          loaded_at tie-break decides which is "latest"
-        · a reconciliation, which latest_confirmed_source must SKIP
-        · a NULL as_of_date, which `nulls last` must sort behind
-          everything even though it was loaded most recently          */
-  const B = (id, type, file, asOf, status, loadedAt) => pool.query(
-    `insert into import_batches (id, property_id, source_type, source_file,
-                                 source_as_of_date, confidence, status, notes, loaded_at)
-     values ($1,$2,$3,$4,$5::date,'confirmed',$6,'slice1 fixture',$7::timestamptz)`,
-    [id, PROPERTY, type, file, asOf, status, loadedAt]);
-  await B("51ce0001-0000-4000-8000-0000000003a1", "rent_roll_ledger", "old.xlsx",
-          "2025-01-31", "committed", "2025-02-01T10:00:00Z");
-  await B("51ce0001-0000-4000-8000-0000000003a2", "rent_roll_ledger", "tie_early.xlsx",
-          "2026-07-31", "committed", "2026-08-01T09:00:00Z");
-  await B("51ce0001-0000-4000-8000-0000000003a3", "rent_roll_ledger", "tie_late.xlsx",
-          "2026-07-31", "committed", "2026-08-01T17:00:00Z");
-  await B("51ce0001-0000-4000-8000-0000000003a4", "rent_roll_reconciliation", "recon.xlsx",
-          "2026-08-15", "committed", "2026-08-16T09:00:00Z");
-  await B("51ce0001-0000-4000-8000-0000000003a5", "rent_roll_ledger", "no_date.xlsx",
-          null, "committed", "2026-08-20T09:00:00Z");
-}
 
 /*  A pool that records every statement it is asked to run, so "the standing
     path no longer walks import_batches" is MEASURED and not read off a diff. */
@@ -222,7 +116,7 @@ const importBatchStatements = (seen) =>
   const pool = new Pool({ connectionString: URL });
   console.log("\nSTANDING BOUND — opening_truth on the tenancy standing path\n");
   try {
-    await seed(pool);
+    await fixture.seed(pool);
 
     const AS_OF = "2026-08-24";
 
@@ -279,6 +173,20 @@ const importBatchStatements = (seen) =>
     bad("harness died", e.message);
     console.error(e);
   } finally {
+    /*  CLEANUP IS ADDITIVE, NEVER SUBSTITUTIVE. A cleanup failure adds a
+        failure; it cannot clear or overwrite one the assertions already
+        recorded, and it cannot turn a red run green. The residue sweep
+        runs only if cleanup itself returned, because counting rows after
+        a failed delete would report a leak whose cause is already known. */
+    try {
+      await fixture.cleanup(pool);
+      const left = await fixture.residue(pool);
+      if (left.total === 0) ok(`fixture removed — 0 rows across ${left.scanned} scanned tables`
+                              + (left.skipped.length ? `, ${left.skipped.length} NOT SCANNED: ${left.skipped.join(", ")}` : ""));
+      else bad(`fixture LEAKED ${left.total} row(s)`, JSON.stringify(left.byTable));
+    } catch (e) {
+      bad("fixture cleanup FAILED — the next run starts dirty", e.message);
+    }
     await pool.end();
   }
   console.log(`\n  ${pass} passed, ${fail} failed\n`);
