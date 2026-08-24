@@ -26,12 +26,30 @@
    real Postgres built from the real migration chain.
 
    ── WHAT IS COUNTED ─────────────────────────────────────────────────
-   Every statement the read issues, and whether each is BOUNDED. A
-   statement is bounded when it carries a LIMIT, is an aggregate, or is a
-   primary-key/unique lookup. An unbounded select over a table whose row
-   count grows with the property's history is a walk — that is the thing
-   §40.6 forbids, and it is forbidden because it does not scale with the
-   number of domains gathered, not because it is slow once.
+   ⚠ THIS PARAGRAPH ONCE DESCRIBED A HEURISTIC — "bounded means it
+   carries a LIMIT, is an aggregate, or is a key lookup" — AND THAT
+   HEURISTIC WAS WRONG. It flagged every structural read and would have
+   had me add LIMIT to "the coverages on this property", truncating truth
+   (§5) to pass this gate. §40.6 says "without walking its full payment,
+   amendment or event history". That is a claim about HISTORY, not about
+   syntax.
+
+   So each statement is DECLARED, by hand, as one of:
+
+     STRUCTURAL     bounded by how the property is BUILT. Grows with
+                    coverages, instruments, meters, financings — not with
+                    time or operating events.
+     HISTORY_WALK   grows every month the property is operated. The thing
+                    §40.6 forbids, and forbidden because it does not scale
+                    with the NUMBER OF DOMAINS gathered, not because it is
+                    slow once.
+     DERIVED_BOUND  growth entirely inherited from another declared walk,
+                    so counting it here would count one curve twice.
+                    `bounded_by` must name a live HISTORY_WALK.
+
+   Three mechanical classifiers were tried before giving up on mechanism;
+   see THE RATCHET below. The gate's job is to keep the declaration
+   honest, not to guess.
 
    The database is EMPTY of operating rows on purpose. An empty property
    is the cheapest possible case, so every number here is a FLOOR: the
@@ -210,6 +228,35 @@ function recorder(client) {
  *  This is §40.5's shape — "declared as data, as part of its read
  *  contract" — applied to cost instead of to truth walls.
  *
+ *  ── §40.6 IS STANDING **PLUS** DETAIL, NEVER STANDING **INSTEAD OF**
+ *     DETAIL. ────────────────────────────────────────────────────────
+ *
+ *  The compact projection is a SECOND, CHEAPER read beside the full one.
+ *  It does not replace it, and bounding a loader is not permission to
+ *  delete the series it was loading.
+ *
+ *  ⚠ THE FAILURE THIS PREVENTS IS NASTY, AND A TEST SUITE WILL NOT CATCH
+ *  IT. paidOverPeriod() computes amounts paid across a period and needs
+ *  every observation in it. It is exported, proven in
+ *  debt_institutional_acceptance.db.js — and called by NOTHING in src/.
+ *  Built-but-dormant.
+ *
+ *  Bounding the loader those two share would have destroyed a working
+ *  capability, and NO PRODUCTION CALLER EXISTED TO GO RED. A cost
+ *  optimisation on a shared loader looks free precisely when it is not:
+ *  the caller that would have complained is the one that has not been
+ *  written yet, or the one whose only witness is a test nobody runs in
+ *  the same pass.
+ *
+ *  So the rule is structural, not a matter of care:
+ *
+ *      BOUND THE STANDING PATH. KEEP THE SERIES REACHABLE BY NAME.
+ *
+ *  debt_payment_observations is bounded inside loadHistory(); the series
+ *  moved to loadPaymentObservations(), which says in its own name what it
+ *  is for. Nothing was deleted — one caller now asks for the expensive
+ *  thing explicitly, which is the whole of §40.6's shape.
+ *
  *  ── THREE TIMES THE OBVIOUS BOUND WOULD HAVE TRADED TRUTH FOR A
  *     NUMBER. READ THESE BEFORE BOUNDING ANYTHING. ──────────────────
  *
@@ -263,6 +310,56 @@ function recorder(client) {
  *  sense §40.6 has — were caught by nothing until the source scan
  *  existed, and that is the whole argument for the scan.               */
 const HISTORY_WALK_CEILING = 9;
+
+/*  ══ COMPUTE_WALK — A CATEGORY THIS GATE CANNOT MEASURE ═════════════
+ *
+ *  ⚠ STATED LIMITATION, NOT A TO-DO: THIS GATE MEASURES QUERIES, NOT
+ *  COMPUTE. Everything above counts statements issued to Postgres. A read
+ *  can be perfectly bounded in SQL and still walk history in JavaScript,
+ *  and nothing here would notice.
+ *
+ *  This is the SAME BLIND SPOT as the empty fixture, arriving a third
+ *  time: a measurement that only observes one channel cannot see what
+ *  happens in another. It is named here rather than instrumented,
+ *  deliberately. A fourth measuring instrument is worth less right now
+ *  than an honest boundary on the three that exist.
+ *
+ *  So COMPUTE_WALK entries are DECLARED BY HAND and DELIBERATELY
+ *  UNMEASURED. They are not counted toward HISTORY_WALK_CEILING, because
+ *  a ratchet over a number nothing measures is theatre.
+ *
+ *  ── WHAT KEEPS THE DECLARATION FROM ROTTING ─────────────────────────
+ *  Every entry names a `pin`: a source coupling that MUST still exist for
+ *  the claim to be true. The gate asserts the pin, which is cheap and
+ *  needs no execution. If the coupling disappears — because someone fixed
+ *  it — the pin goes red and says so, and the entry gets deleted
+ *  deliberately instead of quietly becoming a lie. That is the same
+ *  inverted assertion the defect blocks in
+ *  debt_observation_bound_equivalence.db.js use.
+ *
+ *  This is NOT a compute measurement. It is a staleness guard on a
+ *  hand-written claim, which is the least a hand-written claim owes.   */
+const COMPUTE_WALKS = [
+  {
+    what: "position() derives the FULL amortization schedule on every call",
+    where: "src/asset/debt_position_read.js",
+    why: "deriveSchedule() walks every due date from origination to maturity — "
+       + "120 rows on the 4125 specimen, and it COMPOUNDS, so each row depends "
+       + "on the previous one's balance. standingProjection() then reads "
+       + "projected_principal out of it. THE COMPACT PROJECTION PAYS FOR THE "
+       + "WHOLE SCHEDULE. Every SQL statement in the Debt read is bounded or "
+       + "structural and this gate reports Debt as clean.",
+    //  Two couplings. Both must hold for the claim above to be true.
+    pin: [
+      { file: "src/asset/debt_position_read.js",
+        re: /const schedule = t \? deriveSchedule\(terms, instrument\) : \[\];/,
+        says: "position() derives the schedule" },
+      { file: "src/asset/debt_position_read.js",
+        re: /projected_principal: reading\.principal_position\.projected/,
+        says: "standingProjection() reads a value derived from it" },
+    ],
+  },
+];
 
 /*  Every statement each read issues, classified. `match` is a distinctive
     fragment of the statement. An issued statement matching NOTHING here
@@ -638,6 +735,30 @@ const DOMAINS = [
   for (const m of seen) counted.set(m, "issued by the fixture");
   for (const [m, where] of scanned) if (!counted.has(m)) counted.set(m, `found in ${where}`);
 
+  /*  ── COMPUTE_WALK · REPORTED, PINNED, NOT COUNTED ────────────────  */
+  const rottedPins = [];
+  for (const cw of COMPUTE_WALKS) {
+    for (const pin of cw.pin) {
+      const src = fs.readFileSync(path.join(ROOT, pin.file), "utf8");
+      if (!pin.re.test(src)) rottedPins.push({ cw, pin });
+    }
+  }
+  if (COMPUTE_WALKS.length) {
+    L("COMPUTE WALKS — DECLARED BY HAND, AND THIS GATE DOES NOT MEASURE THEM");
+    L("-".repeat(74));
+    for (const cw of COMPUTE_WALKS) {
+      L(`  ${cw.what}`);
+      L(`    ${cw.where}`);
+      L(`    ${cw.why.replace(/(.{66})\s/g, "$1\n    ")}`);
+      for (const pin of cw.pin) L(`    pin: ${pin.says}`);
+      L("");
+    }
+    L("  These are NOT counted toward the ceiling. A ratchet over a number");
+    L("  nothing measures is theatre. This gate counts QUERIES; a read can be");
+    L("  perfectly bounded in SQL and still walk history in JavaScript.");
+    L("");
+  }
+
   if (derived.length) {
     L("DERIVED — growth inherited from another declared walk, counted there");
     L("-".repeat(74));
@@ -693,6 +814,14 @@ const DOMAINS = [
     L("      the literal payment history §40.6 forbids walking.");
   } else {
     L("  ✔ every `from <table>` in the scanned sources is declared, fired or not");
+  }
+  if (rottedPins.length) {
+    failed++;
+    L(`  ✘ ${rottedPins.length} COMPUTE_WALK pin(s) no longer hold.`);
+    L("      A hand-declared claim whose source coupling is gone is a lie the");
+    L("      next reader will believe. Either the walk was FIXED — delete the");
+    L("      entry and say so — or it moved and the pin needs re-aiming.");
+    for (const r of rottedPins) L(`      ${r.pin.file}: ${r.pin.says}`);
   }
   if (badlyBound.length) {
     failed++;
