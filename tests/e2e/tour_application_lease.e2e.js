@@ -68,10 +68,11 @@ async function completeLeaseSigner({ token, name, initials, sessionId }) {
       },
     }), `${name} field ${field.field_key}`);
   }
-  const submitted = requireOk(await api("POST", `/t/lease/${token}/submit`, {
+  const submissionResult = await api("POST", `/t/lease/${token}/submit`, {
     key: false, body: { session_id: sessionId },
-  }), `${name} lease submission`);
-  return { packet, requiredFields, submitted };
+  });
+  const submitted = requireOk(submissionResult, `${name} lease submission`);
+  return { packet, requiredFields, submitted, submissionResult };
 }
 function futureLeaseDates() {
   const start = new Date();
@@ -561,30 +562,6 @@ async function waitForStaffReply(providerMessageId) {
     `HTTP ${crossRoleCompletion.status} body=${JSON.stringify(crossRoleCompletion.body)} ` +
       `stored=${JSON.stringify(crossRoleStored)} audits=${crossRoleAudits}`);
 
-  const residentSigning = await completeLeaseSigner({
-    token: leaseToken, name, initials: "SJ", sessionId: `resident-${suffix}`,
-  });
-  expect(residentSigning.requiredFields.length > 0
-      && residentSigning.requiredFields.every((field) => field.signer_role === "tenant"),
-    "the resident sees and completes only resident controls");
-  expect(residentSigning.submitted.packet.status === "tenant_in_progress",
-    "resident submission waits for the required guarantor");
-
-  const waitingReview = requireOk(await api(
-    "GET", `/operator/leasing/application-review?application_id=${appId}`, { token: staffToken }
-  ), "application review while guarantor is outstanding");
-  expect(waitingReview.execution_primary_action
-      && waitingReview.execution_primary_action.action === "await_resident_execution"
-      && waitingReview.execution_primary_action.reason.includes(guarantorName),
-    "Application Records names the outstanding guarantor instead of offering company signature");
-  const prematureCompany = await api(
-    "POST", `/operator/leasing/lease-packets/${packetId}/company-sign`, {
-      token: companyToken, body: {},
-    }
-  );
-  expect(prematureCompany.status === 409,
-    "the authorized company signer is blocked while the guarantor is outstanding");
-
   const guarantorSigning = await completeLeaseSigner({
     token: guarantorToken, name: guarantorName, initials: "SG",
     sessionId: `guarantor-${suffix}`,
@@ -592,18 +569,121 @@ async function waitForStaffReply(providerMessageId) {
   expect(guarantorSigning.requiredFields.length > 0
       && guarantorSigning.requiredFields.every((field) => field.signer_role === "guarantor"),
     "the guarantor sees and completes only guarantor controls");
+  const termsReviewObligationId = (await q(
+    "select terms_review_obligation_id from lease_applications where id=$1", [appId]
+  )).rows[0].terms_review_obligation_id;
+  const guarantorFirstPacket = (await q(
+    "select status,resident_executed_at from lease_packets where id=$1", [packetId]
+  )).rows[0];
+  const guarantorFirstSigners = (await q(
+    `select id,signer_role,display_name,submitted_at from lease_packet_signers
+      where lease_packet_id=$1 order by signer_role`, [packetId]
+  )).rows;
+  const guarantorFirstObligation = (await q(
+    `select id,status,required_inputs,completed_at from obligations where id=$1`,
+    [termsReviewObligationId]
+  )).rows[0];
+  const guarantorFirstEvidence = (await q(
+    `select id,type,note,occurred_at from events
+      where type='input_satisfied:terms_acknowledged'
+        and note like '%' || $1::text || '%'
+      order by occurred_at,id`, [termsReviewObligationId]
+  )).rows;
+  const guarantorSignerAfterFirst = guarantorFirstSigners
+    .find((signer) => signer.signer_role === "guarantor");
+  const tenantSignerAfterFirst = guarantorFirstSigners
+    .find((signer) => signer.signer_role === "tenant");
+  const guarantorFirstState = {
+    submit_http: guarantorSigning.submissionResult,
+    packet: guarantorFirstPacket,
+    signers: guarantorFirstSigners,
+    obligation: guarantorFirstObligation,
+    evidence: guarantorFirstEvidence,
+  };
+  expect(guarantorSigning.submitted.packet.status === "tenant_in_progress"
+      && guarantorFirstPacket.status === "tenant_in_progress"
+      && guarantorFirstPacket.resident_executed_at == null
+      && !!guarantorSignerAfterFirst && !!guarantorSignerAfterFirst.submitted_at
+      && !!tenantSignerAfterFirst && tenantSignerAfterFirst.submitted_at == null
+      && !!guarantorFirstObligation
+      && ["open", "in_progress"].includes(guarantorFirstObligation.status)
+      && (guarantorFirstObligation.required_inputs || []).includes("terms_acknowledged")
+      && guarantorFirstObligation.completed_at == null
+      && guarantorFirstEvidence.length === 0,
+    "guarantor-first submission leaves the applicant terms-review work open",
+    JSON.stringify(guarantorFirstState));
+
+  const waitingReviewResult = await api(
+    "GET", `/operator/leasing/application-review?application_id=${appId}`, { token: staffToken }
+  );
+  const waitingReview = requireOk(waitingReviewResult,
+    "application review while the resident is outstanding");
+  expect(waitingReview.execution_primary_action
+      && waitingReview.execution_primary_action.action === "await_resident_execution"
+      && waitingReview.execution_primary_action.reason.includes(name),
+    "Application Records names the outstanding resident after guarantor-first submission",
+    JSON.stringify({ http: waitingReviewResult, action: waitingReview.execution_primary_action,
+      guarantor_first: guarantorFirstState }));
+  const prematureCompany = await api(
+    "POST", `/operator/leasing/lease-packets/${packetId}/company-sign`, {
+      token: companyToken, body: {},
+    }
+  );
+  expect(prematureCompany.status === 409,
+    "the authorized company signer is blocked while the resident is outstanding",
+    JSON.stringify({ http: prematureCompany, review: waitingReview.execution_primary_action,
+      guarantor_first: guarantorFirstState }));
+
+  const residentSigning = await completeLeaseSigner({
+    token: leaseToken, name, initials: "SJ", sessionId: `resident-${suffix}`,
+  });
+  expect(residentSigning.requiredFields.length > 0
+      && residentSigning.requiredFields.every((field) => field.signer_role === "tenant"),
+    "the resident sees and completes only resident controls");
   const residentPacket = (await q(
     "select status,resident_executed_at from lease_packets where id=$1", [packetId]
   )).rows[0];
-  expect(guarantorSigning.submitted.packet.status === "resident_executed"
-      && residentPacket.status === "resident_executed" && !!residentPacket.resident_executed_at,
-    "the package becomes company-signable only after both submissions");
   const signerState = (await q(
-    `select signer_role,submitted_at from lease_packet_signers
+    `select id,signer_role,display_name,submitted_at from lease_packet_signers
       where lease_packet_id=$1 order by signer_role`, [packetId]
   )).rows;
+  const residentObligation = (await q(
+    `select id,status,required_inputs,completed_at from obligations where id=$1`,
+    [termsReviewObligationId]
+  )).rows[0];
+  const residentEvidence = (await q(
+    `select id,type,note,occurred_at from events
+      where type='input_satisfied:terms_acknowledged'
+        and note like '%' || $1::text || '%'
+      order by occurred_at,id`, [termsReviewObligationId]
+  )).rows;
+  const tenantSigner = signerState.find((signer) => signer.signer_role === "tenant");
+  const guarantorSigner = signerState.find((signer) => signer.signer_role === "guarantor");
+  const residentProofNote = String(residentEvidence[0] && residentEvidence[0].note || "");
+  const residentCompletedState = {
+    submit_http: residentSigning.submissionResult,
+    packet: residentPacket,
+    signers: signerState,
+    obligation: residentObligation,
+    evidence: residentEvidence,
+  };
+  expect(residentSigning.submitted.packet.status === "resident_executed"
+      && residentPacket.status === "resident_executed" && !!residentPacket.resident_executed_at
+      && signerState.length === 2 && signerState.every((signer) => !!signer.submitted_at)
+      && residentObligation.status === "complete"
+      && (residentObligation.required_inputs || []).length === 0
+      && !!residentObligation.completed_at
+      && residentEvidence.length === 1
+      && residentProofNote.includes(`"terms_review_obligation_id":"${termsReviewObligationId}"`)
+      && residentProofNote.includes('"signer_role":"tenant"')
+      && residentProofNote.includes(`"packet_signer_id":"${tenantSigner && tenantSigner.id}"`)
+      && !residentProofNote.includes(`"packet_signer_id":"${guarantorSigner && guarantorSigner.id}"`),
+    "resident submission closes the exact terms-review obligation with tenant evidence",
+    JSON.stringify(residentCompletedState));
   expect(signerState.length === 2 && signerState.every((signer) => !!signer.submitted_at),
     "both resident-side submissions are recorded on the same packet");
+  expect(residentPacket.status === "resident_executed" && !!residentPacket.resident_executed_at,
+    "the package becomes company-signable only after both submissions");
   expect((await q("select count(*)::int n from persons where name=$1", [guarantorName])).rows[0].n === 0,
     "the guarantor remains packet-scoped instead of becoming a fabricated Person");
 
@@ -655,3 +735,4 @@ async function waitForStaffReply(providerMessageId) {
 }).finally(async () => {
   await pool.end().catch(() => {});
 });
+
