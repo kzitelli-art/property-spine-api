@@ -324,6 +324,35 @@ function counting(db) {
        "if a conflict key has since been added, this walk can be bounded — "
        + "re-run the bound and lower the ceiling");
 
+    /*  ══ DEFECT #34 · W1 REPORTS THE EARLIEST PAYOFF STATEMENT ═══════
+        A separate defect from the tie, found in the same array while
+        bounding it, and NOT a cost issue. Recorded here because this is
+        the only place in the repo that seeds two payoff statements —
+        every other fixture seeds one, where earliest and latest coincide
+        and nothing can go red.
+
+        These assertions describe what the read DOES today, so they are
+        green now and go RED when the defect is fixed. That is the point:
+        the fix must come here and delete them deliberately, rather than
+        landing while a suite stays quiet.                               */
+    console.log("\n  defect #34 — W1 takes the EARLIEST payoff statement");
+    console.log("  " + "-".repeat(66));
+    const payoffs = hAt.balance_observations
+      .filter((b) => b.observation_source === "payoff_statement")
+      .map((b) => ymd(b.as_of_date));
+    ok("two payoff statements exist on this instrument", payoffs.length === 2,
+       `saw ${payoffs.join(", ")}`);
+
+    const posAfterBoth = read.position(hAt, "2025-05-02");
+    ok("reading AFTER both, W1 reports the 2022 statement — the EARLIEST",
+       posAfterBoth.payoff.as_of_date === "2022-05-01",
+       `reported ${posAfterBoth.payoff.as_of_date}`);
+    ok("…and says nothing about the 2025 statement existing",
+       posAfterBoth.payoff.superseded_by === undefined
+       && posAfterBoth.payoff.conflict === undefined,
+       "if either key now exists, defect #34 is being fixed — delete this block "
+       + "and assert the new reading instead");
+
     console.log("\n  the required as_of");
     console.log("  " + "-".repeat(66));
     let threw = null;
