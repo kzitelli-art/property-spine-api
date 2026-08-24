@@ -309,9 +309,29 @@ function modelFacts(spy) {
     complianceReader: { async readComplianceStanding() { throw new Error("reader down"); } },
   });
   const failedComplianceFacts = modelFacts(failedComplianceSpy);
+  /*  ⚠ CHANGED BY BUILD 3, and the reason matters more than the change.
+   *
+   *  This asserted `!("compliance" in facts)` — that a failed read DELETES
+   *  its fact key. That was a PROXY for this test's own title, and a weak
+   *  one: an absent key is indistinguishable from a domain nobody asked
+   *  about, so "named" was precisely what it was not.
+   *
+   *  §40.7 wants the failure VISIBLE and distinct from "the property has
+   *  nothing". The key now exists, says which silence it is, and asserts
+   *  nothing about the property. The assertions below test the title
+   *  directly instead of standing in for it — including the one that
+   *  actually mattered: no truth_state on a failed read.                */
   ok("C14 a failed Compliance read is named, never shaped as not established",
-     failedComplianceFacts.reads_that_failed.join(",") === "compliance" &&
-       !("compliance" in failedComplianceFacts));
+     failedComplianceFacts.reads_that_failed.join(",") === "compliance"
+       && failedComplianceFacts.compliance
+       && failedComplianceFacts.compliance.read_state === "READ_FAILED"
+       && failedComplianceFacts.compliance.standing === null
+       && failedComplianceFacts.compliance.items === undefined,
+     JSON.stringify(failedComplianceFacts.compliance));
+  ok("C14b …and the computed verdict is BLIND, so silence cannot read as health",
+     failedComplianceFacts.composite_silence
+       && failedComplianceFacts.composite_silence.state === "BLIND",
+     JSON.stringify(failedComplianceFacts.composite_silence));
 
   // ── B · THE BOUNDARY · scope is enforced, not hoped for ───────────
   //  The defect this section exists for: the first version of this slice
@@ -429,10 +449,21 @@ function modelFacts(spy) {
   ok("F1  a read that failed is NAMED in the facts given to the model",
      Array.isArray(facts2.reads_that_failed) && facts2.reads_that_failed.includes("attention"),
      JSON.stringify(facts2.reads_that_failed));
+  /*  ⚠ CHANGED BY BUILD 3, same reasoning as C14. The DANGER this test
+   *  names — "handed to the model as attention: { total_open: 0 }, so the
+   *  model truthfully reports nothing is open, and is wrong" — is exactly
+   *  right and is unchanged. Deleting the key was one way to avoid it;
+   *  carrying a read_state and NO count is a better one, because the
+   *  model is now told the read failed instead of being told nothing.  */
   ok("F2  …and the failed read does NOT appear as an empty result",
-     !("attention" in facts2) || facts2.attention === undefined,
-     "a failed read was handed to the model as `attention: { total_open: 0 }` — " +
-     "the model would truthfully report nothing is open, and be wrong");
+     facts2.attention && facts2.attention.read_state === "READ_FAILED"
+       && facts2.attention.total_open === undefined
+       && facts2.attention.standing === null,
+     JSON.stringify(facts2.attention));
+  ok("F2b …and the model is handed a BLIND verdict, not an absence to interpret",
+     facts2.composite_silence && facts2.composite_silence.state === "BLIND"
+       && facts2.composite_silence.unread.some((u) => u.domain === "attention"),
+     JSON.stringify(facts2.composite_silence));
 
   // ── W · NO WRITE PATH ─────────────────────────────────────────────
   const src = require("fs").readFileSync(

@@ -531,6 +531,55 @@ Compliance is worse — its failure path leaves `facts.compliance` undefined wit
 
 ---
 
+## The four silences — `src/agent/ask_spine_answer.js`
+
+Appended 2026-08-22 (Build 3). Product code changed; no migration, no database write.
+
+| Capability | Rung | Files / note |
+|---|---|---|
+| One silence shape for every gathered domain | `LOCALLY_EXERCISED` | `silenceFor()` / `failedRead()` in `ask_spine_answer.js`. A failed read carries `read_state` and `standing: null` — never a count, never a truth_state |
+| Composite silence **computed, not prompted** | `LOCALLY_EXERCISED` | `facts.composite_silence` = `BLIND` \| `ATTENTION` \| `QUIET`, decided in code from what the readers did |
+| Its gate | `LOCALLY_EXERCISED` | `tests/gate_four_silences.js` — injects real failures into the real `gatherFacts` and inspects real output. Four deliberate breaks each go red |
+
+**What was measured before the fix**, by injecting failures rather than reading source:
+
+```text
+2 of 8   fact key VANISHED on failure   compliance, tour_schedule
+5 of 8   timeout reported as READ_FAILED  compliance, debt, equity,
+                                          economics, tour_schedule
+0 of 8   asserted a truth_state on a failed read   ← already correct
+none     computed a composite verdict
+```
+
+**The real finding was the fourth.** §40.7 says composite silence *"may only mean
+'nothing needs attention' when every required reader successfully returned — computed
+from reader outcomes in code, **never prompted**."* It was prompted: `reads_that_failed`
+was a list handed to the model, and the prompt asked it not to confuse a failed read with
+"nothing to report", then told it *"nothing being open is a real, good answer."* The
+verdict is now decided in code and the model is handed it as a fact.
+
+**A latent assumption surfaced when the silence became visible.** `grounded_on` guarded
+with `facts.compliance ? facts.compliance.items.length : null` — testing that the *key*
+exists. A failed read used to delete the key, so the absent key **was** the guard. Making
+failure visible made that throw. Both array dereferences now guard the array. This is the
+cost of the change, found by the existing suite, not by inspection.
+
+**Two existing tests changed, and it is worth knowing why.** `C14` and `F2` asserted that
+a failed read **deletes its fact key** — a proxy for their own titles, and a weak one,
+since an absent key is indistinguishable from a domain nobody asked about. They now
+assert the titles directly: `read_state` names the silence, `standing` is null, no count
+field exists, and the computed verdict is `BLIND`. Verified to go red when a failed read
+is given `total_open: 0`, which is the danger `F2`'s own comment names.
+
+**Not established:** no production observation. Whether an operator sees the BLIND wording
+is unproven — no browser run.
+
+**Adjacent, recorded not fixed:** utility's and contracted_service's catch blocks call
+`detailRequest()` on the same reader that just threw — an error handler depending on the
+failed collaborator.
+
+---
+
 ## NOT YET SURVEYED — do not read absence as absence
 
 Wave 2 (2026-08-20) closed every area listed here as of the prior version of

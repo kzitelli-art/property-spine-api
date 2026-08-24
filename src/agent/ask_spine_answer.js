@@ -395,6 +395,24 @@ function utilityEvidenceReferences(standing) {
  *  through the same services those surfaces use. Nothing is derived a
  *  second time, so Ask Spine cannot disagree with the board about a fact
  *  they both show.  */
+
+/*  ── ONE SILENCE, SAID THE SAME WAY EVERY TIME (§40.7) ────────────────
+ *  Eight domains failed eight ways. Two set no fact key at all, so an
+ *  absent key was indistinguishable from a domain nobody asked about.
+ *  Five reported a timeout as a plain failure. Three got it right, and
+ *  only because their ask adapters set error.code.
+ *
+ *  A failure says NOTHING about the property, so `standing` stays null
+ *  here and truth_state is never asserted — "we could not look" and "we
+ *  looked and there is nothing" are different answers and only one is
+ *  safe to act on.                                                      */
+function silenceFor(e) {
+  return (e && e.code === "READ_TIMED_OUT") ? "READ_TIMED_OUT" : "READ_FAILED";
+}
+function failedRead(e, extra = {}) {
+  return { read_state: silenceFor(e), standing: null, ...extra };
+}
+
 async function gatherFacts(db, {
   property_id, allowed_modules, subject = "work", mintComplianceReference,
   complianceReader = complianceRead, utilityReader = utilityAskRead,
@@ -425,7 +443,11 @@ async function gatherFacts(db, {
       && (allowed_modules || []).some(module => module === "leasing" || module === "management")) {
     try {
       facts.tour_schedule = await tourScheduleReader(db, { propertyId: property_id, limit: 12 });
-    } catch (e) { failures.push("tour_schedule"); }
+    } catch (e) {
+      const state = silenceFor(e);
+      facts.tour_schedule = failedRead(e);
+      failures.push(state === "READ_TIMED_OUT" ? "tour_schedule_timed_out" : "tour_schedule");
+    }
   }
 
   if (subject === "work") {
@@ -462,7 +484,10 @@ async function gatherFacts(db, {
           is_unassigned: !!i.is_unassigned,
           open: { kind: i.open.kind, id: i.open.id },
         }));
-    } catch (e) { failures.push("attention"); }
+    } catch (e) {
+      facts.attention = failedRead(e);
+      failures.push(silenceFor(e) === "READ_TIMED_OUT" ? "attention_timed_out" : "attention");
+    }
 
     try {
       const wo = await workOrderRead.readPropertyWorkOrderStatuses(db,
@@ -483,7 +508,10 @@ async function gatherFacts(db, {
           opened_at: w.work_order && w.work_order.opened_at,
         })),
       };
-    } catch (e) { failures.push("work_orders"); }
+    } catch (e) {
+      facts.work_orders = failedRead(e);
+      failures.push(silenceFor(e) === "READ_TIMED_OUT" ? "work_orders_timed_out" : "work_orders");
+    }
   }
 
   if (subject === "compliance") {
@@ -523,7 +551,11 @@ async function gatherFacts(db, {
           token: reference.opener.token,
         },
       }));
-    } catch (e) { failures.push("compliance"); }
+    } catch (e) {
+      const state = silenceFor(e);
+      facts.compliance = failedRead(e);
+      failures.push(state === "READ_TIMED_OUT" ? "compliance_timed_out" : "compliance");
+    }
   }
 
   // Entitlement excludes the facts themselves, not merely their links.
@@ -617,8 +649,8 @@ async function gatherFacts(db, {
         ],
       });
     } catch (e) {
-      facts.economics = { read_state: "READ_FAILED" };
-      failures.push("economics");
+      facts.economics = failedRead(e);
+      failures.push(silenceFor(e) === "READ_TIMED_OUT" ? "economics_timed_out" : "economics");
     }
   }
 
@@ -653,8 +685,8 @@ async function gatherFacts(db, {
         });
       }
     } catch (e) {
-      facts.equity = { read_state: "READ_FAILED" };
-      failures.push("equity");
+      facts.equity = failedRead(e);
+      failures.push(silenceFor(e) === "READ_TIMED_OUT" ? "equity_timed_out" : "equity");
     }
   }
 
@@ -704,8 +736,9 @@ async function gatherFacts(db, {
         });
       }
     } catch (e) {
-      failures.push({ domain: "leasing_person", detail: e.message });
-      facts.leasing_person = { read_state: "READ_FAILED", detail: e.message };
+      failures.push({ domain: "leasing_person", detail: e.message,
+        read_state: silenceFor(e) });
+      facts.leasing_person = failedRead(e, { detail: e.message });
     }
   } else if (subject === "leasing_person") {
     facts.leasing_person = { read_state: "NOT_AUTHORIZED",
@@ -815,12 +848,55 @@ async function gatherFacts(db, {
         });
       }
     } catch (e) {
-      facts.debt = { read_state: "READ_FAILED" };
-      failures.push("debt");
+      facts.debt = failedRead(e);
+      failures.push(silenceFor(e) === "READ_TIMED_OUT" ? "debt_timed_out" : "debt");
     }
   }
 
   facts.reads_that_failed = failures;
+
+  /*  ── COMPOSITE SILENCE, COMPUTED (§40.7) ────────────────────────────
+   *  "Composite silence may only mean 'nothing needs attention' when
+   *  every required reader successfully returned — computed from reader
+   *  outcomes IN CODE, NEVER PROMPTED."
+   *
+   *  Before this, `reads_that_failed` was a list handed to the model and
+   *  the prompt asked it not to confuse a failed read with "nothing to
+   *  report". That is the distinction being prompted, which is the one
+   *  thing §40.7 forbids: a model that mostly gets it right still
+   *  decides it, and the failure mode is silence reading as health (§5).
+   *
+   *  The verdict is decided here, from what the readers actually did:
+   *
+   *    BLIND      at least one reader did not return. Silence CANNOT
+   *               mean health, whatever else is true.
+   *    ATTENTION  everything returned, and something is pending.
+   *    QUIET      everything returned, and nothing is pending.
+   *
+   *  The model is handed the verdict, not the evidence to infer one.   */
+  const gathered = Object.entries(facts).filter(
+    ([, v]) => v && typeof v === "object" && typeof v.read_state === "string");
+  const blind = gathered.filter(([, v]) => v.read_state !== "OK");
+  if (blind.length) {
+    facts.composite_silence = {
+      state: "BLIND",
+      unread: blind.map(([k, v]) => ({ domain: k, read_state: v.read_state })),
+      why: "at least one required reader did not return, so silence cannot mean health",
+    };
+  } else {
+    const pending = gathered.filter(([, v]) => {
+      const s = v.standing || v;
+      const unknowns = s && s.important_unknowns;
+      return Boolean((s && s.next_milestone)
+        || (Array.isArray(unknowns) && unknowns.length)
+        || v.attention_state === "ATTENTION_REQUIRED");
+    });
+    facts.composite_silence = pending.length
+      ? { state: "ATTENTION", domains: pending.map(([k]) => k) }
+      : { state: "QUIET",
+          why: "every reader returned and none reports anything pending" };
+  }
+
   return facts;
 }
 
@@ -898,15 +974,24 @@ function systemPrompt(subject = "work") {
     "   change anything. If asked to, say what you can see and that doing it is",
     "   not something you can do yet. Do not describe an action as though you",
     "   performed it.",
-    "3. If `reads_that_failed` is non-empty, say that part of the picture could",
-    "   not be read. Do not report a failed read as 'nothing to report' — those",
-    "   are different facts and confusing them is the worst thing you can do.",
+    "3. `composite_silence` is COMPUTED by the server, not by you. Read its",
+    "   `state` and say what it says:",
+    "     BLIND     part of the picture could not be read. Name what was unread",
+    "               from `composite_silence.unread`. NEVER report this as",
+    "               'nothing to report' — those are different facts.",
+    "     ATTENTION something is pending in the named domains.",
+    "     QUIET     everything was read and nothing is pending.",
+    "   Do not derive this verdict yourself from `reads_that_failed`, and do",
+    "   not contradict it. It is a fact, like any other fact here.",
     "   For Utilities, READ_FAILED means Spine could not read it; READ_TIMED_OUT",
     "   means the read exceeded its bound; QUIET means the read succeeded and",
     "   nothing requires attention. None of those means there are no accounts.",
     "   The same failure and quiet-state distinctions apply to Contracted Services.",
-    "4. Nothing being open is a real, good answer. Say it plainly and stop.",
-    "   Do not manufacture concerns to seem useful.",
+    "4. Nothing being open is a real, good answer — but ONLY when",
+    "   `composite_silence.state` is QUIET. Say it plainly and stop.",
+    "   Do not manufacture concerns to seem useful. If the state is BLIND,",
+    "   an empty-looking picture is NOT good news and must not be reported",
+    "   as though it were.",
     "5. The FACTS contain only one authorized subject. Never combine Compliance,",
     "   Utilities, Contracted Services, Debt, Equity or Tenancy with work, residents,",
     "   finances or any absent domain. Composition authority",
@@ -1278,7 +1363,15 @@ async function answer(db, anthropic, {
     grounded_on: {
       open_items: facts.attention ? facts.attention.total_open : null,
       work_orders: facts.work_orders ? facts.work_orders.count : null,
-      compliance_items: facts.compliance ? facts.compliance.items.length : null,
+      //  ⚠ These two dereference an ARRAY, so `facts.X ? …` is not enough
+      //  a guard: it tests that the KEY exists, and a failed read now
+      //  produces a key with a read_state and no payload. Before Build 3
+      //  a failed compliance read deleted the key entirely, which made
+      //  this line accidentally safe — the absent key WAS the guard.
+      //  Making the silence visible surfaced that assumption. Guard on
+      //  the array, not on the key.
+      compliance_items: Array.isArray(facts.compliance && facts.compliance.items)
+        ? facts.compliance.items.length : null,
       compliance_as_of: facts.compliance ? facts.compliance.as_of : null,
       composition_authorization: facts.compliance
         ? facts.compliance.composition_authorization : null,
@@ -1299,7 +1392,8 @@ async function answer(db, anthropic, {
       debt_important_unknown_count: facts.debt && facts.debt.instruments
         ? facts.debt.instruments.reduce((count, instrument) =>
             count + ((instrument.important_unknowns || []).length), 0) : null,
-      equity_position_count: facts.equity ? facts.equity.positions.length : null,
+      equity_position_count: Array.isArray(facts.equity && facts.equity.positions)
+        ? facts.equity.positions.length : null,
       equity_read_state: facts.equity ? facts.equity.read_state : null,
       equity_coverage_gap_count: facts.equity && facts.equity.coverage_gaps
         ? facts.equity.coverage_gaps.length : null,

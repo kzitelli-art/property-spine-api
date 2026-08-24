@@ -81,8 +81,12 @@ const DOMAINS = [
     fail: { tenancyReader: { readTenancyStanding: boom } },
     slow: { tenancyReader: { readTenancyStanding: timeout } } },
   { domain: "economics", subject: "economics", modules: ALL, key: "economics",
-    fail: { economicReader: boom },
-    slow: { economicReader: timeout } },
+    //  Called as economicReader.effectiveEconomicPicture(...), so a bare
+    //  function stub throws a TypeError instead of the injected error —
+    //  which read as "economics collapses the timeout" when the fault was
+    //  in this stub. Faithful shape matters as much in a gate as in code.
+    fail: { economicReader: { effectiveEconomicPicture: boom } },
+    slow: { economicReader: { effectiveEconomicPicture: timeout } } },
   { domain: "tour_schedule", subject: "tour_schedule", modules: ALL, key: "tour_schedule",
     fail: { tourScheduleReader: boom },
     slow: { tourScheduleReader: timeout } },
