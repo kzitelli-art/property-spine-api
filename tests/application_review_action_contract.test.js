@@ -62,3 +62,7 @@ out=sandbox.executionPrimaryAction(app,{present:false},null,governing) || {};
 ok('resident-side completion authors company countersign',out.action==='company_execute_lease'&&out.method==='POST');
 console.log(`${pass}/${pass+fail}`);
 process.exit(fail?1:0);
+
+// DELIBERATE CI FALSIFICATION — immediately reverted after parent exit is observed.
+process.stderr.write('DELIBERATE CI FALSIFICATION: runner must exit 1\n');
+process.exitCode = 1;
