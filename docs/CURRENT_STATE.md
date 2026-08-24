@@ -679,3 +679,71 @@ human Git push or manual Actions run; inspect the exact terminal-state browser
 output; then deliberately break one lifecycle assertion, require parent exit
 1, restore the exact bytes, and require a clean parent run. Append any earned
 rung here afterward; do not rewrite this stopped receipt.
+
+### 24 Aug 2026 — superseded lease-signing links fail closed
+
+**`HTTP_PROVEN` in disposable branch CI; not deployed.** Packet versioning
+already marked an issued lease package with `superseded_at` when staff created
+a governed replacement, and the company-signing door already refused that old
+package. The canonical public token resolver nevertheless selected resident
+and guarantor links using only token hash, expiry, and non-void status. An old
+link could therefore still disclose the obsolete package and accept signer
+traffic after staff had replaced it.
+
+Both the migration-192 signer-token query and its legacy resident-token
+fallback now require `lease_packets.superseded_at is null`. The existing
+hostile lease journey creates a real issued packet, supersedes it through the
+governed new-version command, and requires the old public link to return 404
+for both packet read and final submit. No token store, status, route, signing
+service, migration, or runner path was added.
+
+The evidence cycle was observed against exact GitHub SHAs. Run
+[#152](https://github.com/kzitelli-art/property-spine-api/actions/runs/32755614094)
+tested `426faa8`, reported the hostile proof PASS, parent exit 0, no NOT RUN,
+and every later proof executed. The test stayed intact while only the current
+signer query's non-superseded predicate was removed at `4877ce7`; run
+[#153](https://github.com/kzitelli-art/property-spine-api/actions/runs/32757553306)
+then captured `superseded resident read refused — accepted 200` and
+`superseded resident submit refused — accepted 409`, reported hostile proofs
+10 passed / 2 failed, and returned parent exit 1 while still executing every
+later proof. The exact guarded source blob was restored at `bd747de`; run
+[#154](https://github.com/kzitelli-art/property-spine-api/actions/runs/32757884687)
+reported the hostile proof PASS, parent exit 0, no NOT RUN, and every later
+proof executed. Passing assertion lines are suppressed by the parent runner
+and are not claimed as observed output; the product-side red run establishes
+that those assertions can turn the parent red.
+
+This also corrects the preceding receipt's tooling inference that
+connector-authored pushes did not dispatch Actions. GitHub's run history later
+showed push runs on the exact commits; the available workflow lookup was blind
+to those push events. Exact `05ef8ba` was independently repeated by manual run
+[#149](https://github.com/kzitelli-art/property-spine-api/actions/runs/32754235727):
+parent exit 0, all 23 steps PASS, no NOT RUN, real Postgres and Chromium, and
+the staff-invite browser proof plus both later lease journeys executed. The
+older missing-selector red proves that browser step reaches the parent, but it
+does not by itself establish that each lifecycle assertion detects a product
+regression; no broader rung is inferred from that selector break.
+
+The canonical token resolver guard is **Class 1 — permanent primitive**. The
+hostile journey extension is **Class 3 — test infrastructure**. At closeout,
+the three ownership lanes remained separate: Codex changed only
+`src/applications/leasepackets.js` and its hostile lease proof; CAMP remained
+on standing-projection / Ask Spine files at last-reported `1eb6221`; CABIN
+remained on tenancy standing/move-in reads and its named proofs at
+last-reported `41c1aa6`. `tests/e2e/verify_all.sh` was not changed.
+
+No main merge, PR, deployment, migration, app or `index.html` change, Neon or
+Render contact, production read/write, or carrier action occurred. The next
+bounded source question is the public V3 guarantor fact: validated captured
+contact and top-level `guarantor_name` currently can disagree before packet
+generation decides whether a guarantor signer is required.
+
+Cross-branch coordination remained contained. CAMP's exact `1eb6221` full
+parent baseline is red at run
+[#32731669834](https://github.com/kzitelli-art/property-spine-api/actions/runs/32731669834):
+the clean lease path, hostile lease proof, cross-surface reconciliation,
+standing/review comparison, and resident browser signing stop on
+`signature_intent_required`. CAMP correctly refused to edit or import the
+Codex-owned application and lease helpers. This is recorded as integration
+drift requiring an owner reconciliation ruling after the bounded branches
+close, not as a source collision and not as authority to expand this slice.
