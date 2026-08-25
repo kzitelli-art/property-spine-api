@@ -125,6 +125,45 @@ function marketingState(p, liveOk) {
       : { state: "occupied", reason: "spanning_lease" };
   }
 
+  /*  ── A LEASE SPINE CANNOT PLACE IN TIME ──────────────────────────────
+   *
+   *  leases.start_date is NULLABLE, so a NON-TERMINAL lease can exist with
+   *  no usable start date. The classifier cannot bucket it as current,
+   *  pending or future, so it lands in other_spanning_lease_positions and
+   *  `p.lease` above is null — an occupied bed that reaches this line
+   *  looking exactly like an empty one.
+   *
+   *  Measured on real Postgres: an ACTIVE lease with a named resident and
+   *  start_date NULL produced availability_state `ready_now`, and this
+   *  function returned `marketable_now`. The bed was offerable while Spine
+   *  held a lease over it that it could not read.
+   *
+   *  `unresolved` IS THE EXISTING CONCEPT, NOT A NEW LADDER.
+   *  dated_positions.js:213 already maps a nonempty
+   *  other_spanning_lease_positions to "unresolved" on the tenancy axis;
+   *  this carries the same answer onto the marketing surface rather than
+   *  inventing a second availability model.
+   *
+   *  IT SITS WITH THE LEASE GUARDS, ABOVE possession, turnover and triage,
+   *  for the reason those guards sit there: a right Spine holds over the
+   *  bed outranks how physically ready the bed is. A triage certification
+   *  therefore cannot reach past it.
+   *
+   *  NOTHING IS FABRICATED. This does not claim occupancy, does not
+   *  manufacture a conflict, and does not populate current_lease_position.
+   *  It says only what is true — Spine cannot place this claim, so it will
+   *  not call the bed open.
+   *
+   *  `!start_date` IS THE WHOLE TEST, and it is sufficient for DB-sourced
+   *  data: leases.start_date is a `date` column, so a present value is
+   *  always a real day. A shaped claim with no start date is exactly the
+   *  unplaceable one.                                                     */
+  const unplaceableClaim = (p.other_spanning_lease_positions || [])
+    .find((l) => l && !l.start_date);
+  if (unplaceableClaim) {
+    return { state: "unresolved", reason: "unplaceable_nonterminal_lease_claim" };
+  }
+
   // No spanning lease from here down. Still not automatically marketable.
   if (p.possession_state === "delivered")
     return { state: "not_ready", reason: "possession_not_returned" };
@@ -200,6 +239,31 @@ function marketingState(p, liveOk) {
     return { state: "use_not_configured", reason: "no_governed_use_type" };
   if (!MARKETABLE_USE_TYPES.has(p.use_type))
     return { state: "not_marketable_use", reason: "use_type_" + p.use_type };
+
+  /*  ── MARKETABLE IS A POSITIVE FINDING, NOT A LEFTOVER ────────────────
+   *
+   *  This return used to be unconditional: anything that survived the
+   *  guards above was marketable, whatever the tenancy axis actually said.
+   *  Measured against every availability_state on a position carrying no
+   *  other blocker, only two values were ever read by this function —
+   *  committed_activation_pending and committed_future. EVERYTHING else
+   *  reached here and became marketable_now:
+   *
+   *      "unavailable" · "on_notice" · "vacant_turning" · "ready_now"
+   *      an unrecognised value · undefined · null
+   *
+   *  Those first three are withheld today only because a DIFFERENT field
+   *  catches them earlier — p.lease, physical_readiness. The availability
+   *  axis itself was never consulted, so any position that slipped past
+   *  those fields was offered on no evidence at all.
+   *
+   *  Now the axis must positively say the bed is open. Anything else —
+   *  including a value this function does not recognise, and including
+   *  nothing at all — fails CLOSED as `unresolved`, because "I was not
+   *  told" is not "it is available" (§5).                                */
+  if (p.availability_state !== "ready_now") {
+    return { state: "unresolved", reason: "availability_not_established" };
+  }
 
   return { state: "marketable_now", reason: null };
 }

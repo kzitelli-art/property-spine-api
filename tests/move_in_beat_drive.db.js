@@ -56,6 +56,7 @@ const ROOT = path.join(__dirname, "..");
 const econ = require(path.join(ROOT, "src/tenancy/economic_tenancy_service.js"));
 const { spacePosition, recordEffectivePossession } = require(path.join(ROOT, "src/tenancy/space_position.js"));
 const tenancy = require(path.join(ROOT, "src/tenancy/tenancy_position_read.js"));
+const { availabilityRead, marketingState } = require(path.join(ROOT, "src/surfaces/availability_read.js"));
 
 const P    = "cab10001-0000-4000-8000-000000000001"; // property
 const UNIT = "cab10001-0000-4000-8000-0000000000a1";
@@ -581,6 +582,173 @@ const posFor = async (pool, asOf) => {
     } finally {
       await pool.query(`delete from leases where id=$1`, [GHOST]);
     }
+
+    /* ══ F · MARKETABLE IS A POSITIVE FINDING ═══════════════════════════
+     *
+     *  Build 2 made an unplaceable lease VISIBLE in
+     *  other_spanning_lease_positions, and that changed nothing about what
+     *  gets offered, because no consumer read the field. This section holds
+     *  the operator marketing surface itself.
+     *
+     *  What was measured on marketingState before this correction, on a
+     *  position carrying no other blocker so the availability axis is
+     *  isolated: it read only TWO availability_state values —
+     *  committed_activation_pending and committed_future. Every other value
+     *  fell through to marketable_now:
+     *
+     *      "unavailable" · "on_notice" · "vacant_turning" · "ready_now"
+     *      an unrecognised value · undefined · null
+     *
+     *  The first three are withheld in practice only because a DIFFERENT
+     *  field catches them earlier (p.lease, physical_readiness). The
+     *  availability axis itself was never consulted, so anything slipping
+     *  past those fields was offered on no evidence at all.
+     *
+     *  F1-F3 assert the BOUNDARY directly through marketingState, because
+     *  that is the function the rule lives in and a DB round-trip cannot
+     *  reach an "unrecognised availability_state" — no writer produces one.
+     *  F4-F6 drive the REAL availabilityRead against real Postgres.       */
+    const cleanPos = (over) => ({
+      conflict_state: "clear", is_down: false, operating_use: null, evidence_state: null,
+      successor: null, future_commitment: null, lease: null, possession_state: "pending",
+      physical_readiness: "ready", triage: null, use_type: "residential",
+      notice_state: "none", other_spanning_lease_positions: [], ...over,
+    });
+
+    // ── F1 · unknown / garbage availability_state cannot be marketable ─
+    let f1bad = 0;
+    for (const v of ["totally_made_up_value", "unresolved", "unavailable", "on_notice", "vacant_turning"]) {
+      const m = marketingState(cleanPos({ availability_state: v }), true);
+      if (m.state === "marketable_now") { bad(`F1 · availability_state ${JSON.stringify(v)} became marketable_now`, "the axis was never consulted"); f1bad++; }
+    }
+    if (!f1bad) ok("F1 · no unrecognised or non-open availability_state can become marketable_now");
+
+    // ── F2 · null / absent availability_state cannot be marketable ─────
+    let f2bad = 0;
+    for (const v of [null, undefined]) {
+      const m = marketingState(cleanPos({ availability_state: v }), true);
+      if (m.state === "marketable_now") { bad(`F2 · availability_state ${String(v)} became marketable_now`, "\"I was not told\" is not \"it is available\""); f2bad++; }
+      else if (m.reason !== "availability_not_established") { bad(`F2 · ${String(v)} withheld with the wrong reason`, m.reason); f2bad++; }
+    }
+    if (!f2bad) ok("F2 · a missing availability_state fails CLOSED as availability_not_established");
+
+    // ── F3 · POSITIVE CONTROL — a genuinely open bed is still offerable ─
+    /*  Without this, F1/F2 could pass by making everything unmarketable.  */
+    const openBed = marketingState(cleanPos({ availability_state: "ready_now" }), true);
+    if (openBed.state === "marketable_now")
+      ok("F3 · POSITIVE CONTROL — a free, configured, ready position is still marketable_now");
+    else bad("F3 · a genuinely open bed stopped being marketable", JSON.stringify(openBed));
+
+    // ── F3b · triage certification cannot outrank a lease-class fact ───
+    const certifiedButClaimed = marketingState(cleanPos({
+      availability_state: "ready_now",
+      triage: { certified_ready: true },
+      other_spanning_lease_positions: [{ lease_id: "x", start_date: null, end_date: null }],
+    }), true);
+    if (certifiedButClaimed.state === "unresolved"
+        && certifiedButClaimed.reason === "unplaceable_nonterminal_lease_claim")
+      ok("F3b · a triage-CERTIFIED bed carrying an unplaceable claim is still withheld — certification cannot outrank a right");
+    else bad("F3b · triage certification reached past an unplaceable lease claim", JSON.stringify(certifiedButClaimed));
+
+    const certifiedFree = marketingState(cleanPos({
+      availability_state: "ready_now", triage: { certified_ready: true },
+    }), true);
+    if (certifiedFree.state === "marketable_now")
+      ok("F3b · POSITIVE CONTROL — certification on a genuinely free bed still yields marketable_now");
+    else bad("F3b · certification on a free bed lost marketability", JSON.stringify(certifiedFree));
+
+    // ── F4 · END-TO-END through the real operator surface ──────────────
+    /*  ⚠ MY FIRST VERSION OF F4 WAS VACUOUS AND WENT GREEN ANYWAY.
+     *  It put the unplaceable lease on unit 301 — the bed that already
+     *  carries the real dated ACTIVE lease — so availabilityRead returned
+     *  `occupied` from the pre-existing p.lease guard and the assertion
+     *  passed without ever reaching the new one. A proof that cannot fail
+     *  for its own reason proves nothing.
+     *
+     *  The isolated case needs a bed whose ONLY claim is the unplaceable
+     *  one: no governing lease, no possession, nothing else to withhold
+     *  it. That bed is the one that used to read marketable_now.         */
+    const U2 = "cab10001-0000-4000-8000-0000000000a2";
+    const GHOST2 = "cab10001-0000-4000-8000-0000000001f2";
+    await pool.query(`insert into units (id,property_id,unit_number) values ($1,$2,'302')`, [U2, P]);
+    const space2 = (await pool.query(
+      `select id from spaces where unit_id=$1 order by created_at limit 1`, [U2])).rows[0].id;
+    /*  A configured, marketable use type. Without it the control bed reads
+     *  use_not_configured and the F4 red below would be indistinguishable
+     *  from "this bed is never offered anyway".                          */
+    await pool.query(`update spaces set use_type='residential' where id=$1`, [space2]);
+    try {
+      //  First: with NO claim at all, this bed must be offerable. Without
+      //  this the F4 red below could just mean "unit 302 is never offered".
+      const arFree = await availabilityRead(pool, { property_id: P, as_of: AS_OF });
+      const freeRow = (arFree.positions || arFree.rows || []).find((r) => String(r.unit_number) === "302");
+      const freeState = freeRow && freeRow.marketing_state;
+      console.log(`\n  unit 302, no claim: ${JSON.stringify({ state: freeState, reason: freeRow && freeRow.blocking_reason })}`);
+      if (freeState === "marketable_now")
+        ok("F4 · POSITIVE CONTROL — an unclaimed, configured bed IS offered by the operator surface");
+      else note(`F4 · unclaimed bed reads ${freeState} — not offerable for an unrelated reason; F4 below is reported, not claimed`);
+
+      await pool.query(
+        `insert into leases (id, property_id, space_id, tenant_ids, rent, balance,
+                             start_date, end_date, lease_status)
+         values ($1,$2,$3,$4::uuid[],1200,0,NULL,NULL,'active')`,
+        [GHOST2, P, space2, [PERSON]]);
+      const ar = await availabilityRead(pool, { property_id: P, as_of: AS_OF });
+      const row = (ar.positions || ar.rows || []).find((r) => String(r.unit_number) === "302");
+      const st = row && row.marketing_state;
+      const rsn = row && row.blocking_reason;
+      console.log(`  unit 302, unplaceable claim: ${JSON.stringify({ state: st, reason: rsn })}`);
+      if (st === "unresolved" && rsn === "unplaceable_nonterminal_lease_claim")
+        ok("F4 · the operator surface withholds the bed as unresolved and NAMES the unplaceable claim");
+      else if (st !== "marketable_now")
+        bad(`F4 · withheld, but not as the ruled result — ${st} / ${rsn}`,
+            "expected unresolved / unplaceable_nonterminal_lease_claim");
+      else bad("F4 · the operator surface OFFERED a bed carrying an unplaceable lease claim", JSON.stringify(row));
+
+      // ── F6 · an ENDED lease must not permanently suppress the bed ────
+      await pool.query(`delete from leases where id=$1`, [GHOST2]);
+      await pool.query(
+        `insert into leases (id, property_id, space_id, tenant_ids, rent, balance,
+                             start_date, end_date, lease_status)
+         values ($1,$2,$3,$4::uuid[],1200,0,'2024-01-01','2024-12-31','ended')`,
+        [GHOST2, P, space2, [PERSON]]);
+      /*  ── THE PROSPECT RAIL IS NOT ASSERTED HERE, AND WHY ────────────
+       *  I wrote a leasing_inventory inclusion/exclusion pair and removed
+       *  it: it could not attribute its own result. The legacy predicate at
+       *  leasing_inventory.js:110-118 already excludes any unit carrying a
+       *  non-terminal lease on any of its spaces —
+       *
+       *      and not exists (select 1 from spaces sp join leases lz …
+       *                      where lz.lease_status not in (terminal…))
+       *
+       *  so a bed with an unplaceable claim is withheld from prospects
+       *  TODAY regardless of interval_state, and an exclusion assertion
+       *  would have passed on the legacy predicate while appearing to prove
+       *  this correction. The interval half is proved where it can be
+       *  attributed: space_rows_lease_relevance D1 shows the same claim
+       *  makes interval_state `unresolved`, which is the signal that
+       *  survives the documented prospect-inventory cutover once that
+       *  predicate is removed.                                           */
+      const arEnded = await availabilityRead(pool, { property_id: P, as_of: AS_OF });
+      const endedRow = (arEnded.positions || arEnded.rows || []).find((r) => String(r.unit_number) === "302");
+      const endedState = endedRow && endedRow.marketing_state;
+      if (endedState === freeState)
+        ok(`F6 · an ENDED lease does not suppress a genuinely free position — still ${endedState}`);
+      else bad(`F6 · an ended lease changed the answer to ${endedState}`,
+               "terminal leases must not be treated as unplaceable claims");
+    } finally {
+      await pool.query(`delete from leases where id=$1`, [GHOST2]);
+      await pool.query(`delete from spaces where unit_id=$1`, [U2]);
+      await pool.query(`delete from units where id=$1`, [U2]);
+    }
+
+    // ── F5 · the dated ACTIVE lease is still withheld as occupied ──────
+    const arOccupied = await availabilityRead(pool, { property_id: P, as_of: AS_OF });
+    const occRow = (arOccupied.positions || arOccupied.rows || []).find((r) => String(r.unit_number) === "301");
+    const occState = occRow && occRow.marketing_state;
+    if (occState && occState !== "marketable_now")
+      ok(`F5 · the dated ACTIVE lease still withholds its own bed — ${occState}`);
+    else bad("F5 · an occupied bed became marketable", JSON.stringify(occRow));
 
     /*  AND ONE THAT POSTGRES LETS THROUGH. ' 2026-09-20' casts fine —
      *  Postgres trims it — so it reaches the classifier on the real read
