@@ -84,6 +84,7 @@ const { spacePosition } = require(path.join(ROOT, "src/tenancy/space_position.js
 const { intervalPropertyPositions } = require(path.join(ROOT, "src/tenancy/dated_positions.js"));
 const { readTenancyTermStanding } = require(path.join(ROOT, "src/tenancy/tenancy_position_read.js"));
 const { forwardLeasingPosition } = require(path.join(ROOT, "src/leasing/forward_leasing_read.js"));
+const { forwardRent, _internal: frInternal } = require(path.join(ROOT, "src/leasing/forward_rent.js"));
 const fixture = require(path.join(__dirname, "tenancy_position_fixture.js"));
 
 const PROPERTY      = fixture.IDS.PROPERTY;
@@ -694,6 +695,235 @@ const forwardShape = async (pool) =>
     else bad("F9 · the fixture did not return to its baseline", JSON.stringify({
       before: fBase.headline, after: fEnd.headline,
       collection: (fEnd.unresolved_positions || []).length }));
+
+    /* ══ G · THE EXPLANATION SURVIVES THE ECONOMIC READING ═════════════
+     *
+     *  F proved forwardLeasingPosition says WHY a bed is unresolved.
+     *  forward_rent.js is the next consumer and the last one before the
+     *  conversational reader, and it returned `forward_leasing:
+     *  position.headline` — seven numbers. Measured on this fixture
+     *  before the change: `unresolved: 2` with no way to learn which two
+     *  beds or what would resolve them. The compact collection died one
+     *  module short of the reader that needs it most.
+     *
+     *  WHAT THIS SECTION IS NOT. It is not a second proof that the
+     *  reasons are right — F owns that, directly against the classifier's
+     *  consumer. G proves PASS-THROUGH FIDELITY: that what arrives is
+     *  the canonical object, unchanged, and that nothing else in the
+     *  economic payload moved to make room for it.
+     *
+     *  THE POPULATION IS DELIBERATE. One genuinely SIGNED bed sits beside
+     *  the two unresolved ones, so an implementation that turned the whole
+     *  projection unresolved — or that carried a collection by rebuilding
+     *  it from every row — cannot pass G1 and G5.                       */
+    const cycleRent = () => forwardRent(pool, {
+      property_id: PROPERTY, cycle_start: CYC_S, cycle_end: CYC_E });
+    const spaceB1 = (await pool.query(
+      `select s.id from spaces s join units u on u.id = s.unit_id
+        where u.property_id = $1 and u.unit_number = '102'`, [PROPERTY])).rows[0].id;
+
+    const UNP = "51ce0001-0000-4000-8000-000000000b01";
+    const CN1 = "51ce0001-0000-4000-8000-000000000b02";
+    const CN2 = "51ce0001-0000-4000-8000-000000000b03";
+    const ODD2 = "51ce0001-0000-4000-8000-000000000b04";
+    const addDated = (id, space, st, en, status) => pool.query(
+      `insert into leases (id, property_id, space_id, tenant_ids, rent, balance,
+                           start_date, end_date, lease_status)
+       values ($1,$2,$3,$4::uuid[],1200,0,$5,$6,$7)`,
+      [id, PROPERTY, space, [fixture.IDS.PERSON], st, en, status]);
+
+    /*  ⚠ THE UNPLACEABLE CLAIM GOES ON SPACE B, NOT ON THE ANCHOR. Put on
+     *  101A it would take the fixture's signed lease with it and leave the
+     *  section with no resolved row at all — the exact vacuous shape G
+     *  exists to rule out. */
+    await pool.query(
+      `insert into leases (id, property_id, space_id, tenant_ids, rent, balance,
+                           start_date, end_date, lease_status)
+       values ($1,$2,$3,$4::uuid[],1000,0,NULL,NULL,'active')`,
+      [UNP, PROPERTY, fixture.IDS.SPACE_A2, [fixture.IDS.PERSON]]);
+    await addDated(CN1, spaceB1, "2027-11-01", "2028-02-01", "signed");
+    await addDated(CN2, spaceB1, "2027-12-01", "2028-03-01", "signed");
+
+    /*  Every key that appears anywhere in the payload, at any depth. A
+     *  substring search over the JSON would match the word inside a prose
+     *  field and report a ledger that is not there — a mention is not a
+     *  guard. */
+    const allKeys = (v, into = new Set()) => {
+      if (Array.isArray(v)) { v.forEach((x) => allKeys(x, into)); return into; }
+      if (!v || typeof v !== "object") return into;
+      for (const [k, child] of Object.entries(v)) { into.add(k); allKeys(child, into); }
+      return into;
+    };
+    //  Fields that exist ONLY on a ledger row. If any of these reach the
+    //  economic payload, the collection was built by copying rows.
+    const LEDGER_ONLY = ["commitment_state", "contracted_rent", "rent_state", "claim_state",
+                         "operating_state", "proof", "contract_position", "term_shape"];
+
+    try {
+      const pos = await cycleLedger();          // the canonical position
+      const fr = await cycleRent();             // the economic reading of it
+
+      // ── G1 · REQ 7 — a genuinely resolved positive row is present ────
+      if (pos.headline.signed === 1 && pos.headline.unresolved === 2
+          && fr.forward_leasing.signed === 1 && fr.forward_leasing.committed === 1)
+        ok("G1 · CONTROL — one genuinely SIGNED bed beside two unresolved ones; an all-unresolved projection cannot pass G");
+      else bad("G1 · the population is not mixed; the rest of G would be vacuous",
+               JSON.stringify({ canonical: pos.headline, carried: fr.forward_leasing }));
+
+      // ── G2 · REQ 1 — the count is the canonical count ────────────────
+      if (fr.forward_leasing.unresolved === pos.headline.unresolved)
+        ok(`G2 · forward_leasing.unresolved equals the canonical Forward Leasing count (${pos.headline.unresolved})`);
+      else bad("G2 · the carried unresolved count is not the canonical one", JSON.stringify({
+        canonical: pos.headline.unresolved, carried: fr.forward_leasing.unresolved }));
+
+      // ── G3 · REQ 2 — the collection is the canonical object ──────────
+      const canonical = JSON.stringify(pos.unresolved_positions);
+      const carried = JSON.stringify(fr.forward_leasing.unresolved_positions);
+      if (carried === canonical && pos.unresolved_positions.length === 2)
+        ok("G3 · forward_leasing.unresolved_positions is DEEP-EQUAL to the canonical compact collection, across two different reasons");
+      else bad("G3 · the carried collection is not the canonical one", JSON.stringify({
+        canonical: canonical && canonical.slice(0, 200), carried: carried && carried.slice(0, 200) }));
+
+      // ── G4 · REQ 3 — every named field survives, checked BY NAME ─────
+      const REQUIRED = ["unit_number", "space_label", "unresolved_reason",
+                        "contract_unresolved_because", "unplaceable_rights", "colliding_rights"];
+      /*  ABSENT AND INCOMPLETE ARE DIFFERENT FAILURES. The first version
+       *  read `(… || [])` and then checked the fields, so a missing
+       *  collection reported "a carried position lost a named field" with
+       *  an empty detail — a true failure naming a cause that did not
+       *  happen. Found by dry-running the falsification before pushing it. */
+      const positionsOut = fr.forward_leasing.unresolved_positions;
+      if (!Array.isArray(positionsOut) || positionsOut.length !== 2) {
+        bad("G4 · there is no carried collection to check fields on",
+            `expected 2 carried positions, got ${Array.isArray(positionsOut) ? positionsOut.length : typeof positionsOut}`);
+      } else {
+        const short = positionsOut
+          .map((x) => REQUIRED.filter((k) => !(k in x))).filter((m) => m.length);
+        if (short.length === 0) ok(`G4 · every carried position preserves ${REQUIRED.join(", ")}`);
+        else bad("G4 · a carried position lost a named field", JSON.stringify(short));
+      }
+
+      /*  …and the VALUES, not only the keys. A carriage that preserved the
+       *  shape while blanking the causes would satisfy G4 and tell a
+       *  reader nothing. Both reasons must arrive, and the canonical
+       *  `overlapping_claims` must arrive with the one it belongs to. */
+      const byBed = Object.fromEntries((fr.forward_leasing.unresolved_positions || [])
+        .map((x) => [`${x.unit_number}${x.space_label}`, x]));
+      const unp = byBed["101B"], con = byBed["102A"];
+      if (unp && unp.unresolved_reason === "unplaceable_rights" && unp.unplaceable_rights.length === 1
+          && con && con.unresolved_reason === "overlapping_rights"
+          && con.contract_unresolved_because === "overlapping_claims"
+          && con.colliding_rights.length === 2)
+        ok("G4 · and the values arrive intact — unplaceable_rights on 101B, overlapping_rights + overlapping_claims with both rights on 102A");
+      else bad("G4 · the carried causes are not the canonical causes", JSON.stringify({ unp, con }));
+
+      // ── G5 · REQ 6 — the headline is untouched and nothing else added ─
+      const { unresolved_positions: _carried, ...headlineOnly } = fr.forward_leasing;
+      if (JSON.stringify(headlineOnly) === JSON.stringify(pos.headline))
+        ok("G5 · forward_leasing MINUS the new key is deep-equal to the canonical headline — positions, signed, pending, committed, remaining, unresolved, committed_pct all unmoved");
+      else bad("G5 · an existing headline field changed shape or meaning", JSON.stringify({
+        canonical: pos.headline, carried: headlineOnly }));
+      const added = Object.keys(fr.forward_leasing).filter((k) => !(k in pos.headline));
+      if (added.length === 1 && added[0] === "unresolved_positions")
+        ok("G5 · and exactly ONE key was added; nothing was renamed or smuggled in beside it");
+      //  GAINED NOTHING and GAINED THE WRONG THING are different defects
+      //  and must not share a sentence — the first is the carriage being
+      //  absent, the second is this module inventing a field.
+      else if (added.length === 0)
+        bad("G5 · forward_leasing carries the headline and NOTHING else — the explanation never arrived",
+            "unresolved_positions is not among its keys");
+      else bad("G5 · forward_leasing gained a key that is not unresolved_positions", JSON.stringify(added));
+
+      // ── G6 · REQ 4 — no ledger was copied ────────────────────────────
+      const keys = allKeys(fr);
+      const leaked = LEDGER_ONLY.filter((k) => keys.has(k));
+      if (!keys.has("ledger") && leaked.length === 0)
+        ok(`G6 · no ledger anywhere in the economic payload, and none of the ${LEDGER_ONLY.length} ledger-only row fields leaked into it`);
+      else bad("G6 · ledger rows reached forward_rent's payload", JSON.stringify({
+        ledger_key: keys.has("ledger"), leaked }));
+
+      /*  ── G7 · REQ 5 — no second classification in forward_rent ───────
+       *  Two statements, and neither is "I read the diff". G3 already
+       *  shows the object is the canonical one rather than a re-derived
+       *  look-alike. This adds that forward_rent grew no new internals:
+       *  its exported surface is still exactly the two month helpers it
+       *  had, so no date parser or status set was introduced beside them.
+       *
+       *  WHAT IT DOES NOT PROVE: a private unexported function. That is
+       *  why it is stated alongside G3 and not instead of it.           */
+      const internals = Object.keys(frInternal || {}).sort();
+      if (JSON.stringify(internals) === JSON.stringify(["governsMonth", "monthsBetween"]))
+        ok("G7 · forward_rent's internals are still exactly monthsBetween and governsMonth — no classifier appeared beside them");
+      else bad("G7 · forward_rent gained an internal it did not have", JSON.stringify(internals));
+
+      /*  ── G8 · REQ 6 — the economics did not move ─────────────────────
+       *  Recomputed INDEPENDENTLY from the canonical position rather than
+       *  compared to a snapshot this harness wrote, so a change that moved
+       *  both at once still fails.                                       */
+      const committedRows = pos.ledger.filter(
+        (r) => r.operating_state === "signed" || r.operating_state === "pending");
+      const expectRent = committedRows.filter((r) => r.contracted_rent != null)
+        .reduce((a, r) => a + r.contracted_rent, 0);
+      const okEcon = fr.coverage.committed_positions === committedRows.length
+        && fr.committed_rent.contractual === expectRent
+        && fr.committed_rent.decomposition.reconciles === true
+        && JSON.stringify(fr.operating_position) === JSON.stringify(pos.operating_position);
+      if (okEcon)
+        ok(`G8 · economics unchanged — coverage.committed_positions=${fr.coverage.committed_positions}, contractual=${fr.committed_rent.contractual}, decomposition reconciles, operating_position deep-equal to the canonical one`);
+      else bad("G8 · an economic figure moved", JSON.stringify({
+        coverage: fr.coverage.committed_positions, expect_positions: committedRows.length,
+        contractual: fr.committed_rent.contractual, expect_rent: expectRent,
+        reconciles: fr.committed_rent.decomposition.reconciles }));
+
+      //  The schedule spans the cycle's months and nothing about carrying
+      //  an explanation touched it.
+      if (fr.dated_schedule.months.length === 6
+          && fr.dated_schedule.months[0].month === "2027-10"
+          && fr.dated_schedule.months[5].month === "2028-03")
+        ok("G8 · the dated schedule still spans the six cycle months, 2027-10 → 2028-03");
+      else bad("G8 · the dated schedule moved", JSON.stringify({
+        n: fr.dated_schedule.months.length,
+        first: fr.dated_schedule.months[0] && fr.dated_schedule.months[0].month }));
+
+      /*  ── G9 · the carriage is indifferent to WHICH reason ────────────
+       *  Swap the contested pair on 102A for a single lease whose status
+       *  this read does not recognise. A different cause, a different
+       *  count of rights, same pass-through.                            */
+      await pool.query(`delete from leases where id = any($1::uuid[])`, [[CN1, CN2]]);
+      await addDated(ODD2, spaceB1, "2027-11-01", "2028-02-01", "holdover_pending");
+      const pos2 = await cycleLedger();
+      const fr2 = await cycleRent();
+      const carried2 = JSON.stringify(fr2.forward_leasing.unresolved_positions);
+      const reasons2 = (fr2.forward_leasing.unresolved_positions || [])
+        .map((x) => x.unresolved_reason).sort();
+      if (carried2 === JSON.stringify(pos2.unresolved_positions)
+          && JSON.stringify(reasons2) === JSON.stringify(["unplaceable_rights", "unrecognized_lease_status"])
+          && fr2.forward_leasing.signed === 1)
+        ok("G9 · a different reason mix — unplaceable_rights + unrecognized_lease_status — carries identically, with the signed bed still signed");
+      else if (!Array.isArray(fr2.forward_leasing.unresolved_positions))
+        bad("G9 · nothing was carried on the second reason mix either",
+            "unresolved_positions is absent, so reason-agnosticism cannot be measured");
+      else bad("G9 · the pass-through is not reason-agnostic", JSON.stringify({
+        reasons: reasons2, signed: fr2.forward_leasing.signed }));
+    } finally {
+      await pool.query(`delete from leases where id = any($1::uuid[])`,
+        [[UNP, CN1, CN2, ODD2]]);
+    }
+
+    /*  ── G10 · CONTROL — EMPTY IS STATED, NOT ABSENT ──────────────────
+     *  With every probe row gone the cycle has nothing unresolved. The key
+     *  must still be there carrying `[]`: a reader cannot tell a missing
+     *  collection from a genuinely empty one, and this is the assertion
+     *  that would catch the carriage silently disappearing on the quiet
+     *  path where nobody is looking.                                    */
+    const frEnd = await cycleRent();
+    if (frEnd.forward_leasing.unresolved === 0
+        && Array.isArray(frEnd.forward_leasing.unresolved_positions)
+        && frEnd.forward_leasing.unresolved_positions.length === 0)
+      ok("G10 · CONTROL — with nothing unresolved the key is PRESENT and empty, not absent");
+    else bad("G10 · an empty collection is not stated", JSON.stringify({
+      unresolved: frEnd.forward_leasing.unresolved,
+      collection: frEnd.forward_leasing.unresolved_positions }));
   } catch (e) {
     bad("harness died", e.message);
     console.error(e);
