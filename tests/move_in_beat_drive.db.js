@@ -524,6 +524,64 @@ const posFor = async (pool, asOf) => {
     mustAcceptPure("D9i · -05 (offset hour only)", "2026-09-20T13:45:00-05");
     mustAcceptPure("D9i · T13:45 (no seconds)", "2026-09-20T13:45");
 
+    /* ══ E · A LEASE SPINE CANNOT PLACE IN TIME ═════════════════════════
+     *
+     *  leases.start_date is NULLABLE and leaseIsValid checks only the
+     *  status, so a NON-TERMINAL lease with no usable start date used to
+     *  pass every arm of the classifier and be caught by none — datesSpan,
+     *  isFuture, the other-spanning bucket and the conflict detector all
+     *  require a start date.
+     *
+     *  Measured on real Postgres before the repair, on a bed carrying an
+     *  ACTIVE lease with a named resident:
+     *
+     *      no lease at all           econ=none  avail=ready_now  other=0
+     *      ACTIVE lease, start NULL  econ=none  avail=ready_now  other=0
+     *      same lease, start present econ=active avail=unavailable
+     *
+     *  Indistinguishable from an empty bed. That is precisely what the
+     *  classifier's own doctrine forbids: "a lease Spine holds over a bed,
+     *  whose meaning it cannot classify, is a reason to stop, not a reason
+     *  to offer the bed."
+     *
+     *  E2 IS THE CONTROL AND IT MATTERS. If the unplaceable lease were
+     *  caught by widening something that also catches ordinary leases, E2
+     *  would go red — the active lease must still read as ACTIVE occupancy
+     *  and must NOT appear in the cannot-place bucket.                   */
+    const GHOST = "cab10001-0000-4000-8000-0000000001f1";
+    const spaceOfLease = (await pool.query(
+      `select space_id from leases where id=$1`, [LEASE])).rows[0].space_id;
+    await pool.query(
+      `insert into leases (id, property_id, space_id, tenant_ids, rent, balance,
+                           start_date, end_date, lease_status)
+       values ($1,$2,$3,$4::uuid[],1200,0,NULL,NULL,'active')`,
+      [GHOST, P, spaceOfLease, [PERSON]]);
+    try {
+      const p2 = await posFor(pool, AS_OF);
+      const others = p2.other_spanning_lease_positions || [];
+      const ghost = others.find((l) => String(l.lease_id || l.id) === GHOST);
+      if (ghost)
+        ok("E1 · a non-terminal lease with NO start_date is surfaced as unplaceable, not silently dropped");
+      else bad("E1 · an ACTIVE lease with start_date NULL is INVISIBLE to every arm",
+               `the bed reads econ=${p2.economic_tenancy_state} avail=${p2.availability_state} `
+             + `other_spanning=${others.length} — indistinguishable from an empty bed`);
+
+      /*  The bed is genuinely occupied by the real lease, so this also
+       *  proves the unplaceable one did not displace the real answer.    */
+      if (p2.current_lease_position && p2.economic_tenancy_state === "active")
+        ok("E2 · CONTROL — the real dated lease still reads as ACTIVE occupancy beside it");
+      else bad("E2 · CONTROL FAILED — the unplaceable lease disturbed the real position",
+               JSON.stringify({ econ: p2.economic_tenancy_state, current: p2.current_lease_position }));
+
+      const realInBucket = others.some((l) => String(l.lease_id || l.id) === LEASE);
+      if (!realInBucket)
+        ok("E2 · CONTROL — and an ordinary dated lease is NOT swept into the cannot-place bucket");
+      else bad("E2 · an ordinary dated lease was swept into the unplaceable bucket",
+               "the predicate is too wide; it would flag healthy leases");
+    } finally {
+      await pool.query(`delete from leases where id=$1`, [GHOST]);
+    }
+
     /*  AND ONE THAT POSTGRES LETS THROUGH. ' 2026-09-20' casts fine —
      *  Postgres trims it — so it reaches the classifier on the real read
      *  path and the classifier is the only thing that can refuse it. This

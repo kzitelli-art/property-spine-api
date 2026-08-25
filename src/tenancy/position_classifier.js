@@ -397,10 +397,38 @@ function classifyPosition(row, { asOf, personNames } = {}) {
    *  must never happen is that it lands in Open — a lease Spine holds
    *  over a bed, whose meaning it cannot classify, is a reason to stop,
    *  not a reason to offer the bed. */
+  /*  A LEASE THAT CANNOT BE PLACED IN TIME IS THE SAME CASE.
+   *
+   *  leases.start_date is NULLABLE and leaseIsValid checks only the status,
+   *  so a non-terminal lease with no usable start date passed every arm and
+   *  was caught by none: datesSpan, isFuture, the bucket below and the
+   *  conflict detector all require a start date. Measured on real Postgres
+   *  — an ACTIVE lease with a named resident and start_date NULL:
+   *
+   *      no lease at all              econ=none  avail=ready_now  other=0
+   *      ACTIVE lease, start NULL     econ=none  avail=ready_now  other=0
+   *      same lease, start present    econ=active avail=unavailable
+   *
+   *  Indistinguishable from an empty bed. That is the exact thing the
+   *  paragraph above forbids: Spine holds a right over the bed, cannot say
+   *  what it means, and offers the bed anyway.
+   *
+   *  So an unplaceable lease joins the SAME bucket as a spanning lease
+   *  whose status we do not understand — one contract, no new vocabulary,
+   *  no new field. A reader that already refuses to call a bed empty on
+   *  other_spanning_lease_positions now refuses on this too, for free.
+   *
+   *  NOT AN AVAILABILITY CHANGE. This bucket deliberately does not feed
+   *  availability_state — an unknown-STATUS spanning lease leaves it
+   *  ready_now today as well. Wiring it in would move availability_read,
+   *  leasing_inventory and the prospect surface at once, which is an
+   *  architecture decision and not this repair's to make.               */
+  const unplaceableInTime = (lease) => dateKey(lease && lease.start_date) === null;
   const otherSpanning = leases.filter((lease) =>
-    datesSpan(lease, asOfKey)
-    && !CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease))
-    && !ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease)));
+    unplaceableInTime(lease)
+    || (datesSpan(lease, asOfKey)
+        && !CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease))
+        && !ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease))));
 
   /*  ── A POSITION AT as_of D MAY ONLY USE EVENTS EFFECTIVE BY D ──────
    *
