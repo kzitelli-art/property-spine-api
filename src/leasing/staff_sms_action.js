@@ -130,11 +130,7 @@ function targetMatches(text, target) {
 }
 
 function chooseTarget(text, allTargets, hintedUnitId = null) {
-  const namesAUnit = /\bunit\s*[#-]?\s*[a-z0-9][a-z0-9-]*\b/i.test(String(text || ""));
-  const candidates = hintedUnitId && !namesAUnit
-    ? allTargets.filter((target) => String(target.unit_id) === String(hintedUnitId))
-    : allTargets;
-  const matches = candidates.filter((target) => targetMatches(text, target));
+  const matches = allTargets.filter((target) => targetMatches(text, target));
   if (matches.length === 1) return { target: matches[0], candidates: matches };
   if (matches.length > 1) return { target: null, candidates: matches, reason: "ambiguous_target" };
 
@@ -286,33 +282,12 @@ function makeStaffLeasingAction({
     }
 
     if (!parsed.sendApplication) {
-      let nextPrompt = null;
-      if (capture && parsed.standing === "ready_to_apply" && parsed.hasTarget) {
-        try {
-          const targetMenu = await applicationTargetRead.leaseableApplicationTargets(pool, {
-            property_id: propertyId,
-          });
-          const targetChoice = chooseTarget(
-            body,
-            targetMenu.eligible_targets,
-            capture.unitId || null
-          );
-          if (targetChoice.target) {
-            const label = targetLabel(targetChoice.target);
-            nextPrompt = `I found ${label}. Nothing was sent. Reply "Send ${capture.prospectName} the application for ${label}."`;
-          } else {
-            nextPrompt = targetPrompt(targetChoice.candidates || [], capture.prospectName);
-          }
-        } catch (_) {
-          nextPrompt = "I couldn't read the application targets just now. Nothing was sent. Try the application request again.";
-        }
-      }
       return finish("tour_outcome_recorded", {
         tourId: capture.tourId,
         conversionId: capture.conversionId,
         prospectName: capture.prospectName,
         standingLabel: capture.standingLabel,
-        nextPrompt,
+        nextPrompt: null,
       }, "leasing_tour_outcome_recorded");
     }
 
