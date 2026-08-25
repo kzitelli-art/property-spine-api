@@ -751,7 +751,7 @@ function project(snapshot = {}, { as_of = null } = {}) {
   const inScopeObservations = observations.filter(
     (row) => classOf(row).visibility === "IN_SCOPE");
   const hasTruth = requirements.length || engagements.length || documents.length
-    || observations.length || !!coverageReview;
+    || inScopeObservations.length || !!coverageReview;
   const setupState = !hasTruth ? "not_established"
     : coverageReview && unresolved.length === 0 ? "established" : "partially_established";
   const attention = engagementViews.filter((row) =>
