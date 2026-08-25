@@ -379,7 +379,39 @@ function withoutDatabaseIds(value) {
   if (!value || typeof value !== "object") return value;
   const clean = {};
   for (const [key, child] of Object.entries(value)) {
-    if (key === "id" || /_id$/.test(key) || (/_identifier$/.test(key) && !/_masked$/.test(key))) {
+    /*  ── AND HASHES, WHICH THIS SANITIZER USED TO LET THROUGH ────────
+     *  An artifact hash is an internal identity wearing a value's
+     *  clothes. It names a specific retained document without being an
+     *  `id`, so the id rules above never touched it — and a payload
+     *  census through the real door found exactly two reaching the
+     *  model: `leasing_person.lease.instrument_package_sha256` and
+     *  `leasing_person.lease.executed_lease.document_sha256`. A model
+     *  holding one can repeat it, correlate two answers by it, or offer
+     *  it as a reference Spine never resolved, which is the same failure
+     *  §40.8 forbids for record ids.
+     *
+     *  ONE SANITIZER, EXTENDED — not a leasing-only second pass. The
+     *  leak was found in leasing and the rule is not: any reader that
+     *  ever returns a hash is covered the day it lands, without anyone
+     *  remembering to add it.
+     *
+     *  SCOPE IS WHAT WAS OBSERVED, NOT WHAT WAS IMAGINED. A search of
+     *  every canonical reader reachable from gatherFacts found these two
+     *  keys and no other hash-shaped output key at all — no `*_hash`,
+     *  `*_token` or `*_digest`. `executed_lease_records.payload_hash` is
+     *  a real column, but no reader selects it, so it is NOT matched
+     *  here: a rule written for a key nobody emits is speculation, and
+     *  the day a reader does emit it this line is the place to widen.
+     *
+     *  NOT REMOVED, DELIBERATELY: the top-level `property_id`. It is set
+     *  on `facts` before any reader runs, so it never passes through
+     *  here at all. It is the server-derived SCOPE of the question — the
+     *  caller already knows it, the response echoes it, and it names no
+     *  record the model could compose a link to. tenancy_ask_spine_http
+     *  asserts it in model context and excludes it from its own id
+     *  sweep, so it is an existing contract, not an oversight.  */
+    if (key === "id" || /_id$/.test(key) || (/_identifier$/.test(key) && !/_masked$/.test(key))
+        || /_sha256$/.test(key)) {
       continue;
     }
     clean[key] = withoutDatabaseIds(child);

@@ -143,7 +143,11 @@ async function cleanup(pool) {
   for (const { id } of props) {
     await pool.query(`delete from staff_sessions where property_id=$1`, [id]);
     await pool.query(`delete from property_team_assignments where property_id=$1`, [id]);
+    await pool.query(`delete from executed_lease_records where property_id=$1`, [id]);
+    await pool.query(`delete from lease_packets where property_id=$1`, [id]);
     await pool.query(`delete from lease_applications where property_id=$1`, [id]);
+    await pool.query(`delete from spaces where unit_id in (select id from units where property_id=$1)`, [id]);
+    await pool.query(`delete from units where property_id=$1`, [id]);
     await pool.query(`delete from leasing_leads where property_id=$1`, [id]);
     await pool.query(`delete from leasing_conversions where property_id=$1`, [id]);
     await pool.query(`delete from properties where id=$1`, [id]);
@@ -153,7 +157,7 @@ async function cleanup(pool) {
   await pool.query(`delete from organizations where name=$1`, [ORG]);
 }
 
-receipt.begin(__filename, { url: CONN, expected: 61 });
+receipt.begin(__filename, { url: CONN, expected: 78 });
 
 (async () => {
   const pool = new Pool({ connectionString: CONN });
@@ -192,9 +196,63 @@ receipt.begin(__filename, { url: CONN, expected: 61 });
 
   //  A real application for Marisol, so her standing read has something
   //  to stand on rather than reading an empty person.
-  await pool.query(
+  const application = (await pool.query(
     `insert into lease_applications (property_id, person_id, status, applicant_name)
-     values ($1,$2,'submitted','Marisol Trejo')`, [prop, marisol]);
+     values ($1,$2,'submitted','Marisol Trejo') returning id`, [prop, marisol])).rows[0].id;
+
+  /*  ── A PACKET AND AN EXECUTED RECORD THAT CARRY REAL HASHES ────────
+   *  Without these the canonical read returns no `lease` band at all,
+   *  the hash keys are simply absent, and an assertion that "no hash
+   *  reaches the model" passes by measuring an empty payload. That is
+   *  precisely the false green this file exists to prevent: the FIRST
+   *  version of this harness seeded no packet, so the two hash leaks it
+   *  later reported were read out of the source rather than measured.
+   *  The seeded values are distinctive, so the assertions can look for
+   *  the exact strings and not merely for a key name.
+   *
+   *  The schema is strict here and correctly so: `document_sha256` is
+   *  only permitted alongside a full spine_instrument lineage, and the
+   *  executed document's hash must equal the packet's package hash. The
+   *  seed satisfies the real constraints rather than working around
+   *  them.  */
+  const HASH = {
+    body:    "b0dy" + "a".repeat(60),
+    terms:   "7e2m" + "b".repeat(60),
+    package: "9ac4" + "c".repeat(60),
+    //  NOT NULL on executed_lease_records, so EVERY real executed record
+    //  carries one. The only thing keeping it out of model context is the
+    //  reader's SELECT list — not its absence. Seeded so the proof can say
+    //  that from measurement rather than from reading the schema.
+    payload:  "9a71" + "e".repeat(60),
+  };
+  const packet = (await pool.query(
+    `insert into lease_packets (property_id, application_id, version, status, is_placeholder,
+        instrument_form_code, instrument_form_version, instrument_body_sha256,
+        instrument_terms_sha256, instrument_package_sha256, resident_executed_at)
+     values ($1,$2,1,'sent',false,'PA-RES-2026','1.0',$3,$4,$5,now()) returning id`,
+    [prop, application, HASH.body, HASH.terms, HASH.package])).rows[0].id;
+  {
+    const ev = (await pool.query(
+      `insert into events (type) values ('lease_executed') returning id`)).rows[0].id;
+    const verifier = (await pool.query(
+      `insert into users (name,email,role,account_kind)
+       values ($1,$1,'property_manager','human_staff') returning id`,
+      ["skyline-leasing-http-verifier@test"])).rows[0].id;
+    const unit = (await pool.query(
+      `insert into units (property_id,unit_number,occupancy_status)
+       values ($1,'101','unknown') returning id`, [prop])).rows[0].id;
+    const space = (await pool.query(
+      `insert into spaces (unit_id,space_label) values ($1,'A') returning id`, [unit])).rows[0].id;
+    await pool.query(
+      `insert into executed_lease_records (property_id, application_id, space_id, rent,
+          security_deposit, lease_start_date, lease_end_date, document_sha256, payload_hash, signers,
+          verified_by_user_id, event_id, executed_at, execution_channel, admission_status,
+          admission_blockers, verification_basis, source_lease_packet_id)
+       values ($1,$2,$3,1450,1450,current_date,current_date + 365,$4,$5,
+               '[{"role":"resident","name":"Marisol Trejo"}]',$6,$7,current_date,'spine_esign',
+               'blocked','[{"code":"deposit_unpaid"}]','spine_instrument',$8)`,
+      [prop, application, space, HASH.package, HASH.payload, verifier, ev, packet]);
+  }
 
   // ── REAL OPERATORS, REAL SESSIONS ─────────────────────────────────
   async function operator(email, modules) {
@@ -639,6 +697,153 @@ receipt.begin(__filename, { url: CONN, expected: 61 });
        new Set(Object.values(seen)).size === 4, JSON.stringify(seen));
   }
 
+  /*  ══ MODEL-CONTEXT IDENTIFIER FIREWALL (§40.8) ═════════════════════
+   *  The model narrates governed facts. It must never receive an
+   *  internal identity it could repeat, correlate between answers, or
+   *  offer as a reference Spine never resolved.
+   *
+   *  A payload census through this same door found TWO leaks that the
+   *  id rules could not see, because a hash is an identity wearing a
+   *  value's clothes rather than an `id`:
+   *      leasing_person.lease.instrument_package_sha256
+   *      leasing_person.lease.executed_lease.document_sha256
+   *  Both are now stripped by the ONE recursive sanitizer.
+   *
+   *  Asserted BY KEY SHAPE AND BY VALUE, at every nesting depth. Key
+   *  shape alone misses a hash under an innocent name; the exact seeded
+   *  values alone miss a key whose value happens to differ. Both, or
+   *  neither is worth much.  */
+  console.log("\n  ── §40.8 · no internal identifier reaches model context ──");
+  {
+    //  Walk to leaves so nesting depth cannot hide anything. A sanitizer
+    //  that only cleaned the top level would pass a shallow check.
+    const leaves = [];
+    (function walk(v, path) {
+      if (Array.isArray(v)) return v.forEach((c, i) => walk(c, `${path}[${i}]`));
+      if (v && typeof v === "object") {
+        for (const [k, c] of Object.entries(v)) walk(c, path ? `${path}.${k}` : k);
+        return;
+      }
+      leaves.push({ path, key: path.split(".").pop().replace(/\[\d+\]$/, ""), value: v });
+    })(facts, "");
+
+    const offenders = (test) => leaves.filter((l) => test(l.key)).map((l) => l.path);
+
+    ok("F1  no key `id` anywhere in model context",
+       offenders((k) => k === "id").length === 0, JSON.stringify(offenders((k) => k === "id")));
+    /*  ⚠ ONE DELIBERATE EXCEPTION, NAMED RATHER THAN QUIETLY ALLOWED.
+     *  The top-level `property_id` is set on `facts` before any reader
+     *  runs, so it never passes through the sanitizer. It is the
+     *  server-derived SCOPE of the question: the caller already knows
+     *  it, the HTTP response echoes it, and it names no record the model
+     *  could compose a link to. tenancy_ask_spine_http asserts it IS in
+     *  model context and excludes it from its own id sweep, so removing
+     *  it would break a frozen contract in a file this lane does not
+     *  own. The exception is asserted to be exactly one path — if a
+     *  second `_id` ever appears, this goes red.  */
+    const idKeys = offenders((k) => /_id$/.test(k));
+    ok("F2  the ONLY key ending `_id` is the top-level server-derived property_id",
+       idKeys.length === 1 && idKeys[0] === "property_id", JSON.stringify(idKeys));
+    ok("F3  no unmasked key ending `_identifier`",
+       offenders((k) => /_identifier$/.test(k) && !/_masked$/.test(k)).length === 0,
+       JSON.stringify(offenders((k) => /_identifier$/.test(k) && !/_masked$/.test(k))));
+    ok("F4  no key ending `_sha256` — the leak this firewall closed",
+       offenders((k) => /_sha256$/.test(k)).length === 0,
+       JSON.stringify(offenders((k) => /_sha256$/.test(k))));
+
+    /*  BY VALUE, NOT ONLY BY KEY. The exact seeded hashes are searched
+     *  for in the SERIALIZED payload — the literal bytes the model would
+     *  receive — so a hash surviving under any key at any depth is
+     *  caught even if its key shape was never anticipated.  */
+    for (const [name, value] of Object.entries(HASH)) {
+      ok(`F5  the seeded ${name} hash appears NOWHERE in the serialized model context`,
+         !sent.includes(value), `${name} present`);
+    }
+    ok("F6  …and no 32+ char hex run survives at all, whatever its key",
+       !/[0-9a-f]{32,}/i.test(sent.split(String(prop)).join("")),
+       (sent.match(/[0-9a-f]{32,}/i) || [])[0]);
+    ok("F7  no database uuid other than the session's property reaches the model",
+       !UUID.test(sent.split(String(prop)).join("")),
+       (sent.match(UUID) || [])[0]);
+    ok("F8  __refs never reaches the model",
+       !/__refs/.test(sent), "__refs is in the payload");
+
+    /*  NESTED-ARRAY CONTROL. A sanitizer that recursed into objects but
+     *  not through arrays would pass every assertion above, because the
+     *  real leasing payload happens to carry its hashes on plain
+     *  objects. This drives the same sanitizer with a hash buried two
+     *  array levels down, so a shallow implementation cannot pass.  */
+    /*  ⚠ THE FIRST VERSION OF F9 WAS VACUOUS AND PASSED ANYWAY. It
+     *  reached for a `__test_sanitize` export that does not exist, found
+     *  undefined, and its `nested === null ||` guard made the assertion
+     *  true without sanitizing anything. A control that cannot fail
+     *  controls nothing — the same defect this file's L7b already exists
+     *  to prevent, made again.
+     *
+     *  Driven through the REAL path instead: an injected reader returns
+     *  a hash buried two array levels down, gatherFacts passes it to the
+     *  same one sanitizer, and the result is read back. No test-only
+     *  export, and the thing under test is the shipping code path.  */
+    const nestedFacts = await askSpineAnswer.gatherFacts(pool, {
+      property_id: prop, allowed_modules: ["leasing"], subject: "leasing_person",
+      question: Q,
+      leasingReader: {
+        resolveLeasingSubject: async () => ({ resolved: true, person: { id: marisol, name: "Marisol Trejo" } }),
+        readLeasingStanding: async () => ({
+          lots: [[{ deep_package_sha256: HASH.package, keep: "narrative",
+                    inner: [{ another_body_sha256: HASH.body }] }]],
+        }),
+      },
+    });
+    const deep = nestedFacts.leasing_person.lots[0][0];
+    ok("F9  CONTROL · hashes two and three array levels deep are stripped, neighbour survives",
+       deep.deep_package_sha256 === undefined
+       && deep.keep === "narrative"
+       && deep.inner[0].another_body_sha256 === undefined
+       && !JSON.stringify(nestedFacts).includes(HASH.package)
+       && !JSON.stringify(nestedFacts).includes(HASH.body),
+       JSON.stringify(nestedFacts.leasing_person.lots));
+
+    /*  THE FIREWALL MUST NOT HAVE EATEN THE ANSWER. A sanitizer that
+     *  removed everything would pass every assertion above and leave the
+     *  model with nothing to say — so the narrative facts are asserted
+     *  present, by value, in the same payload.  */
+    const lp = facts.leasing_person;
+    ok("F10 the narrative facts still reach the model after sanitizing",
+       lp.subject_name === "Marisol Trejo"
+       && lp.lease && lp.lease.packet_status === "sent"
+       && lp.lease.instrument_form_code === "PA-RES-2026"
+       && typeof lp.lease.resident_executed_at === "string"
+       && lp.lease.company_executed_at === null
+       && lp.application.status === "submitted"
+       && lp.current_position && typeof lp.current_position.stage === "string"
+       && lp.lease.executed_lease.admission_status === "blocked"
+       && Array.isArray(lp.uncertainty),
+       JSON.stringify(lp).slice(0, 300));
+    ok("F11 …and the answer still succeeds through the structured-output contract",
+       answered.status === 200 && answered.json.outcome === "answered",
+       JSON.stringify(answered.json && answered.json.outcome));
+    /*  The form CODE is narrative and must survive; only the HASH goes.
+     *  Stripping both would be a sanitizer that cannot tell an identity
+     *  from a description.  */
+    ok("F12 the instrument FORM CODE survives while its hash does not",
+       lp.lease.instrument_form_code === "PA-RES-2026"
+       && lp.lease.instrument_package_sha256 === undefined,
+       JSON.stringify({ code: lp.lease.instrument_form_code, hash: lp.lease.instrument_package_sha256 }));
+
+    /*  SERVER-SIDE SURFACES ARE UNAFFECTED. The firewall is about model
+     *  context; references and grounding are built server-side after the
+     *  model answers and must keep working — while themselves carrying
+     *  no prohibited identifier.  */
+    const gjson = JSON.stringify(answered.json.grounded_on || {});
+    ok("F13 grounded_on remains server-built and carries no id, hash or uuid",
+       !UUID.test(gjson) && !/[0-9a-f]{32,}/i.test(gjson)
+       && !/"[a-z_]*_sha256"/.test(gjson) && answered.json.grounded_on.leasing_read_state === "OK",
+       gjson.slice(0, 200));
+    ok("F14 the HTTP response still carries its references array",
+       Array.isArray(answered.json.references), JSON.stringify(answered.json.references));
+  }
+
   leasingRead.resolveLeasingSubject = realResolve;
   leasingRead.readLeasingStanding = realStanding;
   server.close();
@@ -653,7 +858,7 @@ receipt.begin(__filename, { url: CONN, expected: 61 });
     console.log("  not mean the behaviour is right.");
   }
   console.log("");
-  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 61 }));
+  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 78 }));
 })().catch((e) => {
   console.error(e && e.stack ? e.stack : e);
   process.exit(receipt.died(__filename, e, ran));
