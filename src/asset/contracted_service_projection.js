@@ -83,6 +83,50 @@ function engagementTemporalRelation(engagement, asOf) {
   return "CURRENT";
 }
 
+/*  ── DOCUMENT AS-OF AUTHORITY · CLASS 1 ──────────────────────────────
+ *  A retained document carries THREE distinct clocks, and only two of them
+ *  are economic. Establishing which is which is the whole of this rule.
+ *
+ *    confirmed_at          KNOWLEDGE time — when Spine recorded the
+ *                          confirmation. It NEVER gates. PHILOSOPHY §40.4
+ *                          defines as_of as "when it was true, or when it
+ *                          happened", not when we learned it, and no domain
+ *                          in this lane gates on a confirmation timestamp.
+ *                          A 2026 confirmation of a 2003 agreement is
+ *                          therefore eligible at as_of 2010: we learned it
+ *                          late, but it WAS true then.
+ *
+ *    document_date         the document's own economic date. Gates.
+ *    named_effective_date  the business effect the document NAMES. Gates.
+ *
+ *  Both economic dates gate independently and are not redundant: a proposal
+ *  can be dated today and name an effect that begins in 2030. Either one
+ *  still ahead of as_of means the document has no effect to assert yet.
+ *
+ *  A NULL date is an honest unknown, never a reason to hide retained
+ *  evidence — an undated document stays eligible, exactly as a null
+ *  period_start keeps an observation visible.
+ *
+ *  ORDER IS LOAD-BEARING: heads() FIRST, then eligibility. A document
+ *  correction is not a newer document — contracted_service_service.js
+ *  refuses one unless it "refer[s] to the same retained source artifact",
+ *  and its siblings must "retain the earlier fact's date". A correction is
+ *  therefore a better reading of the SAME paper and governs retroactively,
+ *  at every as_of. A predecessor replaced by a correction that is not yet
+ *  eligible is not erased by accident: the corrected reading is the truth,
+ *  and it appears at a later qualifying as_of.                            */
+function documentEligibleAt(row, asOf) {
+  const documentDate = day(row.document_date);
+  if (documentDate && documentDate > asOf) return false;
+  const namedEffective = day(row.named_effective_date);
+  if (namedEffective && namedEffective > asOf) return false;
+  return true;
+}
+
+function eligibleDocuments(rows, asOf) {
+  return heads(rows || []).filter((row) => documentEligibleAt(row, asOf));
+}
+
 function classifyObservation(row, { asOf, engagementById } = {}) {
   const periodStart = day(row.period_start);
   const visibility = !periodStart || periodStart <= asOf ? "IN_SCOPE" : "FUTURE";
@@ -449,7 +493,9 @@ function project(snapshot = {}, { as_of = null } = {}) {
     .filter((row) => day(row.reviewed_as_of) <= asOf), ["reviewed_as_of", "recorded_at"]);
   const requirements = current(snapshot.requirements || [], asOf);
   const engagements = current(snapshot.engagements || [], asOf);
-  const documents = heads(snapshot.documents || []);
+  //  ONE eligible set. documentById, engagementDocuments, unmatchedDocuments
+  //  and hasTruth all read this; no consumer re-derives document eligibility.
+  const documents = eligibleDocuments(snapshot.documents, asOf);
   const terms = heads(snapshot.terms || []);
   const scopes = current(snapshot.scopes || [], asOf);
   const locations = current(snapshot.locations || [], asOf);
@@ -743,11 +789,10 @@ function project(snapshot = {}, { as_of = null } = {}) {
    *  a second definition of "visible at as_of" is what this repair exists
    *  to prevent.
    *
-   *  ⚠ INCOMPLETE, DELIBERATELY. `documents` remains temporally unscoped:
-   *  the repository does not establish whether document_date,
-   *  named_effective_date or confirmed_at owns document visibility, and
-   *  inventing that rule here is not this repair. The setup_state temporal
-   *  contract is therefore NOT yet whole — documents are REPORTED.       */
+   *  `documents` is now scoped too: eligibleDocuments() applies the document
+   *  as-of authority above, so a document whose economic dates are still
+   *  ahead of as_of no longer establishes the domain either. confirmed_at
+   *  remains a knowledge clock and gates nothing.                        */
   const inScopeObservations = observations.filter(
     (row) => classOf(row).visibility === "IN_SCOPE");
   const hasTruth = requirements.length || engagements.length || documents.length

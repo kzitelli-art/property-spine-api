@@ -130,6 +130,18 @@ const observation = (client, s, engagementId, label, periodStart, periodEnd, ser
     [s.property, engagementId, serviceClass || null, s.provider, s.artifact,
      label, periodStart, periodEnd, s.user]).then((r) => r.rows[0].id);
 
+const document_ = (client, s, engagementId, kind, executionState,
+                   documentDate, namedEffectiveDate, supersedesId, artifactId) => client.query(
+  `insert into contracted_service_documents
+     (property_id, engagement_id, source_artifact_id, document_kind, execution_state,
+      document_date, named_effective_date, supersedes_id, revision_reason,
+      confirmed_by_user_id)
+   values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning id`,
+  [s.property, engagementId, artifactId || s.artifact, kind, executionState,
+   documentDate, namedEffectiveDate, supersedesId,
+   supersedesId ? "re-read of the same retained artifact" : null, s.user])
+  .then((r) => r.rows[0].id);
+
 const review = (client, s, when) => client.query(
   `insert into contracted_service_coverage_reviews
      (property_id, reviewed_as_of, provenance_note, reviewed_by_user_id)
@@ -163,6 +175,27 @@ const SCENARIOS = [
     build: async (c, s) => {
       const e = await engagement(c, s, "svc_a", "2000-01-01", "2005-01-01");
       await observation(c, s, e, "hist", "2003-04-01", "2003-04-30"); } },
+  /*  ── DOCUMENT AS-OF AUTHORITY ────────────────────────────────────────
+   *  confirmed_at is a KNOWLEDGE clock and must never gate; document_date
+   *  and named_effective_date are ECONOMIC and both gate. A correction is a
+   *  re-reading of the same retained artifact and governs retroactively.  */
+  { name: "DOC confirmed after as_of, dated before it", expect: "partially_established",
+    build: async (c, s) => { await document_(c, s, null, "agreement", "executed",
+      "2003-04-01", null, null); } },
+  { name: "DOC undated retained document", expect: "partially_established",
+    build: async (c, s) => { await document_(c, s, null, "agreement", "executed",
+      null, null, null); } },
+  { name: "DOC future document_date only", expect: "not_established",
+    build: async (c, s) => { await document_(c, s, null, "agreement", "executed",
+      "2099-01-01", null, null); } },
+  { name: "DOC proposal with future named_effective_date", expect: "not_established",
+    build: async (c, s) => { await document_(c, s, null, "proposal", "unsigned",
+      "2010-01-01", "2020-01-01", null); } },
+  { name: "DOC correction re-dates the same artifact into the future",
+    expect: "not_established",
+    build: async (c, s) => {
+      const first = await document_(c, s, null, "agreement", "executed", "2003-04-01", null, null);
+      await document_(c, s, null, "agreement", "executed", "2099-01-01", null, first); } },
   { name: "review + ENDED-engagement observation", expect: "established",
     build: async (c, s) => {
       await review(c, s, "2010-01-01");
@@ -172,7 +205,7 @@ const SCENARIOS = [
 
 async function run() {
   const connectionString = localOnly(runReceipt.harnessConnectionString());
-  runReceipt.begin(__filename, { url: connectionString, expected: 12 });
+  runReceipt.begin(__filename, { url: connectionString, expected: 24 });
   const client = new Client({ connectionString, application_name: PREFIX });
   await client.connect();
 
@@ -216,6 +249,82 @@ async function run() {
       assetManagementListsDoorLive(futureObservation) === assetManagementListsDoorLive(futureEngagement)
         && askSpineSays(futureObservation) === askSpineSays(futureEngagement));
 
+    //  ── DOCUMENT AUTHORITY · the clocks, and what they govern ────────
+    ok("DOC: confirmed_at is a KNOWLEDGE clock and does not gate eligibility",
+      observed["DOC confirmed after as_of, dated before it"].standing.setup_state
+        === "partially_established");
+    ok("DOC: an undated retained document stays eligible (honest blank)",
+      observed["DOC undated retained document"].standing.setup_state
+        === "partially_established");
+    ok("DOC: a future document_date does not establish the domain",
+      observed["DOC future document_date only"].standing.setup_state === "not_established");
+    ok("DOC: a future named_effective_date does not establish the domain",
+      observed["DOC proposal with future named_effective_date"].standing.setup_state
+        === "not_established");
+    ok("DOC: a correction re-dating the same artifact governs RETROACTIVELY",
+      observed["DOC correction re-dates the same artifact into the future"]
+        .standing.setup_state === "not_established");
+
+    //  every document consumer must read the ONE eligible set
+    for (const [label, expectedDocs] of [
+      ["DOC confirmed after as_of, dated before it", 1],
+      ["DOC undated retained document", 1],
+      ["DOC future document_date only", 0],
+      ["DOC proposal with future named_effective_date", 0],
+      ["DOC correction re-dates the same artifact into the future", 0]]) {
+      const seen = observed[label].position;
+      ok(`  consumers agree on the eligible document set for "${label}"`,
+        (seen.detail.unmatched_documents || []).length === expectedDocs
+          && seen.standing.unmatched_document_count === expectedDocs,
+        `unmatched=${(seen.detail.unmatched_documents || []).length} `
+        + `count=${seen.standing.unmatched_document_count} expected=${expectedDocs}`);
+    }
+
+    //  ── a document excluded now must appear at a later qualifying as_of ──
+    await client.query("begin");
+    try {
+      const s = await scaffold(client, `${PREFIX}-doc-later`);
+      const engagementId = await engagement(client, s, "hvac_maintenance", "2000-01-01", null);
+      const documentId = await document_(client, s, engagementId, "agreement", "executed",
+        "2099-01-01", null, null);
+      const before = await positionRead.readPosition(client,
+        { property_id: s.property, as_of: AS_OF });
+      const after = await positionRead.readPosition(client,
+        { property_id: s.property, as_of: AS_OF_LATER });
+      const docsIn = (position) => (position.detail.engagements || [])
+        .flatMap((row) => (row.documents || []).map((d) => d.id));
+      ok("DOC: a future-dated document is absent before its date and present after",
+        !docsIn(before).includes(documentId) && docsIn(after).includes(documentId),
+        `before=${docsIn(before).length} after=${docsIn(after).length}`);
+
+      /*  ── GOVERNING AUTHORITY FOLLOWS DOCUMENT ELIGIBILITY ─────────────
+       *  ONE term, ONE document dated 2015, read at two dates. The term
+       *  covers both. Only the document's eligibility differs, so the term's
+       *  governing authority is attributable to nothing else.             */
+      const authorityDocument = await document_(client, s, engagementId, "agreement",
+        "executed", "2015-01-01", null, null);
+      const governingTerm = (await client.query(
+        `insert into contracted_service_terms
+           (property_id, engagement_id, document_id, term_authority, commencement_date,
+            initial_end_date, term_kind, provenance_note, recorded_by_user_id)
+         values ($1, $2, $3, 'governing', '2005-01-01', '2020-01-01', 'fixed',
+                 'proof', $4) returning id`,
+        [s.property, engagementId, authorityDocument, s.user])).rows[0].id;
+      const stateOf = (position) => (((position.detail.engagements || [])[0] || {})
+        .term_standing) || {};
+      const before2010 = stateOf(await positionRead.readPosition(client,
+        { property_id: s.property, as_of: AS_OF }));            // doc not yet eligible
+      const after2019 = stateOf(await positionRead.readPosition(client,
+        { property_id: s.property, as_of: "2019-06-15" }));      // doc eligible
+      ok("DOC: a term whose document is NOT yet eligible is not governing",
+        before2010.current === null,
+        `state=${before2010.state} current=${before2010.current && before2010.current.id}`);
+      ok("DOC: the SAME term governs once its document becomes eligible",
+        before2010.current === null && after2019.current !== null
+          && after2019.current.id === governingTerm,
+        `state=${after2019.state} current=${after2019.current && after2019.current.id}`);
+    } finally { await client.query("rollback"); }
+
     //  ── the ended-engagement case must not inflate current standing ───
     const ended = observed["IN_SCOPE observation on an ENDED engagement"];
     const endedGaps = (ended.position.detail.unresolved || [])
@@ -243,11 +352,12 @@ async function run() {
     } finally { await client.query("rollback"); }
 
     //  ── documents are deliberately NOT pinned: still unscoped, REPORTED ──
-    console.log("\n  note  documents remain temporally unscoped and REPORTED —");
-    console.log("        the setup_state temporal contract is NOT yet whole.\n");
+    console.log("\n  note  documents are now as-of scoped by documentEligibleAt():");
+    console.log("        document_date and named_effective_date gate; confirmed_at,");
+    console.log("        a knowledge clock, does not. Corrections govern retroactively.\n");
 
     runReceipt.complete({ harness: __filename, passed,
-      failed: failures.length, expectedAtLeast: 12 });
+      failed: failures.length, expectedAtLeast: 24 });
   } catch (error) {
     died = error;
   } finally {
