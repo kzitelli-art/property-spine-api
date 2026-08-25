@@ -79,7 +79,34 @@ function dateKey(value) {
     const d = String(value.getDate()).padStart(2, "0");
     return `${y}-${m}-${d}`;
   }
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value));
+  /*  ── THE ACCEPTED GRAMMAR, ANCHORED AT BOTH ENDS ─────────────────
+   *
+   *  This pattern used to be a PREFIX match, and a valid calendar prefix is
+   *  not evidence that the whole value is a date. '2026-09-20garbage' and
+   *  '2026-09-20Tgarbage' both keyed as 2026-09-20 and were answered — a
+   *  string nobody can account for, silently treated as a supported
+   *  representation. Anchored, they are refused.
+   *
+   *  Exactly two string forms are supported, and no others:
+   *
+   *      YYYY-MM-DD                     the canonical date
+   *      YYYY-MM-DDTHH:MM[:SS[.frac]][Z|±HH[:]MM]
+   *                                     the ISO timestamp form this
+   *                                     contract already carries — it is
+   *                                     what Postgres emits for a
+   *                                     timestamptz (…T10:07:22.308802+00:00)
+   *
+   *  No locale forms. '09/20/2026' is a date only under DateStyle MDY, and
+   *  an answer that depends on a database session setting is not a governed
+   *  answer. No trailing characters of any kind.
+   *
+   *  THE DATE IS THE ONE WRITTEN, not an instant re-projected into some
+   *  zone. A timestamp carrying an offset denotes an instant whose calendar
+   *  day differs by zone, so converting would make the answer depend on a
+   *  zone policy nobody declared — the same hazard as DateStyle, one level
+   *  down. The written Y-M-D is deterministic and is what is used.        */
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}|[+-]\d{2})?)?$/
+    .exec(String(value));
   if (!m) return null;
   /*  THE SHAPE IS NOT THE DATE. The pattern above accepts 2026-02-31 and
    *  2026-99-99 — well-formed strings that are not days. Round-trip the
@@ -121,11 +148,12 @@ function dateKey(value) {
 function asOfKeyOrRefuse(asOf) {
   if (asOf === null || asOf === undefined) return null;
   const key = dateKey(asOf);
-  /*  DELIBERATE FALSIFICATION. Only the present-invalid REFUSAL is disabled;
-   *  the single-key path and every arm below still consume this return
-   *  value, so the red is attributable to the missing refusal alone.
-   *  Returning null here restores the old "apply no bound" fallback.
-   *  REVERTED IN THE NEXT COMMIT.                                        */
+  if (key === null) {
+    const e = new Error(
+      `as_of must be a calendar date as YYYY-MM-DD; received ${JSON.stringify(String(asOf))}`);
+    e.code = "INVALID_AS_OF";
+    throw e;
+  }
   return key;
 }
 

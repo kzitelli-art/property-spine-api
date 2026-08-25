@@ -429,6 +429,10 @@ const posFor = async (pool, asOf) => {
       } catch (e) { bad(`${label} — threw ${e.code || ""}`, e.message); }
     };
     await sameAnswer("D9b · ISO timestamp 2026-09-20T13:45:00Z", "2026-09-20T13:45:00Z");
+    /*  The exact shape Postgres emits for a timestamptz. It is the ISO form
+        this contract already carries, so it must key to the same day.     */
+    await sameAnswer("D9b · pg timestamptz 2026-09-20T13:45:00.308802+00:00",
+                     "2026-09-20T13:45:00.308802+00:00");
     await sameAnswer("D9c · JS Date object", new Date(Date.UTC(2026, 8, 20)));
 
     // ── D9d · absent asOf preserves the existing undated behaviour ────
@@ -454,6 +458,44 @@ const posFor = async (pool, asOf) => {
     await mustRefuse("D9e · 2026-9-20 (unpadded)", "2026-9-20");
     await mustRefuse("D9e · 20260920 (ISO basic)", "20260920");
     await mustRefuse("D9e · 09/20/2026 (DateStyle-dependent)", "09/20/2026");
+
+    /*  ── D9h · A VALID PREFIX IS NOT A VALID DATE ────────────────────
+     *
+     *  The grammar was a PREFIX match before this correction, so
+     *  '2026-09-20garbage' and '2026-09-20Tgarbage' keyed as 2026-09-20 and
+     *  were ANSWERED — a string nobody can account for, silently treated as
+     *  a supported representation. The answer looked perfectly ordinary,
+     *  which is what makes it worse than a refusal.
+     *
+     *  ASSERTED THROUGH THE PURE FUNCTION, for the same reason as D9f and
+     *  learned the same way: routing these through spacePosition proved
+     *  nothing, because openingBaselineAsOf casts $2::date and Postgres
+     *  rejects them with 22007 BEFORE the classifier is reached. A first
+     *  version of this case did exactly that and reported "refused with the
+     *  WRONG code 22007" — it was measuring Postgres, not the contract.
+     *  The classifier must refuse them on its own, so a caller that never
+     *  touches Postgres is refused too.                                   */
+    const mustRefusePure = (label, value) => {
+      try {
+        PC0.classifyPosition(bareRow0, { asOf: value, personNames: new Map() });
+        bad(`${label} — ACCEPTED by the classifier`, "a valid calendar prefix is not a valid date");
+      } catch (e) {
+        if (e.code === "INVALID_AS_OF") ok(`${label} — refused INVALID_AS_OF`);
+        else bad(`${label} — refused with the WRONG code ${e.code || "(none)"}`, e.message);
+      }
+    };
+    const PC0 = require(path.join(ROOT, "src/tenancy/position_classifier.js"));
+    const bareRow0 = { space_id: "s", unit_id: "u", unit_number: "x", space_label: "A",
+                       leases: [], possession_events: [] };
+    mustRefusePure("D9h · 2026-09-20garbage (trailing junk)", "2026-09-20garbage");
+    mustRefusePure("D9h · 2026-09-20Tgarbage (junk after T)", "2026-09-20Tgarbage");
+    mustRefusePure("D9h · 2026-09-20T (bare T, no time)", "2026-09-20T");
+
+    /*  AND ONE THAT POSTGRES LETS THROUGH. ' 2026-09-20' casts fine —
+     *  Postgres trims it — so it reaches the classifier on the real read
+     *  path and the classifier is the only thing that can refuse it. This
+     *  is the case that shows the upstream cast is not a contract.        */
+    await mustRefuse("D9h · ' 2026-09-20' (leading space, PG accepts it)", " 2026-09-20");
 
     // ── D9f · impossible days refuse INSIDE the classifier ────────────
     /*  Postgres also rejects these, at openingBaselineAsOf's $2::date — but
@@ -481,7 +523,8 @@ const posFor = async (pool, asOf) => {
      *  ANY representation Spine accepts. Refused inputs cannot reach an
      *  answer at all, so the accepted set is the whole risk surface.      */
     let leaked = null;
-    for (const rep of [REF, "2026-09-20T13:45:00Z", new Date(Date.UTC(2026, 8, 20))]) {
+    for (const rep of [REF, "2026-09-20T13:45:00Z", "2026-09-20T13:45:00.308802+00:00",
+                       new Date(Date.UTC(2026, 8, 20))]) {
       const p = await posFor(pool, rep);
       if (p.possession_state !== "delivered" || p.availability_state === "committed_future"
           || p.economic_tenancy_state === "forward") {
