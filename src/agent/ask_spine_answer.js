@@ -1500,6 +1500,32 @@ async function answer(db, anthropic, {
        *  document_sha256), any reference or token, and anything the
        *  model selected. Grounding is what Spine can stand behind, not
        *  what would be interesting to print.  */
+      leasing_read_state: facts.leasing_person ? facts.leasing_person.read_state : null,
+      leasing_subject_name: facts.leasing_person && facts.leasing_person.subject_name
+        ? facts.leasing_person.subject_name : null,
+      leasing_relationship_stage: facts.leasing_person && facts.leasing_person.current_position
+        ? facts.leasing_person.current_position.stage : null,
+      leasing_application_status: facts.leasing_person && facts.leasing_person.application
+        ? facts.leasing_person.application.status : null,
+      leasing_packet_status: facts.leasing_person && facts.leasing_person.lease
+        ? facts.leasing_person.lease.packet_status : null,
+      //  TWO SEPARATE ACTS, NEVER ONE "signed" (§40.5). A resident
+      //  signing and the company countersigning are different facts on
+      //  different clocks, and collapsing them is how a surface reports
+      //  a lease as executed when only one party has signed.
+      leasing_resident_executed_at: facts.leasing_person && facts.leasing_person.lease
+        ? (facts.leasing_person.lease.resident_executed_at || null) : null,
+      leasing_company_executed_at: facts.leasing_person && facts.leasing_person.lease
+        ? (facts.leasing_person.lease.company_executed_at || null) : null,
+      leasing_next_action_code: facts.leasing_person && facts.leasing_person.next
+        && facts.leasing_person.next.action
+        ? facts.leasing_person.next.action.code : null,
+      //  A COUNT, NOT A VERDICT. The uncertainty entries themselves stay
+      //  in the answer's own reading; what grounding carries is how many
+      //  there were, so an empty list cannot be mistaken on the surface
+      //  for "we did not look" (§40.7).
+      leasing_uncertainty_count: facts.leasing_person && Array.isArray(facts.leasing_person.uncertainty)
+        ? facts.leasing_person.uncertainty.length : null,
       tour_schedule_read_state: facts.tour_schedule ? facts.tour_schedule.read_state : null,
       tour_schedule_open_count: facts.tour_schedule ? facts.tour_schedule.next_open_times.length : null,
       tour_schedule_coverage_attention_count: facts.tour_schedule ? facts.tour_schedule.coverage_attention.length : null,
