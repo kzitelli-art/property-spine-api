@@ -1,6 +1,8 @@
 /*  HOSTILE PROOFS — deliberately falsify the leasing execution path.
     Every case asserts a REFUSAL or a preserved fact, never a success.     */
 const { pool, q, api, ctx, toPacket, residentSigns } = require("./leasing_e2e_lib.js");
+const { createHash } = require("crypto");
+const BASE = "http://127.0.0.1:3000";
 
 let pass = 0, fail = 0;
 const ok   = (n, d) => { pass++; console.log(`  ✓ ${n}${d ? "  — " + d : ""}`); };
@@ -277,9 +279,21 @@ const head = (t) => console.log(`\n── ${t} ${"─".repeat(Math.max(0, 58 - t
     const signature = packet && packet.fields
       && packet.fields.find((f) => f.required && f.field_type === "signature");
     const signerName = packet && packet.current_signer && packet.current_signer.display_name;
-    if (validRead.status !== 200 || !signature || !signerName) {
+    const validInstrumentResponse = await fetch(BASE + `/t/lease/${P.rawTok}/instrument`);
+    const validInstrumentBytes = Buffer.from(await validInstrumentResponse.arrayBuffer());
+    const validInstrument = {
+      status: validInstrumentResponse.status,
+      content_type: validInstrumentResponse.headers.get("content-type"),
+      byte_length: validInstrumentBytes.length,
+      sha256: createHash("sha256").update(validInstrumentBytes).digest("hex"),
+    };
+    const expectedInstrumentSha256 = packet && packet.instrument && packet.instrument.source_sha256;
+    if (validRead.status !== 200 || !signature || !signerName
+        || validInstrument.status !== 200 || validInstrument.byte_length === 0
+        || !expectedInstrumentSha256 || validInstrument.sha256 !== expectedInstrumentSha256) {
       bad("expired signer token refused at every public door",
-        `pre-expiry read=${validRead.status} body=${JSON.stringify(validRead.body)}`);
+        `pre-expiry read=${validRead.status} body=${JSON.stringify(validRead.body)} `
+        + `instrument=${JSON.stringify(validInstrument)} expected_sha256=${expectedInstrumentSha256}`);
     } else {
       const beforePacket = (await q(
         `select id,status,superseded_at,tenant_submitted_at,resident_executed_at,
@@ -316,6 +330,17 @@ const head = (t) => console.log(`\n── ${t} ${"─".repeat(Math.max(0, 58 - t
         expiryClient.release();
       }
 
+      const expiredInstrumentResponse = await fetch(BASE + `/t/lease/${P.rawTok}/instrument`);
+      const expiredInstrumentBytes = Buffer.from(await expiredInstrumentResponse.arrayBuffer());
+      let expiredInstrumentBody = null;
+      try { expiredInstrumentBody = JSON.parse(expiredInstrumentBytes.toString("utf8")); } catch (_) {}
+      const expiredInstrument = {
+        status: expiredInstrumentResponse.status,
+        content_type: expiredInstrumentResponse.headers.get("content-type"),
+        byte_length: expiredInstrumentBytes.length,
+        sha256: createHash("sha256").update(expiredInstrumentBytes).digest("hex"),
+        body: expiredInstrumentBody,
+      };
       const expiredRead = await api("GET", `/t/lease/${P.rawTok}/data`);
       const expiredWrite = await api(
         "POST", `/t/lease/${P.rawTok}/fields/${signature.id}/complete`, {
@@ -355,17 +380,20 @@ const head = (t) => console.log(`\n── ${t} ${"─".repeat(Math.max(0, 58 - t
           order by occurred_at,id`, [obligationId]
       )).rows;
 
-      const earliestBreach = expiredRead.status !== 404 ? "read"
+      const earliestBreach = expiredInstrument.status !== 404 ? "instrument"
+        : expiredRead.status !== 404 ? "read"
         : expiredWrite.status !== 404 ? "evidence_write"
         : expiredSubmit.status !== 404 ? "submit" : null;
       const state = {
         earliest_breach: earliestBreach,
-        http: { read: expiredRead, write: expiredWrite, submit: expiredSubmit },
+        http: { instrument: expiredInstrument, read: expiredRead,
+          write: expiredWrite, submit: expiredSubmit },
         before: { packet: beforePacket, signer: beforeSigner },
         after: { packet: afterPacket, signer: afterSigner, field: afterField,
           field_completed_audits: auditCount, obligation, evidence },
       };
-      if (expiredRead.status === 404 && expiredWrite.status === 404 && expiredSubmit.status === 404
+      if (expiredInstrument.status === 404 && expiredRead.status === 404
+          && expiredWrite.status === 404 && expiredSubmit.status === 404
           && ["sent", "in_progress", "tenant_in_progress"].includes(beforePacket.status)
           && !!beforePacket.tenant_token_hash && !!beforeSigner.token_hash
           && afterPacket.status === beforePacket.status && afterPacket.superseded_at == null
@@ -381,7 +409,7 @@ const head = (t) => console.log(`\n── ${t} ${"─".repeat(Math.max(0, 58 - t
           && (obligation.required_inputs || []).includes("terms_acknowledged")
           && obligation.completed_at == null && evidence.length === 0) {
         ok("expired signer token refused at every public door",
-          `read/write/submit 404 · packet ${afterPacket.status} · obligation ${obligation.status}`);
+          `instrument/read/write/submit 404 · packet ${afterPacket.status} · obligation ${obligation.status}`);
       } else {
         bad("expired signer token refused at every public door", JSON.stringify(state));
       }
@@ -394,4 +422,5 @@ const head = (t) => console.log(`\n── ${t} ${"─".repeat(Math.max(0, 58 - t
   await pool.end();
   process.exit(fail ? 2 : 0);
 })().catch(async (e) => { console.log("\nDIED: " + e.stack); try { await pool.end(); } catch (_) {} process.exit(1); });
+
 
