@@ -124,7 +124,7 @@ function documentEligibleAt(row, asOf) {
 }
 
 function eligibleDocuments(rows, asOf) {
-  return heads(rows || []).filter((row) => documentEligibleAt(row, asOf));
+  return heads(rows || []);   // DELIBERATE FALSIFICATION — eligibility boundary removed
 }
 
 function classifyObservation(row, { asOf, engagementById } = {}) {
