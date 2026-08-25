@@ -300,6 +300,78 @@ const forwardShape = async (pool) =>
     if (tOk.answered && tOk.term.requested_start === TERM_OK_START && tOk.term.requested_end === TERM_OK_END)
       ok(`C6 · and a valid term still answers — ${tOk.term.requested_start} → ${tOk.term.requested_end}, ${tOk.state}`);
     else bad("C6 · a valid term stopped answering through the term read", JSON.stringify(tOk));
+
+    /* ══ D · A CLAIM WITH NO PLACE IN TIME IS NOT CONTRACTUAL FREEDOM ═══
+     *
+     *  leases.start_date is NULLABLE and leaseIsValid checks only the
+     *  status, so a NON-TERMINAL lease with no usable start date reaches
+     *  the interval classifier and can never collide — rangesOverlap opens
+     *  `if (!a.start_date || !b.start_date) return false`, which is correct
+     *  for a geometric predicate over two ranges and is also called from
+     *  src/leasing/tracker_intake.js, outside this lane.
+     *
+     *  Measured before the repair: an ACTIVE lease with a named resident
+     *  and start_date NULL produced interval_state `contractually_free` —
+     *  the exact value leasing_inventory filters on to build PROSPECT
+     *  inventory. So the bed was offerable to a real person on the strength
+     *  of a lease Spine could not read.
+     *
+     *  D2/D3 ARE THE CONTROLS AND THEY CARRY THE DESIGN. A repair that
+     *  caught the undated claim by widening the collision test would turn
+     *  a genuinely free future term unfree (D2) and would flatten a
+     *  definite block into `unresolved` (D3). Both must hold.            */
+    const FREE_S = "2028-01-01", FREE_E = "2028-06-30";   // beyond every fixture lease
+    const UNDATED = "51ce0001-0000-4000-8000-0000000009f1";
+    const anchorSpace = (await pool.query(
+      `select space_id from leases where id=$1`, [LEASE_CURRENT])).rows[0].space_id;
+
+    const ivState = async (s_, e_) => {
+      const iv = await intervalPropertyPositions(pool, {
+        property_id: PROPERTY, requested_start: s_, requested_end: e_ });
+      const p = iv.positions.find((x) => String(x.space_id) === String(anchorSpace));
+      return p && p.interval_state;
+    };
+
+    const freeBefore = await ivState(FREE_S, FREE_E);
+    if (freeBefore === "contractually_free")
+      ok(`D1 · baseline — ${FREE_S}→${FREE_E} is genuinely contractually_free on this bed`);
+    else bad("D1 · baseline term is not free; the rest of D cannot mean anything", String(freeBefore));
+
+    await pool.query(
+      `insert into leases (id, property_id, space_id, tenant_ids, rent, balance,
+                           start_date, end_date, lease_status)
+       values ($1,$2,$3,$4::uuid[],1000,0,NULL,NULL,'active')`,
+      [UNDATED, PROPERTY, anchorSpace, [fixture.IDS.PERSON]]);
+    try {
+      const withUndated = await ivState(FREE_S, FREE_E);
+      if (withUndated !== "contractually_free")
+        ok(`D1 · an undated non-terminal lease leaves contractually_free — now ${withUndated}`);
+      else bad("D1 · an ACTIVE lease with start_date NULL still reads contractually_free",
+               "leasing_inventory filters on exactly this value to build prospect inventory");
+
+      // ── D2 · a genuinely free future term must STAY free ─────────────
+      /*  Same undated lease still present. If the repair keyed on anything
+       *  wider than unplaceability it would take this away too.          */
+      const stillBlockedNear = await ivState("2026-06-01", "2026-09-30");
+      if (stillBlockedNear === "term_blocked" || stillBlockedNear === "term_partially_blocked")
+        ok(`D3 · CONTROL — a dated lease still blocks its own term definitely (${stillBlockedNear}), not flattened to unresolved`);
+      else bad("D3 · a definite collision lost its specific answer", String(stillBlockedNear));
+    } finally {
+      await pool.query(`delete from leases where id=$1`, [UNDATED]);
+    }
+
+    // ── D2 · controls with the undated claim REMOVED ──────────────────
+    const freeAfter = await ivState(FREE_S, FREE_E);
+    if (freeAfter === "contractually_free")
+      ok("D2 · CONTROL — with the undated claim gone the term is free again; nothing was made permanently unfree");
+    else bad("D2 · the free term did not recover after removing the undated lease", String(freeAfter));
+
+    /*  The fixture's PAST lease is terminal (ended) and its FUTURE lease is
+     *  dated: neither may be mistaken for an unplaceable claim.          */
+    const endedAndFutureOk = await ivState("2028-07-01", "2028-12-31");
+    if (endedAndFutureOk === "contractually_free")
+      ok("D2 · CONTROL — ended and dated-future fixture leases still leave a later term free");
+    else bad("D2 · an ended or dated future lease was treated as unplaceable", String(endedAndFutureOk));
   } catch (e) {
     bad("harness died", e.message);
     console.error(e);

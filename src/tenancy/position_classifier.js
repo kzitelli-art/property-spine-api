@@ -793,9 +793,46 @@ function classifyPositionForInterval(row, { start_date, end_date = null, personN
     tenants: tenantList(l, personNames),
   });
 
+  /*  ── A CLAIM WITH NO PLACE IN TIME IS NOT FREEDOM ────────────────
+   *
+   *  leases.start_date is NULLABLE and leaseIsValid checks only the status,
+   *  so a NON-TERMINAL lease with no usable start date reaches here. It can
+   *  never collide, because rangesOverlap opens with
+   *
+   *      if (!a || !b || !a.start_date || !b.start_date) return false;
+   *
+   *  and that is CORRECT for what rangesOverlap is — a geometric predicate
+   *  over two ranges, and a range with no start is not a range. It is also
+   *  exported and called from src/leasing/tracker_intake.js, outside this
+   *  lane. So the repair belongs HERE, at the interval classifier's own
+   *  decision point, and not in the geometry.
+   *
+   *  Measured on real Postgres before this: an ACTIVE lease with a named
+   *  resident and start_date NULL returned interval_state
+   *  `contractually_free` — the exact value leasing_inventory filters on to
+   *  build PROSPECT inventory. A right Spine cannot place is not evidence
+   *  the term is open; it is the reason Spine cannot say so.
+   *
+   *  SCOPED TO THE FREEDOM BRANCH ON PURPOSE. A definite collision stays
+   *  `term_blocked` and a partial one `term_partially_blocked` — both
+   *  already withhold, and both say something TRUER than `unresolved` about
+   *  which dated right blocks the term. Only the branch that would have
+   *  claimed freedom is corrected, so all four existing distinctions
+   *  survive and exactly one answer changes.
+   *
+   *  REPORTED, NOT REPAIRED HERE: a term_partially_blocked position that
+   *  also carries an undated claim still publishes free_spans Spine cannot
+   *  fully stand behind. That never reaches a prospect — leasing_inventory
+   *  admits only `contractually_free` — so it is recorded rather than
+   *  widened into this change.                                            */
+  const undatedClaims = leases.filter((l) => dateKey(l && l.start_date) === null);
+
   let interval_state;
   let free_spans = [];
   if (contestedIds.length) {
+    interval_state = "unresolved";
+  } else if (!colliding.length && undatedClaims.length) {
+    //  Nothing dated collides, but Spine holds a claim it cannot place.
     interval_state = "unresolved";
   } else if (!colliding.length) {
     interval_state = "contractually_free";
