@@ -725,8 +725,33 @@ function project(snapshot = {}, { as_of = null } = {}) {
       };
     });
 
+  /*  ── WHAT COUNTS AS TRUTH AT as_of · CLASS 1 ────────────────────────
+   *  Only observations VISIBLE at as_of may establish the domain. A FUTURE
+   *  observation appears in no bucket a reader can see — not under an
+   *  engagement, not under a noncurrent engagement, not unmatched — so it
+   *  must not be the thing that decides the domain exists.
+   *
+   *  Measured before this line was written: an observation with period
+   *  2099-01-01 and nothing else moved setup_state at as_of 2010 from
+   *  not_established to partially_established, which made
+   *  asset_management.js list the door LIVE and made Ask Spine answer
+   *  ESTABLISHED. A FUTURE ENGAGEMENT in the same situation correctly
+   *  answered not_established — the same temporal fact gave opposite
+   *  readiness decisions depending only on which table it sat in.
+   *
+   *  Visibility is asked of classifyObservation() and of nothing else;
+   *  a second definition of "visible at as_of" is what this repair exists
+   *  to prevent.
+   *
+   *  ⚠ INCOMPLETE, DELIBERATELY. `documents` remains temporally unscoped:
+   *  the repository does not establish whether document_date,
+   *  named_effective_date or confirmed_at owns document visibility, and
+   *  inventing that rule here is not this repair. The setup_state temporal
+   *  contract is therefore NOT yet whole — documents are REPORTED.       */
+  const inScopeObservations = observations.filter(
+    (row) => classOf(row).visibility === "IN_SCOPE");
   const hasTruth = requirements.length || engagements.length || documents.length
-    || observations.length || !!coverageReview;
+    || inScopeObservations.length || !!coverageReview;
   const setupState = !hasTruth ? "not_established"
     : coverageReview && unresolved.length === 0 ? "established" : "partially_established";
   const attention = engagementViews.filter((row) =>
