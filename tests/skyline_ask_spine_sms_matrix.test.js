@@ -54,22 +54,25 @@ const NO_DB = { query() { throw new Error("this proof must not touch a database"
  *  pinned here. `acceptance` records what the product acceptance rule
  *  wants, so a divergence is visible instead of silently normalised.   */
 const MATRIX = [
-  { q: "What should I focus on?",                          subject: "work",                    dest: "technician", acceptance: "personal_attention" },
+  { q: "What should I focus on?",                          subject: "work",                    dest: "ask_spine",  acceptance: "personal_attention" },
   { q: "Where does Jane's application stand?",             subject: "leasing_person",          dest: "ask_spine",  acceptance: "leasing_person" },
   { q: "Did the resident sign?",                           subject: "leasing_person",          dest: "ask_spine",  acceptance: "leasing_person" },
   { q: "Did the guarantor sign?",                          subject: "leasing_person",          dest: "ask_spine",  acceptance: "leasing_person" },
-  { q: "Has Skyline countersigned?",                       subject: "work",                    dest: "technician", acceptance: "leasing_person" },
+  { q: "Has Skyline countersigned?",                       subject: "leasing_person",          dest: "ask_spine",  acceptance: "leasing_person" },
   { q: "has Skyline signed Jane's lease",                  subject: "leasing_person",          dest: "technician", acceptance: "leasing_person", surfaceSplit: true },
-  { q: "What is holding this lease up?",                   subject: "tenancy",                 dest: "ask_spine",  acceptance: "leasing_person" },
+  { q: "What is holding this lease up?",                   subject: "leasing_person",          dest: "ask_spine",  acceptance: "leasing_person" },
   { q: "What does the applicant need to do next?",         subject: "leasing_person",          dest: "ask_spine",  acceptance: "leasing_person" },
   { q: "Which unit or bed is this applicant pursuing?",    subject: "leasing_person",          dest: "ask_spine",  acceptance: "leasing_person" },
-  { q: "What happened after yesterday's tour?",            subject: "work",                    dest: "technician", acceptance: "leasing_person" },
-  { q: "When is my next tour?",                            subject: "work",                    dest: "technician", acceptance: "tour_schedule" },
+  { q: "What happened after yesterday's tour?",            subject: "leasing_person",          dest: "ask_spine",  acceptance: "leasing_person" },
+  { q: "When is my next tour?",                            subject: "tour_schedule",           dest: "ask_spine",  acceptance: "tour_schedule" },
+  { q: "What needs my attention?",                          subject: "work",                    dest: "ask_spine",  acceptance: "personal_attention" },
   { q: "upcoming tour availability",                       subject: "tour_schedule",           dest: "technician", acceptance: "tour_schedule", surfaceSplit: true },
   { q: "What is our debt service on this property?",       subject: "debt",                    dest: "ask_spine",  acceptance: "debt" },
   { q: "How many beds do we have, and what is the loan balance?",
                                                            subject: "composition_unavailable", dest: "ask_spine",  acceptance: "composition_unavailable" },
-  { q: "What is the weather tomorrow?",                    subject: "work",                    dest: "technician", acceptance: "out_of_scope" },
+  //  Reported with its full reasoning further down, so this row opts out
+  //  of the terse generic note rather than saying it twice.
+  { q: "What is the weather tomorrow?",                    subject: "work",                    dest: "technician", acceptance: "out_of_scope", reportedSeparately: true },
   { q: "Where do Jane's and Marcus's applications stand?", subject: "leasing_person",          dest: "ask_spine",  acceptance: "leasing_person" },
 ];
 
@@ -78,7 +81,8 @@ for (const row of MATRIX) {
   const subject = askSpineAnswer.questionSubject(row.q);
   ok(`subject "${row.q.slice(0, 44)}" → ${row.subject}`,
     subject === row.subject, `got ${subject}`);
-  if (subject !== row.acceptance && row.acceptance !== "personal_attention") {
+  if (subject !== row.acceptance && row.acceptance !== "personal_attention"
+      && !row.reportedSeparately) {
     note(`${JSON.stringify(row.q)} routes to "${subject}"; acceptance rule wants "${row.acceptance}"`);
   }
 }
@@ -114,11 +118,106 @@ ok("a personal-attention question routes to ask_spine with subject work",
   askSpineAnswer.isPersonalAttentionQuestion("what's on my plate")
     && routeStaffSmsTurn({ text: "what's on my plate", attachments: [] }).destination === "ask_spine"
     && routeStaffSmsTurn({ text: "what's on my plate", attachments: [] }).subject === "work");
-for (const phrasing of ["What should I focus on?", "What needs my attention?"]) {
-  if (!askSpineAnswer.isPersonalAttentionQuestion(phrasing)) {
-    note(`${JSON.stringify(phrasing)} is NOT recognised as a personal-attention question`);
-  }
+/*  These two were REPORTED as unrecognised and are now ASSERTED. The
+ *  earlier `note()` was the right call while the phrasings were Codex's
+ *  to rule on; once the composer accepted them, a note would let them
+ *  regress silently. PERSONAL_ATTENTION_TERMS is shared by the dashboard
+ *  and the SMS router, so each phrasing is checked on BOTH surfaces —
+ *  that sharing is the reason there is one list, and an assertion that
+ *  only looked at the composer would not notice if it stopped being
+ *  true.  */
+for (const phrasing of ["What should I focus on?", "What needs my attention?",
+                        "what should I do today", "what's on my plate"]) {
+  const route = routeStaffSmsTurn({ text: phrasing, attachments: [] });
+  ok(`"${phrasing}" is a personal-attention question on BOTH surfaces`,
+    askSpineAnswer.isPersonalAttentionQuestion(phrasing)
+      && route.destination === "ask_spine" && route.subject === "work",
+    `personal=${askSpineAnswer.isPersonalAttentionQuestion(phrasing)} `
+    + `dest=${route.destination} subject=${route.subject}`);
 }
+
+/*  ── THE TWO LATENT REGEX DEFECTS, PINNED AT THE TOKEN ──────────────
+ *  Repairing the phrases above is not the same as proving WHY they were
+ *  broken, and the acceptance phrase would keep passing if someone
+ *  reintroduced the bug in a form that happened to miss it. These assert
+ *  the bare word forms directly:
+ *
+ *    `toured?`     is `toure` + optional `d`; it never matched "tour".
+ *    `countersign` had no suffix group, and "countersigned" has no word
+ *                  boundary before "sign", so nothing rescued it.       */
+for (const bare of ["a tour", "the tour", "she toured", "they are touring"]) {
+  ok(`the bare noun form "${bare}" reaches leasing_person`,
+    askSpineAnswer.questionSubject("what happened at " + bare) === "leasing_person",
+    askSpineAnswer.questionSubject("what happened at " + bare));
+}
+for (const form of ["countersign", "countersigns", "countersigned", "countersigning"]) {
+  ok(`"${form}" reaches leasing_person`,
+    askSpineAnswer.questionSubject("has the company " + form + " it") === "leasing_person",
+    askSpineAnswer.questionSubject("has the company " + form + " it"));
+}
+
+/*  ── THE WIDENING DID NOT SWALLOW ITS NEIGHBOURS ────────────────────
+ *  `holding ... up` was widened by NAMING LEASING'S OWN NOUNS, not by
+ *  loosening the object slot. A `holding .* up` wildcard would have
+ *  taken Maintenance's sentence, so that is the assertion.
+ *  And bare `tours?` is only safe because tour_schedule suppresses
+ *  leasing_person — asserted here rather than trusted.                 */
+/*  A PRE-EXISTING MIS-ROUTE, FOUND WHILE WIDENING AND NOT INTRODUCED BY
+ *  IT. The original `holding (?:this|it|things) up` alternative claims a
+ *  sentence that carries explicit MAINTENANCE vocabulary, because `work`
+ *  yields to `leasing_person` by design. Widening did not cause it and
+ *  narrowing the new noun-anchored alternative cannot cure it. Repairing
+ *  it means deciding whether some leasing vocabulary is weak enough to
+ *  yield to explicit work terms — a routing ruling, not a phrase fix, so
+ *  it is REPORTED and pinned rather than taken here.                    */
+ok("a work sentence with a generic leasing phrase still goes to leasing_person (PRE-EXISTING, pinned)",
+  askSpineAnswer.questionSubject("the elevator repair is holding this up") === "leasing_person",
+  askSpineAnswer.questionSubject("the elevator repair is holding this up"));
+note("PRE-EXISTING (not introduced by this build) — \"the elevator repair is holding this "
+   + "up\" routes to `leasing_person`. The generic `holding this up` alternative outranks "
+   + "explicit maintenance vocabulary because `work` yields to every named domain. Curing "
+   + "it needs a weak/strong distinction inside leasing vocabulary, which is a routing "
+   + "ruling rather than a phrase repair.");
+
+ok("\"what is holding the elevator up\" stays OUT of leasing_person",
+  askSpineAnswer.questionSubject("what is holding the elevator up") !== "leasing_person",
+  askSpineAnswer.questionSubject("what is holding the elevator up"));
+for (const sched of ["when can we tour", "schedule a tour", "tour availability this week",
+                     "who is hosting tours friday", "When is my next tour?"]) {
+  ok(`scheduling sentence "${sched}" still wins over bare tour vocabulary`,
+    askSpineAnswer.questionSubject(sched) === "tour_schedule",
+    askSpineAnswer.questionSubject(sched));
+}
+
+/*  ── THE UNSUPPORTED-QUESTION BOUNDARY · ANSWERED, NOT BOLTED ON ────
+ *  "What is the weather tomorrow?" was reported as routing to `work`
+ *  rather than out_of_scope. It still does, DELIBERATELY.
+ *
+ *  questionSubject has no deterministic unsupported boundary: it ends at
+ *  `return "work"`, so every unrecognised sentence becomes a work
+ *  question. The only deterministic out_of_scope returns in answer() are
+ *  for an EMPTY question and an OVERSIZED one — properties of the
+ *  string, not of its subject. Off-subject detection is the MODEL's, by
+ *  design, and the comment above that rule records why: an earlier
+ *  version also refused when the facts were thin, which was dishonest
+ *  ("I can only answer about open work" when the truth was there is
+ *  none) and unstable (the same question landed differently run to run).
+ *  It was narrowed to subject alone because subject has an edge and
+ *  sufficiency does not.
+ *
+ *  A weather regex would be the first entry in exactly the blacklist
+ *  that design rejected. So the boundary is asserted as it stands, and
+ *  the finding stays REPORTED.                                          */
+ok("an off-subject question routes to `work`; out_of_scope is the model's call, not a blacklist",
+  askSpineAnswer.questionSubject("What is the weather tomorrow?") === "work"
+    && askSpineAnswer.questionSubject("") === "work",
+  askSpineAnswer.questionSubject("What is the weather tomorrow?"));
+note("\"What is the weather tomorrow?\" routes to `work`. REPORTED, not repaired: "
+   + "questionSubject has no deterministic unsupported boundary — it ends at "
+   + "`return \"work\"`, and the only deterministic out_of_scope returns are for an "
+   + "empty or oversized question. Off-subject is decided by the model against "
+   + "DECISION_SCHEMA, and the server writes the sentence. Adding a weather pattern "
+   + "would start the blacklist that design deliberately rejected.");
 
 async function main() {
 /*  ── PART B · ENTITLEMENT PRECEDES THE READER ───────────────────────

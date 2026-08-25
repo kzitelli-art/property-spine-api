@@ -232,8 +232,35 @@ const TENANCY_TERMS =
 //  person-leasing vocabulary in it belongs to Leasing, and Tenancy yields
 //  — the same suppression rule already used for contracted_service and
 //  equity, and for the same reason: shared words, different domains.
+/*  ⚠ TWO OF THESE TOKENS NEVER MATCHED WHAT THEY WERE WRITTEN FOR, AND
+ *  BOTH FAILED SILENTLY — the sentence simply fell through to `work`,
+ *  which is the default, so nothing ever looked broken.
+ *
+ *    `toured?`     is `toure` + an optional `d`. It matches "toured" and
+ *                  the non-word "toure"; it has NEVER matched the bare
+ *                  noun "tour". "What happened after yesterday's tour?"
+ *                  went to `work`.
+ *    `countersign` carries no suffix group at all, and "countersigned" —
+ *                  the only form anyone actually types — has no word
+ *                  boundary before "sign", so the neighbouring
+ *                  `sign(?:...)` alternative could not rescue it either.
+ *                  "Has Skyline countersigned?" went to `work`.
+ *
+ *  A regex that matches a form nobody says is indistinguishable from an
+ *  absent rule, and the default hides it. Measured against the phrases,
+ *  not read.
+ *
+ *  The `holding ... up` alternative is widened by NAMING THE DOMAIN'S OWN
+ *  NOUNS rather than by loosening the object slot. "holding this lease
+ *  up" is leasing; "holding the elevator up" must stay Maintenance's, and
+ *  a `holding .* up` wildcard would have taken it.
+ *
+ *  `tours?` is deliberately bare, and it is safe because tourSchedule
+ *  already suppresses leasingPerson below: a sentence about BOOKING a
+ *  tour goes to tour_schedule, a sentence about what happened AT one
+ *  belongs to the person who was there.  */
 const LEASING_PERSON_TERMS =
-  /\b(appl(?:y|ie[sd]|ication|icant)s?|sign(?:s|ed|ing|ature|atures)?|countersign|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|toured?|packets?)\b/i;
+  /\b(appl(?:y|ie[sd]|ication|icant)s?|sign(?:s|ed|ing|ature|atures)?|countersign(?:s|ed|ing)?|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|holding (?:this|the|his|her|their|my|our) (?:lease|application|packet|file|approval|signing|renewal|move[- ]?in) up|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|tours?|toured|touring|packets?)\b/i;
 const DEBT_TERMS =
   /\b(debt (?:position|service)|mortgage(?: loan)?|loan (?:balance|maturity|payment|rate|terms?|pricing)|lender|servicer|principal balance|payoff (?:quote|amount)|interest rate|maturity date|extension option|debt-service reserve)\b/i;
 const ECONOMICS_SPECIFIC_TERMS =
@@ -242,20 +269,29 @@ const BARE_PRICING_TERM = /\bpricing\b/i;
 const UTILITY_DETAIL_TERMS =
   /\b(electric(?:ity)?|gas|water|sewer|meters?|submeters?|provider|utility account|account ending|peco|bills? residents|utility setup)\b/i;
 const LEASING_PERSON_DETAIL_TERMS =
-  /\b(applicants?|sign(?:s|ed|ing|ature|atures)?|countersign|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|toured?|packets?)\b/i;
+  /\b(applicants?|sign(?:s|ed|ing|ature|atures)?|countersign(?:s|ed|ing)?|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|holding (?:this|the|his|her|their|my|our) (?:lease|application|packet|file|approval|signing|renewal|move[- ]?in) up|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|tours?|toured|touring|packets?)\b/i;
 const TENANCY_STANDING_TERMS =
   /\b(rent ?roll|occupanc(?:y|ies)|occupied|vacan(?:t|cy|cies)|residents?|move[- ]?(?:in|out)s?|beds?|who lives|how many (?:units|beds|positions|residents))\b/i;
 const EXPLICIT_WORK_TERMS =
   /\b(work[ -]?order|repair|maintenance|technician|task|job|assigned|assignment)\b/i;
 const TOUR_SCHEDULE_TERMS =
-  /\b(tours? (?:times?|schedule|availability|openings?|slots?|hosts?|coverage)|(?:hosting|covering) tours?|book(?:ing)? (?:a )?tour|schedule (?:a )?tour|when can (?:we|i|someone) tour)\b/i;
+  /\b(tours? (?:times?|schedule|availability|openings?|slots?|hosts?|coverage)|(?:hosting|covering) tours?|book(?:ing)? (?:a )?tour|schedule (?:a )?tour|when can (?:we|i|someone) tour|(?:next|upcoming) tours?|when (?:is|are) (?:my|our|the) (?:next |upcoming )?tours?)\b/i;
 const ECONOMICS_MODULES = new Set(["leasing", "management", "asset_management"]);
 
 //  One person-scoped operating question. This is shared by the dashboard and
 //  staff SMS router so neither surface gets to decide independently that "my"
 //  means the property queue or a technician command.
 const PERSONAL_ATTENTION_TERMS = [
-  /^\s*what should i (?:do|work on)(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  //  "focus on" sits beside "do" and "work on" as a third way of saying
+  //  the same sentence. It is the phrasing, not the meaning, that was
+  //  missing — so it joins the existing pattern rather than starting a
+  //  second list.
+  /^\s*what should i (?:do|work on|focus on)(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  //  The passive form of the same question. "What needs my attention"
+  //  and "what should I do" are one intent; a person picks between them
+  //  by habit, and Spine must not answer only the one it happens to
+  //  recognise.
+  /^\s*what (?:needs|requires) my attention(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
   /^\s*what do i (?:need|have) to do(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
   /^\s*what(?:'s| is) (?:on )?my (?:list|plate|queue|agenda)(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
   /^\s*what(?:'s| is) (?:open|assigned) for me(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
@@ -1217,6 +1253,36 @@ async function answer(db, anthropic, {
       references: [],
     };
   }
+  /*  ── LEASING, AT THE GRAIN OF ONE PERSON ──────────────────────────
+   *  This refusal was MISSING, and its absence was measured rather than
+   *  assumed: an asset-management-only session asking "has Marisol Trejo
+   *  signed" came back `outcome: "answered"`. The canonical reader was
+   *  correctly skipped inside gatherFacts, so no leasing fact ever
+   *  reached the model and §40.8's letter held — but the model WAS
+   *  called, and it was called with a marker word, NOT_AUTHORIZED, that
+   *  the system prompt never defines. READ_FAILED, NOT_ESTABLISHED and
+   *  NOT_CONFIGURED each get explicit named instructions; this one got
+   *  none, so the refusal SENTENCE an unentitled operator saw was the
+   *  model's to invent.
+   *
+   *  A refusal a person can see is product copy (§5), and product copy is
+   *  not something a model composes fresh each time. It is written here,
+   *  once, in Spine's own words, and returned BEFORE gatherFacts and
+   *  BEFORE Anthropic — exactly like every sibling domain.
+   *
+   *  The inner NOT_AUTHORIZED envelope in gatherFacts is KEPT. It is not
+   *  redundant: gatherFacts is exported and independently callable, so
+   *  removing its guard would leave a second door into the same reader.
+   *  This one is the product; that one is depth.  */
+  if (subject === "leasing_person"
+      && !modules.includes("leasing") && !modules.includes("management")) {
+    return {
+      outcome: "not_authorized",
+      answer: "A person's leasing standing is not available in your current access for this property.",
+      grounded_on: null,
+      references: [],
+    };
+  }
   if (subject === "economics" && !canReadEconomics(modules)) {
     return {
       outcome: "not_authorized",
@@ -1415,6 +1481,51 @@ async function answer(db, anthropic, {
         ? facts.economics.completeness.overall : null,
       economics_monthly_total_withheld: facts.economics && facts.economics.combined_monthly_total
         ? !!facts.economics.combined_monthly_total.withheld : null,
+      /*  ── LEASING, MADE CHECKABLE ──────────────────────────────────
+       *  Leasing was the ONE domain with a reader and no grounding: an
+       *  answered question about a named human returned a grounded_on
+       *  object in which every key was null, while tenancy carried six,
+       *  contracted_service four and debt three. The surface shows
+       *  grounded_on so a claim can be checked; the domain that speaks
+       *  about a PERSON was the one whose answer could not be.
+       *
+       *  Read from facts.leasing_person, which gatherFacts has already
+       *  passed through withoutDatabaseIds — so no id can arrive here
+       *  even by accident. Nothing is recomputed and nothing is taken
+       *  from the model: every value below is the canonical read's, or
+       *  null because the canonical read did not establish it. null is a
+       *  real answer here and never a zero (§5).
+       *
+       *  Deliberately NOT included: hashes (instrument_package_sha256,
+       *  document_sha256), any reference or token, and anything the
+       *  model selected. Grounding is what Spine can stand behind, not
+       *  what would be interesting to print.  */
+      leasing_read_state: facts.leasing_person ? facts.leasing_person.read_state : null,
+      leasing_subject_name: facts.leasing_person && facts.leasing_person.subject_name
+        ? facts.leasing_person.subject_name : null,
+      leasing_relationship_stage: facts.leasing_person && facts.leasing_person.current_position
+        ? facts.leasing_person.current_position.stage : null,
+      leasing_application_status: facts.leasing_person && facts.leasing_person.application
+        ? facts.leasing_person.application.status : null,
+      leasing_packet_status: facts.leasing_person && facts.leasing_person.lease
+        ? facts.leasing_person.lease.packet_status : null,
+      //  TWO SEPARATE ACTS, NEVER ONE "signed" (§40.5). A resident
+      //  signing and the company countersigning are different facts on
+      //  different clocks, and collapsing them is how a surface reports
+      //  a lease as executed when only one party has signed.
+      leasing_resident_executed_at: facts.leasing_person && facts.leasing_person.lease
+        ? (facts.leasing_person.lease.resident_executed_at || null) : null,
+      leasing_company_executed_at: facts.leasing_person && facts.leasing_person.lease
+        ? (facts.leasing_person.lease.company_executed_at || null) : null,
+      leasing_next_action_code: facts.leasing_person && facts.leasing_person.next
+        && facts.leasing_person.next.action
+        ? facts.leasing_person.next.action.code : null,
+      //  A COUNT, NOT A VERDICT. The uncertainty entries themselves stay
+      //  in the answer's own reading; what grounding carries is how many
+      //  there were, so an empty list cannot be mistaken on the surface
+      //  for "we did not look" (§40.7).
+      leasing_uncertainty_count: facts.leasing_person && Array.isArray(facts.leasing_person.uncertainty)
+        ? facts.leasing_person.uncertainty.length : null,
       tour_schedule_read_state: facts.tour_schedule ? facts.tour_schedule.read_state : null,
       tour_schedule_open_count: facts.tour_schedule ? facts.tour_schedule.next_open_times.length : null,
       tour_schedule_coverage_attention_count: facts.tour_schedule ? facts.tour_schedule.coverage_attention.length : null,

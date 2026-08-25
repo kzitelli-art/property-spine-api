@@ -49,32 +49,31 @@
    5  The facts on the wire ARE the canonical read — not something that
       merely resembles it.
 
-   ── TWO DIVERGENCES THIS HARNESS PINS RATHER THAN REPAIRS ───────────
-   Both are durable product-source questions outside this harness's
-   ownership. They are asserted as CURRENT BEHAVIOUR so that a future
-   change to either goes red here and is seen, rather than discovered by
-   an operator. Each is printed in the DIVERGENCES report at the end.
+   ── WHAT THIS HARNESS ONCE PINNED, AND WHAT REPLACED IT ────────────
+   Its first version recorded three defects as CURRENT BEHAVIOUR because
+   they were durable product questions outside its lane. All three have
+   since been repaired in src/agent/ask_spine_answer.js, so the pins are
+   gone and the assertions are positive — pinning them now would assert
+   the bug.
 
-   D1  leasing_person has NO top-level entitlement refusal. Every other
-       subject with an entitlement (tenancy, tour_schedule, economics,
-       debt, equity, compliance, utility, contracted_service) returns
-       `not_authorized` from answer() BEFORE any fact is gathered and
-       before the model is called. leasing_person instead falls through
-       to gatherFacts, which marks the fact NOT_AUTHORIZED — and then the
-       model IS called. No unentitled FACT reaches the model, so §40.8's
-       letter holds; the SURFACE is nonetheless inconsistent with every
-       sibling domain, and an unentitled operator spends a model call.
-   D1b The same unentitled response comes back `answered`, not
-       `not_authorized`, and the word NOT_AUTHORIZED appears exactly once
-       in ask_spine_answer.js — at the line that writes it — so the
-       refusal wording is the model's to invent.
-   D3  Addressing matches the WHOLE recorded name, so "has Dana signed"
-       resolves nobody and is reported as the same silence as a question
-       naming no human at all.
-   D2  `grounded_on` carries no leasing_person key at all. An answered
-       leasing question returns a grounded_on object in which every key
-       is null. The dashboard shows grounded_on so a claim is checkable;
-       for leasing there is nothing to check it against.
+   D1/D1b (repaired) leasing_person was the only entitled subject with no
+      top-level refusal. An unentitled question fell through to
+      gatherFacts, spent a model call and returned `answered` with wording
+      the model invented over a marker the system prompt never defines.
+      It now returns the literal `not_authorized`, with Spine's own
+      sentence, before gatherFacts and before Anthropic. L7–L11g.
+   D2 (repaired) grounded_on carried no leasing key, so the one domain
+      that answers about a named human was the one whose answer an
+      operator could not check. Nine fields now come straight from the
+      canonical read. L32–L40.
+
+   ── WHAT IS STILL PINNED ────────────────────────────────────────────
+   D3 · addressing matches the WHOLE recorded name, so "has Dana signed"
+      resolves nobody and reports the same silence as a question naming
+      no human at all. Safe — it never answers about the wrong person —
+      but the sentence people actually say does not arrive, and the
+      operator is not told a partial name was the reason. Held with Codex
+      alongside the SMS surface-split and phrase-routing findings.
 
    ISOLATION: HARNESS_DATABASE_URL, refused if it matches DATABASE_URL —
    through the shared receipt guard, never a hand-rolled one.
@@ -154,7 +153,7 @@ async function cleanup(pool) {
   await pool.query(`delete from organizations where name=$1`, [ORG]);
 }
 
-receipt.begin(__filename, { url: CONN, expected: 34 });
+receipt.begin(__filename, { url: CONN, expected: 61 });
 
 (async () => {
   const pool = new Pool({ connectionString: CONN });
@@ -291,83 +290,93 @@ receipt.begin(__filename, { url: CONN, expected: 34 });
   }
 
   console.log("\n  ── §40.8 · entitlement precedes intelligence, over the wire ──");
+  /*  ── WHAT CHANGED HERE, AND WHY THE OLD ASSERTIONS ARE GONE ────────
+   *  The previous version of this block PINNED a defect: leasing_person
+   *  was the only entitled subject with no top-level refusal, so an
+   *  unentitled question fell through to gatherFacts, spent a model call
+   *  and came back `answered` with wording the model invented over a
+   *  marker the system prompt never defines. Those assertions were
+   *  correct about the product as it stood. The product has been
+   *  repaired, so pinning that behaviour would now assert the bug.
+   *
+   *  The refusal is the product, so the refusal is what is asserted —
+   *  not the inner NOT_AUTHORIZED fact envelope, which still exists as
+   *  depth and would happily keep passing with the top-level refusal
+   *  removed.  */
   {
-    const before = modelCalls.length;
+    const beforeModel = modelCalls.length;
     const r = await askLeasing(Q, amOnlyToken);
-    //  THE ASSERTION THAT MATTERS: the READER never ran, so no leasing
-    //  fact about a real human was ever gathered for an unentitled
-    //  session. This is measured at the reader, not read off the answer.
+
     ok("L7  an asset-management-only operator never causes the leasing reader to run",
        readerCalls.subject === 0 && readerCalls.standing === 0, JSON.stringify(readerCalls));
-    /*  ⚠ THE FIRST VERSION OF L8 TESTED THE WRONG BOUNDARY. It asserted
-     *  that the string "Marisol Trejo" never reached the model — and it
-     *  failed, correctly. The QUESTION is in the prompt, and the question
-     *  is the operator's own sentence. A name the caller typed is not a
-     *  fact Spine disclosed. What §40.8 forbids is an unentitled FACT
-     *  entering model context, so the assertion is made about the fact
-     *  payload: the marker is there and the standing read is not.  */
-    const unentitled = (() => {
-      const s = String(modelCalls[modelCalls.length - 1].messages[0].content);
-      return JSON.parse(s.slice(s.indexOf("{"), s.lastIndexOf("}") + 1));
-    })();
-    ok("L8  …the fact is a bare NOT_AUTHORIZED marker with no standing payload",
-       unentitled.leasing_person
-       && unentitled.leasing_person.read_state === "NOT_AUTHORIZED"
-       && unentitled.leasing_person.subject_name === undefined
-       && unentitled.leasing_person.current_position === undefined
-       && unentitled.leasing_person.uncertainty === undefined,
-       JSON.stringify(unentitled.leasing_person));
-    ok("L8b …and the composite silence refuses to read as health (§40.7)",
-       unentitled.composite_silence && unentitled.composite_silence.state === "BLIND"
-       && (unentitled.composite_silence.unread || []).some(
-            (u) => u.domain === "leasing_person" && u.read_state === "NOT_AUTHORIZED"),
-       JSON.stringify(unentitled.composite_silence));
-    ok("L9  …and no reference was minted",
-       Array.isArray(r.json && r.json.references) && r.json.references.length === 0,
-       JSON.stringify(r.json && r.json.references));
-
-    /*  D1 · PINNED, NOT REPAIRED. Every sibling subject refuses at
-     *  answer() before the model is reached; leasing_person does not.
-     *  Whichever way this is later resolved, it changes here first.  */
-    const modelWasCalled = modelCalls.length > before;
-    ok("L10 D1 · leasing_person reaches the model even unentitled (CURRENT BEHAVIOUR, pinned)",
-       modelWasCalled === true, `model calls: ${modelCalls.length - before}`);
-    if (modelWasCalled) {
-      divergence(
-        "D1 · an UNENTITLED leasing question still costs a model call. Every other "
-        + "entitled subject (tenancy, tour_schedule, economics, debt, equity, compliance, "
-        + "utility, contracted_service) returns not_authorized from answer() before "
-        + "gatherFacts. leasing_person has no such top-level refusal — it is marked "
-        + "NOT_AUTHORIZED as a FACT and composed over. §40.8's letter holds (no "
-        + "unentitled fact reaches the model, asserted at L7/L8); the surface is "
-        + "inconsistent with every sibling domain.");
-    }
-    /*  D1's SHARP EDGE, and it is sharper than the note above alone.
-     *  An unentitled operator does not merely spend a model call — the
-     *  response comes back `answered`, not `not_authorized`. Every
-     *  sibling subject returns the literal outcome `not_authorized` with
-     *  a fixed sentence Spine wrote. Leasing returns whatever the model
-     *  composed over a marker word the system prompt never defines:
-     *  "NOT_AUTHORIZED" appears exactly ONCE in ask_spine_answer.js, at
-     *  the line that writes it. The generic composite-silence block does
-     *  carry it to the model as an unread domain — so this is not a
-     *  silent leak — but the refusal SENTENCE is left to the model's
-     *  discretion, where READ_FAILED, NOT_ESTABLISHED and NOT_CONFIGURED
-     *  each get explicit named instructions.  */
-    ok("L11 D1 · an unentitled leasing question comes back `answered`, not "
-       + "`not_authorized` (CURRENT BEHAVIOUR, pinned)",
-       r.status === 200 && r.json.outcome === "answered",
+    ok("L8  …and Anthropic is NEVER reached for an unentitled question",
+       modelCalls.length === beforeModel, `${modelCalls.length - beforeModel} call(s)`);
+    ok("L9  …the outcome is the literal `not_authorized`, not a composed sentence",
+       r.status === 200 && r.json && r.json.outcome === "not_authorized",
        `${r.status} ${JSON.stringify(r.json && r.json.outcome)}`);
-    if (r.json && r.json.outcome === "answered") {
-      divergence(
-        "D1b · the unentitled leasing response carries outcome `answered`. Every "
-        + "sibling subject returns the literal outcome `not_authorized` with a "
-        + "sentence Spine wrote. The word NOT_AUTHORIZED occurs exactly once in "
-        + "ask_spine_answer.js — at the line that writes it — so the system prompt "
-        + "never defines it, and the refusal wording is the model's to invent. The "
-        + "model is told the domain went unread by the generic composite-silence "
-        + "block, so nothing leaks; what it is not given is Spine's own refusal.");
+    /*  A refusal a person can see is PRODUCT COPY (§5). The exact string
+     *  is asserted, not a shape: "it said something refusal-ish" is how
+     *  a model-authored sentence slips back in unnoticed. It must also
+     *  name a next step, which here is the access that would grant it.  */
+    ok("L10 …and the sentence is Spine's own, deterministic and unchanged run to run",
+       r.json.answer === "A person's leasing standing is not available in your "
+                       + "current access for this property.",
+       JSON.stringify(r.json && r.json.answer));
+    ok("L11 …grounded_on is null — there is nothing to ground a refusal on",
+       r.json.grounded_on === null, JSON.stringify(r.json.grounded_on));
+    ok("L11b …and references is an empty array, not absent",
+       Array.isArray(r.json.references) && r.json.references.length === 0,
+       JSON.stringify(r.json.references));
+    /*  NO PERSON, APPLICATION OR LEASE FACT ANYWHERE IN THE RESPONSE.
+     *  Asserted over the WHOLE serialized body rather than key by key:
+     *  a key-by-key check only refutes the leak it thought of.  */
+    const body = JSON.stringify(r.json);
+    ok("L11c …and no person, application or lease fact appears anywhere in the response",
+       !/Marisol|Trejo|Whitfield|submitted|packet|executed|prospect|application_status/i.test(body),
+       body.slice(0, 200));
+    ok("L11d …and the same refusal is byte-identical on a second ask (deterministic)",
+       (await askLeasing(Q, amOnlyToken)).json.answer === r.json.answer);
+    ok("L11e …and that second ask reached neither reader nor model",
+       readerCalls.subject === 0 && readerCalls.standing === 0
+       && modelCalls.length === beforeModel,
+       `${JSON.stringify(readerCalls)} model+${modelCalls.length - beforeModel}`);
+  }
+
+  /*  ── THE SAME REFUSAL, DIRECTLY ─────────────────────────────────────
+   *  QB requires both HTTP and direct evidence. answer() is called with
+   *  no database and no Anthropic client AT ALL: if the refusal were not
+   *  returned before gatherFacts, this would throw rather than pass, so
+   *  the ordering is proven by construction and not by a counter.       */
+  {
+    const explode = { query: () => { throw new Error("the database must not be touched"); } };
+    const noModel = { messages: { create: async () => { throw new Error("Anthropic must not be reached"); } } };
+    const direct = await askSpineAnswer.answer(explode, noModel, {
+      property_id: prop, allowed_modules: ["asset_management"],
+      operator_user_id: "unused", question: Q,
+    });
+    ok("L11f the refusal is returned BEFORE any database or model work exists to do",
+       direct.outcome === "not_authorized" && direct.grounded_on === null
+       && Array.isArray(direct.references) && direct.references.length === 0,
+       JSON.stringify(direct));
+    /*  THE WALL IS ENTITLEMENT, NOT A LEASING-ONLY DOOR. Management
+     *  resolves the operation and must reach this read; asset management
+     *  must not. Both are checked against the SAME exploding deps, so
+     *  the two outcomes differ only by module:
+     *      refused      → `not_authorized`, nothing was attempted
+     *      not refused  → `unavailable`, because the work was attempted
+     *                     and the deliberately broken model threw
+     *  A single-module assertion would pass just as well if the wall
+     *  refused everyone.  */
+    const byModule = {};
+    for (const m of [["management"], ["leasing"], ["asset_management"], []]) {
+      byModule[m.join(",") || "(none)"] = (await askSpineAnswer.answer(explode, noModel, {
+        property_id: prop, allowed_modules: m, operator_user_id: "u", question: Q,
+      })).outcome;
     }
+    ok("L11g leasing AND management both pass the wall; asset_management and none are refused",
+       byModule.management === "unavailable" && byModule.leasing === "unavailable"
+       && byModule.asset_management === "not_authorized" && byModule["(none)"] === "not_authorized",
+       JSON.stringify(byModule));
   }
 
   console.log("\n  ── the entitled question, against the real canonical read ──");
@@ -517,19 +526,117 @@ receipt.begin(__filename, { url: CONN, expected: 34 });
     ok("L31 the property_id echoed to the client is the SESSION's",
        String(answered.json.property_id) === String(prop));
 
-    /*  D2 · PINNED, NOT REPAIRED. */
-    const leasingKeys = Object.keys(g).filter((k) => /^leasing/.test(k));
-    ok("L32 D2 · grounded_on carries NO leasing_person key (CURRENT BEHAVIOUR, pinned)",
-       leasingKeys.length === 0, JSON.stringify(leasingKeys));
-    if (leasingKeys.length === 0) {
-      divergence(
-        "D2 · an ANSWERED leasing question returns a grounded_on object with no "
-        + "leasing key — every key in it is null. grounded_on exists so an operator "
-        + "can check a claim; tenancy gets six keys, contracted_service four, debt "
-        + "three (counted in the grounded_on literal itself, not from memory). "
-        + "Leasing gets none, so the one domain that answers about a NAMED "
-        + "HUMAN is the one whose answer is unverifiable on the surface.");
+    /*  ── PHASE 2 · LEASING IS NOW CHECKABLE ────────────────────────
+     *  This block previously PINNED the absence of any leasing key. That
+     *  was true of the product as it stood and is now the defect, so the
+     *  assertions are positive: the grounding exists, it is exactly the
+     *  canonical read's, and it carries nothing it should not.
+     *
+     *  Every expected value is taken from the CANONICAL READ at the same
+     *  as_of, never from a literal. A hand-written expectation would
+     *  only prove the harness agrees with itself, and would keep passing
+     *  if grounding silently stopped tracking the read.  */
+    const canon = await realStanding(pool, {
+      person_id: marisol, property_id: prop,
+      as_of: facts && facts.leasing_person ? facts.leasing_person.as_of : null,
+    });
+    const expected = {
+      leasing_read_state: "OK",
+      leasing_subject_name: "Marisol Trejo",
+      leasing_relationship_stage: canon.current_position ? canon.current_position.stage : null,
+      leasing_application_status: canon.application ? canon.application.status : null,
+      leasing_packet_status: canon.lease ? canon.lease.packet_status : null,
+      leasing_resident_executed_at: canon.lease ? (canon.lease.resident_executed_at || null) : null,
+      leasing_company_executed_at: canon.lease ? (canon.lease.company_executed_at || null) : null,
+      leasing_next_action_code: canon.next && canon.next.action ? canon.next.action.code : null,
+      leasing_uncertainty_count: Array.isArray(canon.uncertainty) ? canon.uncertainty.length : null,
+    };
+    for (const key of Object.keys(expected)) {
+      ok(`L32 ${key} is present and equals the canonical read`,
+         key in g && JSON.stringify(g[key]) === JSON.stringify(expected[key]),
+         `grounded_on=${JSON.stringify(g[key])} canonical=${JSON.stringify(expected[key])}`);
     }
+    /*  THE TWO SIGNATURES ARE SEPARATE FACTS (§40.5). `resident signed`
+     *  and `company countersigned` are different acts on different
+     *  clocks; a surface that collapses them reports an executed lease
+     *  when one party has signed. Grounding must carry both slots even
+     *  when both are empty — and empty must be null, never false and
+     *  never a date-shaped zero.  */
+    ok("L33 the two execution facts are separate slots, and unsigned is null (never false, never a zero date)",
+       "leasing_resident_executed_at" in g && "leasing_company_executed_at" in g
+       && (g.leasing_resident_executed_at === null || typeof g.leasing_resident_executed_at === "string")
+       && (g.leasing_company_executed_at === null || typeof g.leasing_company_executed_at === "string"),
+       JSON.stringify([g.leasing_resident_executed_at, g.leasing_company_executed_at]));
+    /*  PROSE INPUTS AND GROUNDING MUST AGREE. The model was handed
+     *  facts.leasing_person; the operator is shown grounded_on. If those
+     *  two ever disagree the surface contradicts its own citation, which
+     *  is worse than having no citation at all.  */
+    const lp = facts.leasing_person;
+    ok("L34 grounding agrees with the facts the model was actually given",
+       g.leasing_read_state === lp.read_state
+       && g.leasing_subject_name === lp.subject_name
+       && g.leasing_application_status === (lp.application ? lp.application.status : null)
+       && g.leasing_packet_status === (lp.lease ? lp.lease.packet_status : null)
+       && g.leasing_uncertainty_count === (Array.isArray(lp.uncertainty) ? lp.uncertainty.length : null),
+       JSON.stringify({ g, lp_read: lp.read_state, lp_app: lp.application }));
+    /*  §40.8 · NOTHING IDENTIFYING, AND NOTHING THE MODEL CHOSE.
+     *  grounded_on is rendered on a surface, so an id here is as bad as
+     *  an id in model context. Hashes are excluded too: they identify a
+     *  document without naming it, which is an internal reference
+     *  wearing a value's clothes.  */
+    const gs = JSON.stringify(g);
+    ok("L35 no database id reaches grounded_on", !UUID.test(gs), (gs.match(UUID) || [])[0]);
+    ok("L36 no hash or token reaches grounded_on",
+       !/[0-9a-f]{32,}/i.test(gs) && !/sha256|token|digest/i.test(gs),
+       (gs.match(/[0-9a-f]{32,}/i) || [])[0] || "a hash-shaped key is present");
+    ok("L37 grounded_on is server-built — the model's own words appear nowhere in it",
+       !gs.includes("Marisol Trejo has an application submitted"), gs.slice(0, 160));
+  }
+
+  /*  ── PHASE 2 · THE SILENCES REACH GROUNDING AS THEMSELVES (§40.7) ──
+   *  Four different empty answers, and grounding must keep them four.
+   *  If NO_SUBJECT, AMBIGUOUS_SUBJECT, READ_FAILED and READ_TIMED_OUT
+   *  all arrive on the surface as the same blank, the operator cannot
+   *  tell "nobody by that name" from "Spine could not look" — and one of
+   *  those is a fact about the property while the other is a fact about
+   *  Spine. Driven through the real HTTP door for the two the door can
+   *  reach, and through the composer directly for the two that need a
+   *  reader that fails, since a real socket cannot make a read time out
+   *  on demand.  */
+  console.log("\n  ── §40.7 · the four silences survive INTO grounded_on ──");
+  {
+    const seen = {};
+    for (const [label, question] of [["NO_SUBJECT", "has anyone signed a packet yet"],
+                                     ["AMBIGUOUS_SUBJECT", "has Dana Whitfield signed anything"]]) {
+      const rr = await askLeasing(question, leasingToken);
+      seen[label] = rr.json.grounded_on ? rr.json.grounded_on.leasing_read_state : "(no grounded_on)";
+      ok(`L38 ${label} reaches grounded_on as itself`,
+         seen[label] === label, JSON.stringify(seen[label]));
+      ok(`L38 ${label} carries no subject name and no stage`,
+         rr.json.grounded_on
+         && rr.json.grounded_on.leasing_subject_name === null
+         && rr.json.grounded_on.leasing_relationship_stage === null,
+         JSON.stringify(rr.json.grounded_on));
+    }
+    //  READ_FAILED and READ_TIMED_OUT need a reader that fails, which a
+    //  real socket cannot arrange. The composer is called directly with
+    //  an injected failing reader — the same seam gatherFacts exposes.
+    for (const [label, err] of [["READ_FAILED", Object.assign(new Error("boom"), {})],
+                                ["READ_TIMED_OUT", Object.assign(new Error("slow"), { code: "READ_TIMED_OUT" })]]) {
+      const failing = {
+        resolveLeasingSubject: async () => { throw err; },
+        readLeasingStanding: async () => { throw err; },
+      };
+      const f = await askSpineAnswer.gatherFacts(pool, {
+        property_id: prop, allowed_modules: ["leasing"], subject: "leasing_person",
+        question: Q, leasingReader: failing,
+      });
+      seen[label] = f.leasing_person.read_state;
+      ok(`L39 ${label} is its own silence, not collapsed into absence`,
+         f.leasing_person.read_state === label, JSON.stringify(f.leasing_person));
+    }
+    ok("L40 all four silences are DISTINCT values, not one blank wearing four names",
+       new Set(Object.values(seen)).size === 4, JSON.stringify(seen));
   }
 
   leasingRead.resolveLeasingSubject = realResolve;
@@ -546,7 +653,7 @@ receipt.begin(__filename, { url: CONN, expected: 34 });
     console.log("  not mean the behaviour is right.");
   }
   console.log("");
-  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 34 }));
+  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 61 }));
 })().catch((e) => {
   console.error(e && e.stack ? e.stack : e);
   process.exit(receipt.died(__filename, e, ran));
