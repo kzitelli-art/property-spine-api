@@ -423,12 +423,14 @@ function classifyPosition(row, { asOf, personNames } = {}) {
    *  ready_now today as well. Wiring it in would move availability_read,
    *  leasing_inventory and the prospect surface at once, which is an
    *  architecture decision and not this repair's to make.               */
-  const unplaceableInTime = (lease) => dateKey(lease && lease.start_date) === null;
+  /*  DELIBERATE FALSIFICATION — only the unplaceable-lease arm is removed.
+   *  Everything else (the date contract, the interval primitive, the
+   *  possession bound, the assertions) is untouched, so the red is
+   *  attributable to this predicate alone. REVERTED IN THE NEXT COMMIT. */
   const otherSpanning = leases.filter((lease) =>
-    unplaceableInTime(lease)
-    || (datesSpan(lease, asOfKey)
-        && !CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease))
-        && !ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease))));
+    datesSpan(lease, asOfKey)
+    && !CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease))
+    && !ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease)));
 
   /*  ── A POSITION AT as_of D MAY ONLY USE EVENTS EFFECTIVE BY D ──────
    *
