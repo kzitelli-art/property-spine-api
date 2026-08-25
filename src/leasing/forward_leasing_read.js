@@ -119,6 +119,21 @@ async function forwardLeasingPosition(pool, {
 
   const ledger = [];
   const unrecognised = [];
+  /*  ── WHY, NOT JUST THAT ─────────────────────────────────────────────
+   *  `commitment_state: unresolved` is a refusal, and a refusal nobody can
+   *  act on is barely better than a wrong answer (§5). The classifier
+   *  already knows WHICH claims it could not place and which rights contest
+   *  the term; this read was reducing all of that to one word, so a person
+   *  — or Ask Spine — was told a bed is a question and given nothing to go
+   *  and resolve.
+   *
+   *  EVIDENCE CARRIAGE ONLY. Nothing below re-reads a date, re-classifies a
+   *  lease, or adds a commitment state. Every input is already governed
+   *  upstream: `unplaceable_rights` and `conflict_state` come from
+   *  classifyPositionForInterval, `unresolved_because` from the interval
+   *  read, and `other` is this file's own existing unrecognised-status
+   *  path.                                                               */
+  const unresolvedPositions = [];
   for (const p of iv.positions) {
     //  The governing right for THIS cycle. `colliding_rights` is exactly
     //  the set of non-terminal leases overlapping the window — the basis,
@@ -140,6 +155,25 @@ async function forwardLeasingPosition(pool, {
     else if (pending.length) commitment_state = "pending";
     else if (other.length) commitment_state = "unresolved";      // never "signed" by default
     else commitment_state = "remaining";
+
+    /*  THE REASON IS READ OFF THE POSITION, NOT DECIDED HERE. Precedence
+     *  is stated once, in the order a person needs it: a claim Spine cannot
+     *  place is the most actionable thing to go fix, a contested term is
+     *  next, and an unrecognised status is a vocabulary problem in a writer
+     *  rather than a problem on the bed.
+     *
+     *  It is null on a row that is not unresolved, INCLUDING a row that
+     *  carries unplaceable rights while staying certain — a fully blocked
+     *  term is still fully blocked whatever the undated claim turns out to
+     *  be, and naming a reason there would imply a doubt the read does not
+     *  have. The rights themselves are carried on every row regardless. */
+    const unplaceable = p.unplaceable_rights || [];
+    const unresolved_reason = commitment_state !== "unresolved" ? null
+      : unplaceable.length ? "unplaceable_rights"
+        : (p.conflict_state === "conflicted" || (p.conflicting_lease_ids || []).length)
+          ? "overlapping_rights"
+          : other.length ? "unrecognized_lease_status"
+            : null;
 
     //  The governing lease, when there is exactly one. More than one
     //  non-terminal right overlapping a cycle is not an economics
@@ -172,7 +206,40 @@ async function forwardLeasingPosition(pool, {
       contract_position: p.interval_state,
       contended,
       conflicting_lease_ids: p.conflicting_lease_ids || [],
+
+      //  Carried on EVERY row, not only unresolved ones. A bed that is
+      //  certainly blocked and also carries a claim Spine cannot place is
+      //  two true facts, and the second does not stop being true because
+      //  the first answered the question.
+      unplaceable_rights: unplaceable,
+      unresolved_reason,
+      /*  ⚠ THE CANONICAL REASON, VERBATIM, BECAUSE THE FOUR VALUES ABOVE
+       *  DO NOT SPAN IT. dated_positions sets `unresolved_because` to
+       *  `overlapping_claims`, `opening_evidence_disagrees` or
+       *  `opening_position_unreconciled`. The last two are opening-evidence
+       *  causes with no name in this read's vocabulary, and dropping them
+       *  would leave an unresolved bed reading as unresolved FOR NO REASON
+       *  — the exact silence this change exists to remove. Carried under
+       *  its own canonical key so nothing here has to invent a word for
+       *  it. */
+      contract_unresolved_because: p.unresolved_because || null,
     });
+
+    /*  ONE COMPACT COLLECTION, so a consumer that wants only the questions
+     *  does not walk 160 rows to find three. Derived from the ledger row it
+     *  was just built from — never a second classification of the same
+     *  bed. `colliding_rights` rides along because "contested" is
+     *  unreadable without the rights that contest it. */
+    if (commitment_state === "unresolved") {
+      unresolvedPositions.push({
+        unit_number: p.unit_number,
+        space_label: p.space_label,
+        unresolved_reason,
+        contract_unresolved_because: p.unresolved_because || null,
+        unplaceable_rights: unplaceable,
+        colliding_rights: rights,
+      });
+    }
   }
 
   //  ── overlay the claim layer, labelled ──
@@ -418,6 +485,14 @@ async function forwardLeasingPosition(pool, {
     //  Reported, never absorbed. A lease status this read does not
     //  recognise must not become "signed" by falling through a default.
     unrecognised_lease_statuses: unrecognised,
+
+    /*  EVERY UNRESOLVED BED, WITH ITS EVIDENCE, at the top of the payload.
+     *  `headline.unresolved` is a count and a count is not answerable — it
+     *  says three beds are questions without saying which three or why.
+     *  This is the same rows, named, so the answer to "what is unresolved
+     *  and what would resolve it" is a read rather than a reconstruction.
+     *  Exactly `headline.unresolved` long, by construction.             */
+    unresolved_positions: unresolvedPositions,
 
     ledger,
 

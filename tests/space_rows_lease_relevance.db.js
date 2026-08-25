@@ -83,6 +83,7 @@ const ROOT = path.join(__dirname, "..");
 const { spacePosition } = require(path.join(ROOT, "src/tenancy/space_position.js"));
 const { intervalPropertyPositions } = require(path.join(ROOT, "src/tenancy/dated_positions.js"));
 const { readTenancyTermStanding } = require(path.join(ROOT, "src/tenancy/tenancy_position_read.js"));
+const { forwardLeasingPosition } = require(path.join(ROOT, "src/leasing/forward_leasing_read.js"));
 const fixture = require(path.join(__dirname, "tenancy_position_fixture.js"));
 
 const PROPERTY      = fixture.IDS.PROPERTY;
@@ -477,6 +478,180 @@ const forwardShape = async (pool) =>
       ok("E7 · CONTROL — a genuinely free term is still contractually_free with no unplaceable rights");
     else bad("E7 · a free term was disturbed", JSON.stringify({
       state: cleanFree.interval_state, up: cleanFree.unplaceable_rights }));
+
+    /* ══ F · THE REFUSAL MUST TRAVEL, NOT JUST THE WORD ════════════════
+     *
+     *  E proved the CLASSIFIER now knows why an interval is unresolved.
+     *  This proves the first consumer above it does not throw that away.
+     *
+     *  forwardLeasingPosition reduced every such bed to
+     *  `commitment_state: unresolved` and stopped. Measured on this
+     *  fixture before the change: the ledger row carried no
+     *  unplaceable_rights, no reason, and the payload had no collection of
+     *  unresolved beds at all — so "why is 101A a question?" was
+     *  answerable only by re-running the classifier by hand.
+     *
+     *  Three reasons are produced SEPARATELY, because a single fixture
+     *  that happens to trigger all three at once would not show that the
+     *  precedence picks the right one:
+     *
+     *      unplaceable_rights        an undated non-terminal claim
+     *      overlapping_rights        two dated rights contesting the term
+     *      unrecognized_lease_status a status this read does not know
+     *
+     *  F1 is the control and it runs FIRST: if the baseline cycle already
+     *  contained an unresolved bed, every assertion below would pass
+     *  without the change meaning anything.                              */
+    const CYC_S = "2027-10-01", CYC_E = "2028-03-31";
+    const cycleLedger = () => forwardLeasingPosition(pool, {
+      property_id: PROPERTY, cycle_start: CYC_S, cycle_end: CYC_E,
+      //  The tracker overlay is a different layer with its own proof and
+      //  its own failure mode. Excluding it keeps this measuring carriage
+      //  from the classifier and not the claim join.
+      include_claims: false,
+    });
+    const rowOf = (f, unit, label) =>
+      f.ledger.find((r) => r.unit_number === unit && r.space_label === label);
+
+    /*  ONE INVARIANT, CHECKED IN EVERY ARM. The collection must be exactly
+     *  the unresolved rows — no more, no fewer — and no entry may be a
+     *  refusal with nothing to act on. `unresolved_reason` alone cannot
+     *  carry that: dated_positions also refuses for `opening_evidence_
+     *  disagrees` and `opening_position_unreconciled`, which this read's
+     *  four-value vocabulary has no word for, so the canonical
+     *  `unresolved_because` rides along and either one satisfies it. */
+    const carriesWhy = (f, tag) => {
+      const n = f.ledger.filter((r) => r.commitment_state === "unresolved").length;
+      if (f.unresolved_positions.length === n && f.headline.unresolved === n)
+        ok(`F8 · ${tag} — unresolved_positions is exactly the unresolved ledger rows (${n}) and ties to the headline`);
+      else bad(`F8 · ${tag} — the collection and the ledger disagree`, JSON.stringify({
+        collection: f.unresolved_positions.length, ledger: n, headline: f.headline.unresolved }));
+      const mute = f.unresolved_positions
+        .filter((x) => !x.unresolved_reason && !x.contract_unresolved_because);
+      if (mute.length === 0) ok(`F8 · ${tag} — no unresolved bed is reported without a reason`);
+      else bad(`F8 · ${tag} — ${mute.length} unresolved bed(s) carry no reason at all`, JSON.stringify(mute));
+    };
+
+    // ── F1 · CONTROL — the baseline cycle has nothing unresolved ───────
+    const fBase = await cycleLedger();
+    const base101A = rowOf(fBase, "101", "A");
+    if (fBase.headline.unresolved === 0 && base101A && base101A.commitment_state === "signed"
+        && base101A.unresolved_reason === null && (base101A.unplaceable_rights || []).length === 0)
+      ok("F1 · CONTROL — the baseline cycle is signed on 101A with no unresolved beds; F2–F7 can mean something");
+    else bad("F1 · the baseline already carries an unresolved bed", JSON.stringify({
+      unresolved: fBase.headline.unresolved,
+      row: base101A && { s: base101A.commitment_state, r: base101A.unresolved_reason } }));
+    carriesWhy(fBase, "baseline");
+
+    // ── F2/F3/F4/F5 · an unplaceable claim reaches the ledger ──────────
+    const UND3 = "51ce0001-0000-4000-8000-0000000009f7";
+    await addUndated(UND3, "active");
+    try {
+      const f = await cycleLedger();
+      const row = rowOf(f, "101", "A");
+      if (row && row.commitment_state === "unresolved" && row.unresolved_reason === "unplaceable_rights")
+        ok("F2 · the ledger row says WHY it is unresolved — unplaceable_rights");
+      else bad("F2 · the reason did not reach the ledger row", JSON.stringify(row && {
+        s: row.commitment_state, r: row.unresolved_reason }));
+
+      const up = row && (row.unplaceable_rights || []);
+      if (up && up.length === 1 && String(up[0].lease_id) === UND3 && up[0].lease_status === "active")
+        ok(`F3 · and it names the claim itself — ${UND3.slice(0, 8)} / active, in the canonical right shape`);
+      else bad("F3 · the unplaceable claim was not carried onto the row", JSON.stringify(up));
+
+      const entry = f.unresolved_positions.find((x) => x.unit_number === "101" && x.space_label === "A");
+      if (f.unresolved_positions.length === 1 && entry
+          && entry.unresolved_reason === "unplaceable_rights"
+          && (entry.unplaceable_rights || []).length === 1)
+        ok("F4 · the top-level collection names the bed, the reason and the claim");
+      else bad("F4 · the collection does not carry the bed", JSON.stringify(f.unresolved_positions));
+
+      /*  ⚠ ADDED, NOT SUBSTITUTED. The signed lease that partially blocks
+       *  this term is still the reason the bed is not open, and an answer
+       *  that shows only the unplaceable claim has traded one missing half
+       *  of the story for the other. */
+      if (entry && (entry.colliding_rights || []).length === 1
+          && entry.colliding_rights[0].lease_status === "signed")
+        ok("F5 · CONTROL — the dated signed right is carried BESIDE it, not replaced by it");
+      else bad("F5 · the dated collision evidence was dropped from the collection",
+               JSON.stringify(entry && entry.colliding_rights));
+      carriesWhy(f, "unplaceable");
+    } finally {
+      await pool.query(`delete from leases where id=$1`, [UND3]);
+    }
+
+    /*  ── F6 · A STATUS THIS READ DOES NOT RECOGNISE ────────────────────
+     *  On space B of unit 101, which carries no fixture lease, so the row
+     *  is unresolved for exactly one reason. The interval itself is NOT
+     *  unresolved here — it is term_partially_blocked — which is what
+     *  proves the reason came from this read's own status path and was not
+     *  copied off interval_state.                                        */
+    const ODD = "51ce0001-0000-4000-8000-0000000009f8";
+    const spaceB = fixture.IDS.SPACE_A2;
+    await pool.query(
+      `insert into leases (id, property_id, space_id, tenant_ids, rent, balance,
+                           start_date, end_date, lease_status)
+       values ($1,$2,$3,$4::uuid[],1200,0,'2027-11-01','2028-02-01','holdover_pending')`,
+      [ODD, PROPERTY, spaceB, [fixture.IDS.PERSON]]);
+    try {
+      const f = await cycleLedger();
+      const row = rowOf(f, "101", "B");
+      if (row && row.commitment_state === "unresolved"
+          && row.unresolved_reason === "unrecognized_lease_status"
+          && row.contract_position === "term_partially_blocked")
+        ok("F6 · an unrecognised status reads unrecognized_lease_status while the INTERVAL stays term_partially_blocked");
+      else bad("F6 · the unrecognised-status arm did not resolve to its own reason", JSON.stringify(row && {
+        s: row.commitment_state, r: row.unresolved_reason, c: row.contract_position }));
+      carriesWhy(f, "unrecognised status");
+    } finally {
+      await pool.query(`delete from leases where id=$1`, [ODD]);
+    }
+
+    /*  ── F7 · TWO DATED RIGHTS CONTESTING THE SAME TERM ────────────────
+     *  This arm carries the second half of the contract: dated_positions
+     *  sets `unresolved_because: overlapping_claims`, and that canonical
+     *  word must arrive verbatim rather than being re-derived or dropped. */
+    const CON1 = "51ce0001-0000-4000-8000-0000000009f9";
+    const CON2 = "51ce0001-0000-4000-8000-000000000a01";
+    for (const [id, st, en] of [[CON1, "2027-11-01", "2028-02-01"], [CON2, "2027-12-01", "2028-03-01"]]) {
+      await pool.query(
+        `insert into leases (id, property_id, space_id, tenant_ids, rent, balance,
+                             start_date, end_date, lease_status)
+         values ($1,$2,$3,$4::uuid[],1200,0,$5,$6,'signed')`,
+        [id, PROPERTY, spaceB, [fixture.IDS.PERSON], st, en]);
+    }
+    try {
+      const f = await cycleLedger();
+      const row = rowOf(f, "101", "B");
+      if (row && row.unresolved_reason === "overlapping_rights")
+        ok("F7 · a contested term reads overlapping_rights");
+      else bad("F7 · the contested arm did not resolve to overlapping_rights",
+               JSON.stringify(row && { s: row.commitment_state, r: row.unresolved_reason }));
+      if (row && row.contract_unresolved_because === "overlapping_claims")
+        ok("F7 · and the canonical unresolved_because arrives verbatim, not re-derived");
+      else bad("F7 · the canonical reason was dropped on the way up",
+               JSON.stringify(row && row.contract_unresolved_because));
+      const entry = f.unresolved_positions.find((x) => x.unit_number === "101" && x.space_label === "B");
+      if (entry && (entry.colliding_rights || []).length === 2)
+        ok("F7 · the collection names BOTH contesting rights — a contest is unreadable without them");
+      else bad("F7 · the contesting rights are not in the collection",
+               JSON.stringify(entry && entry.colliding_rights));
+      carriesWhy(f, "contested");
+    } finally {
+      await pool.query(`delete from leases where id = any($1::uuid[])`, [[CON1, CON2]]);
+    }
+
+    /*  ── F9 · CONTROL — the read is back where it started ──────────────
+     *  Every arm above added rows and removed them. If the ledger does not
+     *  return to the F1 answer, something above leaked and the greens are
+     *  measuring a database nobody described.                            */
+    const fEnd = await cycleLedger();
+    if (fEnd.headline.unresolved === 0 && fEnd.unresolved_positions.length === 0
+        && JSON.stringify(fEnd.headline) === JSON.stringify(fBase.headline))
+      ok("F9 · CONTROL — with every probe row removed the ledger is identical to F1");
+    else bad("F9 · the fixture did not return to its baseline", JSON.stringify({
+      before: fBase.headline, after: fEnd.headline,
+      collection: fEnd.unresolved_positions.length }));
   } catch (e) {
     bad("harness died", e.message);
     console.error(e);
