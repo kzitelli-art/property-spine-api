@@ -391,25 +391,7 @@ async function forwardRent(pool, {
                 committed.filter((r) => r.contracted_rent == null).length === 0,
     },
 
-    /*  ── THE HEADLINE, PLUS WHY ITS REFUSALS ARE REFUSALS ─────────────
-     *  `position.headline` alone reports `unresolved: 2` and stops. Two
-     *  beds are questions and this payload — the last one before the
-     *  conversational reader — could not say which two or what would
-     *  resolve them. The compact collection is ALREADY AUTHORED by
-     *  forward_leasing_read, so it is carried, not rebuilt: no ledger
-     *  copy, no second count, no reinterpretation of a cause, no
-     *  vocabulary of this module's own. Forward Rent is the economic
-     *  reading of the position and has no authority over why a term is
-     *  contested.
-     *
-     *  ⚠ NO `|| []` DEFAULT. If the collection is ever absent, the key is
-     *  absent — because an empty array here would read as "no unresolved
-     *  beds" beside a headline saying two, which is precisely the
-     *  confident-wrong this carriage exists to remove (§5).            */
-    forward_leasing: {
-      ...position.headline,
-      unresolved_positions: position.unresolved_positions,
-    },
+    forward_leasing: position.headline,
     operating_position: position.operating_position,
 
     does_not_establish: [
