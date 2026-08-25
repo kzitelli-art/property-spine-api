@@ -894,6 +894,15 @@ async function datedPropertyPositions(pool, { property_id, as_of = null, opening
       other_spanning_lease_positions: p.other_spanning_lease_positions || [],
       conflict_state: p.conflict_state,
       conflicting_lease_ids: p.conflicting_lease_ids,
+      /*  THE FORWARD CONTEST, carried on the same axis as the current one.
+       *  This projection is an explicit whitelist, so a field the
+       *  classifier computes and this list omits reaches no reader at all —
+       *  which is how the future contest stayed invisible even after the
+       *  classifier could see it. Named parallel to conflict_state and
+       *  never folded into it: contested today and contested next November
+       *  are two facts about two dates.                                  */
+      future_conflict_state: p.future_conflict_state,
+      future_conflicting_lease_ids: p.future_conflicting_lease_ids,
 
       // canonical physical / configuration facts
       is_down: withDown.is_down,

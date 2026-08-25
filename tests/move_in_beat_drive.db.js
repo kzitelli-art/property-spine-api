@@ -844,6 +844,132 @@ const posFor = async (pool, asOf) => {
     if (leaked === null)
       ok("D9g · CONTROL — occupied space stays occupied through every ACCEPTED date representation");
     else bad("D9g · OCCUPIED SPACE LEAKED through an accepted representation", JSON.stringify(leaked));
+
+    /* ══ G · A FUTURE DOUBLE-LET IS NOT AN ORDINARY SUCCESSOR ══════════
+     *
+     *  MEASURED ON REAL POSTGRES BEFORE THE FIX, on this exact bed: adding
+     *  a SECOND overlapping future signed lease changed NOTHING on the
+     *  as-of axis. Byte for byte the same answer as one clean successor —
+     *
+     *      availability_state  committed_future
+     *      conflict_state      clear
+     *      marketing_state     successor_pending
+     *      blocking_reason     future_commitment_native_proof_or_funding_
+     *                          incomplete
+     *
+     *  — because classifyPosition reduces every future right to
+     *  `leases.find(isFuture)` and discards the rest. The interval read
+     *  names the same situation `overlapping_claims`. The fact existed in
+     *  one canonical projection and vanished in the next, and the reason
+     *  the operator was given sent them to chase proof and funding on one
+     *  lease while two people held a claim on the bed.
+     *
+     *  ⚠ WHAT MUST NOT MOVE, AND WHY EACH CONTROL IS HERE. The current
+     *  conflict detector is date-scoped on purpose — production caught it
+     *  once reporting an April overlap on an August date — so G4 pins that
+     *  a today-contest still reads with its OWN reason and was not merged
+     *  into the new one. G2 pins that ONE clean successor is untouched:
+     *  without it, a fix that simply called every future commitment
+     *  contested would pass G3 and destroy the read.                     */
+    const U3 = "cab10001-0000-4000-8000-0000000000a3";
+    const FUT1 = "cab10001-0000-4000-8000-000000000301";
+    const FUT2 = "cab10001-0000-4000-8000-000000000302";
+    await pool.query(`insert into units (id,property_id,unit_number) values ($1,$2,'303')`, [U3, P]);
+    const space3 = (await pool.query(
+      `select id from spaces where unit_id=$1 order by created_at limit 1`, [U3])).rows[0].id;
+    //  Configured and marketable, so "not offered" can never be an unrelated
+    //  answer — the same trap F4 already records.
+    await pool.query(`update spaces set use_type='residential' where id=$1`, [space3]);
+    const addFuture = (id, st, en, status) => pool.query(
+      `insert into leases (id, property_id, space_id, tenant_ids, rent, balance,
+                           start_date, end_date, lease_status)
+       values ($1,$2,$3,$4::uuid[],1400,0,$5,$6,$7)`,
+      [id, P, space3, [PERSON], st, en, status]);
+    const rowFor303 = async () => {
+      const ar = await availabilityRead(pool, { property_id: P, as_of: AS_OF });
+      return { ar, row: (ar.positions || ar.rows || []).find((r) => String(r.unit_number) === "303") };
+    };
+    try {
+      // ── G1 · POSITIVE CONTROL — the bed is genuinely offerable first ──
+      const g0 = await rowFor303();
+      if (g0.row && g0.row.marketing_state === "marketable_now")
+        ok("G1 · POSITIVE CONTROL — unit 303 with no rights at all IS offered; every G below can fail for its own reason");
+      else bad("G1 · the control bed is not offerable; G2-G5 would be vacuous",
+               JSON.stringify(g0.row && { s: g0.row.marketing_state, r: g0.row.blocking_reason }));
+
+      // ── G2 · CONTROL — ONE future right is still an ordinary successor ─
+      await addFuture(FUT1, "2027-11-01", "2028-02-01", "signed");
+      const g1 = await rowFor303();
+      const oneState = g1.row && g1.row.marketing_state;
+      const oneReason = g1.row && g1.row.blocking_reason;
+      if (oneState === "successor_pending" && oneReason && oneReason !== "overlapping_future_lease_claims")
+        ok(`G2 · CONTROL — ONE future right is still ${oneState} · ${oneReason}; the fix did not make every commitment a contest`);
+      else bad("G2 · a single clean successor changed meaning", JSON.stringify({ s: oneState, r: oneReason }));
+
+      // ── G3 · THE DEFECT — a SECOND overlapping future right is visible ─
+      await addFuture(FUT2, "2027-12-01", "2028-03-01", "signed");
+      const g2 = await rowFor303();
+      const twoState = g2.row && g2.row.marketing_state;
+      const twoReason = g2.row && g2.row.blocking_reason;
+      console.log(`\n  unit 303 · one future right: ${JSON.stringify({ s: oneState, r: oneReason })}`);
+      console.log(`  unit 303 · two contesting:   ${JSON.stringify({ s: twoState, r: twoReason })}`);
+      if (twoState === "contested" && twoReason === "overlapping_future_lease_claims")
+        ok("G3 · two rights contesting the same forward term read contested · overlapping_future_lease_claims");
+      else bad("G3 · a future double-let is still reported as an ordinary successor",
+               JSON.stringify({ s: twoState, r: twoReason }));
+
+      /*  AND IT MUST DIFFER FROM THE ONE-RIGHT ANSWER. Asserted as a
+       *  DIFFERENCE, not only as a value: this is the exact thing that was
+       *  broken — the two shapes were indistinguishable — so the proof has
+       *  to compare them rather than trust that the value it wants is not
+       *  also what one clean successor returns. */
+      if (JSON.stringify({ s: twoState, r: twoReason }) !== JSON.stringify({ s: oneState, r: oneReason }))
+        ok("G3 · and it is DISTINGUISHABLE from the single-successor answer, which is what was broken");
+      else bad("G3 · one right and two contesting rights still give the identical answer",
+               JSON.stringify({ s: twoState, r: twoReason }));
+
+      //  The withheld row must still be explainable and counted — the same
+      //  invariant F7 pins for the unresolved bucket.
+      const label = g2.row && g2.row.blocking_label;
+      const buckets = Object.values(g2.ar.states || {}).reduce((a, n) => a + n, 0);
+      if (label && String(label).trim() && buckets === g2.ar.count)
+        ok(`G3 · the contested row carries a governed label ("${label}") and the buckets still sum to count (${buckets} === ${g2.ar.count})`);
+      else bad("G3 · the contested row is unexplained or the summary stopped adding up",
+               JSON.stringify({ label, buckets, count: g2.ar.count }));
+
+      /*  ── G4 · CONTROL — A CONTEST TODAY KEEPS ITS OWN REASON ─────────
+       *  Two leases spanning as_of. The date-scoped current detector must
+       *  still answer this, with `overlapping_lease_claims` — if the two
+       *  reasons ever merge, an operator can no longer tell "someone may be
+       *  in there twice NOW" from "two people are committed for later". */
+      await pool.query(`delete from leases where id = any($1::uuid[])`, [[FUT1, FUT2]]);
+      await addFuture(FUT1, "2026-08-01", "2027-02-01", "active");
+      await addFuture(FUT2, "2026-08-10", "2027-03-01", "active");
+      const g3 = await rowFor303();
+      if (g3.row && g3.row.marketing_state === "contested"
+          && g3.row.blocking_reason === "overlapping_lease_claims")
+        ok("G4 · CONTROL — a contest SPANNING TODAY still reads contested · overlapping_lease_claims, its own reason intact");
+      else bad("G4 · the current-axis contest lost or changed its reason",
+               JSON.stringify(g3.row && { s: g3.row.marketing_state, r: g3.row.blocking_reason }));
+
+      /*  ── G5 · CONTROL — THE DATE SCOPE DID NOT WIDEN ─────────────────
+       *  Two future leases that do NOT overlap each other are a term and
+       *  its successor, not a contest. A fix that counted "more than one
+       *  future lease" instead of "two future leases overlapping" would
+       *  pass G3 and fail here.                                          */
+      await pool.query(`delete from leases where id = any($1::uuid[])`, [[FUT1, FUT2]]);
+      await addFuture(FUT1, "2027-01-01", "2027-06-30", "signed");
+      await addFuture(FUT2, "2027-08-01", "2028-01-31", "signed");
+      const g4 = await rowFor303();
+      if (g4.row && g4.row.marketing_state !== "contested")
+        ok(`G5 · CONTROL — two CONSECUTIVE future rights are a succession, not a contest — still ${g4.row.marketing_state}`);
+      else bad("G5 · non-overlapping future terms were reported as a contest",
+               JSON.stringify(g4.row && { s: g4.row.marketing_state, r: g4.row.blocking_reason }));
+    } finally {
+      await pool.query(`delete from leases where id = any($1::uuid[])`, [[FUT1, FUT2]]);
+      await pool.query(`delete from spaces where unit_id=$1`, [U3]);
+      await pool.query(`delete from units where id=$1`, [U3]);
+    }
   } catch (e) {
     bad("harness died", e.message);
     console.error(e);

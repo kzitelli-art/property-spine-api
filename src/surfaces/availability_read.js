@@ -88,6 +88,28 @@ function marketingState(p, liveOk) {
   if (p.availability_state === "committed_activation_pending")
     return { state: "activation_pending", reason: "lease_commenced_awaiting_move_in_funds" };
 
+  /*  ── TWO RIGHTS CONTESTING THE SAME FORWARD TERM ──────────────────
+   *  This must be read BEFORE the successor branches, because the
+   *  successor branches are exactly what swallowed it: they answer from a
+   *  single chosen future lease, so a bed with two contesting ones came
+   *  back `successor_pending · future_commitment_native_proof_or_funding_
+   *  incomplete` — a true sentence about the wrong problem. It sent an
+   *  operator to chase proof and funding on one lease while two people
+   *  held a claim on the bed.
+   *
+   *  ⚠ `contested` IS THE EXISTING STATE AND THE EXISTING HUMAN LABEL —
+   *  "Overlapping lease claims — resolve which lease governs" — which is
+   *  precisely the action here. `unresolved` was the alternative and it is
+   *  weaker than what Spine knows: Spine is not failing to establish
+   *  availability, it knows exactly what is wrong and which leases. §5
+   *  prefers the more specific true statement.
+   *
+   *  The REASON keeps the timing distinct, because the operating urgency
+   *  differs: overlapping_lease_claims means someone may be in there twice
+   *  NOW; this means two people are committed for later.                */
+  if (p.future_conflict_state === "conflicted")
+    return { state: "contested", reason: "overlapping_future_lease_claims" };
+
   // A successor removes the position from open inventory whether or not it
   // is locked — a pending successor is not marketable inventory, it is a
   // commitment awaiting proof.

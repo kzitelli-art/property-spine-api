@@ -386,6 +386,44 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease)) && datesSpan(lease, asOfKey)) || null;
   const future = leases.find((lease) => isFuture(lease, asOfKey)) || null;
 
+  /*  ── MORE THAN ONE FUTURE RIGHT IS NOT ONE FUTURE RIGHT ────────────
+   *
+   *  `future` above is a `.find()`. It takes the earliest match and every
+   *  other future right on the bed is discarded before any reader sees it,
+   *  so a bed with TWO signed leases contesting the same forward term was
+   *  reported identically to a bed with one clean successor — same
+   *  availability_state, same future_commitment, same marketing_state,
+   *  same blocking reason. Measured on real Postgres: adding a second
+   *  overlapping future lease changed nothing at all on this axis.
+   *
+   *  The interval read already names this `overlapping_claims`. The as-of
+   *  read had no word for it, so the fact existed in one canonical
+   *  projection and vanished in the next.
+   *
+   *  ⚠ THIS IS DELIBERATELY NOT `conflict_state`, AND THAT IS THE WHOLE
+   *  CARE OF IT. The current-conflict detector below is date-scoped to
+   *  leases spanning asOf, and its comment records why: production caught
+   *  it reporting an April overlap on an August date. Widening it to reach
+   *  future leases would reinstate exactly that defect. A contest today
+   *  and a contest next November are two different facts about two
+   *  different dates, and they get two different fields.
+   *
+   *  Same predicate, same self-comparison defence, same two-sides rule as
+   *  the current detector — not a second definition of a contested bed,
+   *  the same definition asked about a different window.                 */
+  const futures = leases.filter((lease) => isFuture(lease, asOfKey));
+  const futureContest = [];
+  for (let i = 0; i < futures.length; i++) {
+    for (let j = i + 1; j < futures.length; j++) {
+      if (String(futures[i].id) === String(futures[j].id)) continue;
+      if (rangesOverlap(futures[i], futures[j])) {
+        futureContest.push(futures[i].id, futures[j].id);
+      }
+    }
+  }
+  const distinctFutureContest = [...new Set(futureContest)];
+  const future_conflict_ids = distinctFutureContest.length >= 2 ? distinctFutureContest : [];
+
   /*  ── A SPANNING LEASE WHOSE STATUS WE DO NOT UNDERSTAND ───────────
    *  A DIAGNOSTIC, and a fail-closed one. Not a home for statuses we do
    *  understand: 'signed' belongs in activation_pending above, because a
@@ -634,6 +672,12 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     notice_date: row.notice_date || null,
     conflict_state: conflict_ids.length ? "conflicted" : "clear",
     conflicting_lease_ids: conflict_ids,
+    /*  THE SAME QUESTION, ASKED OF THE FORWARD WINDOW. Parallel names on
+     *  purpose: a reader that understands conflict_state understands this
+     *  without being taught a second vocabulary, and the two can never be
+     *  mistaken for each other. */
+    future_conflict_state: future_conflict_ids.length ? "conflicted" : "clear",
+    future_conflicting_lease_ids: future_conflict_ids,
     successor,
     // THE STANDALONE FUTURE COMMITMENT. Same helper, same governed locked rule.
     // availability_read consumes this instead of assuming committed_future
