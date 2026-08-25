@@ -12,6 +12,7 @@ const { Pool } = require("pg");
 const { databaseSsl } = require("../../src/shared/database_ssl");
 const staffSessions = require("../../src/identity/staff_session_service");
 const { routeStaffSmsTurn } = require("../../src/conversation/staff_sms_router");
+const { resolveLeasingSubject } = require("../../src/leasing/leasing_standing_read");
 
 if (process.env.E2E_DISPOSABLE_DATABASE !== "true") {
   console.error("FATAL: E2E_DISPOSABLE_DATABASE=true is required.");
@@ -308,6 +309,39 @@ async function waitForStaffReply(providerMessageId) {
     email: `skyline-${suffix}@example.com`, source: "e2e", attempt_sms: false,
   }}), "prospect intake");
   expect(!!intake.person_id && !!intake.lead_id, "prospect entered through canonical intake");
+
+  const addressedPeople = [];
+  for (const candidateName of ["Priya Nand", "Dana Whitfield", "Dana Flores"]) {
+    const person = (await q(
+      `insert into persons (name,lifecycle_status,source)
+       values ($1,'prospect','leasing_subject_e2e') returning id`,
+      [candidateName]
+    )).rows[0];
+    await q(`insert into leasing_leads (person_id,property_id) values ($1,$2)`,
+      [person.id, propertyId]);
+    addressedPeople.push({ id: person.id, name: candidateName });
+  }
+  const uniquePartial = await resolveLeasingSubject(pool, {
+    property_id: propertyId, text: "Has Priya signed?",
+  });
+  expect(uniquePartial.resolved && uniquePartial.person.id === addressedPeople[0].id,
+    "a unique partial name resolves inside Mike's exact property",
+    JSON.stringify(uniquePartial));
+  const ambiguousPartial = await resolveLeasingSubject(pool, {
+    property_id: propertyId, text: "Has Dana signed?",
+  });
+  expect(!ambiguousPartial.resolved && ambiguousPartial.reason === "ambiguous"
+      && ambiguousPartial.candidates.length === 2
+      && ambiguousPartial.candidates.every((candidate) => candidate.name.startsWith("Dana ")),
+    "a shared partial name asks for clarification instead of choosing a person",
+    JSON.stringify(ambiguousPartial));
+  const exactOutranksPartial = await resolveLeasingSubject(pool, {
+    property_id: propertyId, text: "Has Dana Whitfield signed?",
+  });
+  expect(exactOutranksPartial.resolved
+      && exactOutranksPartial.person.id === addressedPeople[1].id,
+    "a complete recorded name outranks another person's shared first name",
+    JSON.stringify(exactOutranksPartial));
   await q(`insert into contact_preferences
              (person_id,channel,consent_state,source,updated_at)
            values ($1,'text','opted_in','internal_qa_enrollment',now())
