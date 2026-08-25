@@ -512,6 +512,12 @@ const forwardShape = async (pool) =>
     });
     const rowOf = (f, unit, label) =>
       f.ledger.find((r) => r.unit_number === unit && r.space_label === label);
+    /*  READ THE COLLECTION DEFENSIVELY, for the same reason carriesWhy
+     *  does: if it is ever removed, every assertion below must report what
+     *  is missing on its own line rather than one of them killing the run
+     *  and hiding the other five.                                        */
+    const entryOf = (f, unit, label) => (f.unresolved_positions || [])
+      .find((x) => x.unit_number === unit && x.space_label === label);
 
     /*  ONE INVARIANT, CHECKED IN EVERY ARM. The collection must be exactly
      *  the unresolved rows — no more, no fewer — and no entry may be a
@@ -522,6 +528,17 @@ const forwardShape = async (pool) =>
      *  `unresolved_because` rides along and either one satisfies it. */
     const carriesWhy = (f, tag) => {
       const n = f.ledger.filter((r) => r.commitment_state === "unresolved").length;
+      /*  A MISSING COLLECTION IS A NAMED FAILURE, NOT A CRASH. The first
+       *  version read `.length` straight off it, so removing the carriage
+       *  killed the harness at this line and F2–F9 never ran — a red that
+       *  reported one TypeError instead of the six things that had gone
+       *  missing. Found by running the falsification locally before
+       *  pushing it, which is the only reason this line reads this way. */
+      if (!Array.isArray(f.unresolved_positions)) {
+        bad(`F8 · ${tag} — the payload carries no unresolved_positions collection at all`,
+            `typeof ${typeof f.unresolved_positions}`);
+        return;
+      }
       if (f.unresolved_positions.length === n && f.headline.unresolved === n)
         ok(`F8 · ${tag} — unresolved_positions is exactly the unresolved ledger rows (${n}) and ties to the headline`);
       else bad(`F8 · ${tag} — the collection and the ledger disagree`, JSON.stringify({
@@ -533,14 +550,39 @@ const forwardShape = async (pool) =>
     };
 
     // ── F1 · CONTROL — the baseline cycle has nothing unresolved ───────
+    /*  STRICTLY ABOUT THE POPULATION. An earlier version folded the
+     *  key-presence check into this control, so removing the carriage made
+     *  F1 announce "the baseline already carries an unresolved bed" — a
+     *  true failure with a false cause, pointing whoever read it at the
+     *  fixture instead of at the missing field.                          */
     const fBase = await cycleLedger();
     const base101A = rowOf(fBase, "101", "A");
-    if (fBase.headline.unresolved === 0 && base101A && base101A.commitment_state === "signed"
-        && base101A.unresolved_reason === null && (base101A.unplaceable_rights || []).length === 0)
+    if (fBase.headline.unresolved === 0 && base101A && base101A.commitment_state === "signed")
       ok("F1 · CONTROL — the baseline cycle is signed on 101A with no unresolved beds; F2–F7 can mean something");
     else bad("F1 · the baseline already carries an unresolved bed", JSON.stringify({
       unresolved: fBase.headline.unresolved,
-      row: base101A && { s: base101A.commitment_state, r: base101A.unresolved_reason } }));
+      row: base101A && { s: base101A.commitment_state } }));
+
+    /*  ── F1b · THE CARRIAGE EXISTS AT ALL ─────────────────────────────
+     *  Named separately and by key, because this is the assertion that
+     *  must go red — and say WHY — if the carriage is ever removed. The
+     *  three keys are on EVERY row, unresolved or not, so a payload where
+     *  they appear only on questions has half-implemented the contract. */
+    const KEYS = ["unresolved_reason", "unplaceable_rights", "contract_unresolved_because"];
+    const missingKeys = KEYS.filter((k) => !fBase.ledger.every((r) => k in r));
+    if (missingKeys.length === 0 && Array.isArray(fBase.unresolved_positions))
+      ok(`F1b · every ledger row carries ${KEYS.join(", ")}, and the payload carries unresolved_positions`);
+    else bad("F1b · the evidence carriage is absent from the payload", JSON.stringify({
+      missing_row_keys: missingKeys,
+      unresolved_positions: Array.isArray(fBase.unresolved_positions) ? "present" : "ABSENT" }));
+
+    //  …and on a settled row it is explicitly null, not merely absent. A
+    //  reader cannot tell "no reason" from "field never written" (§5).
+    if (base101A && base101A.unresolved_reason === null
+        && Array.isArray(base101A.unplaceable_rights) && base101A.unplaceable_rights.length === 0)
+      ok("F1b · a settled row says null and an empty array, not undefined");
+    else bad("F1b · a settled row does not state its emptiness", JSON.stringify(base101A && {
+      r: base101A.unresolved_reason, up: base101A.unplaceable_rights }));
     carriesWhy(fBase, "baseline");
 
     // ── F2/F3/F4/F5 · an unplaceable claim reaches the ledger ──────────
@@ -559,12 +601,12 @@ const forwardShape = async (pool) =>
         ok(`F3 · and it names the claim itself — ${UND3.slice(0, 8)} / active, in the canonical right shape`);
       else bad("F3 · the unplaceable claim was not carried onto the row", JSON.stringify(up));
 
-      const entry = f.unresolved_positions.find((x) => x.unit_number === "101" && x.space_label === "A");
-      if (f.unresolved_positions.length === 1 && entry
+      const entry = entryOf(f, "101", "A");
+      if ((f.unresolved_positions || []).length === 1 && entry
           && entry.unresolved_reason === "unplaceable_rights"
           && (entry.unplaceable_rights || []).length === 1)
         ok("F4 · the top-level collection names the bed, the reason and the claim");
-      else bad("F4 · the collection does not carry the bed", JSON.stringify(f.unresolved_positions));
+      else bad("F4 · the collection does not carry the bed", JSON.stringify(f.unresolved_positions || null));
 
       /*  ⚠ ADDED, NOT SUBSTITUTED. The signed lease that partially blocks
        *  this term is still the reason the bed is not open, and an answer
@@ -631,7 +673,7 @@ const forwardShape = async (pool) =>
         ok("F7 · and the canonical unresolved_because arrives verbatim, not re-derived");
       else bad("F7 · the canonical reason was dropped on the way up",
                JSON.stringify(row && row.contract_unresolved_because));
-      const entry = f.unresolved_positions.find((x) => x.unit_number === "101" && x.space_label === "B");
+      const entry = entryOf(f, "101", "B");
       if (entry && (entry.colliding_rights || []).length === 2)
         ok("F7 · the collection names BOTH contesting rights — a contest is unreadable without them");
       else bad("F7 · the contesting rights are not in the collection",
@@ -646,12 +688,12 @@ const forwardShape = async (pool) =>
      *  return to the F1 answer, something above leaked and the greens are
      *  measuring a database nobody described.                            */
     const fEnd = await cycleLedger();
-    if (fEnd.headline.unresolved === 0 && fEnd.unresolved_positions.length === 0
+    if (fEnd.headline.unresolved === 0 && (fEnd.unresolved_positions || []).length === 0
         && JSON.stringify(fEnd.headline) === JSON.stringify(fBase.headline))
       ok("F9 · CONTROL — with every probe row removed the ledger is identical to F1");
     else bad("F9 · the fixture did not return to its baseline", JSON.stringify({
       before: fBase.headline, after: fEnd.headline,
-      collection: fEnd.unresolved_positions.length }));
+      collection: (fEnd.unresolved_positions || []).length }));
   } catch (e) {
     bad("harness died", e.message);
     console.error(e);
