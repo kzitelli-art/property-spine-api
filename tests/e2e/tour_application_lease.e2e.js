@@ -334,18 +334,52 @@ async function waitForStaffReply(providerMessageId) {
     "the vague text records no tour outcome");
 
   const captureSid = `SM_E2E_CAPTURE_${suffix}`;
+  const captureWords = "Tour went well. She wants bed B and wants to apply.";
   await sendStaffSms({
     from: mikePhone,
     to: operationsLine,
     sid: captureSid,
-    body: `${name}'s Skyline E2E tour is done. They are Ready to Apply. Send the application.`,
+    body: captureWords,
   });
   const captureReply = await waitForStaffReply(captureSid);
   expect(captureReply.reply_reason === "execution_receipt"
       && /Recorded .* tour as Ready to Apply/.test(captureReply.body),
-    "Mike's second text records the explicit post-tour standing through Ask Spine");
-  expect(/Unit 3B/.test(captureReply.body) && /Unit 3B, Bed B/.test(captureReply.body),
-    "Ask Spine returns the exact-bed menu instead of choosing for Mike");
+    "Mike's ordinary post-tour wording records the explicit Ready to Apply standing");
+  expect(/I found Unit 3B, Bed B/.test(captureReply.body)
+      && /Nothing was sent/.test(captureReply.body)
+      && new RegExp(`Send ${name} the application for Unit 3B, Bed B`).test(captureReply.body),
+    "Spine resolves Bed B inside the toured unit and asks Mike to confirm the consequential send");
+  const capturedInbound = (await q(
+    `select body,actor_user_id,communication_line_id,needs_human,classification
+       from comm_events where sms_sid=$1`, [captureSid]
+  )).rows[0];
+  expect(capturedInbound && capturedInbound.body === captureWords
+      && capturedInbound.actor_user_id === mike.id
+      && capturedInbound.needs_human === false,
+    "the raw wording is retained against phone-derived Mike identity before the reply");
+
+  await sendStaffSms({
+    from: mikePhone,
+    to: operationsLine,
+    sid: captureSid,
+    body: captureWords,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const replayState = (await q(
+    `select
+       (select count(*)::int from comm_events where sms_sid=$1) as inbound_count,
+       (select count(*)::int from comm_events o
+          where o.in_reply_to_comm_event_id=(select id from comm_events where sms_sid=$1)) as reply_count,
+       (select count(*)::int from tour_events
+          where tour_id=$2 and event_type='completed') as completion_count,
+       (select count(*)::int from leasing_conversions
+          where origin_tour_id=$2 and property_id=$3) as conversion_count`,
+    [captureSid, booked.tour_id, propertyId]
+  )).rows[0];
+  expect(replayState && replayState.inbound_count === 1 && replayState.reply_count === 1
+      && replayState.completion_count === 1 && replayState.conversion_count === 1,
+    "provider-message replay creates no second inbound, reply, tour completion, or conversion",
+    JSON.stringify(replayState));
 
   const completed = (await q(
     `select id as conversion_id from leasing_conversions
