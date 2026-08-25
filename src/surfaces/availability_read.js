@@ -370,12 +370,7 @@ const HUMAN = {
   activation_pending: "Lease commenced — awaiting move-in funds",
   use_not_configured: "Use type not configured",
   marketable_now: "Marketable now",
-  /*  The withheld state introduced with the fail-closed marketing boundary.
-   *  It must say what an operator can DO, not merely that Spine declined:
-   *  the position is withheld because a governing availability fact is
-   *  missing or unreadable, and resolving that fact is the next step. A
-   *  withheld row with a null label is a refusal nobody can act on.      */
-  unresolved: "Availability unresolved — resolve the governing lease or availability facts before offering",
+  /*  DELIBERATE FALSIFICATION — HUMAN.unresolved removed. REVERTED NEXT. */
   unavailable: "Live read failed",
 };
 
@@ -630,13 +625,9 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       contested: inState("contested").length,
       use_not_configured: inState("use_not_configured").length,
       not_marketable_use: inState("not_marketable_use").length,
-      /*  THE INVARIANT ABOVE IS A CLAIM, AND IT WAS BRIEFLY FALSE.
-       *  "Each position appears in exactly one state" stopped holding the
-       *  moment marketingState could return `unresolved`, because no bucket
-       *  counted it: a withheld row vanished from the summary while still
-       *  appearing in rows[]. A summary that does not add up to count is
-       *  worse than no summary — it reads as an accounted building.      */
-      unresolved: inState("unresolved").length,
+      /*  DELIBERATE FALSIFICATION — states.unresolved removed. REVERTED NEXT.
+       *  The DECISION path is untouched: marketingState still returns
+       *  unresolved and still withholds. Only the EXPOSURE is gone.    */
     },
 
     rows,
