@@ -78,12 +78,12 @@ const MATRIX = [
   //  Realistic phrasings for the remaining supported reads, so the
   //  matrix covers what Mike actually asks rather than only what
   //  happened to be convenient to assert.
-  { q: "Which signer is still outstanding?",               subject: "work",                    dest: "technician", acceptance: "leasing_person", reportedSeparately: true },
+  { q: "Which signer is still outstanding?",               subject: "leasing_person",          dest: "ask_spine",  acceptance: "leasing_person" },
   { q: "What is the asking rent for a 1 bedroom?",         subject: "economics",               dest: "ask_spine",  acceptance: "economics" },
   { q: "What do we charge for security deposits?",         subject: "economics",               dest: "ask_spine",  acceptance: "economics" },
   { q: "How many beds are occupied right now?",            subject: "tenancy",                 dest: "ask_spine",  acceptance: "tenancy" },
   { q: "How many beds are vacant?",                        subject: "tenancy",                 dest: "ask_spine",  acceptance: "tenancy" },
-  { q: "What work orders are assigned to me?",             subject: "work",                    dest: "technician", acceptance: "personal_attention", reportedSeparately: true },
+  { q: "What work orders are assigned to me?",             subject: "work",                    dest: "ask_spine",  acceptance: "personal_attention" },
 ];
 
 console.log("\n  ── subject routing, real functions ──");
@@ -172,22 +172,16 @@ for (const form of ["countersign", "countersigns", "countersigned", "countersign
  *  taken Maintenance's sentence, so that is the assertion.
  *  And bare `tours?` is only safe because tour_schedule suppresses
  *  leasing_person — asserted here rather than trusted.                 */
-/*  A PRE-EXISTING MIS-ROUTE, FOUND WHILE WIDENING AND NOT INTRODUCED BY
- *  IT. The original `holding (?:this|it|things) up` alternative claims a
- *  sentence that carries explicit MAINTENANCE vocabulary, because `work`
- *  yields to `leasing_person` by design. Widening did not cause it and
- *  narrowing the new noun-anchored alternative cannot cure it. Repairing
- *  it means deciding whether some leasing vocabulary is weak enough to
- *  yield to explicit work terms — a routing ruling, not a phrase fix, so
- *  it is REPORTED and pinned rather than taken here.                    */
-ok("a work sentence with a generic leasing phrase still goes to leasing_person (PRE-EXISTING, pinned)",
-  askSpineAnswer.questionSubject("the elevator repair is holding this up") === "leasing_person",
+/*  THE PRE-EXISTING MIS-ROUTE THIS FILE REPORTED TWICE IS NOW FIXED.
+ *  It was pinned across two builds as "the generic `holding this up`
+ *  alternative outranks explicit maintenance vocabulary", with the note
+ *  that curing it needed a weak/strong distinction inside leasing
+ *  vocabulary. That distinction now exists, so the pin becomes an
+ *  assertion in the opposite direction — a technician's sentence keeps
+ *  its own domain.                                                      */
+ok("a work sentence with a generic leasing phrase now stays with WORK (was a pinned mis-route)",
+  askSpineAnswer.questionSubject("the elevator repair is holding this up") === "work",
   askSpineAnswer.questionSubject("the elevator repair is holding this up"));
-note("PRE-EXISTING (not introduced by this build) — \"the elevator repair is holding this "
-   + "up\" routes to `leasing_person`. The generic `holding this up` alternative outranks "
-   + "explicit maintenance vocabulary because `work` yields to every named domain. Curing "
-   + "it needs a weak/strong distinction inside leasing vocabulary, which is a routing "
-   + "ruling rather than a phrase repair.");
 
 ok("\"what is holding the elevator up\" stays OUT of leasing_person",
   askSpineAnswer.questionSubject("what is holding the elevator up") !== "leasing_person",
@@ -351,6 +345,7 @@ console.log("\n  ── four silences remain distinct (§40.7) ──");
 }
 
 /*  ── PART D · COMPOSITION IS A REFUSAL, NOT AN ANSWER (§40.8) ───────  */
+await unnamedSignerShape();
 await entitlementMatrix();
 
 console.log("\n  ── cross-domain composition remains refused ──");
@@ -362,31 +357,104 @@ ok("the SMS router carries that refusal rather than picking a domain",
     .subject === "composition_unavailable");
 
 /*  ── PART E · THE MODEL GETS NO IDS AND NO TOOLS ────────────────────  */
-/*  ── TWO COMPOSER-OWNED NEAR-MISSES, MEASURED AND NOT REPAIRED ──────
- *  Both live in questionSubject / PERSONAL_ATTENTION_TERMS, which this
- *  lane owns — and both are one token from working. They are recorded
- *  rather than fixed because this build's mandate is the model-scope
- *  firewall and a readiness census; extending routing again is a
- *  separate ruling, and quietly widening a regex while shipping a
- *  security boundary is how two changes become one unreviewable diff.
- *  The exact minimal fix is named so the next thread does not have to
- *  rediscover it.                                                       */
-ok("C4  \"Which signer is still outstanding?\" routes to `work` (MEASURED, not repaired)",
-  askSpineAnswer.questionSubject("Which signer is still outstanding?") === "work",
-  askSpineAnswer.questionSubject("Which signer is still outstanding?"));
-note("COMPOSER-OWNED · \"Which signer is still outstanding?\" → dashboard `work`, SMS `technician`; "
-   + "acceptance wants `leasing_person`. LEASING_PERSON_TERMS has "
-   + "`sign(?:s|ed|ing|ature|atures)?`, and \"signer\" has no word boundary after \"sign\", so the "
-   + "noun for the person who signs matches nothing. Minimal fix: add `signers?` to that "
-   + "alternation. Not applied here.");
-ok("C5  \"What work orders are assigned to me?\" is not personal-attention (MEASURED, not repaired)",
-  askSpineAnswer.isPersonalAttentionQuestion("What work orders are assigned to me?") === false,
-  "recognised");
-note("COMPOSER-OWNED · \"What work orders are assigned to me?\" is not recognised as personal "
-   + "attention. PERSONAL_ATTENTION_TERMS has `what (?:work|tasks?|jobs?) (?:is|are) assigned to "
-   + "me`, which \"work orders\" misses by one word. Minimal fix: `(?:work(?: orders?)?|tasks?|"
-   + "jobs?)`. Not applied here. It still answers as a property-scoped `work` question, so the "
-   + "failure is scope — Mike gets the property queue where he asked for his own.");
+/*  ══ MIKE NATURAL-LANGUAGE READ BOUNDARIES ═════════════════════════
+ *  The two near-misses this file reported last build are repaired, and
+ *  the repair is asserted with its NEGATIVE CONTROLS beside it. Positive
+ *  cases alone would pass just as well if the classifier had simply been
+ *  made greedy — and greedy is how "sign off on the repair" became a
+ *  lease question. Each block therefore proves both directions.
+ *
+ *  ── WHAT PHASE A DID *NOT* DO, AND WHY ──────────────────────────────
+ *  "Which signer is still outstanding?" now reaches leasing_person. It
+ *  does NOT get a property-wide answer, because no canonical read can
+ *  give one — traced, not assumed:
+ *
+ *    · readLeasingStanding THROWS without a person_id. It is
+ *      person-grain by construction.
+ *    · the obligations queue carries no signature obligation at all:
+ *      `lease_signature_followup` and `lease_countersign` are RUNGS on
+ *      `leasing_conversion_obligations`, a separate rail that
+ *      operator_obligations_service never reads.
+ *
+ *  So an unnamed signer question lands on the existing deterministic
+ *  NO_SUBJECT shape, which asks for a name. That is honest, and it is
+ *  strictly better than the old behaviour: `work` answered a signature
+ *  question with the property work queue — the wrong answer, confidently.
+ *  The missing property-wide read is a Codex contract request, not
+ *  something a person-grain reader should be made to fake.              */
+console.log("\n  ── PHASE A · signature language reaches leasing, maintenance keeps its own ──");
+for (const q of ["Which signer is still outstanding?", "Who still needs to sign?",
+                 "Has Jane signed?", "Has Jane signed her lease?",
+                 "Has Skyline signed Jane's lease?", "What is holding up Jane's lease?",
+                 "Which application is waiting on a signature?"]) {
+  ok(`A1  "${q}" reaches leasing_person`,
+    askSpineAnswer.questionSubject(q) === "leasing_person", askSpineAnswer.questionSubject(q));
+}
+/*  THE CONTROLS. Every one of these was measured routing to
+ *  leasing_person before this build.  */
+for (const q of ["sign maintenance work", "sign off on the repair", "signature paint color",
+                 "assign the work order", "the elevator repair is holding this up"]) {
+  ok(`A2  CONTROL · "${q}" is NOT a leasing question`,
+    askSpineAnswer.questionSubject(q) !== "leasing_person", askSpineAnswer.questionSubject(q));
+}
+//  No generic substring matching: "assign" and "design" contain "sign".
+for (const q of ["assign the elevator repair", "redesign the signage", "he resigned last week"]) {
+  ok(`A3  CONTROL · "${q}" does not reach leasing through a sign-substring`,
+    askSpineAnswer.questionSubject(q) !== "leasing_person", askSpineAnswer.questionSubject(q));
+}
+/*  AN UNNAMED SIGNER QUESTION IS HONESTLY EMPTY, NOT WRONGLY FULL.
+ *  Driven through the real composer with a reader that resolves nobody —
+ *  the shape a property with no matching name actually produces.
+ *
+ *  ⚠ A FUNCTION, NOT A BARE BLOCK. Top-level `await` in a CommonJS file
+ *  passes `node --check` and then refuses to load at runtime — a trap
+ *  this suite has already paid for once.  */
+async function unnamedSignerShape() {
+  const facts = await askSpineAnswer.gatherFacts(NO_DB, {
+    property_id: "p-1", allowed_modules: ["leasing"], subject: "leasing_person",
+    question: "Which signer is still outstanding?",
+    leasingReader: {
+      async resolveLeasingSubject() { return { resolved: false, reason: "no_person_named", candidates: [] }; },
+      async readLeasingStanding() { throw new Error("must not be called without a person"); },
+    },
+  });
+  ok("A4  an unnamed signer question is NO_SUBJECT — it does not invent a property-wide answer",
+    facts.leasing_person && facts.leasing_person.read_state === "NO_SUBJECT",
+    JSON.stringify(facts.leasing_person));
+  ok("A5  …and the refusal names a next step rather than stopping at a code",
+    /No person at this property matches a name/i.test(facts.leasing_person.note || ""),
+    JSON.stringify(facts.leasing_person && facts.leasing_person.note));
+}
+note("CODEX CONTRACT REQUEST · there is no canonical PROPERTY-WIDE signature read. "
+   + "readLeasingStanding throws without person_id, and the signature rungs "
+   + "(`lease_signature_followup`, `lease_countersign`) live on leasing_conversion_obligations, "
+   + "which operator_obligations_service does not read — so the obligations queue cannot answer "
+   + "it either. Needed: a property-scoped read of applications awaiting resident or company "
+   + "signature. Until it exists, \"which signer is outstanding\" honestly asks for a name.");
+
+console.log("\n  ── PHASE B · personal work attention needs a pronoun, not a keyword ──");
+for (const q of ["What work orders are assigned to me?", "What work is assigned to me?",
+                 "What jobs are mine?", "What tasks need my attention?",
+                 "Show me my open work orders."]) {
+  const route = routeStaffSmsTurn({ text: q, attachments: [] });
+  ok(`B1  "${q}" is personal attention on BOTH surfaces`,
+    askSpineAnswer.isPersonalAttentionQuestion(q)
+    && askSpineAnswer.questionSubject(q) === "work"
+    && route.destination === "ask_spine" && route.subject === "work",
+    `personal=${askSpineAnswer.isPersonalAttentionQuestion(q)} dest=${route.destination}`);
+}
+/*  THE CONTROLS THAT MAKE B1 MEAN SOMETHING. "assigned" and "work order"
+ *  appear in both lists; only the pronoun separates them. Answering any
+ *  of these from Mike's own queue would be a wrong answer delivered
+ *  confidently — the property asked about is not him.  */
+for (const q of ["What work orders are open at Skyline?", "What work is assigned to Jane?",
+                 "Who is assigned to the elevator repair?", "What jobs are still unassigned?",
+                 "Show all open work."]) {
+  ok(`B2  CONTROL · "${q}" stays an ordinary property work question`,
+    !askSpineAnswer.isPersonalAttentionQuestion(q)
+    && askSpineAnswer.questionSubject(q) === "work",
+    `personal=${askSpineAnswer.isPersonalAttentionQuestion(q)} subject=${askSpineAnswer.questionSubject(q)}`);
+}
 
 /*  ══ PHASE C · SKYLINE CONVERSATIONAL READINESS ════════════════════
  *  The matrix above proves which SENTENCE reaches which READ. This

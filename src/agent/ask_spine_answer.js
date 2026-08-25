@@ -259,8 +259,60 @@ const TENANCY_TERMS =
  *  already suppresses leasingPerson below: a sentence about BOOKING a
  *  tour goes to tour_schedule, a sentence about what happened AT one
  *  belongs to the person who was there.  */
-const LEASING_PERSON_TERMS =
-  /\b(appl(?:y|ie[sd]|ication|icant)s?|sign(?:s|ed|ing|ature|atures)?|countersign(?:s|ed|ing)?|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|holding (?:this|the|his|her|their|my|our) (?:lease|application|packet|file|approval|signing|renewal|move[- ]?in) up|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|tours?|toured|touring|packets?)\b/i;
+/*  ── STRONG AND WEAK LEASING VOCABULARY, AND WHY THE SPLIT EXISTS ────
+ *  These used to be ONE list, and `work` yielded to all of it. That made
+ *  four maintenance sentences into leasing questions — measured, not
+ *  supposed:
+ *
+ *      "sign maintenance work"                  → leasing_person
+ *      "sign off on the repair"                 → leasing_person
+ *      "signature paint color"                  → leasing_person
+ *      "the elevator repair is holding this up" → leasing_person
+ *
+ *  The cause is that some leasing words are unambiguous and some are
+ *  ordinary English that leasing happens to use. "Application",
+ *  "countersign", "packet" and "signer" belong to leasing wherever they
+ *  appear. A bare "sign", and "holding this up", belong to whoever the
+ *  sentence is actually about — and a technician signs off on work every
+ *  day.
+ *
+ *  STRONG wins outright. WEAK wins only when the sentence carries no
+ *  explicit maintenance vocabulary. That is a stated precedence rule
+ *  rather than regex ordering, so the next person can see it and argue
+ *  with it.
+ *
+ *  `signature` is NOT weak leasing vocabulary — it is strong only in the
+ *  constructions that ask about an OUTSTANDING one ("waiting on a
+ *  signature"). As a bare noun it is an ordinary adjective, which is how
+ *  "signature paint color" became a lease question.
+ *
+ *  ⚠ NO GENERIC `sign` SUBSTRING MATCHING. Every alternative below is
+ *  word-bounded, so "assign", "assigned", "design" and "resignation"
+ *  cannot reach leasing through a substring.                            */
+const LEASING_PERSON_STRONG =
+  /\b(appl(?:y|ie[sd]|ication|icant)s?|countersign(?:s|ed|ing)?|signers?|execut(?:e[sd]?|ing|ion)|where is|where'?s|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|tours?|toured|touring|packets?|(?:waiting on|pending|outstanding|missing|awaiting|needs?|requires?) (?:a |an |the |their |his |her )?signatures?|holding (?:this|the|his|her|their|my|our) (?:lease|application|packet|file|approval|signing|renewal|move[- ]?in) up|holding up (?:[a-z]+'?s? )?(?:lease|application|packet|file|approval|signing|renewal|move[- ]?in))\b/i;
+/*  Ordinary English that leasing uses. Yields to explicit maintenance
+ *  vocabulary — see `leasingPerson` below.                              */
+const LEASING_PERSON_WEAK =
+  /\b(sign(?:s|ed|ing)?|holding (?:this|it|things) up)\b/i;
+/*  ⚠ THE ECONOMICS TIE-BREAK IS DELIBERATELY NARROWER, AND I BROKE IT
+ *  ONCE BY "SIMPLIFYING" IT. This list is NOT the union of STRONG and
+ *  WEAK. It answers a different question — "does this pricing sentence
+ *  also carry PERSON-leasing detail?" — and the difference that matters
+ *  is `applicants?` rather than the full `appl…ication` group.
+ *
+ *  "What is the application fee?" is a PRICING question. Deriving this
+ *  list from STRONG made `application` match, so the sentence looked
+ *  like two domains at once and came back composition_unavailable — a
+ *  refusal to answer a question Economics answers perfectly well. Caught
+ *  by economics_ask_spine.test.js, which existed precisely because
+ *  someone had already thought about this.
+ *
+ *  It carries the same token repairs as STRONG (suffixed countersign,
+ *  bare tour, signers, both holding-up orders) so the two cannot drift,
+ *  but it keeps its own narrower applicant vocabulary on purpose.       */
+const LEASING_PERSON_DETAIL_TERMS =
+  /\b(applicants?|sign(?:s|ed|ing|ature|atures)?|countersign(?:s|ed|ing)?|signers?|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|holding (?:this|the|his|her|their|my|our) (?:lease|application|packet|file|approval|signing|renewal|move[- ]?in) up|holding up (?:[a-z]+'?s? )?(?:lease|application|packet|file|approval|signing|renewal|move[- ]?in)|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|tours?|toured|touring|packets?)\b/i;
 const DEBT_TERMS =
   /\b(debt (?:position|service)|mortgage(?: loan)?|loan (?:balance|maturity|payment|rate|terms?|pricing)|lender|servicer|principal balance|payoff (?:quote|amount)|interest rate|maturity date|extension option|debt-service reserve)\b/i;
 const ECONOMICS_SPECIFIC_TERMS =
@@ -268,8 +320,6 @@ const ECONOMICS_SPECIFIC_TERMS =
 const BARE_PRICING_TERM = /\bpricing\b/i;
 const UTILITY_DETAIL_TERMS =
   /\b(electric(?:ity)?|gas|water|sewer|meters?|submeters?|provider|utility account|account ending|peco|bills? residents|utility setup)\b/i;
-const LEASING_PERSON_DETAIL_TERMS =
-  /\b(applicants?|sign(?:s|ed|ing|ature|atures)?|countersign(?:s|ed|ing)?|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|holding (?:this|the|his|her|their|my|our) (?:lease|application|packet|file|approval|signing|renewal|move[- ]?in) up|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|tours?|toured|touring|packets?)\b/i;
 const TENANCY_STANDING_TERMS =
   /\b(rent ?roll|occupanc(?:y|ies)|occupied|vacan(?:t|cy|cies)|residents?|move[- ]?(?:in|out)s?|beds?|who lives|how many (?:units|beds|positions|residents))\b/i;
 const EXPLICIT_WORK_TERMS =
@@ -287,6 +337,22 @@ const PERSONAL_ATTENTION_TERMS = [
   //  missing — so it joins the existing pattern rather than starting a
   //  second list.
   /^\s*what should i (?:do|work on|focus on)(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  /*  ── PERSONAL MEANS A PRONOUN, NOT A KEYWORD ────────────────────
+   *  "assigned" and "work order" are NOT enough on their own: "What
+   *  work is assigned to Jane?" and "Who is assigned to the elevator
+   *  repair?" are property questions, and answering either from Mike's
+   *  own queue would be the wrong answer delivered confidently. Every
+   *  pattern below therefore requires a first-person marker — me, my or
+   *  mine — and is anchored end to end so a personal phrase buried in a
+   *  longer property question cannot capture it.
+   *
+   *  `work(?: orders?)?` exists because "work orders" missed the older
+   *  `work` pattern by exactly one word, and Mike got the property
+   *  queue where he had asked for his own.  */
+  /^\s*what (?:work(?: orders?)?|tasks?|jobs?) (?:is|are) assigned to me(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  /^\s*what (?:work(?: orders?)?|tasks?|jobs?) (?:is|are) mine(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  /^\s*what (?:work(?: orders?)?|tasks?|jobs?) (?:needs?|require[sd]?) my attention(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  /^\s*(?:show|give) me my (?:[a-z]+ )?(?:work(?: orders?)?|tasks?|jobs?|priorities|queue)(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
   //  The passive form of the same question. "What needs my attention"
   //  and "what should I do" are one intent; a person picks between them
   //  by habit, and Spine must not answer only the one it happens to
@@ -341,7 +407,12 @@ function questionSubject(question) {
    *                                                       so the composition
    *                                                       guard must see both
    */
-  const leasingPerson = LEASING_PERSON_TERMS.test(text) && !tourSchedule && !contractedService && !equity && !debt
+  /*  STRONG outright; WEAK only when no explicit maintenance vocabulary
+   *  is present. `work` still yields to leasingPerson below, so this is
+   *  the only place a technician's sentence can hold its ground.  */
+  const leasingSignal = LEASING_PERSON_STRONG.test(text)
+    || (LEASING_PERSON_WEAK.test(text) && !EXPLICIT_WORK_TERMS.test(text));
+  const leasingPerson = leasingSignal && !tourSchedule && !contractedService && !equity && !debt
     && !(economics && !LEASING_PERSON_DETAIL_TERMS.test(text));
   const tenancy = tenancyThing && !tourSchedule && !contractedService && !equity && !leasingPerson
     && !(economics && !TENANCY_STANDING_TERMS.test(text));
