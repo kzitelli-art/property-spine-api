@@ -239,19 +239,31 @@ function refuseInterval(message) {
 /*  Returns { start, end } as canonical keys; end is null when open-ended,
  *  which the lower-level interval primitive supports and must keep.      */
 function intervalBoundariesOrRefuse(startValue, endValue = null) {
-  /*  DELIBERATE FALSIFICATION — Phase B. ONLY this primitive is weakened,
-   *  back to the pre-repair behaviour: truncate each boundary with
-   *  slice(0, 10) and refuse nothing. canonicalDay, dateKey and the whole
-   *  point-in-time as_of contract are untouched, as are the assertions and
-   *  the dated_positions consumer — so the red is attributable to the
-   *  missing boundary refusal alone. The PRESENCE check is kept so the red
-   *  is about malformed values escaping, not about crashes.
-   *  REVERTED IN THE NEXT COMMIT.                                        */
   const startGiven = startValue !== null && startValue !== undefined && startValue !== "";
   if (!startGiven) throw refuseInterval("requested_start is required — a term has two dates.");
-  const start = String(startValue).slice(0, 10);
-  const end = (endValue !== null && endValue !== undefined && endValue !== "")
-    ? String(endValue).slice(0, 10) : null;
+  const start = canonicalDay(startValue);
+  /*  FIELD-SPECIFIC AND TRUE. The old path blamed the OTHER field: a
+   *  malformed start was reported as "requested_end is before
+   *  requested_start", sending an operator to correct a date that was
+   *  never wrong. A refusal has to name what to fix (§5).               */
+  if (start === null) {
+    throw refuseInterval(
+      `requested_start must be an exact calendar date as YYYY-MM-DD; received ${JSON.stringify(String(startValue))}`);
+  }
+
+  const endGiven = endValue !== null && endValue !== undefined && endValue !== "";
+  let end = null;
+  if (endGiven) {
+    end = canonicalDay(endValue);
+    if (end === null) {
+      throw refuseInterval(
+        `requested_end must be an exact calendar date as YYYY-MM-DD; received ${JSON.stringify(String(endValue))}`);
+    }
+    //  Compared as canonical keys, only after both are known to be days.
+    if (end < start) {
+      throw refuseInterval(`requested_end ${end} precedes requested_start ${start}.`);
+    }
+  }
   return { start, end };
 }
 
