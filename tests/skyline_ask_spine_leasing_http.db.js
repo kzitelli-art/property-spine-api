@@ -525,8 +525,9 @@ receipt.begin(__filename, { url: CONN, expected: 34 });
       divergence(
         "D2 · an ANSWERED leasing question returns a grounded_on object with no "
         + "leasing key — every key in it is null. grounded_on exists so an operator "
-        + "can check a claim; tenancy gets five keys, contracted_service four, debt "
-        + "three. Leasing gets none, so the one domain that answers about a NAMED "
+        + "can check a claim; tenancy gets six keys, contracted_service four, debt "
+        + "three (counted in the grounded_on literal itself, not from memory). "
+        + "Leasing gets none, so the one domain that answers about a NAMED "
         + "HUMAN is the one whose answer is unverifiable on the surface.");
     }
   }
