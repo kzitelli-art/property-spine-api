@@ -411,7 +411,7 @@ function questionSubject(question) {
    *  is present. `work` still yields to leasingPerson below, so this is
    *  the only place a technician's sentence can hold its ground.  */
   const leasingSignal = LEASING_PERSON_STRONG.test(text)
-    || LEASING_PERSON_WEAK.test(text);
+    || (LEASING_PERSON_WEAK.test(text) && !EXPLICIT_WORK_TERMS.test(text));
   const leasingPerson = leasingSignal && !tourSchedule && !contractedService && !equity && !debt
     && !(economics && !LEASING_PERSON_DETAIL_TERMS.test(text));
   const tenancy = tenancyThing && !tourSchedule && !contractedService && !equity && !leasingPerson
