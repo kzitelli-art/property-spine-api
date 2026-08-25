@@ -11,6 +11,7 @@ const fs = require("fs");
 const { Pool } = require("pg");
 const { databaseSsl } = require("../../src/shared/database_ssl");
 const staffSessions = require("../../src/identity/staff_session_service");
+const { routeStaffSmsTurn } = require("../../src/conversation/staff_sms_router");
 
 if (process.env.E2E_DISPOSABLE_DATABASE !== "true") {
   console.error("FATAL: E2E_DISPOSABLE_DATABASE=true is required.");
@@ -280,6 +281,25 @@ async function waitForStaffReply(providerMessageId) {
       && acceptedIdentity.has_staff_context && acceptedIdentity.has_leasing_assignment
       && acceptedIdentity.primary_for_modules.includes("leasing"),
     "acceptance creates Mike's bridge, staff context, access, and work assignment together");
+
+  for (const [question, subject, sidLabel] of [
+    ["has Skyline signed Jane's lease", "leasing_person", "LEASE_READ"],
+    ["upcoming tour availability", "tour_schedule", "TOUR_READ"],
+  ]) {
+    const routedRead = routeStaffSmsTurn({ text: question, attachments: [] });
+    expect(routedRead.destination === "ask_spine" && routedRead.subject === subject,
+      `Mike's SMS ${subject} shorthand reaches the same governed read as the dashboard`,
+      JSON.stringify({ question, routedRead }));
+    const readSid = `SM_E2E_${sidLabel}_${suffix}`;
+    const readAck = await sendStaffSms({
+      from: mikePhone, to: operationsLine, sid: readSid, body: question,
+    });
+    const readReply = await waitForStaffReply(readSid);
+    expect(readAck.status === 200 && readReply.reply_reason === "governed_read"
+        && typeof readReply.body === "string" && readReply.body.trim().length > 0,
+      `phone-derived Mike receives an honest ${subject} governed-read receipt`,
+      JSON.stringify({ question, status: readAck.status, readReply }));
+  }
 
   const name = `Skyline Journey ${suffix}`;
   const phone = "+1215" + suffix;
