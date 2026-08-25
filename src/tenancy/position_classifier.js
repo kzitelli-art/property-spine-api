@@ -831,11 +831,9 @@ function classifyPositionForInterval(row, { start_date, end_date = null, personN
   let free_spans = [];
   if (contestedIds.length) {
     interval_state = "unresolved";
-  /*  DELIBERATE FALSIFICATION — the undated-claim arm is removed, restoring
-   *  the precise old escape: nothing dated collides, so the term is called
-   *  free even though Spine holds a claim it cannot place. undatedClaims is
-   *  still computed and rangesOverlap is still untouched, so the red is
-   *  attributable to this branch alone. REVERTED IN THE NEXT COMMIT.    */
+  } else if (!colliding.length && undatedClaims.length) {
+    //  Nothing dated collides, but Spine holds a claim it cannot place.
+    interval_state = "unresolved";
   } else if (!colliding.length) {
     interval_state = "contractually_free";
     free_spans = [{ from: requested.start_date, to: requested.end_date }];
