@@ -45,6 +45,63 @@ function current(rows, asOf) {
   return heads(rows).filter((row) => activeAt(row, asOf));
 }
 
+/*  ── THE ONE OBSERVATION CLASSIFIER · CLASS 1 ────────────────────────
+ *  A financial observation carries THREE ORTHOGONAL FACTS. They are kept
+ *  separate on purpose: collapsing them is what produced the defect this
+ *  replaces, where "unmatched" was computed from whether an engagement was
+ *  CURRENT and therefore answered a linkage question with a timing answer.
+ *
+ *    visibility                    IN_SCOPE | FUTURE
+ *      period_start is the economic date. Null means the economic date is
+ *      not established — an honest unknown that stays VISIBLE. We never
+ *      invent one, and we never hide a row for lacking one.
+ *
+ *    linkage                       LINKED | ORPHANED
+ *      Does engagement_id name an engagement this property knows? Only
+ *      ORPHANED is a gap. A linked observation is explained, whatever the
+ *      state of the engagement explaining it.
+ *
+ *    engagement_temporal_relation  CURRENT | ENDED | NOT_YET_BEGUN | null
+ *      A fact about the ENGAGEMENT, not the observation. Null when there is
+ *      no engagement to describe. A future engagement is NOT historical —
+ *      the two are different facts and never share a bucket.
+ *
+ *  `class` is DERIVED from the three and is a convenience for readers. The
+ *  three facts remain on the envelope; nothing may re-derive them.
+ *
+ *  Engagements carry no supersedes_id (migration 171), so heads() cannot
+ *  hide one: exclusion from current() is purely temporal, which is what
+ *  makes ENDED/NOT_YET_BEGUN a COMPLETE partition of the non-current known
+ *  engagements. The schema check `effective_to > effective_from` makes them
+ *  mutually exclusive.                                                    */
+function engagementTemporalRelation(engagement, asOf) {
+  if (!engagement) return null;
+  const start = day(engagement.effective_from || engagement.commencement_date);
+  const end = day(engagement.effective_to);
+  if (start && start > asOf) return "NOT_YET_BEGUN";
+  if (end && end <= asOf) return "ENDED";
+  return "CURRENT";
+}
+
+function classifyObservation(row, { asOf, engagementById } = {}) {
+  const periodStart = day(row.period_start);
+  const visibility = !periodStart || periodStart <= asOf ? "IN_SCOPE" : "FUTURE";
+  const engagement = row.engagement_id && engagementById
+    ? engagementById.get(row.engagement_id) || null : null;
+  const linkage = engagement ? "LINKED" : "ORPHANED";
+  const relation = engagementTemporalRelation(engagement, asOf);
+  return {
+    visibility,
+    linkage,
+    engagement_temporal_relation: relation,
+    engagement_id: engagement ? engagement.id : null,
+    period_start: periodStart,
+    class: visibility === "FUTURE" ? "FUTURE"
+      : linkage === "ORPHANED" ? "ORPHANED"
+      : relation === "CURRENT" ? "CURRENT_LINKED" : "NONCURRENT_LINKED",
+  };
+}
+
 /*  ── COMPARING TWO RECORDED VALUES · CLASS 1 ─────────────────────────
  *  A projection primitive, not a second owner of contract-term authority.
  *  Which term governs is decided by evaluateTerm() below and by nothing
@@ -125,6 +182,29 @@ function priceView(row) {
     currency_code: row.currency_code || "USD",
     quantity_basis: row.quantity_basis || null,
     description: row.description || null,
+  };
+}
+
+/*  One shape for an observation read THROUGH its engagement, so a linked
+    observation looks identical whether that engagement is current or not.
+    The unmatched view is deliberately NOT unified with this one: it carries
+    a different service_class fallback and its own label, and changing that
+    shape is not this repair.                                              */
+function engagementObservationView(row, engagement, providerById) {
+  return {
+    id: row.id,
+    service_class: row.service_class || (engagement ? engagement.service_class : null),
+    provider_id: row.provider_id || null,
+    provider_name: row.provider_id && providerById.get(row.provider_id)
+      ? providerById.get(row.provider_id).provider_name : row.provider_name || null,
+    kind: row.observation_kind,
+    line_label: row.line_label || null,
+    period_start: day(row.period_start),
+    period_end: day(row.period_end),
+    amount_cents: row.amount_cents === null || row.amount_cents === undefined
+      ? null : Number(row.amount_cents),
+    currency_code: row.currency_code || "USD",
+    evidence: sourceOf(row),
   };
 }
 
@@ -376,6 +456,14 @@ function project(snapshot = {}, { as_of = null } = {}) {
   const prices = heads(snapshot.prices || []);
   const observations = heads(snapshot.financial_observations || []);
   const providerById = new Map((snapshot.providers || []).map((row) => [row.id, row]));
+  //  EVERY known engagement, current or not. Linkage is asked of this map;
+  //  currency is a separate fact recorded beside it.
+  const engagementById = new Map((snapshot.engagements || []).map((row) => [row.id, row]));
+  //  Classified ONCE. Every bucket below and the unmatched-gap loop read
+  //  this one result; nothing re-derives linkage or timing.
+  const observationClass = new Map(observations.map((row) =>
+    [row.id, classifyObservation(row, { asOf, engagementById })]));
+  const classOf = (row) => observationClass.get(row.id) || classifyObservation(row, { asOf, engagementById });
   const documentById = new Map(documents.map((row) => [row.id, row]));
   const unresolved = [];
   const facts = [];
@@ -418,7 +506,12 @@ function project(snapshot = {}, { as_of = null } = {}) {
       ? prices.filter((row) => row.term_id === currentTerm.id) : [];
     const offered = newest(offeredTerms, ["commencement_date", "recorded_at"]);
     const observed = newest(observedTerms, ["commencement_date", "recorded_at"]);
-    const observationsForEngagement = observations.filter((row) => row.engagement_id === engagement.id);
+    //  IN_SCOPE only: a period after as_of has not economically happened yet
+    //  at this reading, so it belongs to no bucket here.
+    const observationsForEngagement = observations.filter((row) => {
+      const seen = classOf(row);
+      return seen.visibility === "IN_SCOPE" && seen.engagement_id === engagement.id;
+    });
 
     if (!provider) {
       gap("provider", `Who provides ${contract.labelForService(engagement.service_class, engagement.service_label)}?`,
@@ -507,21 +600,8 @@ function project(snapshot = {}, { as_of = null } = {}) {
         evidence: sourceOf(currentScope),
       } : null,
       documents: engagementDocuments.map(documentView),
-      financial_observations: observationsForEngagement.map((row) => ({
-        id: row.id,
-        service_class: row.service_class || engagement.service_class,
-        provider_id: row.provider_id || null,
-        provider_name: row.provider_id && providerById.get(row.provider_id)
-          ? providerById.get(row.provider_id).provider_name : row.provider_name || null,
-        kind: row.observation_kind,
-        line_label: row.line_label || null,
-        period_start: day(row.period_start),
-        period_end: day(row.period_end),
-        amount_cents: row.amount_cents === null || row.amount_cents === undefined
-          ? null : Number(row.amount_cents),
-        currency_code: row.currency_code || "USD",
-        evidence: sourceOf(row),
-      })),
+      financial_observations: observationsForEngagement.map((row) =>
+        engagementObservationView(row, engagement, providerById)),
       payment: { truth_state: "NOT_ESTABLISHED",
         reason: "No governed accounting settlement is linked to this engagement." },
       service_completion: { truth_state: "NOT_ESTABLISHED",
@@ -553,12 +633,16 @@ function project(snapshot = {}, { as_of = null } = {}) {
     };
   });
 
-  const knownEngagementIds = new Set(engagementViews.map((row) => row.id));
   const allEngagementIds = new Set((snapshot.engagements || []).map((row) => row.id));
   const unmatchedDocuments = documents.filter((row) =>
     !row.engagement_id || !allEngagementIds.has(row.engagement_id)).map(documentView);
-  const unmatchedObservations = observations.filter((row) =>
-    !row.engagement_id || !knownEngagementIds.has(row.engagement_id)).map((row) => ({
+  //  ORPHANED ONLY. An observation whose engagement merely ENDED is
+  //  explained; calling it unmatched asked an operator a question Spine had
+  //  already recorded the answer to.
+  const unmatchedObservations = observations.filter((row) => {
+    const seen = classOf(row);
+    return seen.visibility === "IN_SCOPE" && seen.linkage === "ORPHANED";
+  }).map((row) => ({
       id: row.id,
       service_class: row.service_class || null,
       label: row.service_class ? contract.labelForService(row.service_class, row.service_label) : null,
@@ -596,6 +680,50 @@ function project(snapshot = {}, { as_of = null } = {}) {
     { financial_observation_id: observation.id, service_class: observation.service_class,
       engagement_id: conflictingProvider ? conflictingProvider.id : null });
   }
+
+  /*  ── NONCURRENT ENGAGEMENTS · a home, not an operating position ──────
+   *  Linked observations whose engagement is not current at as_of still need
+   *  somewhere to be READ. Without this they would either be called unmatched
+   *  (a false gap, the defect this replaces) or — had we simply widened the
+   *  linkage set — disappear from the read entirely, which is worse.
+   *
+   *  ENDED and NOT_YET_BEGUN are carried separately and never merged: a
+   *  future engagement is not a historical one.
+   *
+   *  This contributes to NO count, milestone, owner, standing state or
+   *  operating action. It carries no term_standing, so nothing in it can be
+   *  mistaken for something to act on. Only engagements that actually hold an
+   *  in-scope observation appear — an ended engagement with nothing to read
+   *  needs no home, and inventing rows here would be a different feature.   */
+  const noncurrentObservationsByEngagement = new Map();
+  for (const row of observations) {
+    const seen = classOf(row);
+    if (seen.visibility !== "IN_SCOPE" || seen.linkage !== "LINKED") continue;
+    if (seen.engagement_temporal_relation === "CURRENT") continue;
+    if (!noncurrentObservationsByEngagement.has(seen.engagement_id)) {
+      noncurrentObservationsByEngagement.set(seen.engagement_id, []);
+    }
+    noncurrentObservationsByEngagement.get(seen.engagement_id).push(row);
+  }
+  const noncurrentEngagementViews = [...noncurrentObservationsByEngagement.entries()]
+    .map(([engagementId, rows]) => {
+      const engagement = engagementById.get(engagementId);
+      const relation = engagementTemporalRelation(engagement, asOf);
+      const provider = providerById.get(engagement.provider_id) || null;
+      return {
+        id: engagement.id,
+        service_class: engagement.service_class,
+        label: contract.labelForService(engagement.service_class, engagement.service_label),
+        engagement_label: engagement.engagement_label || null,
+        provider: provider ? { id: provider.id, name: provider.provider_name } : null,
+        temporal_relation: relation,
+        ended_on: relation === "ENDED" ? day(engagement.effective_to) : null,
+        begins_on: relation === "NOT_YET_BEGUN"
+          ? day(engagement.effective_from || engagement.commencement_date) : null,
+        financial_observations: rows.map((row) =>
+          engagementObservationView(row, engagement, providerById)),
+      };
+    });
 
   const hasTruth = requirements.length || engagements.length || documents.length
     || observations.length || !!coverageReview;
@@ -669,6 +797,7 @@ function project(snapshot = {}, { as_of = null } = {}) {
       engagements: engagementViews,
       unmatched_documents: unmatchedDocuments,
       unmatched_financial_observations: unmatchedObservations,
+      noncurrent_engagements: noncurrentEngagementViews,
       unresolved,
     },
   };
