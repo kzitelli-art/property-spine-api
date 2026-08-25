@@ -372,6 +372,111 @@ const forwardShape = async (pool) =>
     if (endedAndFutureOk === "contractually_free")
       ok("D2 · CONTROL — ended and dated-future fixture leases still leave a later term free");
     else bad("D2 · an ended or dated future lease was treated as unplaceable", String(endedAndFutureOk));
+
+    /* ══ E · A PARTIAL BLOCK PLUS AN UNPLACEABLE CLAIM IS NOT PARTIAL ═══
+     *
+     *  freeSpans() computes the gaps the DATED collisions leave. Those gaps
+     *  are only trustworthy if EVERY right on the bed is dated. An undated
+     *  non-terminal claim could sit anywhere in the requested term —
+     *  including inside a span about to be published as free — and Spine
+     *  cannot know which. Publishing spans it cannot stand behind is worse
+     *  than publishing none: a caller reads dates it can act on and nothing
+     *  in the payload says they are guesses.
+     *
+     *  Every branch below has a NAMED control, because the danger of this
+     *  correction is over-suppression: turning a legitimate partial answer
+     *  or a certain complete block into a vague refusal would tell an
+     *  operator LESS than Spine knows.                                    */
+    const ivFull = async (s_, e_) => {
+      const iv = await intervalPropertyPositions(pool, {
+        property_id: PROPERTY, requested_start: s_, requested_end: e_ });
+      return iv.positions.find((x) => String(x.space_id) === String(anchorSpace));
+    };
+    const UND2 = "51ce0001-0000-4000-8000-0000000009f2";
+    const addUndated = (id, status) => pool.query(
+      `insert into leases (id, property_id, space_id, tenant_ids, rent, balance,
+                           start_date, end_date, lease_status)
+       values ($1,$2,$3,$4::uuid[],1000,0,NULL,NULL,$5)`,
+      [id, PROPERTY, anchorSpace, [fixture.IDS.PERSON], status]);
+
+    /*  A term the fixture's dated leases only PARTIALLY block. My first
+     *  window was 2026-12-01 → 2027-06-30 and it went red honestly: the
+     *  fixture's 2025-01-01→2026-12-31 and 2027-01-01→2027-12-31 leases are
+     *  CONSECUTIVE, so that window has no gap and is term_blocked. This one
+     *  straddles the END of the 2027 lease, leaving a real free span in
+     *  2028 for freeSpans() to compute.                                   */
+    const PS = "2027-10-01", PE = "2028-03-31";
+
+    // ── E1 · CONTROL — partial WITHOUT an undated claim stays partial ──
+    const partialAlone = await ivFull(PS, PE);
+    if (partialAlone.interval_state === "term_partially_blocked" && (partialAlone.free_spans || []).length)
+      ok(`E1 · CONTROL — a partial dated collision alone stays term_partially_blocked with ${partialAlone.free_spans.length} legitimate free span(s)`);
+    else bad("E1 · the baseline partial term is not partial; E2 cannot mean anything",
+             JSON.stringify({ state: partialAlone.interval_state, spans: partialAlone.free_spans }));
+
+    // ── E2 · partial + undated claim → unresolved, NO free spans ──────
+    await addUndated(UND2, "active");
+    try {
+      const partialPlus = await ivFull(PS, PE);
+      if (partialPlus.interval_state === "unresolved")
+        ok("E2 · a partial dated collision PLUS an unplaceable claim is unresolved, not partially blocked");
+      else bad(`E2 · still ${partialPlus.interval_state} with an unplaceable claim present`,
+               "free spans computed from dated rights alone are not trustworthy here");
+      if ((partialPlus.free_spans || []).length === 0)
+        ok("E2 · and it publishes NO free_spans — Spine does not offer dates it cannot stand behind");
+      else bad("E2 · untrustworthy free_spans were published", JSON.stringify(partialPlus.free_spans));
+
+      // ── E3 · the explanatory collection names the unplaceable right ──
+      const up = partialPlus.unplaceable_rights || [];
+      if (up.length && String(up[0].lease_id) === UND2 && "lease_status" in up[0])
+        ok(`E3 · unplaceable_rights names the claim in the existing right shape — ${up[0].lease_id.slice(0,8)} / ${up[0].lease_status}`);
+      else bad("E3 · the refusal does not say WHICH claim could not be placed", JSON.stringify(up));
+
+      // ── E4 · CONTROL — dated colliding_rights are preserved ─────────
+      if ((partialPlus.colliding_rights || []).length === (partialAlone.colliding_rights || []).length
+          && (partialPlus.colliding_rights || []).length > 0)
+        ok(`E4 · CONTROL — the dated colliding_rights are preserved (${partialPlus.colliding_rights.length})`);
+      else bad("E4 · dated collision evidence was lost", JSON.stringify({
+        before: (partialAlone.colliding_rights || []).length,
+        after: (partialPlus.colliding_rights || []).length }));
+
+      // ── E5 · CONTROL — a COMPLETE dated block stays term_blocked ────
+      /*  2027-02-01 → 2027-06-30 sits entirely inside the 2027 lease. The
+       *  term is taken whatever the undated claim turns out to be, so the
+       *  certain answer must survive.                                     */
+      const fullBlock = await ivFull("2027-02-01", "2027-06-30");
+      if (fullBlock.interval_state === "term_blocked")
+        ok("E5 · CONTROL — a COMPLETE dated block stays term_blocked; certainty is not downgraded to unresolved");
+      else bad(`E5 · a certain complete block became ${fullBlock.interval_state}`,
+               "this tells an operator less than Spine knows");
+    } finally {
+      await pool.query(`delete from leases where id=$1`, [UND2]);
+    }
+
+    // ── E6 · CONTROL — a TERMINAL undated row does not poison anything ─
+    const TERM_UND = "51ce0001-0000-4000-8000-0000000009f3";
+    await addUndated(TERM_UND, "cancelled");
+    try {
+      const withTerminal = await ivFull(PS, PE);
+      if (withTerminal.interval_state === "term_partially_blocked"
+          && (withTerminal.free_spans || []).length)
+        ok("E6 · CONTROL — a TERMINAL undated row does not poison the answer; the partial term is still partial");
+      else bad(`E6 · a terminal undated lease changed the answer to ${withTerminal.interval_state}`,
+               "leaseIsValid excludes terminal statuses; they are not unplaceable claims");
+      if ((withTerminal.unplaceable_rights || []).length === 0)
+        ok("E6 · and it is not listed as an unplaceable right");
+      else bad("E6 · a terminal row was reported as an unplaceable claim", JSON.stringify(withTerminal.unplaceable_rights));
+    } finally {
+      await pool.query(`delete from leases where id=$1`, [TERM_UND]);
+    }
+
+    // ── E7 · CONTROL — a clean free term is still free, with no rights ─
+    const cleanFree = await ivFull("2028-01-01", "2028-06-30");
+    if (cleanFree.interval_state === "contractually_free"
+        && (cleanFree.unplaceable_rights || []).length === 0)
+      ok("E7 · CONTROL — a genuinely free term is still contractually_free with no unplaceable rights");
+    else bad("E7 · a free term was disturbed", JSON.stringify({
+      state: cleanFree.interval_state, up: cleanFree.unplaceable_rights }));
   } catch (e) {
     bad("harness died", e.message);
     console.error(e);

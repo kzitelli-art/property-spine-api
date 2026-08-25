@@ -840,6 +840,28 @@ function classifyPositionForInterval(row, { start_date, end_date = null, personN
   } else {
     free_spans = freeSpans(requested.start_date, requested.end_date, colliding);
     interval_state = free_spans.length ? "term_partially_blocked" : "term_blocked";
+    /*  ── A PARTIAL BLOCK PLUS AN UNPLACEABLE CLAIM IS NOT PARTIAL ────
+     *
+     *  freeSpans() computes the gaps the DATED collisions leave. Those gaps
+     *  are only trustworthy if every right on the bed is dated. An undated
+     *  non-terminal claim could sit anywhere in the requested term —
+     *  including squarely inside a span this function is about to publish
+     *  as free — and Spine has no way to know which.
+     *
+     *  So a partially blocked term carrying an unplaceable claim becomes
+     *  `unresolved` with NO free_spans. Publishing spans Spine cannot stand
+     *  behind is worse than publishing none: a caller reads dates it can
+     *  act on, and nothing in the payload says they are guesses (§5).
+     *
+     *  A COMPLETE dated block is deliberately left alone. `term_blocked`
+     *  already publishes no free spans and is CERTAIN — the term is taken
+     *  whatever the undated claim turns out to be, so downgrading that
+     *  certainty to `unresolved` would lose information and tell an
+     *  operator less than Spine actually knows.                          */
+    if (free_spans.length && undatedClaims.length) {
+      interval_state = "unresolved";
+      free_spans = [];
+    }
   }
 
   return {
@@ -850,6 +872,13 @@ function classifyPositionForInterval(row, { start_date, end_date = null, personN
     requested,
     interval_state,
     colliding_rights: colliding.map(shape),
+    /*  THE RIGHTS THAT COULD NOT BE PLACED, in the SAME shape as
+     *  colliding_rights. A reader told `unresolved` must be able to see
+     *  WHICH claims Spine could not place, or the refusal is unactionable —
+     *  the same reason colliding_rights is carried whole rather than
+     *  flattened to a count. An explanatory projection of leases already
+     *  filtered above; not a second classifier or status ladder.        */
+    unplaceable_rights: undatedClaims.map(shape),
     free_spans,
     //  Contest state SCOPED TO THIS INTERVAL, deliberately not the
     //  position-wide conflict_state the dated read reports.
