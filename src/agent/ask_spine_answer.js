@@ -337,22 +337,6 @@ const PERSONAL_ATTENTION_TERMS = [
   //  missing — so it joins the existing pattern rather than starting a
   //  second list.
   /^\s*what should i (?:do|work on|focus on)(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
-  /*  ── PERSONAL MEANS A PRONOUN, NOT A KEYWORD ────────────────────
-   *  "assigned" and "work order" are NOT enough on their own: "What
-   *  work is assigned to Jane?" and "Who is assigned to the elevator
-   *  repair?" are property questions, and answering either from Mike's
-   *  own queue would be the wrong answer delivered confidently. Every
-   *  pattern below therefore requires a first-person marker — me, my or
-   *  mine — and is anchored end to end so a personal phrase buried in a
-   *  longer property question cannot capture it.
-   *
-   *  `work(?: orders?)?` exists because "work orders" missed the older
-   *  `work` pattern by exactly one word, and Mike got the property
-   *  queue where he had asked for his own.  */
-  /^\s*what (?:work(?: orders?)?|tasks?|jobs?) (?:is|are) assigned to me(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
-  /^\s*what (?:work(?: orders?)?|tasks?|jobs?) (?:is|are) mine(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
-  /^\s*what (?:work(?: orders?)?|tasks?|jobs?) (?:needs?|require[sd]?) my attention(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
-  /^\s*(?:show|give) me my (?:[a-z]+ )?(?:work(?: orders?)?|tasks?|jobs?|priorities|queue)(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
   //  The passive form of the same question. "What needs my attention"
   //  and "what should I do" are one intent; a person picks between them
   //  by habit, and Spine must not answer only the one it happens to
