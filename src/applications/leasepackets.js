@@ -1696,7 +1696,7 @@ module.exports = function leasePacketsModule(deps) {
               s.submitted_at as access_submitted_at
          from lease_packet_signers s
          join lease_packets pk on pk.id=s.lease_packet_id
-        where s.token_hash=$1
+        where s.token_hash=$1 and s.token_expires_at>now()
           and pk.status<>'voided' and pk.superseded_at is null${suffix}`,
       [tokenHash])).rows[0];
 
