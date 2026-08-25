@@ -901,6 +901,8 @@ async function datedPropertyPositions(pool, { property_id, as_of = null, opening
        *  classifier could see it. Named parallel to conflict_state and
        *  never folded into it: contested today and contested next November
        *  are two facts about two dates.                                  */
+      future_conflict_state: p.future_conflict_state,
+      future_conflicting_lease_ids: p.future_conflicting_lease_ids,
 
       // canonical physical / configuration facts
       is_down: withDown.is_down,
