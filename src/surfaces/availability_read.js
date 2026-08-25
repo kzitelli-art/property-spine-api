@@ -107,9 +107,6 @@ function marketingState(p, liveOk) {
    *  The REASON keeps the timing distinct, because the operating urgency
    *  differs: overlapping_lease_claims means someone may be in there twice
    *  NOW; this means two people are committed for later.                */
-  if (p.future_conflict_state === "conflicted")
-    return { state: "contested", reason: "overlapping_future_lease_claims" };
-
   // A successor removes the position from open inventory whether or not it
   // is locked — a pending successor is not marketable inventory, it is a
   // commitment awaiting proof.

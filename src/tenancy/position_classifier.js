@@ -411,19 +411,6 @@ function classifyPosition(row, { asOf, personNames } = {}) {
    *  Same predicate, same self-comparison defence, same two-sides rule as
    *  the current detector — not a second definition of a contested bed,
    *  the same definition asked about a different window.                 */
-  const futures = leases.filter((lease) => isFuture(lease, asOfKey));
-  const futureContest = [];
-  for (let i = 0; i < futures.length; i++) {
-    for (let j = i + 1; j < futures.length; j++) {
-      if (String(futures[i].id) === String(futures[j].id)) continue;
-      if (rangesOverlap(futures[i], futures[j])) {
-        futureContest.push(futures[i].id, futures[j].id);
-      }
-    }
-  }
-  const distinctFutureContest = [...new Set(futureContest)];
-  const future_conflict_ids = distinctFutureContest.length >= 2 ? distinctFutureContest : [];
-
   /*  ── A SPANNING LEASE WHOSE STATUS WE DO NOT UNDERSTAND ───────────
    *  A DIAGNOSTIC, and a fail-closed one. Not a home for statuses we do
    *  understand: 'signed' belongs in activation_pending above, because a
@@ -676,8 +663,6 @@ function classifyPosition(row, { asOf, personNames } = {}) {
      *  purpose: a reader that understands conflict_state understands this
      *  without being taught a second vocabulary, and the two can never be
      *  mistaken for each other. */
-    future_conflict_state: future_conflict_ids.length ? "conflicted" : "clear",
-    future_conflicting_lease_ids: future_conflict_ids,
     successor,
     // THE STANDALONE FUTURE COMMITMENT. Same helper, same governed locked rule.
     // availability_read consumes this instead of assuming committed_future
