@@ -56,7 +56,7 @@ const ROOT = path.join(__dirname, "..");
 const econ = require(path.join(ROOT, "src/tenancy/economic_tenancy_service.js"));
 const { spacePosition, recordEffectivePossession } = require(path.join(ROOT, "src/tenancy/space_position.js"));
 const tenancy = require(path.join(ROOT, "src/tenancy/tenancy_position_read.js"));
-const { availabilityRead, marketingState } = require(path.join(ROOT, "src/surfaces/availability_read.js"));
+const { availabilityRead, marketingState, HUMAN } = require(path.join(ROOT, "src/surfaces/availability_read.js"));
 
 const P    = "cab10001-0000-4000-8000-000000000001"; // property
 const UNIT = "cab10001-0000-4000-8000-0000000000a1";
@@ -704,6 +704,55 @@ const posFor = async (pool, asOf) => {
         bad(`F4 · withheld, but not as the ruled result — ${st} / ${rsn}`,
             "expected unresolved / unplaceable_nonterminal_lease_claim");
       else bad("F4 · the operator surface OFFERED a bed carrying an unplaceable lease claim", JSON.stringify(row));
+
+      /* ── F7 · THE WITHHELD STATE MUST BE EXPLAINABLE AND COUNTED ─────
+       *
+       *  Withholding a bed is only half a governed answer. An operator who
+       *  is told "not offerable" and nothing else cannot act, and a summary
+       *  that omits the state reads as a fully accounted building.
+       *
+       *  availabilityRead().states carries the comment "Each position
+       *  appears in exactly one state." That invariant stopped holding the
+       *  moment marketingState could return `unresolved` and no bucket
+       *  counted it — the row vanished from the summary while still
+       *  appearing in rows[]. F7c re-asserts the invariant arithmetically
+       *  rather than trusting the comment.                                */
+      if (rsn && String(rsn).trim())
+        ok(`F7a · blocking_reason is exact and nonblank — ${rsn}`);
+      else bad("F7a · a withheld row carries no blocking_reason", JSON.stringify(row));
+
+      const label = row && row.blocking_label;
+      if (label && String(label).trim() && label === HUMAN.unresolved)
+        ok(`F7b · blocking_label is governed and nonblank — "${label}"`);
+      else bad("F7b · the withheld row has no governed operator-facing label",
+               JSON.stringify({ blocking_label: label, expected: HUMAN.unresolved }));
+
+      const unresolvedCount = ar.states && ar.states.unresolved;
+      if (unresolvedCount >= 1)
+        ok(`F7c · states.unresolved counts the withheld row — ${unresolvedCount}`);
+      else bad("F7c · the withheld row is missing from states", JSON.stringify(ar.states));
+
+      const bucketSum = Object.values(ar.states || {}).reduce((a, b) => a + b, 0);
+      if (bucketSum === ar.count)
+        ok(`F7c · every returned row is accounted for — buckets ${bucketSum} === count ${ar.count}`);
+      else bad(`F7c · the summary does not add up — buckets ${bucketSum} vs count ${ar.count}`,
+               "a position appearing in rows[] but no state reads as an accounted building");
+
+      /*  POSITIVE CONTROL, taken from the UNCLAIMED read. My first version
+       *  asserted it against the claimed read and went red for a true
+       *  reason: at that moment 302 carries the claim and 301 is occupied,
+       *  so nothing in the building is offerable. The control has to come
+       *  from the state where a marketable bed genuinely exists, or it is
+       *  asserting the fixture rather than the summary.                  */
+      const freeStates = arFree.states || {};
+      const freeSum = Object.values(freeStates).reduce((a, b) => a + b, 0);
+      if (freeStates.marketable_now >= 1)
+        ok(`F7d · POSITIVE CONTROL — states.marketable_now counts the offerable bed before the claim (${freeStates.marketable_now})`);
+      else bad("F7d · no marketable position in the unclaimed summary; F7c could pass vacuously",
+               JSON.stringify(freeStates));
+      if (freeSum === arFree.count)
+        ok(`F7d · and that summary also adds up — buckets ${freeSum} === count ${arFree.count}`);
+      else bad(`F7d · the unclaimed summary does not add up — ${freeSum} vs ${arFree.count}`, JSON.stringify(freeStates));
 
       // ── F6 · an ENDED lease must not permanently suppress the bed ────
       await pool.query(`delete from leases where id=$1`, [GHOST2]);
