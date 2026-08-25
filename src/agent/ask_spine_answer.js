@@ -1274,15 +1274,6 @@ async function answer(db, anthropic, {
    *  redundant: gatherFacts is exported and independently callable, so
    *  removing its guard would leave a second door into the same reader.
    *  This one is the product; that one is depth.  */
-  if (subject === "leasing_person"
-      && !modules.includes("leasing") && !modules.includes("management")) {
-    return {
-      outcome: "not_authorized",
-      answer: "A person's leasing standing is not available in your current access for this property.",
-      grounded_on: null,
-      references: [],
-    };
-  }
   if (subject === "economics" && !canReadEconomics(modules)) {
     return {
       outcome: "not_authorized",
