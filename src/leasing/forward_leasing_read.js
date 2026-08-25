@@ -207,6 +207,22 @@ async function forwardLeasingPosition(pool, {
       contended,
       conflicting_lease_ids: p.conflicting_lease_ids || [],
 
+      //  Carried on EVERY row, not only unresolved ones. A bed that is
+      //  certainly blocked and also carries a claim Spine cannot place is
+      //  two true facts, and the second does not stop being true because
+      //  the first answered the question.
+      unplaceable_rights: unplaceable,
+      unresolved_reason,
+      /*  ⚠ THE CANONICAL REASON, VERBATIM, BECAUSE THE FOUR VALUES ABOVE
+       *  DO NOT SPAN IT. dated_positions sets `unresolved_because` to
+       *  `overlapping_claims`, `opening_evidence_disagrees` or
+       *  `opening_position_unreconciled`. The last two are opening-evidence
+       *  causes with no name in this read's vocabulary, and dropping them
+       *  would leave an unresolved bed reading as unresolved FOR NO REASON
+       *  — the exact silence this change exists to remove. Carried under
+       *  its own canonical key so nothing here has to invent a word for
+       *  it. */
+      contract_unresolved_because: p.unresolved_because || null,
     });
 
     /*  ONE COMPACT COLLECTION, so a consumer that wants only the questions
@@ -469,6 +485,14 @@ async function forwardLeasingPosition(pool, {
     //  Reported, never absorbed. A lease status this read does not
     //  recognise must not become "signed" by falling through a default.
     unrecognised_lease_statuses: unrecognised,
+
+    /*  EVERY UNRESOLVED BED, WITH ITS EVIDENCE, at the top of the payload.
+     *  `headline.unresolved` is a count and a count is not answerable — it
+     *  says three beds are questions without saying which three or why.
+     *  This is the same rows, named, so the answer to "what is unresolved
+     *  and what would resolve it" is a read rather than a reconstruction.
+     *  Exactly `headline.unresolved` long, by construction.             */
+    unresolved_positions: unresolvedPositions,
 
     ledger,
 
