@@ -491,6 +491,39 @@ const posFor = async (pool, asOf) => {
     mustRefusePure("D9h · 2026-09-20Tgarbage (junk after T)", "2026-09-20Tgarbage");
     mustRefusePure("D9h · 2026-09-20T (bare T, no time)", "2026-09-20T");
 
+    /*  ── D9i · SHAPE IS NOT RANGE ────────────────────────────────────
+     *  Anchoring the grammar closed the trailing-junk hole and left a
+     *  quieter one: digit-SHAPED clock fields that are not times. Each of
+     *  these matched \d{2}:\d{2} perfectly and was answered as 2026-09-20.
+     *  A valid Y-M-D prefix plus well-formed-looking clock fields is still
+     *  not a complete temporal value.
+     *
+     *  Pure-function, for the same reason as D9f/D9h: Postgres rejects most
+     *  of these at $2::date first, so the DB path would measure Postgres
+     *  rather than the contract.                                          */
+    mustRefusePure("D9i · T99:99Z (hour and minute out of range)", "2026-09-20T99:99Z");
+    mustRefusePure("D9i · T24:00Z (hour 24)", "2026-09-20T24:00Z");
+    mustRefusePure("D9i · T23:99:00Z (minute out of range)", "2026-09-20T23:99:00Z");
+    mustRefusePure("D9i · T23:59:99Z (second out of range)", "2026-09-20T23:59:99Z");
+    mustRefusePure("D9i · +99:00 (offset hour out of range)", "2026-09-20T13:45:00+99:00");
+    mustRefusePure("D9i · +14:01 (past the ISO maximum +14:00)", "2026-09-20T13:45:00+14:01");
+    mustRefusePure("D9i · -12:01 (past the ISO minimum -12:00)", "2026-09-20T13:45:00-12:01");
+
+    /*  AND THE EDGES THAT MUST STILL BE ACCEPTED. A range check that
+     *  quietly narrows the supported set is the mirror defect — it would
+     *  refuse legitimate callers and look like correctness.               */
+    const mustAcceptPure = (label, value) => {
+      try {
+        PC0.classifyPosition(bareRow0, { asOf: value, personNames: new Map() });
+        ok(`${label} — accepted, as a supported representation must be`);
+      } catch (e) { bad(`${label} — REFUSED ${e.code || ""}`, e.message); }
+    };
+    mustAcceptPure("D9i · +14:00 (the ISO maximum)", "2026-09-20T13:45:00+14:00");
+    mustAcceptPure("D9i · -12:00 (the ISO minimum)", "2026-09-20T13:45:00-12:00");
+    mustAcceptPure("D9i · +0530 (offset without a colon)", "2026-09-20T13:45:00+0530");
+    mustAcceptPure("D9i · -05 (offset hour only)", "2026-09-20T13:45:00-05");
+    mustAcceptPure("D9i · T13:45 (no seconds)", "2026-09-20T13:45");
+
     /*  AND ONE THAT POSTGRES LETS THROUGH. ' 2026-09-20' casts fine —
      *  Postgres trims it — so it reaches the classifier on the real read
      *  path and the classifier is the only thing that can refuse it. This

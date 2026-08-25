@@ -79,40 +79,68 @@ function dateKey(value) {
     const d = String(value.getDate()).padStart(2, "0");
     return `${y}-${m}-${d}`;
   }
-  /*  ── THE ACCEPTED GRAMMAR, ANCHORED AT BOTH ENDS ─────────────────
+  /*  ── THE ACCEPTED GRAMMAR: ANCHORED, AND RANGE-CHECKED ───────────
    *
-   *  This pattern used to be a PREFIX match, and a valid calendar prefix is
-   *  not evidence that the whole value is a date. '2026-09-20garbage' and
-   *  '2026-09-20Tgarbage' both keyed as 2026-09-20 and were answered — a
-   *  string nobody can account for, silently treated as a supported
-   *  representation. Anchored, they are refused.
+   *  Two corrections live here, each earned by a value that slipped past
+   *  the version before it.
+   *
+   *  1. ANCHORED AT BOTH ENDS. This was once a PREFIX match, so
+   *     '2026-09-20garbage' and '2026-09-20Tgarbage' keyed as 2026-09-20
+   *     and were answered. A valid calendar prefix is not evidence that
+   *     the whole value is a date.
+   *
+   *  2. SHAPE IS NOT RANGE. Anchoring alone still accepted
+   *     '2026-09-20T99:99Z', '2026-09-20T23:59:99Z' and
+   *     '…T13:45:00+99:00' — digit-shaped clock fields that are not
+   *     times. Every component supplied is now captured and checked.
    *
    *  Exactly two string forms are supported, and no others:
    *
-   *      YYYY-MM-DD                     the canonical date
-   *      YYYY-MM-DDTHH:MM[:SS[.frac]][Z|±HH[:]MM]
-   *                                     the ISO timestamp form this
-   *                                     contract already carries — it is
-   *                                     what Postgres emits for a
-   *                                     timestamptz (…T10:07:22.308802+00:00)
+   *      YYYY-MM-DD
+   *      YYYY-MM-DDTHH:MM[:SS[.frac]][Z|±HH[:]MM|±HH]
    *
-   *  No locale forms. '09/20/2026' is a date only under DateStyle MDY, and
-   *  an answer that depends on a database session setting is not a governed
-   *  answer. No trailing characters of any kind.
+   *  with hour 00-23, minute 00-59, second 00-59, and an offset within the
+   *  real ISO 8601 span of -12:00 … +14:00 (Kiribati is +14:00, and +14:00
+   *  admits no minutes). No locale forms — '09/20/2026' is a date only
+   *  under DateStyle MDY, and an answer that depends on a database session
+   *  setting is not a governed answer. No trailing characters, no
+   *  whitespace, no half-written timestamp.
    *
-   *  THE DATE IS THE ONE WRITTEN, not an instant re-projected into some
-   *  zone. A timestamp carrying an offset denotes an instant whose calendar
-   *  day differs by zone, so converting would make the answer depend on a
-   *  zone policy nobody declared — the same hazard as DateStyle, one level
-   *  down. The written Y-M-D is deterministic and is what is used.        */
-  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2}|[+-]\d{2})?)?$/
+   *  THE DATE IS THE ONE WRITTEN. The offset is VALIDATED but never
+   *  APPLIED: a timestamp carrying an offset denotes an instant whose
+   *  calendar day differs by zone, so re-projecting it would make the
+   *  answer depend on a zone policy nobody declared — the same hazard as
+   *  DateStyle, one level down. Nothing here parses the value as a Date to
+   *  derive the day; only the written Y-M-D is used, and Date.UTC appears
+   *  solely to validate that those three written fields name a real day. */
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|([+-])(\d{2}):?(\d{2})|([+-])(\d{2}))?)?$/
     .exec(String(value));
   if (!m) return null;
-  /*  THE SHAPE IS NOT THE DATE. The pattern above accepts 2026-02-31 and
-   *  2026-99-99 — well-formed strings that are not days. Round-trip the
-   *  parsed fields through a UTC calendar and require them back unchanged:
-   *  Date.UTC ROLLS overflow (Feb 31 → Mar 3, month 99 → a later year), so
-   *  a mismatch is exactly "this is not a real day".                     */
+
+  const inRange = (v, lo, hi) => v === undefined || (Number(v) >= lo && Number(v) <= hi);
+  if (!inRange(m[4], 0, 23)) return null;   // hour
+  if (!inRange(m[5], 0, 59)) return null;   // minute
+  if (!inRange(m[6], 0, 59)) return null;   // second, when supplied
+
+  /*  A time-of-day at all requires BOTH hour and minute; the pattern only
+   *  matches them together, so this is a belt-and-braces read of intent.  */
+  if ((m[4] === undefined) !== (m[5] === undefined)) return null;
+
+  //  Offset, in either supported spelling (±HH:MM / ±HHMM, or ±HH).
+  const offSign = m[7] || m[10];
+  const offHour = m[8] !== undefined ? m[8] : m[11];
+  const offMin  = m[9] !== undefined ? m[9] : "00";
+  if (offSign) {
+    const oh = Number(offHour), om = Number(offMin);
+    if (!Number.isInteger(oh) || !Number.isInteger(om)) return null;
+    if (om < 0 || om > 59) return null;
+    const total = oh * 60 + om;
+    //  -12:00 … +14:00 — the actual ISO 8601 / tzdata span, declared rather
+    //  than assumed, so a reader can see what "supported" means.
+    if (offSign === "+" && total > 14 * 60) return null;
+    if (offSign === "-" && total > 12 * 60) return null;
+  }
+
   const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
   const probe = new Date(Date.UTC(y, mo - 1, d));
   if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== mo - 1 || probe.getUTCDate() !== d) return null;
