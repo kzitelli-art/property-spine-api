@@ -268,9 +268,130 @@ const head = (t) => console.log(`\n── ${t} ${"─".repeat(Math.max(0, 58 - t
     else bad("one anchor per application", JSON.stringify(rows));
   }
 
+  // ═══ 13 · EXPIRED SIGNER TOKEN HAS NO PUBLIC AUTHORITY ═══════════
+  head("13 · an expired signer token cannot read, write, or submit");
+  {
+    const P = await toPacket(C, { bed: C.bedA });
+    const validRead = await api("GET", `/t/lease/${P.rawTok}/data`);
+    const packet = validRead.body && validRead.body.packet;
+    const signature = packet && packet.fields
+      && packet.fields.find((f) => f.required && f.field_type === "signature");
+    const signerName = packet && packet.current_signer && packet.current_signer.display_name;
+    if (validRead.status !== 200 || !signature || !signerName) {
+      bad("expired signer token refused at every public door",
+        `pre-expiry read=${validRead.status} body=${JSON.stringify(validRead.body)}`);
+    } else {
+      const beforePacket = (await q(
+        `select id,status,superseded_at,tenant_submitted_at,resident_executed_at,
+                tenant_token_hash,tenant_token_expires_at
+           from lease_packets where id=$1`, [P.packetId])).rows[0];
+      const beforeSigner = (await q(
+        `select id,signer_role,submitted_at,token_hash,token_expires_at
+           from lease_packet_signers
+          where lease_packet_id=$1 and signer_role='tenant'`, [P.packetId])).rows[0];
+
+      // Migration 192 freezes issued signer-link authority. Arrange the
+      // elapsed-time fixture through its allowed draft window, then restore
+      // the exact active packet status before any public request is made.
+      const expiryClient = await pool.connect();
+      try {
+        await expiryClient.query("begin");
+        const draft = (await expiryClient.query(
+          `update lease_packets set status='draft'
+            where id=$1 and status=$2 returning id`, [P.packetId, beforePacket.status])).rows[0];
+        if (!draft) throw new Error("expired-token fixture could not enter its draft setup window");
+        await expiryClient.query(
+          `update lease_packet_signers set token_expires_at=now()-interval '5 minutes'
+            where id=$1`, [beforeSigner.id]);
+        const restored = (await expiryClient.query(
+          `update lease_packets
+              set tenant_token_expires_at=now()-interval '5 minutes', status=$2
+            where id=$1 and status='draft' returning id`, [P.packetId, beforePacket.status])).rows[0];
+        if (!restored) throw new Error("expired-token fixture could not restore its active packet status");
+        await expiryClient.query("commit");
+      } catch (error) {
+        await expiryClient.query("rollback").catch(() => {});
+        throw error;
+      } finally {
+        expiryClient.release();
+      }
+
+      const expiredRead = await api("GET", `/t/lease/${P.rawTok}/data`);
+      const expiredWrite = await api(
+        "POST", `/t/lease/${P.rawTok}/fields/${signature.id}/complete`, {
+          body: { value: signerName, consent: true, session_id: "expired-token" },
+        }
+      );
+      const expiredSubmit = await api("POST", `/t/lease/${P.rawTok}/submit`, {
+        body: { session_id: "expired-token" },
+      });
+
+      const afterPacket = (await q(
+        `select id,status,superseded_at,tenant_submitted_at,resident_executed_at,
+                tenant_token_hash,tenant_token_expires_at,
+                tenant_token_expires_at<now() as token_expired
+           from lease_packets where id=$1`, [P.packetId])).rows[0];
+      const afterSigner = (await q(
+        `select id,signer_role,submitted_at,token_hash,token_expires_at,
+                token_expires_at<now() as token_expired
+           from lease_packet_signers where id=$1`, [beforeSigner.id])).rows[0];
+      const afterField = (await q(
+        `select id,field_key,completed,field_value,signed_by_person_id,signed_by_packet_signer_id
+           from lease_packet_fields where id=$1`, [signature.id])).rows[0];
+      const auditCount = Number((await q(
+        `select count(*)::int n from lease_packet_audit_events
+          where lease_packet_id=$1 and event_type='field_completed'
+            and event_json->>'field_key'=$2`, [P.packetId, signature.field_key])).rows[0].n);
+      const obligationId = (await q(
+        `select terms_review_obligation_id from lease_applications where id=$1`, [P.appId]
+      )).rows[0].terms_review_obligation_id;
+      const obligation = (await q(
+        `select id,status,required_inputs,completed_at from obligations where id=$1`, [obligationId]
+      )).rows[0];
+      const evidence = (await q(
+        `select id,type,note,occurred_at from events
+          where type='input_satisfied:terms_acknowledged'
+            and note like '%' || $1::text || '%'
+          order by occurred_at,id`, [obligationId]
+      )).rows;
+
+      const earliestBreach = expiredRead.status !== 404 ? "read"
+        : expiredWrite.status !== 404 ? "evidence_write"
+        : expiredSubmit.status !== 404 ? "submit" : null;
+      const state = {
+        earliest_breach: earliestBreach,
+        http: { read: expiredRead, write: expiredWrite, submit: expiredSubmit },
+        before: { packet: beforePacket, signer: beforeSigner },
+        after: { packet: afterPacket, signer: afterSigner, field: afterField,
+          field_completed_audits: auditCount, obligation, evidence },
+      };
+      if (expiredRead.status === 404 && expiredWrite.status === 404 && expiredSubmit.status === 404
+          && ["sent", "in_progress", "tenant_in_progress"].includes(beforePacket.status)
+          && !!beforePacket.tenant_token_hash && !!beforeSigner.token_hash
+          && afterPacket.status === beforePacket.status && afterPacket.superseded_at == null
+          && afterPacket.tenant_submitted_at == null && afterPacket.resident_executed_at == null
+          && afterPacket.tenant_token_hash === beforePacket.tenant_token_hash
+          && afterPacket.token_expired === true
+          && afterSigner.submitted_at == null && afterSigner.token_hash === beforeSigner.token_hash
+          && afterSigner.token_expired === true
+          && afterField.completed === false && afterField.field_value == null
+          && afterField.signed_by_person_id == null && afterField.signed_by_packet_signer_id == null
+          && auditCount === 0
+          && ["open", "in_progress"].includes(obligation.status)
+          && (obligation.required_inputs || []).includes("terms_acknowledged")
+          && obligation.completed_at == null && evidence.length === 0) {
+        ok("expired signer token refused at every public door",
+          `read/write/submit 404 · packet ${afterPacket.status} · obligation ${obligation.status}`);
+      } else {
+        bad("expired signer token refused at every public door", JSON.stringify(state));
+      }
+    }
+  }
+
   console.log(`\n══════════════════════════════════════════════════════════════`);
   console.log(`  HOSTILE PROOFS: ${pass} passed, ${fail} failed`);
   console.log(`══════════════════════════════════════════════════════════════`);
   await pool.end();
   process.exit(fail ? 2 : 0);
 })().catch(async (e) => { console.log("\nDIED: " + e.stack); try { await pool.end(); } catch (_) {} process.exit(1); });
+
