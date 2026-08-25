@@ -63,6 +63,13 @@ step "instrument fixture"   node tests/e2e/instrument_fixture.js
 #  nothing. A gate nobody runs is not a gate.
 step "standing projection cost"  node tests/gate_standing_projection_cost.js
 step "property name resolution"  node tests/gate_property_name_resolution.js
+step "utility latest statement ordering" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/utility_latest_statement_ordering.db.js
+step "utility usage bound equivalence" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/utility_statement_usage_bound_equivalence.db.js
+step "debt observation bound equivalence" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/debt_observation_bound_equivalence.db.js
+step "tax obligation state bound" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/tax_obligation_state_bound.db.js
+step "contracted service term ordering" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/contracted_service_latest_term_ordering.db.js
+step "contracted service observation class" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/contracted_service_observation_classification.db.js
+step "contracted service setup temporal" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/contracted_service_setup_state_temporal.db.js
 
 # ── the real server, the real HTTP door ─────────────────────────────
 #  ASK BEFORE LAUNCHING. Polling /health afterwards cannot distinguish
