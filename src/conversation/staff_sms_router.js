@@ -19,6 +19,22 @@ const ACTION_REQUEST_RX = new RegExp(
   "i"
 );
 
+// Ask Spine owns the subject. This router owns only whether the staff turn is
+// shaped like a read rather than a report or action. Auxiliary-led questions
+// and the terse tour-schedule wording people use in search boxes/texts are
+// reads; a recognised domain alone is not enough ("pricing changed yesterday"
+// remains a statement on the technician rail).
+const GOVERNED_QUESTION_LEAD_RX = /^\s*(?:has|have|had)\b/i;
+const TOUR_SCHEDULE_SHORTHAND_RX =
+  /^\s*(?:(?:next|upcoming)\s+)?tours?\s+(?:availability|schedule|times?|openings?|slots?|hosts?|coverage)\s*[?!.]*\s*$/i;
+
+function looksLikeGovernedRead(text, subject) {
+  const value = String(text || "");
+  return technicianIntent.looksLikeQuestion(value)
+    || GOVERNED_QUESTION_LEAD_RX.test(value)
+    || (subject === "tour_schedule" && TOUR_SCHEDULE_SHORTHAND_RX.test(value));
+}
+
 function routeStaffSmsTurn({ text, attachments = [] } = {}) {
   const technician = technicianIntent.readTurn({ text, attachments });
   const personalAttention = askSpineAnswer.isPersonalAttentionQuestion(text);
@@ -53,7 +69,7 @@ function routeStaffSmsTurn({ text, attachments = [] } = {}) {
   }
 
   const subject = askSpineAnswer.questionSubject(text);
-  if (!technicianIntent.looksLikeQuestion(text) || subject === "work") {
+  if (!looksLikeGovernedRead(text, subject) || subject === "work") {
     return Object.freeze({ destination: "technician", technician, leasing, subject: null });
   }
 
