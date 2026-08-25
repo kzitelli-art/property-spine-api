@@ -148,12 +148,12 @@ function dateKey(value) {
 function asOfKeyOrRefuse(asOf) {
   if (asOf === null || asOf === undefined) return null;
   const key = dateKey(asOf);
-  if (key === null) {
-    const e = new Error(
-      `as_of must be a calendar date as YYYY-MM-DD; received ${JSON.stringify(String(asOf))}`);
-    e.code = "INVALID_AS_OF";
-    throw e;
-  }
+  /*  DELIBERATE FALSIFICATION. ONLY the present-invalid refusal is removed.
+   *  The anchored grammar, the Gregorian round-trip and the single-key path
+   *  are all untouched, and every arm still consumes this return value —
+   *  so the red is attributable to the missing refusal and nothing else.
+   *  Returning null restores the old "apply no bound" fallback.
+   *  REVERTED IN THE NEXT COMMIT.                                        */
   return key;
 }
 
