@@ -157,7 +157,7 @@ async function cleanup(pool) {
   await pool.query(`delete from organizations where name=$1`, [ORG]);
 }
 
-receipt.begin(__filename, { url: CONN, expected: 78 });
+receipt.begin(__filename, { url: CONN, expected: 128 });
 
 (async () => {
   const pool = new Pool({ connectionString: CONN });
@@ -467,8 +467,18 @@ receipt.begin(__filename, { url: CONN, expected: 78 });
   ok("L16 …addressed at the person the DATABASE resolved, not one the model picked",
      !!facts && facts.leasing_person.subject_name === "Marisol Trejo",
      JSON.stringify(facts && facts.leasing_person && facts.leasing_person.subject_name));
-  ok("L17 …read at the property the SESSION named",
-     !!facts && String(facts.property_id) === String(prop));
+  /*  ⚠ THIS ASSERTION USED TO READ `facts.property_id` OUT OF THE MODEL
+   *  PAYLOAD. That was only possible because the property UUID was being
+   *  sent to the model, which is exactly what the firewall now stops.
+   *  Scope is a SERVER fact and is proven where the server states it:
+   *  the response the router echoes from the session, and the canonical
+   *  read the payload is compared against below (L18–L20) — which was
+   *  taken at this property and would not match if the read had been
+   *  scoped anywhere else.  */
+  ok("L17 …read at the property the SESSION named — proven server-side, not by a uuid in the payload",
+     String(answered.json.property_id) === String(prop)
+     && !String(sent).includes(String(prop)),
+     `echoed=${answered.json.property_id} inPayload=${String(sent).includes(String(prop))}`);
 
   /*  THE FACTS ON THE WIRE *ARE* THE CANONICAL READ. Not "resemble".
    *  The canonical read is called directly, at the date the wire itself
@@ -731,19 +741,24 @@ receipt.begin(__filename, { url: CONN, expected: 78 });
 
     ok("F1  no key `id` anywhere in model context",
        offenders((k) => k === "id").length === 0, JSON.stringify(offenders((k) => k === "id")));
-    /*  ⚠ ONE DELIBERATE EXCEPTION, NAMED RATHER THAN QUIETLY ALLOWED.
-     *  The top-level `property_id` is set on `facts` before any reader
-     *  runs, so it never passes through the sanitizer. It is the
-     *  server-derived SCOPE of the question: the caller already knows
-     *  it, the HTTP response echoes it, and it names no record the model
-     *  could compose a link to. tenancy_ask_spine_http asserts it IS in
-     *  model context and excludes it from its own id sweep, so removing
-     *  it would break a frozen contract in a file this lane does not
-     *  own. The exception is asserted to be exactly one path — if a
-     *  second `_id` ever appears, this goes red.  */
+    /*  ⚠ THIS ASSERTION USED TO ALLOW ONE EXCEPTION — the top-level
+     *  `property_id` — on the reasoning that a server-derived scope is
+     *  not really a record identifier. That exception is withdrawn. A
+     *  server-derived scope is still a database UUID; the server needs
+     *  it to scope its readers, the model needs the story. The earlier
+     *  argument leaned on an existing tenancy proof asserting the same
+     *  thing, and an existing test documents behaviour rather than
+     *  making it canonical.
+     *
+     *  NO key ending `_id` now, with no exception at all.  */
     const idKeys = offenders((k) => /_id$/.test(k));
-    ok("F2  the ONLY key ending `_id` is the top-level server-derived property_id",
-       idKeys.length === 1 && idKeys[0] === "property_id", JSON.stringify(idKeys));
+    ok("F2  NO key ending `_id` reaches model context — including property_id",
+       idKeys.length === 0, JSON.stringify(idKeys));
+    ok("F2b …and the session's own property UUID appears nowhere in the payload",
+       !sent.includes(String(prop)), "the property uuid is in model context");
+    ok("F2c …while the server still scopes and echoes it normally",
+       String(answered.json.property_id) === String(prop),
+       String(answered.json.property_id));
     ok("F3  no unmasked key ending `_identifier`",
        offenders((k) => /_identifier$/.test(k) && !/_masked$/.test(k)).length === 0,
        JSON.stringify(offenders((k) => /_identifier$/.test(k) && !/_masked$/.test(k))));
@@ -844,6 +859,226 @@ receipt.begin(__filename, { url: CONN, expected: 78 });
        Array.isArray(answered.json.references), JSON.stringify(answered.json.references));
   }
 
+  /*  ══ PHASE B · REPRESENTATIVE-DOMAIN MODEL-PAYLOAD CENSUS ══════════
+   *  The firewall is only worth what it covers. leasing_person is
+   *  proven above through the real socket; this drives EVERY OTHER
+   *  model-called subject to the same serialization boundary and reads
+   *  the captured Anthropic request back.
+   *
+   *  ── THE RUNG, STATED HONESTLY ──────────────────────────────────
+   *  These rows are NOT over a socket. The HTTP router takes only
+   *  { pool, anthropic } and forwards no readers, so a domain whose
+   *  facts must be injected cannot be driven through it — and building
+   *  a second door to pretend otherwise would be faking a rung. They
+   *  call the real `answer()`, which is where serialization actually
+   *  happens: same sanitizer, same replacer, same bytes. What they do
+   *  not prove is the socket, the session and the router gate, and
+   *  leasing_person (L1–F14) proves those.
+   *
+   *  Note `answer()` forwards every reader EXCEPT leasingReader, which
+   *  is why leasing cannot be injected here and had to be seeded for
+   *  real — the harder path, and the better one.
+   *
+   *  Each injected reader returns facts LACED with identifier-shaped
+   *  values at several depths, including inside nested arrays, plus
+   *  narrative that must survive. Both are asserted: a firewall that
+   *  ate the narrative would pass a leak test and fail the product.  */
+  console.log("\n  ── PHASE B · every model-called subject, at the serialization boundary ──");
+  {
+    const SEEDED = {
+      uuid:   "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      sha:    "5ha2" + "f".repeat(60),
+      token:  "tok_" + "9".repeat(40),
+      secret: "sk-live-" + "z".repeat(32),
+    };
+    //  Identifier-shaped at the top, one array level down, and two —
+    //  and narrative beside each, so stripping is proven selective.
+    const laced = (extra) => ({
+      id: SEEDED.uuid, some_id: SEEDED.uuid, vendor_identifier: SEEDED.uuid,
+      document_sha256: SEEDED.sha, api_token: SEEDED.token, client_secret: SEEDED.secret,
+      rows: [[{ nested_id: SEEDED.uuid, deep_sha256: SEEDED.sha, label: "narrative-deep" }]],
+      name: "Marisol Trejo", status: "submitted", as_of: "2026-08-25",
+      amount: 1450, label: "narrative-top", form_code: "PA-RES-2026", read_state: "OK",
+      ...(extra || {}),
+    });
+
+    const CASES = [
+      { subject: "tenancy", q: "how many beds are occupied", mods: ["leasing"], injected: true,
+        dep: { tenancyReader: { readTenancyStanding: async () => laced({
+          standing: { truth_state: "ESTABLISHED" },
+          position: { rentable_positions: 160, occupied: 128, open: 32 },
+          unknowns: { occupied_positions_with_no_recorded_rent: 0 },
+          truth_walls: ["occupied ≠ paying"] }) } } },
+      { subject: "tour_schedule", q: "tour availability this week", mods: ["leasing"], injected: true,
+        dep: { tourScheduleReader: async () => laced({
+          next_open_times: [{ start: "2026-08-26T15:00:00Z", host_user_id: SEEDED.uuid, host_name: "Mike" }],
+          coverage_attention: [] }) } },
+      { subject: "economics", q: "what are our asking rents", mods: ["asset_management"], projects: true,
+        dep: { economicReader: { effectiveEconomicPicture: async () => laced({
+          base_rent: { types: [{ unit_type: "1BR", rent: 1450, unit_type_id: SEEDED.uuid }],
+                       completeness: { overall: "complete" } },
+          one_time_fees: { completeness: { overall: "complete" }, unresolved_reason: null, published: [] },
+          recurring_charges: { completeness: { overall: "complete" }, unresolved_reason: null, published: [] },
+          completeness: { overall: "complete" },
+          combined_monthly_total: { withheld: false, amount: 1450 } }) } } },
+      { subject: "compliance", q: "what licenses expire soon", mods: ["asset_management"], projects: true,
+        extra: { mintComplianceReference: () => ({ token: SEEDED.token }) },
+        dep: { complianceReader: { readComplianceStanding: async () => laced({
+          contract_version: "1", capability_classes: ["retrieval"],
+          composition_authorization: "single_domain", coverage: { state: "partial" },
+          items: [laced({ kind: "license", state: "expiring", due_on: "2026-09-30",
+                          evidence: [], references: [] })],
+          references: [] }) } } },
+      { subject: "utility", q: "who is the electric provider", mods: ["asset_management"], injected: true,
+        dep: { utilityReader: { readForQuestion: async () => ({
+          read_state: "OK", attention_state: "QUIET", mode: "detail",
+          detail: laced({ service: "electric" }),
+          standing: laced({ setup_state: "established", established_services: ["electric"] }) }) } } },
+      { subject: "contracted_service", q: "what contracted services do we have",
+        mods: ["asset_management"], injected: true,
+        dep: { contractedServiceReader: { readForQuestion: async () => ({
+          read_state: "OK", attention_state: "QUIET", mode: "detail",
+          detail: laced({ service: "landscaping" }),
+          standing: laced({ setup_state: "established", engagement_count: 2 }) }) } } },
+      //  Debt and equity are driven through their real NOT_ESTABLISHED
+      //  path: an empty property is a real answer, and it is the one
+      //  their services can produce here without inventing instruments.
+      { subject: "debt", q: "what is our debt service", mods: ["asset_management"], injected: false,
+        dep: { debtService: { listInstrumentsForProperty: async () => [] },
+               debtRead: { NOT_ESTABLISHED: "NOT_ESTABLISHED" } } },
+      { subject: "equity", q: "what is our preferred equity position", mods: ["asset_management"],
+        injected: false,
+        dep: { equityService: { loadHistory: async () => ({ positions: [] }) },
+               equityRead: { NOT_ESTABLISHED: "NOT_ESTABLISHED" } } },
+      //  `work` runs entirely on real rows at the seeded property.
+      { subject: "work", q: "what work orders are open", mods: ["maintenance"], injected: false, dep: {} },
+    ];
+
+    const censusRows = [];
+    for (const c of CASES) {
+      const seen = [];
+      const stub = { messages: { create: async (input) => {
+        seen.push(input);
+        return { content: [{ type: "text", text: JSON.stringify({ outcome: "answered", answer: "ok" }) }] };
+      } } };
+      const out = await askSpineAnswer.answer(pool, stub, {
+        property_id: prop, allowed_modules: c.mods, operator_user_id: "census",
+        question: c.q, ...(c.extra || {}), ...c.dep,
+      });
+      ok(`B0  ${c.subject} reaches the model at all (subject selected, entitlement passed)`,
+         seen.length === 1, `calls=${seen.length} outcome=${out.outcome}`);
+      if (seen.length !== 1) { censusRows.push({ subject: c.subject, note: "NO MODEL CALL" }); continue; }
+
+      const payload = String(seen[0].messages[0].content);
+      ok(`B1  ${c.subject} · the server's chosen subject is what the model was told`,
+         new RegExp(`QUESTION SUBJECT: ${c.subject}\\b`).test(payload), payload.slice(0, 60));
+
+      const factsSent = JSON.parse(payload.slice(payload.indexOf("{"), payload.lastIndexOf("}") + 1));
+      const leaves = [];
+      (function walk(v, path) {
+        if (Array.isArray(v)) return v.forEach((x, i) => walk(x, `${path}[${i}]`));
+        if (v && typeof v === "object") {
+          for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k);
+          return;
+        }
+        leaves.push({ path, key: path.split(".").pop().replace(/\[\d+\]$/, ""), value: v });
+      })(factsSent, "");
+
+      //  BY KEY SHAPE …
+      const badKeys = leaves.filter((l) =>
+        l.key === "id" || /_id$/.test(l.key)
+        || (/_identifier$/.test(l.key) && !/_masked$/.test(l.key))
+        || /_sha256$/.test(l.key) || /(^|_)(hash|token|secret)$/.test(l.key));
+      ok(`B2  ${c.subject} · no id, identifier, hash, token or secret KEY reaches the model`,
+         badKeys.length === 0, JSON.stringify(badKeys.map((b) => b.path)));
+
+      //  … AND BY VALUE, which catches a leak under a key nobody predicted.
+      const badValues = leaves.filter((l) =>
+        UUID.test(String(l.value)) || /^[0-9a-f]{32,}$/i.test(String(l.value))
+        || /^(tok_|sk-)/.test(String(l.value)));
+      ok(`B3  ${c.subject} · no uuid, hex run, token or secret VALUE reaches the model`,
+         badValues.length === 0, JSON.stringify(badValues.map((b) => `${b.path}=${b.value}`)));
+
+      ok(`B4  ${c.subject} · the session's property UUID is absent from the payload`,
+         !payload.includes(String(prop)), "property uuid present");
+      ok(`B5  ${c.subject} · __refs never reaches the model`,
+         !/__refs/.test(payload), "__refs present");
+
+      //  NARRATIVE SURVIVAL — only meaningful where facts were injected;
+      //  the projecting domains select their own fields by design.
+      /*  ── TWO SHAPES OF DOMAIN, AND THE DIFFERENCE MATTERS ────────
+       *  Measured, not assumed. Some branches SPREAD the reader's object
+       *  into the envelope (`...governed.standing`), so whatever a
+       *  reader returns travels and the sanitizer is the only thing
+       *  standing between it and the model. Others PROJECT — they name
+       *  the fields they take — so they are allow-listed by
+       *  construction and an injected extra never travels at all.
+       *
+       *  Both are asserted, in opposite directions, because each has its
+       *  own failure: a spreading domain fails by carrying too much, a
+       *  projecting domain fails by silently dropping a fact the
+       *  operator needed. Anyone changing a branch from one shape to the
+       *  other should have to come here and say so.  */
+      if (c.injected) {
+        ok(`B6  ${c.subject} · SPREADS · narrative survives at top level AND two array levels deep`,
+           payload.includes("narrative-top") && payload.includes("narrative-deep"),
+           payload.slice(0, 160));
+      } else if (c.projects) {
+        ok(`B6  ${c.subject} · PROJECTS · the composer names its own fields, so injected extras never travel`,
+           !payload.includes("narrative-top") && !payload.includes("narrative-deep")
+           && badKeys.length === 0 && badValues.length === 0,
+           payload.slice(0, 200));
+      }
+      censusRows.push({ subject: c.subject, leaves: leaves.length, injected: c.injected });
+    }
+
+    /*  THE CENSUS COVERED WHAT IT CLAIMS. If a subject silently stopped
+     *  being exercised, the table would shrink and nobody would notice —
+     *  so the count is asserted, and leasing_person is named as proven
+     *  on the stronger rung above rather than counted twice here.  */
+    ok("B7  the census covered every model-called subject except leasing_person",
+       censusRows.length === 9
+       && ["tenancy", "tour_schedule", "economics", "compliance", "utility",
+           "contracted_service", "debt", "equity", "work"]
+            .every((n) => censusRows.some((r) => r.subject === n)),
+       JSON.stringify(censusRows.map((r) => r.subject)));
+
+    /*  ── THE FIREWALL DID NOT EAT THE SERVER'S OWN REFERENCE ─────────
+     *  `__refs` carries a minted opener TOKEN, and the sanitizer now
+     *  strips keys named `token`. The sanitized copy is what the model
+     *  sees; `references` is returned from the ORIGINAL envelope, so the
+     *  app still gets its opener. That distinction is the whole design
+     *  and it is worth an assertion rather than an argument.  */
+    {
+      const seen = [];
+      const stub = { messages: { create: async (input) => {
+        seen.push(input);
+        return { content: [{ type: "text", text: JSON.stringify({ outcome: "answered", answer: "ok" }) }] };
+      } } };
+      const out = await askSpineAnswer.answer(pool, stub, {
+        property_id: prop, allowed_modules: ["asset_management"], operator_user_id: "census",
+        question: "what licenses expire soon",
+        mintComplianceReference: () => ({ token: "opener_" + SEEDED.token }),
+        complianceReader: { readComplianceStanding: async () => ({
+          contract_version: "1", capability_classes: ["retrieval"],
+          composition_authorization: "single_domain", as_of: "2026-08-25",
+          coverage: { state: "partial" }, items: [],
+          references: [{ role: "canonical_record", label: "Rental Licence",
+                         opener: { token: "opener_" + SEEDED.token } }] }) },
+      });
+      const payload = String(seen[0].messages[0].content);
+      ok("B8  the minted opener token reaches the HTTP response…",
+         Array.isArray(out.references) && out.references.length === 1
+         && out.references[0].open.token === "opener_" + SEEDED.token,
+         JSON.stringify(out.references));
+      ok("B8b …and never reaches the model",
+         !payload.includes("opener_" + SEEDED.token) && !payload.includes(SEEDED.token),
+         "the opener token is in model context");
+      ok("B8c …and the reference label is server-resolved, not parsed from prose",
+         out.references[0].label === "Rental Licence", JSON.stringify(out.references[0]));
+    }
+  }
+
   leasingRead.resolveLeasingSubject = realResolve;
   leasingRead.readLeasingStanding = realStanding;
   server.close();
@@ -858,7 +1093,7 @@ receipt.begin(__filename, { url: CONN, expected: 78 });
     console.log("  not mean the behaviour is right.");
   }
   console.log("");
-  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 78 }));
+  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 128 }));
 })().catch((e) => {
   console.error(e && e.stack ? e.stack : e);
   process.exit(receipt.died(__filename, e, ran));

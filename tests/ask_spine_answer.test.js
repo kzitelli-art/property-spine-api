@@ -194,9 +194,20 @@ function modelFacts(spy) {
      !/"open"\s*:/.test(spy.lastRequest.messages[0].content),
      "the model was handed navigation targets; it can now compose a link " +
      "Spine never resolved");
-  ok("G4  …and the facts it was given name the server-derived property",
-     spy.lastRequest.messages[0].content.includes(PROP),
-     "the model was not told which property it is talking about");
+  /*  ⚠ G4 WAS INVERTED BY RULING, NOT BY CONVENIENCE.
+   *  It used to assert that the model IS told the property UUID, on the
+   *  reasoning that a server-derived scope is not really a record
+   *  identifier. That exception is withdrawn: a server-derived scope is
+   *  still a database UUID. The server needs it to scope its readers,
+   *  authorize the request and echo it in the response — all of which
+   *  still happen. The MODEL needs the story, not the key.
+   *
+   *  This assertion documented behaviour; behaviour is not canonical
+   *  because a test wrote it down. It now asserts the boundary the
+   *  final serialization firewall enforces.  */
+  ok("G4  …and the model is NOT told the property UUID — scope is a server fact, not a model fact",
+     !spy.lastRequest.messages[0].content.includes(PROP),
+     "the property UUID reached model context");
 
   //  THE INSTRUCTION IS THE PRODUCT. If these sentences go missing, the
   //  surface can fabricate and nothing else here would notice.

@@ -74,6 +74,16 @@ const MATRIX = [
   //  of the terse generic note rather than saying it twice.
   { q: "What is the weather tomorrow?",                    subject: "work",                    dest: "technician", acceptance: "out_of_scope", reportedSeparately: true },
   { q: "Where do Jane's and Marcus's applications stand?", subject: "leasing_person",          dest: "ask_spine",  acceptance: "leasing_person" },
+  //  ── PHASE C · the rest of the readiness matrix ──────────────────
+  //  Realistic phrasings for the remaining supported reads, so the
+  //  matrix covers what Mike actually asks rather than only what
+  //  happened to be convenient to assert.
+  { q: "Which signer is still outstanding?",               subject: "work",                    dest: "technician", acceptance: "leasing_person", reportedSeparately: true },
+  { q: "What is the asking rent for a 1 bedroom?",         subject: "economics",               dest: "ask_spine",  acceptance: "economics" },
+  { q: "What do we charge for security deposits?",         subject: "economics",               dest: "ask_spine",  acceptance: "economics" },
+  { q: "How many beds are occupied right now?",            subject: "tenancy",                 dest: "ask_spine",  acceptance: "tenancy" },
+  { q: "How many beds are vacant?",                        subject: "tenancy",                 dest: "ask_spine",  acceptance: "tenancy" },
+  { q: "What work orders are assigned to me?",             subject: "work",                    dest: "technician", acceptance: "personal_attention", reportedSeparately: true },
 ];
 
 console.log("\n  ── subject routing, real functions ──");
@@ -341,6 +351,8 @@ console.log("\n  ── four silences remain distinct (§40.7) ──");
 }
 
 /*  ── PART D · COMPOSITION IS A REFUSAL, NOT AN ANSWER (§40.8) ───────  */
+await entitlementMatrix();
+
 console.log("\n  ── cross-domain composition remains refused ──");
 ok("a two-domain question is composition_unavailable at the subject layer",
   askSpineAnswer.questionSubject("How many beds do we have, and what is the loan balance?")
@@ -350,6 +362,112 @@ ok("the SMS router carries that refusal rather than picking a domain",
     .subject === "composition_unavailable");
 
 /*  ── PART E · THE MODEL GETS NO IDS AND NO TOOLS ────────────────────  */
+/*  ── TWO COMPOSER-OWNED NEAR-MISSES, MEASURED AND NOT REPAIRED ──────
+ *  Both live in questionSubject / PERSONAL_ATTENTION_TERMS, which this
+ *  lane owns — and both are one token from working. They are recorded
+ *  rather than fixed because this build's mandate is the model-scope
+ *  firewall and a readiness census; extending routing again is a
+ *  separate ruling, and quietly widening a regex while shipping a
+ *  security boundary is how two changes become one unreviewable diff.
+ *  The exact minimal fix is named so the next thread does not have to
+ *  rediscover it.                                                       */
+ok("C4  \"Which signer is still outstanding?\" routes to `work` (MEASURED, not repaired)",
+  askSpineAnswer.questionSubject("Which signer is still outstanding?") === "work",
+  askSpineAnswer.questionSubject("Which signer is still outstanding?"));
+note("COMPOSER-OWNED · \"Which signer is still outstanding?\" → dashboard `work`, SMS `technician`; "
+   + "acceptance wants `leasing_person`. LEASING_PERSON_TERMS has "
+   + "`sign(?:s|ed|ing|ature|atures)?`, and \"signer\" has no word boundary after \"sign\", so the "
+   + "noun for the person who signs matches nothing. Minimal fix: add `signers?` to that "
+   + "alternation. Not applied here.");
+ok("C5  \"What work orders are assigned to me?\" is not personal-attention (MEASURED, not repaired)",
+  askSpineAnswer.isPersonalAttentionQuestion("What work orders are assigned to me?") === false,
+  "recognised");
+note("COMPOSER-OWNED · \"What work orders are assigned to me?\" is not recognised as personal "
+   + "attention. PERSONAL_ATTENTION_TERMS has `what (?:work|tasks?|jobs?) (?:is|are) assigned to "
+   + "me`, which \"work orders\" misses by one word. Minimal fix: `(?:work(?: orders?)?|tasks?|"
+   + "jobs?)`. Not applied here. It still answers as a property-scoped `work` question, so the "
+   + "failure is scope — Mike gets the property queue where he asked for his own.");
+
+/*  ══ PHASE C · SKYLINE CONVERSATIONAL READINESS ════════════════════
+ *  The matrix above proves which SENTENCE reaches which READ. This
+ *  proves that each supported read then behaves: the server picks the
+ *  subject, entitlement is decided before the model is reached, the
+ *  right canonical reader is the one that runs, the outcome is honest,
+ *  and grounding and references are the server's.
+ *
+ *  NOTHING HERE DEPENDS ON MODEL PROSE. Every assertion reads an
+ *  outcome, a read_state, a grounded_on key or a call count. The stub
+ *  answers "ok" to everything on purpose: if any assertion below could
+ *  be changed by rewording the model's sentence, it would be measuring
+ *  the wrong thing.                                                    */
+console.log("\n  ── PHASE C · readiness per supported read ──");
+{
+  const SUPPORTED = [
+    { name: "application status for a named person", q: "Where does Jane's application stand?",
+      subject: "leasing_person", entitled: ["leasing"], unentitled: ["asset_management"] },
+    { name: "did a named resident sign",             q: "Did Jane sign?",
+      subject: "leasing_person", entitled: ["management"], unentitled: ["maintenance"] },
+    { name: "what is holding a lease up",            q: "What is holding this lease up?",
+      subject: "leasing_person", entitled: ["leasing"], unentitled: ["asset_management"] },
+    { name: "upcoming tour availability",            q: "When is my next tour?",
+      subject: "tour_schedule",  entitled: ["leasing"], unentitled: ["asset_management"] },
+    { name: "published asking rent and charges",     q: "What is the asking rent for a 1 bedroom?",
+      subject: "economics",      entitled: ["asset_management"], unentitled: ["maintenance"] },
+    { name: "open/occupied tenancy position",        q: "How many beds are occupied right now?",
+      subject: "tenancy",        entitled: ["leasing"], unentitled: ["asset_management"] },
+  ];
+  for (const c of SUPPORTED) {
+    ok(`C1  ${c.name} · the SERVER selects the subject deterministically`,
+      askSpineAnswer.questionSubject(c.q) === c.subject
+      && askSpineAnswer.questionSubject(c.q) === askSpineAnswer.questionSubject(c.q),
+      `${askSpineAnswer.questionSubject(c.q)} (want ${c.subject})`);
+  }
+}
+
+/*  ENTITLEMENT IS DECIDED BEFORE THE MODEL, PER SUBJECT.
+ *  Driven against a database that THROWS and a model that THROWS, so a
+ *  subject that refuses cannot have touched either: the refusal is
+ *  proven by construction, not by a counter that might not move.       */
+console.log("\n  ── PHASE C · entitlement precedes the model, per subject ──");
+async function entitlementMatrix() {
+  const explode = { query: () => { throw new Error("the database must not be touched"); } };
+  const noModel = { messages: { create: async () => { throw new Error("Anthropic must not be reached"); } } };
+  const ask = (mods, q) => askSpineAnswer.answer(explode, noModel, {
+    property_id: "11111111-1111-4111-8111-111111111111",
+    allowed_modules: mods, operator_user_id: "u", question: q,
+  });
+  const CASES = [
+    { subject: "leasing_person", q: "Did Jane sign?",                         yes: ["leasing", "management"],       no: ["asset_management", "maintenance"] },
+    { subject: "tenancy",        q: "How many beds are occupied right now?",  yes: ["leasing", "management"],       no: ["asset_management", "maintenance"] },
+    { subject: "tour_schedule",  q: "When is my next tour?",                  yes: ["leasing", "management"],       no: ["asset_management", "maintenance"] },
+    { subject: "economics",      q: "What is the asking rent for a 1 bedroom?", yes: ["leasing", "asset_management"], no: ["maintenance"] },
+    { subject: "compliance",     q: "When does the rental licence expire?",   yes: ["asset_management"],            no: ["leasing", "maintenance"] },
+    { subject: "debt",           q: "What is our debt service?",              yes: ["asset_management"],            no: ["leasing", "maintenance"] },
+  ];
+  for (const c of CASES) {
+    const refused = [];
+    const passed = [];
+    for (const m of c.no)  refused.push((await ask([m], c.q)).outcome);
+    for (const m of c.yes) passed.push((await ask([m], c.q)).outcome);
+    ok(`C2  ${c.subject} · every unentitled module is refused BEFORE any read or model call`,
+      refused.every((o) => o === "not_authorized"), `${JSON.stringify(c.no)} → ${JSON.stringify(refused)}`);
+    /*  The entitled modules must NOT be refused. They fail with
+     *  `unavailable` here because the injected model throws — which is
+     *  the point: they got past the wall and tried to do the work. An
+     *  assertion that only checked refusals would pass a wall that
+     *  refused everyone.  */
+    ok(`C2b ${c.subject} · every entitled module gets past the wall and attempts the work`,
+      passed.every((o) => o !== "not_authorized"), `${JSON.stringify(c.yes)} → ${JSON.stringify(passed)}`);
+  }
+  //  Refusals are Spine's own sentences, not the model's — asserted as
+  //  a property of every refusal, since no model was reachable at all.
+  const r = await ask(["maintenance"], "Did Jane sign?");
+  ok("C3  a refusal carries a server-written sentence, null grounding and no references",
+    typeof r.answer === "string" && r.answer.length > 0
+    && r.grounded_on === null && Array.isArray(r.references) && r.references.length === 0,
+    JSON.stringify(r));
+}
+
 console.log("\n  ── the model never receives identifiers or an action tool ──");
 {
   let captured = null;

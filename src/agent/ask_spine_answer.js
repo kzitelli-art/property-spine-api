@@ -395,23 +395,34 @@ function withoutDatabaseIds(value) {
      *  ever returns a hash is covered the day it lands, without anyone
      *  remembering to add it.
      *
-     *  SCOPE IS WHAT WAS OBSERVED, NOT WHAT WAS IMAGINED. A search of
-     *  every canonical reader reachable from gatherFacts found these two
-     *  keys and no other hash-shaped output key at all — no `*_hash`,
-     *  `*_token` or `*_digest`. `executed_lease_records.payload_hash` is
-     *  a real column, but no reader selects it, so it is NOT matched
-     *  here: a rule written for a key nobody emits is speculation, and
-     *  the day a reader does emit it this line is the place to widen.
+     *  WHAT IS MEASURED, AND WHAT IS THE STATED RULE. Only `_sha256`
+     *  was ever measured leaving a real reader: a census found exactly
+     *  two, both in leasing standing. `hash`, `token` and `secret` are
+     *  matched because the governing rule names them — the model
+     *  receives narrative facts, never identities — and because
+     *  `executed_lease_records.payload_hash` is a real NOT NULL column
+     *  sitting one SELECT away from emission. No reader emits any of
+     *  those three keys today, checked across every reader reachable
+     *  from gatherFacts, so nothing narrative is at risk: these three
+     *  shapes are a wall built before the leak, not after it.
      *
-     *  NOT REMOVED, DELIBERATELY: the top-level `property_id`. It is set
-     *  on `facts` before any reader runs, so it never passes through
-     *  here at all. It is the server-derived SCOPE of the question — the
-     *  caller already knows it, the response echoes it, and it names no
-     *  record the model could compose a link to. tenancy_ask_spine_http
-     *  asserts it in model context and excludes it from its own id
-     *  sweep, so it is an existing contract, not an oversight.  */
+     *  ⚠ THIS COMMENT USED TO BLESS `property_id` REACHING THE MODEL,
+     *  on the reasoning that a server-derived scope is not really a
+     *  record identifier and that an existing proof already asserted it.
+     *  Both halves were wrong. A server-derived scope is still a
+     *  database UUID, and the rule is not "identifiers the model could
+     *  plausibly misuse" but "the model receives narrative facts" — the
+     *  server needs the id to scope its readers; the model needs the
+     *  story. An existing test documents behaviour; it does not make
+     *  behaviour canonical.
+     *
+     *  `property_id` is now removed at the FINAL serialization boundary
+     *  rather than here, because it is set on `facts` before any reader
+     *  runs and so never passes through this function at all. See the
+     *  model call site: ONE sanitizer, applied twice — per domain as
+     *  readers return, and once over the whole envelope on the way out.  */
     if (key === "id" || /_id$/.test(key) || (/_identifier$/.test(key) && !/_masked$/.test(key))
-        || /_sha256$/.test(key)) {
+        || /_sha256$/.test(key) || /(^|_)(hash|token|secret)$/.test(key)) {
       continue;
     }
     clean[key] = withoutDatabaseIds(child);
@@ -1392,12 +1403,35 @@ async function answer(db, anthropic, {
       //  ENDS ON THE USER TURN. Nothing may follow it — see DECISION_SCHEMA
       //  for what the assistant prefill that used to sit here cost.
       messages: [
-        //  `__refs` is STRIPPED HERE. The model gets labels and dates and
-        //  never a record id — see gatherFacts for why a model holding ids
-        //  is a model that can compose a link Spine did not resolve.
+        /*  ── THE FINAL MODEL-PAYLOAD FIREWALL ────────────────────────
+         *  ONE sanitizer, applied at TWO points, and the second is not
+         *  redundant. Per-domain sanitizing runs as each reader returns,
+         *  so it can only clean what a reader produced. Anything the
+         *  COMPOSER itself puts on the envelope — `property_id`,
+         *  `gathered_at`, `question_subject`, `composite_silence`,
+         *  `reads_that_failed` — never passed through it at all, and
+         *  `property_id` rode out to the model that way for the entire
+         *  life of this file.
+         *
+         *  This pass is over the COMPLETE envelope, on the way out. It
+         *  is the last thing that happens before bytes leave for
+         *  Anthropic, so a field added to `facts` anywhere is covered
+         *  the day it lands rather than the day someone remembers. A
+         *  second sanitizer would have to be kept in step with this one;
+         *  there is only ever one.
+         *
+         *  `__refs` is stripped by the replacer as well. It is
+         *  server-owned and reaches the HTTP response, never the model:
+         *  a model holding a record id can compose a link Spine did not
+         *  resolve.
+         *
+         *  WHAT SURVIVES is narrative — names, statuses, dates, amounts,
+         *  labels, form codes, uncertainty and refusal states. The
+         *  server keeps `property_id` for reader scope, authorization
+         *  and the response it echoes; the model gets the story.  */
         { role: "user",
           content: `QUESTION SUBJECT: ${subject}\nFACTS:\n`
-                   + `${JSON.stringify(facts, (k, v) => (k === "__refs" ? undefined : v), 2)}`
+                   + `${JSON.stringify(withoutDatabaseIds(facts), (k, v) => (k === "__refs" ? undefined : v), 2)}`
                    + `\n\nOPERATOR ASKED: ${q}` },
       ],
     });
