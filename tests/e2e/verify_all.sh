@@ -71,6 +71,21 @@ step "contracted service term ordering" env HARNESS_DATABASE_URL="$E2E_DATABASE_
 step "contracted service observation class" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/contracted_service_observation_classification.db.js
 step "contracted service setup temporal" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/contracted_service_setup_state_temporal.db.js
 
+#  ── ASK SPINE · THE CONVERSATIONAL READER (§40.2) ───────────────────
+#  A domain is not done until Ask Spine can read it, and §40.11 says that
+#  is enforced by something that runs, not by memory. These two are the
+#  leasing half of it: the matrix pins which sentence reaches which read
+#  on BOTH surfaces (dashboard composer and staff SMS router), and the
+#  HTTP proof carries one of those sentences over a real socket with a
+#  real session into the real canonical read.
+#
+#  Added 2026-08-25. Both PIN CURRENT BEHAVIOUR and print a DIVERGENCES
+#  report of what they found and did not repair. Green here means the
+#  contract is pinned — it does not mean the contract is right; read the
+#  report.
+step "skyline ask spine sms matrix"  node tests/skyline_ask_spine_sms_matrix.test.js
+step "skyline ask spine leasing HTTP" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/skyline_ask_spine_leasing_http.db.js
+
 # ── the real server, the real HTTP door ─────────────────────────────
 #  ASK BEFORE LAUNCHING. Polling /health afterwards cannot distinguish
 #  our server from a stale one — see tests/e2e/port_guard.sh.
