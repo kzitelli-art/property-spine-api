@@ -180,10 +180,54 @@ function marketingState(p, liveOk) {
    *  data: leases.start_date is a `date` column, so a present value is
    *  always a real day. A shaped claim with no start date is exactly the
    *  unplaceable one.                                                     */
-  const unplaceableClaim = (p.other_spanning_lease_positions || [])
-    .find((l) => l && !l.start_date);
+  const spanningClaims = p.other_spanning_lease_positions || [];
+  const unplaceableClaim = spanningClaims.find((l) => l && !l.start_date);
   if (unplaceableClaim) {
     return { state: "unresolved", reason: "unplaceable_nonterminal_lease_claim" };
+  }
+
+  /*  ── AND A LEASE SPINE CANNOT PLACE IN ITS OWN VOCABULARY ────────────
+   *
+   *  The paragraph above caught the undated half of this bucket and left
+   *  the other half, and the classifier's own comment recorded the gap as
+   *  deliberately parked: "an unknown-STATUS spanning lease leaves it
+   *  ready_now today as well … wiring it in would move availability_read,
+   *  leasing_inventory and the prospect surface at once."
+   *
+   *  MEASURED ON REAL POSTGRES, and it is the whole reason this is no
+   *  longer parked. A lease SPANNING TODAY whose status is outside
+   *  {active, commercial} and {pending, signed} — 'holdover_pending',
+   *  'subleased_pending_review', anything the next writer invents, since
+   *  leases.lease_status has no CHECK constraint — produced:
+   *
+   *      other_spanning   [{ status, start_date }]   ← the right IS here
+   *      marketing_state  marketable_now
+   *      blocking_reason  null
+   *
+   *  Byte-identical to a bed with no rights on it at all, and
+   *  application_target_authority reads exactly this row, so the bed was
+   *  offerable to a real prospect while Spine held a lease over it.
+   *
+   *  ONE BUCKET, ONE RULE. other_spanning_lease_positions is defined by
+   *  the classifier as "valid leases spanning asOf that fit none of the
+   *  buckets above … they exist so a reader can refuse to call a bed empty
+   *  while Spine holds a lease over it." Every entry in it is a right
+   *  Spine cannot interpret. Testing one shape of that and offering the
+   *  other was the defect; the guard now asks the question the bucket was
+   *  built to answer.
+   *
+   *  TWO REASONS, NOT ONE. Undated and unclassifiable are different
+   *  problems with different fixes — supply the date, or teach Spine the
+   *  status — and a reader sent to the wrong one loses the same time §5 is
+   *  written to save.
+   *
+   *  NO NEW STATUS VOCABULARY, DELIBERATELY. Adding these words to
+   *  CURRENT_ECONOMIC_STATUSES or ACTIVATION_PENDING_STATUSES would be the
+   *  other way to make this green, and it would be wrong twice: it decides
+   *  what an unknown status MEANS, which nobody here knows, and it re-opens
+   *  the bed on that guess.                                              */
+  if (spanningClaims.length) {
+    return { state: "unresolved", reason: "unrecognised_spanning_lease_status" };
   }
 
   // No spanning lease from here down. Still not automatically marketable.

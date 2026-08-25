@@ -57,6 +57,11 @@ const econ = require(path.join(ROOT, "src/tenancy/economic_tenancy_service.js"))
 const { spacePosition, recordEffectivePossession } = require(path.join(ROOT, "src/tenancy/space_position.js"));
 const tenancy = require(path.join(ROOT, "src/tenancy/tenancy_position_read.js"));
 const { availabilityRead, marketingState, HUMAN } = require(path.join(ROOT, "src/surfaces/availability_read.js"));
+/*  READ-ONLY, and imported for exactly one reason: `marketing_state` is a
+ *  label until something acts on it. evaluateOfferability is the policy the
+ *  application door actually applies, so importing it turns "the bed reads
+ *  withheld" into "the bed cannot be offered". Nothing here edits it. */
+const { evaluateOfferability } = require(path.join(ROOT, "src/applications/application_target_authority.js"));
 
 const P    = "cab10001-0000-4000-8000-000000000001"; // property
 const UNIT = "cab10001-0000-4000-8000-0000000000a1";
@@ -969,6 +974,159 @@ const posFor = async (pool, asOf) => {
       await pool.query(`delete from leases where id = any($1::uuid[])`, [[FUT1, FUT2]]);
       await pool.query(`delete from spaces where unit_id=$1`, [U3]);
       await pool.query(`delete from units where id=$1`, [U3]);
+    }
+
+    /* ══ H · A LEASE SPINE CANNOT READ MUST NOT LEAVE THE BED OFFERABLE ═
+     *
+     *  F4 caught the UNDATED half of other_spanning_lease_positions. This
+     *  is the other half, and the classifier's own comment recorded it as
+     *  deliberately parked: "an unknown-STATUS spanning lease leaves it
+     *  ready_now today as well … wiring it in would move availability_read,
+     *  leasing_inventory and the prospect surface at once."
+     *
+     *  MEASURED ON REAL POSTGRES BEFORE THE FIX. A lease SPANNING TODAY
+     *  whose status is outside {active, commercial} and {pending, signed}:
+     *
+     *      other_spanning   [{ status, start_date }]   ← the right IS here
+     *      marketing_state  marketable_now
+     *      blocking_reason  null
+     *
+     *  Byte-identical to a bed with no rights at all. This is the highest
+     *  priority shape in the whole audit — not "a reason went missing" but
+     *  "the bed is offered" — so H2 does not stop at the label: it asserts
+     *  through evaluateOfferability, the policy the application door
+     *  actually applies.
+     *
+     *  H4 IS THE CONTROL THAT CARRIES THE DESIGN. A fix that suppressed
+     *  every spanning lease would pass H2 and destroy occupancy, so a
+     *  RECOGNISED spanning status must still read occupied.             */
+    const U4 = "cab10001-0000-4000-8000-0000000000a4";
+    const SPAN = "cab10001-0000-4000-8000-000000000401";
+    await pool.query(`insert into units (id,property_id,unit_number) values ($1,$2,'304')`, [U4, P]);
+    const space4 = (await pool.query(
+      `select id from spaces where unit_id=$1 order by created_at limit 1`, [U4])).rows[0].id;
+    await pool.query(`update spaces set use_type='residential' where id=$1`, [space4]);
+    //  Spans AS_OF (2026-08-24) on both sides, so every arm that asks
+    //  "does this lease govern today" answers yes.
+    const addSpanning = (status, start = "2026-08-01", end = "2027-02-01") => pool.query(
+      `insert into leases (id, property_id, space_id, tenant_ids, rent, balance,
+                           start_date, end_date, lease_status)
+       values ($1,$2,$3,$4::uuid[],1400,0,$5,$6,$7)`,
+      [SPAN, P, space4, [PERSON], start, end, status]);
+    const rowFor304 = async () => {
+      const ar = await availabilityRead(pool, { property_id: P, as_of: AS_OF });
+      return { ar, row: (ar.positions || ar.rows || []).find((r) => String(r.unit_number) === "304") };
+    };
+    try {
+      // ── H1 · POSITIVE CONTROL — the bed is genuinely offerable first ──
+      const h0 = await rowFor304();
+      const cleanOfferable = h0.row && evaluateOfferability(h0.row, {}).offerable;
+      if (h0.row && h0.row.marketing_state === "marketable_now" && cleanOfferable === true)
+        ok("H1 · POSITIVE CONTROL — unit 304 with no rights is marketable_now AND evaluateOfferability says offerable");
+      else bad("H1 · the control bed is not offerable; H2 would be vacuous",
+               JSON.stringify(h0.row && { s: h0.row.marketing_state, offerable: cleanOfferable }));
+
+      // ── H2 · THE DEFECT — an unreadable spanning right withholds the bed ─
+      await addSpanning("holdover_pending");
+      const h1 = await rowFor304();
+      const st = h1.row && h1.row.marketing_state;
+      const rsn = h1.row && h1.row.blocking_reason;
+      const verdict = h1.row && evaluateOfferability(h1.row, {});
+      console.log(`\n  unit 304 · no rights:                ${JSON.stringify({ s: h0.row.marketing_state, r: h0.row.blocking_reason })}`);
+      console.log(`  unit 304 · unreadable spanning lease: ${JSON.stringify({ s: st, r: rsn })}`);
+      if (st === "unresolved" && rsn === "unrecognised_spanning_lease_status")
+        ok("H2 · a spanning lease Spine cannot classify reads unresolved · unrecognised_spanning_lease_status");
+      else bad("H2 · a bed carrying an unreadable spanning lease is still reported open",
+               JSON.stringify({ s: st, r: rsn }));
+
+      /*  THE CONSEQUENCE, NOT THE LABEL. This is the assertion that makes
+       *  H a priority-one proof: the application door refuses the bed. */
+      if (verdict && verdict.offerable === false)
+        ok(`H2 · and the APPLICATION DOOR refuses it — evaluateOfferability offerable=false, ${verdict.refusal_code}`);
+      else bad("H2 · the bed is still OFFERABLE to a prospect", JSON.stringify(verdict));
+
+      //  …and it must differ from the no-rights answer, because being
+      //  indistinguishable from an empty bed was the defect itself.
+      if (st !== h0.row.marketing_state)
+        ok("H2 · and it is DISTINGUISHABLE from a bed with no rights at all");
+      else bad("H2 · an occupied-but-unreadable bed still looks exactly like an empty one", st);
+
+      // ── H3 · CONTROL — the UNDATED half keeps its own reason ──────────
+      await pool.query(`delete from leases where id=$1`, [SPAN]);
+      await addSpanning("active", null, null);
+      const h2 = await rowFor304();
+      if (h2.row && h2.row.marketing_state === "unresolved"
+          && h2.row.blocking_reason === "unplaceable_nonterminal_lease_claim")
+        ok("H3 · CONTROL — the UNDATED claim keeps unplaceable_nonterminal_lease_claim; the two reasons did not merge");
+      else bad("H3 · the undated claim lost or changed its reason",
+               JSON.stringify(h2.row && { s: h2.row.marketing_state, r: h2.row.blocking_reason }));
+
+      /*  ── H4 · CONTROL — A RECOGNISED SPANNING LEASE IS OCCUPANCY ─────
+       *  The load-bearing control. `active` spanning today is a governed
+       *  current tenancy and must still read occupied — a guard that
+       *  suppressed every spanning lease would pass H2 and be catastrophic
+       *  here.                                                           */
+      await pool.query(`delete from leases where id=$1`, [SPAN]);
+      await addSpanning("active");
+      const h3 = await rowFor304();
+      if (h3.row && h3.row.marketing_state === "occupied")
+        ok("H4 · CONTROL — a RECOGNISED spanning status is still occupancy, not unresolved");
+      else bad("H4 · a governed active lease stopped reading as occupied",
+               JSON.stringify(h3.row && { s: h3.row.marketing_state, r: h3.row.blocking_reason }));
+
+      /*  ── H5 · CONTROL — A TERMINAL SPANNING LEASE FREES THE BED ──────
+       *  The guard must read LIVE rights only. A retired lease whose dates
+       *  still cover today is over, and must not withhold the bed.
+       *
+       *  ⚠ MY FIRST VERSION OF H5 USED 'ended' AND WENT RED, AND IT WAS MY
+       *  ASSUMPTION THAT WAS WRONG, NOT THE CODE. RETIRED_STATUSES is
+       *  ["cancelled","terminated","rescinded","void","expired",
+       *  "superseded"] — 'ended' is NOT in it, so leaseIsValid treats an
+       *  'ended' lease as a live right. The control now uses a status that
+       *  is actually retired, and the 'ended' case is pinned below as the
+       *  deliberate consequence it is rather than quietly dropped.       */
+      await pool.query(`delete from leases where id=$1`, [SPAN]);
+      await addSpanning("cancelled");
+      const h4 = await rowFor304();
+      if (h4.row && h4.row.marketing_state === "marketable_now")
+        ok("H5 · CONTROL — a RETIRED spanning lease does not withhold the bed; the guard reads live rights only");
+      else bad("H5 · a retired lease now permanently suppresses its bed",
+               JSON.stringify(h4.row && { s: h4.row.marketing_state, r: h4.row.blocking_reason }));
+
+      /*  ── H5b · AND THE CASE THAT LOOKS TERMINAL AND IS NOT ───────────
+       *  'ended' spanning today is a CONTRADICTORY row: the dates say the
+       *  lease covers today, the status says it is over, and 'ended' is
+       *  absent from RETIRED_STATUSES so Spine has no rule that resolves
+       *  the contradiction. Withholding is the honest answer — Spine
+       *  cannot tell whether someone is in the bed — and it is asserted
+       *  here so that nobody later "fixes" it back to marketable without
+       *  meeting this line first.
+       *
+       *  This is a REAL BEHAVIOUR CHANGE on any property holding such a
+       *  row. No fixture in the parent has one (the parent is green), but
+       *  that is a statement about the fixtures, not about production. */
+      await pool.query(`delete from leases where id=$1`, [SPAN]);
+      await addSpanning("ended");
+      const h4b = await rowFor304();
+      if (h4b.row && h4b.row.marketing_state === "unresolved")
+        ok("H5b · 'ended' spanning TODAY is withheld — the status says over, the dates say live, and 'ended' is not a retired status");
+      else bad("H5b · a contradictory ended/spanning row is offered as open",
+               JSON.stringify(h4b.row && { s: h4b.row.marketing_state, r: h4b.row.blocking_reason }));
+
+      // ── H6 · the withheld row stays explainable and counted ──────────
+      await pool.query(`delete from leases where id=$1`, [SPAN]);
+      await addSpanning("holdover_pending");
+      const h5 = await rowFor304();
+      const label = h5.row && h5.row.blocking_label;
+      const buckets = Object.values(h5.ar.states || {}).reduce((a, n) => a + n, 0);
+      if (label && String(label).trim() && buckets === h5.ar.count)
+        ok(`H6 · the withheld row carries a governed label ("${label}") and the buckets still sum to count (${buckets} === ${h5.ar.count})`);
+      else bad("H6 · the withheld row is unexplained or the summary stopped adding up",
+               JSON.stringify({ label, buckets, count: h5.ar.count }));
+    } finally {
+      await pool.query(`delete from leases where id=$1`, [SPAN]);
+      await pool.query(`delete from spaces where unit_id=$1`, [U4]);
+      await pool.query(`delete from units where id=$1`, [U4]);
     }
   } catch (e) {
     bad("harness died", e.message);
