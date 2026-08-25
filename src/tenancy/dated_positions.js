@@ -43,7 +43,8 @@ const { NOT_RETIRED_SQL, retiredExclusion } = require("./inventory_retirement");
 //  The interval question is a CLASSIFICATION, so it lives with every other
 //  classification — pure, beside classifyPosition, sharing rangesOverlap and
 //  leaseIsValid rather than importing the vocabulary out of them.
-const { classifyPosition, classifyPositionForInterval } = require("./position_classifier");
+const { classifyPosition, classifyPositionForInterval,
+        intervalBoundariesOrRefuse } = require("./position_classifier");
 
 // Occupancy-axis values that mean "structurally not earning".
 const NON_REVENUE_CLAIMS = new Set(["model", "down"]);
@@ -979,14 +980,21 @@ async function intervalPropertyPositions(pool, {
   opening_truth_scope = "detail",
 } = {}) {
   if (!property_id) throw new Error("intervalPropertyPositions requires property_id");
-  if (!requested_start) throw new Error("intervalPropertyPositions requires requested_start");
-  if (requested_end && String(requested_end) < String(requested_start)) {
-    const e = new Error("requested_end is before requested_start");
-    e.code = "INVALID_INTERVAL";
-    throw e;
-  }
-  const start = String(requested_start).slice(0, 10);
-  const end = requested_end ? String(requested_end).slice(0, 10) : null;
+  /*  ONE OWNER FOR THE BOUNDARY CONTRACT — see intervalBoundariesOrRefuse.
+   *
+   *  This replaces a raw-string ordering compare followed by
+   *  String(value).slice(0, 10) on each boundary. That slice was the whole
+   *  defect: it converted an invalid value into a valid-looking day BEFORE
+   *  anything could refuse it, so '2026-09-20garbage' became 2026-09-20 and
+   *  an impossible '2026-99-99' end was echoed straight back inside an
+   *  ESTABLISHED term contract. Ordering was also decided on raw input, so
+   *  2026-09-20 → 2026-09-3 answered a REVERSED term while a legitimate
+   *  same-day term written with a timestamp start was refused.
+   *
+   *  Normalisation and ordering both now belong to the primitive, and the
+   *  canonical pair is what everything downstream sees — including the
+   *  requested_start/requested_end this service reports back.            */
+  const { start, end } = intervalBoundariesOrRefuse(requested_start, requested_end);
 
   //  THE SAME ROWS THE RENT ROLL READS. Not a second query.
   //  Evidence for an interval is judged AT requested_start (see the note

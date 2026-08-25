@@ -82,6 +82,7 @@ if (!/@(127\.0\.0\.1|localhost)[:/]/.test(URL)) {
 const ROOT = path.join(__dirname, "..");
 const { spacePosition } = require(path.join(ROOT, "src/tenancy/space_position.js"));
 const { intervalPropertyPositions } = require(path.join(ROOT, "src/tenancy/dated_positions.js"));
+const { readTenancyTermStanding } = require(path.join(ROOT, "src/tenancy/tenancy_position_read.js"));
 const fixture = require(path.join(__dirname, "tenancy_position_fixture.js"));
 
 const PROPERTY      = fixture.IDS.PROPERTY;
@@ -165,6 +166,140 @@ const forwardShape = async (pool) =>
     if (await asOfShape(pool) === baseAsOf && await forwardShape(pool) === baseFwd)
       ok("restored — both reads match the baseline again");
     else bad("restoration failed", "a probe put the fixture back wrong; the B-results above are not trustworthy");
+
+    /* ══ C · THE INTERVAL DATE CONTRACT ═════════════════════════════════
+     *
+     *  This harness already drives intervalPropertyPositions against real
+     *  Postgres, which makes it the right place to hold the BOUNDARY
+     *  contract honest too. Everything below is about what a requested term
+     *  may look like — not about which leases matter, which is B above.
+     *
+     *  ── WHAT WAS MEASURED BEFORE THE REPAIR ─────────────────────────
+     *  Through intervalPropertyPositions AND readTenancyTermStanding, on
+     *  this fixture, identical through both:
+     *
+     *    requested_end 2026-99-99     ANSWERED, term echoed "2026-99-99"
+     *    requested_end 20260920       ANSWERED, term echoed "20260920"
+     *    requested_end …garbage       ANSWERED, silently truncated
+     *    requested_start …garbage     refused "requested_end is before
+     *                                 requested_start" — a FALSE reason
+     *    2026-09-20 → 2026-09-3       ANSWERED — a REVERSED term
+     *    …T23:00:00Z → 2026-09-20     refused as reversed, though both
+     *                                 boundaries name the same day
+     *
+     *  requested_end had NO validator at any layer: it never reaches
+     *  Postgres (only start does, via openingBaselineAsOf) and never
+     *  reaches classifyPosition (only start does, as asOf). So an
+     *  impossible date could be handed to an operator inside an
+     *  ESTABLISHED term contract.
+     *
+     *  ── THE TWO THINGS THESE ASSERT ─────────────────────────────────
+     *  That malformed boundaries are REFUSED, and that the refusal is
+     *  TRUE — it names the field that is actually wrong. A refusal that
+     *  blames the other date sends someone to fix a date that was never
+     *  broken, which is worse than a blank (§5).                        */
+    const TERM_OK_START = "2026-01-01", TERM_OK_END = "2026-12-31";
+
+    const tryInterval = async (s_, e_) => {
+      try {
+        const iv = await intervalPropertyPositions(pool, {
+          property_id: PROPERTY, requested_start: s_, requested_end: e_ });
+        return { answered: true, start: iv.requested_start, end: iv.requested_end, count: iv.count };
+      } catch (err) { return { answered: false, code: err.code || "(none)", message: String(err.message) }; }
+    };
+
+    /*  MALFORMED, EACH BOUNDARY INDEPENDENTLY. The end column is the one
+     *  that used to answer every single time.                            */
+    const MALFORMED = [
+      ["trailing garbage",      "2026-09-20garbage"],
+      ["bare T",                "2026-09-20T"],
+      ["junk after T",          "2026-09-20Tgarbage"],
+      ["leading whitespace",    " 2026-09-20"],
+      ["trailing whitespace",   "2026-09-20 "],
+      ["unpadded",              "2026-9-20"],
+      ["locale form",           "09/20/2026"],
+      ["compact numeric",       "20260920"],
+      ["impossible day",        "2026-02-31"],
+      ["impossible month",      "2026-99-99"],
+      ["clock out of range",    "2026-09-20T99:99Z"],
+      ["offset out of range",   "2026-09-20T13:45:00+99:00"],
+      ["ISO timestamp",         "2026-09-20T13:45:00Z"],
+    ];
+    let startBad = 0, endBad = 0;
+    for (const [label, v] of MALFORMED) {
+      const a = await tryInterval(v, TERM_OK_END);
+      if (a.answered) { bad(`C1 · requested_start ${label} (${v}) ANSWERED`, `term ${a.start} → ${a.end}`); startBad++; }
+      else if (a.code !== "INVALID_INTERVAL") { bad(`C1 · requested_start ${label} refused ${a.code}`, "not the interval contract — a lower layer answered for it"); startBad++; }
+      else if (!/requested_start/.test(a.message)) { bad(`C1 · requested_start ${label} refused WITHOUT naming requested_start`, a.message); startBad++; }
+
+      const b = await tryInterval(TERM_OK_START, v);
+      if (b.answered) { bad(`C2 · requested_end ${label} (${v}) ANSWERED`, `term ${b.start} → ${b.end}`); endBad++; }
+      else if (b.code !== "INVALID_INTERVAL") { bad(`C2 · requested_end ${label} refused ${b.code}`, "not the interval contract"); endBad++; }
+      else if (!/requested_end/.test(b.message)) { bad(`C2 · requested_end ${label} refused WITHOUT naming requested_end`, b.message); endBad++; }
+    }
+    if (!startBad) ok(`C1 · all ${MALFORMED.length} malformed requested_start forms refused INVALID_INTERVAL, each naming requested_start`);
+    if (!endBad)   ok(`C2 · all ${MALFORMED.length} malformed requested_end forms refused INVALID_INTERVAL, each naming requested_end`);
+
+    // ── C3 · the four named counterexamples ──────────────────────────
+    const rev = await tryInterval("2026-09-20", "2026-09-3");
+    if (!rev.answered && rev.code === "INVALID_INTERVAL")
+      ok(`C3 · 2026-09-20 → 2026-09-3 is REFUSED, not answered as a term`);
+    else bad("C3 · the reversed/malformed-end term was ANSWERED", JSON.stringify(rev));
+
+    /*  THE FALSE-REASON CASE. The start is malformed; the end is a real
+     *  day. It must be refused FOR THE START, and must NOT be described as
+     *  reversed — that was the old lie.                                  */
+    const mis = await tryInterval("2026-09-20T23:00:00Z", "2026-09-20");
+    if (!mis.answered && mis.code === "INVALID_INTERVAL"
+        && /requested_start/.test(mis.message) && !/precedes/.test(mis.message))
+      ok("C3 · a timestamp start with a same-day end is refused FOR requested_start, not falsely called reversed");
+    else bad("C3 · malformed start not named truthfully", JSON.stringify(mis));
+
+    const echoed = await tryInterval(TERM_OK_START, "2026-99-99");
+    if (!echoed.answered) ok("C3 · 2026-99-99 can no longer be returned as requested_end");
+    else bad("C3 · an impossible date came back INSIDE the term", `end=${echoed.end}`);
+
+    const laundered = await tryInterval("2026-09-20garbage", TERM_OK_END);
+    if (!laundered.answered) ok("C3 · 2026-09-20garbage can no longer become 2026-09-20");
+    else bad("C3 · trailing garbage was truncated into a valid day", `start=${laundered.start}`);
+
+    // ── C4 · a genuinely reversed CANONICAL term says so ─────────────
+    const trueRev = await tryInterval("2026-12-31", "2026-01-01");
+    if (!trueRev.answered && trueRev.code === "INVALID_INTERVAL" && /precedes/.test(trueRev.message))
+      ok("C4 · a reversed CANONICAL term is refused and says the end precedes the start");
+    else bad("C4 · reversed canonical term not refused truthfully", JSON.stringify(trueRev));
+
+    // ── C5 · legitimate terms still answer ───────────────────────────
+    const fwd = await tryInterval(TERM_OK_START, TERM_OK_END);
+    if (fwd.answered && fwd.start === TERM_OK_START && fwd.end === TERM_OK_END)
+      ok(`C5 · an ordinary forward term still answers — ${fwd.start} → ${fwd.end}, count=${fwd.count}`);
+    else bad("C5 · a valid forward term stopped answering", JSON.stringify(fwd));
+
+    const sameDay = await tryInterval("2026-09-20", "2026-09-20");
+    if (sameDay.answered && sameDay.start === sameDay.end)
+      ok("C5 · a legitimate same-day term still answers");
+    else bad("C5 · the same-day term was refused", JSON.stringify(sameDay));
+
+    // ── C6 · the canonical TERM READ inherits all of it ──────────────
+    /*  readTenancyTermStanding is the governed term contract an entitled
+     *  reader receives. The malformed end used to arrive there as
+     *  state=ESTABLISHED with the junk echoed in `term`.                 */
+    const termTry = async (s_, e_) => {
+      try {
+        const t = await readTenancyTermStanding(pool, {
+          property_id: PROPERTY, requested_start: s_, requested_end: e_ });
+        return { answered: true, term: t.term, state: t.standing && t.standing.truth_state };
+      } catch (err) { return { answered: false, code: err.code || "(none)" }; }
+    };
+    const tBad = await termTry(TERM_OK_START, "2026-99-99");
+    if (!tBad.answered && tBad.code === "INVALID_INTERVAL")
+      ok("C6 · readTenancyTermStanding refuses the impossible end — no ESTABLISHED contract carrying junk");
+    else bad("C6 · the term contract answered with a malformed end",
+             JSON.stringify({ term: tBad.term, state: tBad.state }));
+    const tOk = await termTry(TERM_OK_START, TERM_OK_END);
+    if (tOk.answered && tOk.term.requested_start === TERM_OK_START && tOk.term.requested_end === TERM_OK_END)
+      ok(`C6 · and a valid term still answers — ${tOk.term.requested_start} → ${tOk.term.requested_end}, ${tOk.state}`);
+    else bad("C6 · a valid term stopped answering through the term read", JSON.stringify(tOk));
   } catch (e) {
     bad("harness died", e.message);
     console.error(e);

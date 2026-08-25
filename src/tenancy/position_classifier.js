@@ -185,6 +185,88 @@ function asOfKeyOrRefuse(asOf) {
   return key;
 }
 
+/*  ── THE ONE INTERVAL BOUNDARY CONTRACT ──────────────────────────────
+ *
+ *  A requested lease term is two CLOSED CALENDAR DAYS. This is the single
+ *  place that says what a boundary may look like and which day it is, and
+ *  both interval layers consume it — intervalPropertyPositions and
+ *  classifyPositionForInterval. Re-validating an already canonical pair is
+ *  idempotent and deliberate; a second copy of the rule is not.
+ *
+ *  ── WHAT IT REPLACES, AND WHY THAT WAS WRONG ────────────────────────
+ *  The interval path used to compare the RAW strings for ordering and then
+ *  derive each boundary with String(value).slice(0, 10). Measured on real
+ *  Postgres through intervalPropertyPositions AND readTenancyTermStanding:
+ *
+ *    requested_end 2026-99-99      ANSWERED, term echoed as "2026-99-99"
+ *    requested_end 20260920        ANSWERED, term echoed as "20260920"
+ *    requested_end …garbage        ANSWERED, silently truncated to a day
+ *    requested_start …garbage      refused "requested_end is before
+ *                                  requested_start" — a FALSE reason
+ *    2026-09-20 → 2026-09-3        ANSWERED: a REVERSED term, because
+ *                                  "2026-09-3" > "2026-09-20" as a string
+ *    2026-09-20T23:00:00Z → 2026-09-20
+ *                                  refused as reversed, though both
+ *                                  boundaries name the same day
+ *
+ *  The truncation is the mechanism: it turned an invalid value into a
+ *  valid-looking one BEFORE anything could object, and an impossible date
+ *  reached the operator inside an ESTABLISHED term contract.
+ *
+ *  ── EXACT CANONICAL DAYS ONLY ───────────────────────────────────────
+ *  Stricter than the as_of contract, on purpose. as_of names an instant a
+ *  caller may legitimately hold as a timestamp; a requested TERM is two
+ *  days a person typed, and the operator route has always promised exact
+ *  calendar dates. So ISO timestamps, Date objects, whitespace, truncatable
+ *  prefixes, locale forms, impossible days and out-of-range clock or offset
+ *  values are all refused here — with no second grammar: dateKey remains
+ *  the only calendar authority, and exactness is `key === value`.
+ *
+ *  NORMALISE, THEN COMPARE. Ordering is decided on the canonical keys and
+ *  never on raw input, which is what made both directions above wrong.   */
+function canonicalDay(value) {
+  if (typeof value !== "string") return null;
+  const key = dateKey(value);
+  return key !== null && key === value ? key : null;
+}
+
+function refuseInterval(message) {
+  const e = new Error(message);
+  e.code = "INVALID_INTERVAL";
+  return e;
+}
+
+/*  Returns { start, end } as canonical keys; end is null when open-ended,
+ *  which the lower-level interval primitive supports and must keep.      */
+function intervalBoundariesOrRefuse(startValue, endValue = null) {
+  const startGiven = startValue !== null && startValue !== undefined && startValue !== "";
+  if (!startGiven) throw refuseInterval("requested_start is required — a term has two dates.");
+  const start = canonicalDay(startValue);
+  /*  FIELD-SPECIFIC AND TRUE. The old path blamed the OTHER field: a
+   *  malformed start was reported as "requested_end is before
+   *  requested_start", sending an operator to correct a date that was
+   *  never wrong. A refusal has to name what to fix (§5).               */
+  if (start === null) {
+    throw refuseInterval(
+      `requested_start must be an exact calendar date as YYYY-MM-DD; received ${JSON.stringify(String(startValue))}`);
+  }
+
+  const endGiven = endValue !== null && endValue !== undefined && endValue !== "";
+  let end = null;
+  if (endGiven) {
+    end = canonicalDay(endValue);
+    if (end === null) {
+      throw refuseInterval(
+        `requested_end must be an exact calendar date as YYYY-MM-DD; received ${JSON.stringify(String(endValue))}`);
+    }
+    //  Compared as canonical keys, only after both are known to be days.
+    if (end < start) {
+      throw refuseInterval(`requested_end ${end} precedes requested_start ${start}.`);
+    }
+  }
+  return { start, end };
+}
+
 function datesSpan(lease, asOf) {
   return !!(lease && lease.start_date && lease.start_date <= asOf && (!lease.end_date || lease.end_date >= asOf));
 }
@@ -645,13 +727,13 @@ function freeSpans(start, end, rights) {
  *  blocked, wholly or partly, by a right that is doing its job.
  */
 function classifyPositionForInterval(row, { start_date, end_date = null, personNames } = {}) {
-  if (!start_date) throw new Error("classifyPositionForInterval requires start_date");
-  if (end_date && String(end_date) < String(start_date)) {
-    const e = new Error("requested_end is before requested_start");
-    e.code = "INVALID_INTERVAL";
-    throw e;
-  }
-  const requested = { start_date: String(start_date), end_date: end_date ? String(end_date) : null };
+  /*  ONE CONTRACT, BOTH LAYERS. This used to carry its own presence check
+   *  and its own raw-string ordering compare — a second copy of a rule that
+   *  drifted from the caller's. It now consumes the same primitive, so a
+   *  boundary that intervalPropertyPositions accepted cannot mean something
+   *  different one level down. Re-validating a canonical pair is idempotent. */
+  const bounds = intervalBoundariesOrRefuse(start_date, end_date);
+  const requested = { start_date: bounds.start, end_date: bounds.end };
   const leases = (row.leases || []).filter(leaseIsValid);
 
   //  THE ONE TEST. Same predicate the conflict detector uses.
@@ -714,6 +796,7 @@ function classifyPositionForInterval(row, { start_date, end_date = null, personN
 module.exports = {
   classifyPosition,
   classifyPositionForInterval,
+  intervalBoundariesOrRefuse,
   freeSpans,
   classifyFutureCommitment,
   isNativelyProven,
