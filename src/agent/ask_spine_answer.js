@@ -410,8 +410,7 @@ function withoutDatabaseIds(value) {
      *  record the model could compose a link to. tenancy_ask_spine_http
      *  asserts it in model context and excludes it from its own id
      *  sweep, so it is an existing contract, not an oversight.  */
-    if (key === "id" || /_id$/.test(key) || (/_identifier$/.test(key) && !/_masked$/.test(key))
-        || /_sha256$/.test(key)) {
+    if (key === "id" || /_id$/.test(key) || (/_identifier$/.test(key) && !/_masked$/.test(key))) {
       continue;
     }
     clean[key] = withoutDatabaseIds(child);
