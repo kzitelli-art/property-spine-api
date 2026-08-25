@@ -858,12 +858,10 @@ function classifyPositionForInterval(row, { start_date, end_date = null, personN
      *  whatever the undated claim turns out to be, so downgrading that
      *  certainty to `unresolved` would lose information and tell an
      *  operator less than Spine actually knows.                          */
-    /*  DELIBERATE FALSIFICATION — only the partial-term guard is removed,
-     *  restoring the old behaviour: a partially blocked term publishes the
-     *  spans computed from DATED rights alone even while an unplaceable
-     *  claim sits on the bed. undatedClaims is still computed and
-     *  unplaceable_rights is still exposed, so the red isolates the
-     *  publication of untrustworthy spans. REVERTED IN THE NEXT COMMIT. */
+    if (free_spans.length && undatedClaims.length) {
+      interval_state = "unresolved";
+      free_spans = [];
+    }
   }
 
   return {
