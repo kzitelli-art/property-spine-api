@@ -80,7 +80,54 @@ function dateKey(value) {
     return `${y}-${m}-${d}`;
   }
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value));
-  return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+  if (!m) return null;
+  /*  THE SHAPE IS NOT THE DATE. The pattern above accepts 2026-02-31 and
+   *  2026-99-99 — well-formed strings that are not days. Round-trip the
+   *  parsed fields through a UTC calendar and require them back unchanged:
+   *  Date.UTC ROLLS overflow (Feb 31 → Mar 3, month 99 → a later year), so
+   *  a mismatch is exactly "this is not a real day".                     */
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  const probe = new Date(Date.UTC(y, mo - 1, d));
+  if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== mo - 1 || probe.getUTCDate() !== d) return null;
+  return `${m[1]}-${m[2]}-${m[3]}`;
+}
+
+/*  THE ONE TEMPORAL KEY EVERY ARM OF classifyPosition CONSUMES.
+ *
+ *  Absent asOf stays allowed and undated — both production entries default
+ *  the date before calling, so this branch is reached only by a direct
+ *  caller, and refusing it would break them for no gain.
+ *
+ *  A PRESENT asOf THAT IS NOT A DAY IS REFUSED, and that is the whole
+ *  correction. It used to fall back to null and mean "apply no bound",
+ *  which silently reinstated the future-event leak the temporal boundary
+ *  closes. Measured on the real read path, resident in possession since
+ *  2026-09-15, asked about 2026-09-20:
+ *
+ *      as_of=2026-09-20   possession delivered · econ active
+ *      as_of=2026-9-20    possession PENDING   · econ active
+ *      as_of=09/20/2026   possession PENDING   · econ FORWARD
+ *
+ *  The last line is why this refuses rather than guesses. `forward` on an
+ *  occupied bed is availability_state committed_future — Spine offering a
+ *  bed someone lives in, with a story attached. Postgres accepts all three
+ *  as ::date, so the openingBaselineAsOf cast upstream lets them through;
+ *  nothing else was checking.
+ *
+ *  NOT ACCEPTED-AND-NORMALISED, on purpose. '2026-9-20' is unambiguous, but
+ *  '09/20/2026' is only a date under DateStyle MDY — under DMY the same
+ *  request means a different day. An answer that depends on a database
+ *  session setting is not a governed answer.                              */
+function asOfKeyOrRefuse(asOf) {
+  if (asOf === null || asOf === undefined) return null;
+  const key = dateKey(asOf);
+  if (key === null) {
+    const e = new Error(
+      `as_of must be a calendar date as YYYY-MM-DD; received ${JSON.stringify(String(asOf))}`);
+    e.code = "INVALID_AS_OF";
+    throw e;
+  }
+  return key;
 }
 
 function datesSpan(lease, asOf) {
@@ -188,11 +235,19 @@ function classifyFutureCommitment(lease, personNames) {
 //  asOf         'YYYY-MM-DD'
 //  personNames  Map(person_id → name) — data, already loaded
 function classifyPosition(row, { asOf, personNames } = {}) {
+  /*  ONE KEY, COMPUTED ONCE, CONSUMED BY EVERY TEMPORAL ARM BELOW.
+   *  No arm compares the raw argument: the lease arms (current /
+   *  activation-pending / future / other-spanning / conflict) and the
+   *  possession filter all read `asOfKey`. A second normalisation site is
+   *  how the two axes drifted apart in the first place — the possession
+   *  filter was bounded while datesSpan next door still compared a raw
+   *  string, so one request could answer `active` and `pending` at once. */
+  const asOfKey = asOfKeyOrRefuse(asOf);
   const leases = (row.leases || []).filter(leaseIsValid);
-  const current = leases.find((lease) => CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease)) && datesSpan(lease, asOf)) || null;
+  const current = leases.find((lease) => CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease)) && datesSpan(lease, asOfKey)) || null;
   const activationPending = leases.find((lease) =>
-    ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease)) && datesSpan(lease, asOf)) || null;
-  const future = leases.find((lease) => isFuture(lease, asOf)) || null;
+    ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease)) && datesSpan(lease, asOfKey)) || null;
+  const future = leases.find((lease) => isFuture(lease, asOfKey)) || null;
 
   /*  ── A SPANNING LEASE WHOSE STATUS WE DO NOT UNDERSTAND ───────────
    *  A DIAGNOSTIC, and a fail-closed one. Not a home for statuses we do
@@ -206,7 +261,7 @@ function classifyPosition(row, { asOf, personNames } = {}) {
    *  over a bed, whose meaning it cannot classify, is a reason to stop,
    *  not a reason to offer the bed. */
   const otherSpanning = leases.filter((lease) =>
-    datesSpan(lease, asOf)
+    datesSpan(lease, asOfKey)
     && !CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease))
     && !ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease)));
 
@@ -246,12 +301,10 @@ function classifyPosition(row, { asOf, personNames } = {}) {
    *  ("Tue Sep 15 2026"), which compares lexically against 'YYYY-MM-DD'
    *  as garbage — silently, and in a direction nobody predicts. Every
    *  side of every comparison here is a canonical YYYY-MM-DD key.       */
-  const asOfKey = dateKey(asOf);
   const allEvents = row.possession_events || [];
-  /*  asOf ABSENT (or itself unusable) → behave exactly as before. This
-   *  filter narrows a dated question; with no usable date to narrow to
-   *  there is nothing to apply, and inventing a refusal here would change
-   *  an answer this repair was not asked to touch.                      */
+  /*  asOfKey is null ONLY when asOf was absent — a present-but-unusable
+   *  one was refused at the top. Undated keeps its old undated behaviour;
+   *  it can no longer be reached by a malformed date.                   */
   const events = asOfKey === null ? allEvents : allEvents.filter((e) => {
     const k = dateKey(e && e.effective_date);
     /*  AN UNUSABLE EVENT DATE IS NOT CURRENT POSSESSION. Spine cannot
@@ -283,7 +336,9 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     available_from = future.start_date;
   } else {
     availability_state = "ready_now";
-    available_from = asOf;
+    /*  The canonical key when dated; the original argument when undated, so
+     *  the undated shape (an absent value, not null) is unchanged.       */
+    available_from = asOfKey === null ? asOf : asOfKey;
   }
 
   let next_required_action = null;
@@ -348,7 +403,7 @@ function classifyPosition(row, { asOf, personNames } = {}) {
    *  agrees with operative_overlap.competingOperativeLeases by
    *  construction — the writer refuses to CREATE exactly the state the
    *  reader now refuses to hide. One definition of a contested bed. */
-  const spanning = leases.filter((lease) => datesSpan(lease, asOf));
+  const spanning = leases.filter((lease) => datesSpan(lease, asOfKey));
   const conflicting = [];
   for (let i = 0; i < spanning.length; i++) {
     for (let j = i + 1; j < spanning.length; j++) {

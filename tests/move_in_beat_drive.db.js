@@ -368,6 +368,131 @@ const posFor = async (pool, asOf) => {
       ok(`D8b · CONTROL — at ${AFTER_OUT} possession is no longer delivered; the move_out is honoured once it is past`);
     else bad(`D8b · CONTROL FAILED — possession survived a move_out effective ${MOVE_OUT_AT}`,
              JSON.stringify(afterOut));
+
+    /* ══ D9 · THE DATE-INPUT CONTRACT ═══════════════════════════════════
+     *
+     *  The temporal boundary is only as good as the key it is given. Its
+     *  first version fell back to "apply no bound" whenever it could not
+     *  parse asOf — which sounds conservative and is the opposite. It
+     *  silently reinstated the very leak the boundary closes, and it did so
+     *  for inputs Postgres HAPPILY ACCEPTS, so nothing upstream refused
+     *  them: openingBaselineAsOf casts $2::date, and '2026-9-20',
+     *  '20260920' and '09/20/2026' all cast fine.
+     *
+     *  Measured on this exact fixture before the correction — resident in
+     *  possession since 2026-09-15, asked about 2026-09-20:
+     *
+     *      as_of=2026-09-20   possession delivered · econ active
+     *      as_of=2026-9-20    possession PENDING   · econ active
+     *      as_of=09/20/2026   possession PENDING   · econ FORWARD
+     *
+     *  The last line is the one that matters. `forward` on an occupied bed
+     *  means availability_state committed_future — Spine offering a bed
+     *  someone lives in, with a story attached. D9g is that control, and it
+     *  is the assertion this whole case exists to protect.
+     *
+     *  WHY REFUSE RATHER THAN NORMALISE. '2026-9-20' is unambiguous, but
+     *  '09/20/2026' is a date only under DateStyle MDY; under DMY the same
+     *  request means a different day. An answer that depends on a database
+     *  session setting is not a governed answer, so all three are refused.
+     */
+    const REF = "2026-09-20";                 // canonical, in possession
+    const truth = await possessionAt(REF);
+
+    // ── D9a · canonical bounds BOTH axes ──────────────────────────────
+    if (truth.possession_state === "delivered"
+        && String(truth.current_possession && truth.current_possession.since) === MOVE_IN_AT
+        && truth.economic_tenancy_state === "active")
+      ok(`D9a · canonical ${REF} bounds both axes — possession delivered AND lease active`);
+    else bad("D9a · canonical date did not bound both axes", JSON.stringify(truth));
+
+    // ── D9b/c · other ACCEPTED representations give the SAME answer ───
+    const sameAnswer = async (label, value) => {
+      try {
+        const p = await posFor(pool, value);
+        const got = {
+          possession_state: p.possession_state,
+          since: p.current_possession ? String(p.current_possession.since) : null,
+          economic_tenancy_state: p.economic_tenancy_state,
+          availability_state: p.availability_state,
+        };
+        const want = {
+          possession_state: truth.possession_state,
+          since: truth.current_possession ? String(truth.current_possession.since) : null,
+          economic_tenancy_state: truth.economic_tenancy_state,
+          availability_state: truth.availability_state,
+        };
+        if (JSON.stringify(got) === JSON.stringify(want))
+          ok(`${label} — identical answer to canonical ${REF}`);
+        else bad(`${label} — DIFFERENT answer from the same day`,
+                 `canonical ${JSON.stringify(want)}\n        this     ${JSON.stringify(got)}`);
+      } catch (e) { bad(`${label} — threw ${e.code || ""}`, e.message); }
+    };
+    await sameAnswer("D9b · ISO timestamp 2026-09-20T13:45:00Z", "2026-09-20T13:45:00Z");
+    await sameAnswer("D9c · JS Date object", new Date(Date.UTC(2026, 8, 20)));
+
+    // ── D9d · absent asOf preserves the existing undated behaviour ────
+    /*  spacePosition defaults a missing as_of to today, so `null` here is
+        the production shape. It must not refuse.                         */
+    try {
+      const undated = await posFor(pool, null);
+      ok(`D9d · absent as_of still answers (undated behaviour preserved) — econ ${undated.economic_tenancy_state}`);
+    } catch (e) { bad("D9d · absent as_of was refused", `${e.code || ""} ${e.message}`); }
+
+    // ── D9e · the three PG-valid noncanonical forms REFUSE ────────────
+    const mustRefuse = async (label, value) => {
+      try {
+        const p = await posFor(pool, value);
+        bad(`${label} — ACCEPTED instead of refused`,
+            `answered possession=${p.possession_state} econ=${p.economic_tenancy_state} ` +
+            `avail=${p.availability_state} — an unbounded answer to a date Spine cannot key`);
+      } catch (e) {
+        if (e.code === "INVALID_AS_OF") ok(`${label} — refused INVALID_AS_OF`);
+        else bad(`${label} — refused with the WRONG code ${e.code || "(none)"}`, e.message);
+      }
+    };
+    await mustRefuse("D9e · 2026-9-20 (unpadded)", "2026-9-20");
+    await mustRefuse("D9e · 20260920 (ISO basic)", "20260920");
+    await mustRefuse("D9e · 09/20/2026 (DateStyle-dependent)", "09/20/2026");
+
+    // ── D9f · impossible days refuse INSIDE the classifier ────────────
+    /*  Postgres also rejects these, at openingBaselineAsOf's $2::date — but
+     *  that is an accident of the read path, not a contract, and it arrives
+     *  as an untyped driver error. The classifier must refuse them itself,
+     *  with its own code, so a caller that does not touch Postgres first is
+     *  refused too. Asserted through the PURE function for exactly that
+     *  reason: routing through spacePosition would let Postgres answer and
+     *  prove nothing about the classifier.                                */
+    const PC = require(path.join(ROOT, "src/tenancy/position_classifier.js"));
+    const bareRow = { space_id: "s", unit_id: "u", unit_number: "x", space_label: "A",
+                      leases: [], possession_events: [] };
+    for (const bad_date of ["2026-02-31", "2026-99-99"]) {
+      try {
+        PC.classifyPosition(bareRow, { asOf: bad_date, personNames: new Map() });
+        bad(`D9f · ${bad_date} accepted by the classifier`, "a well-formed string that is not a day");
+      } catch (e) {
+        if (e.code === "INVALID_AS_OF") ok(`D9f · ${bad_date} refused INVALID_AS_OF inside the classifier`);
+        else bad(`D9f · ${bad_date} refused with the WRONG code ${e.code || "(none)"}`, e.message);
+      }
+    }
+
+    // ── D9g · THE CONTROL THIS CASE EXISTS FOR ────────────────────────
+    /*  Occupied space must never read pending or committed_future through
+     *  ANY representation Spine accepts. Refused inputs cannot reach an
+     *  answer at all, so the accepted set is the whole risk surface.      */
+    let leaked = null;
+    for (const rep of [REF, "2026-09-20T13:45:00Z", new Date(Date.UTC(2026, 8, 20))]) {
+      const p = await posFor(pool, rep);
+      if (p.possession_state !== "delivered" || p.availability_state === "committed_future"
+          || p.economic_tenancy_state === "forward") {
+        leaked = { rep: String(rep), possession: p.possession_state,
+                   avail: p.availability_state, econ: p.economic_tenancy_state };
+        break;
+      }
+    }
+    if (leaked === null)
+      ok("D9g · CONTROL — occupied space stays occupied through every ACCEPTED date representation");
+    else bad("D9g · OCCUPIED SPACE LEAKED through an accepted representation", JSON.stringify(leaked));
   } catch (e) {
     bad("harness died", e.message);
     console.error(e);
