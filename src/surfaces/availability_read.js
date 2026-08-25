@@ -261,10 +261,10 @@ function marketingState(p, liveOk) {
    *  including a value this function does not recognise, and including
    *  nothing at all — fails CLOSED as `unresolved`, because "I was not
    *  told" is not "it is available" (§5).                                */
-  if (p.availability_state !== "ready_now") {
-    return { state: "unresolved", reason: "availability_not_established" };
-  }
-
+  /*  DELIBERATE FALSIFICATION — only the positive-finding requirement is
+   *  removed, restoring the old unconditional fallthrough. The unplaceable
+   *  guard above is untouched and so are all assertions, so the red is
+   *  attributable to this boundary alone. REVERTED IN THE NEXT COMMIT. */
   return { state: "marketable_now", reason: null };
 }
 
