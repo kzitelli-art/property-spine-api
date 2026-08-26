@@ -158,3 +158,16 @@ priority, its owner, or its completion. This thesis adds one clause: **nor its
 accounting treatment.** A technician texting "done, $48.20 at Home Depot" is
 capturing an operating fact with a cost attached — not making a journal entry
 (§14).
+
+## 7. Planning is a downstream composition, not another money writer
+
+The eventual Operating Plan, approved budget and live forecast consume governed
+Money and operating facts without taking ownership away from their source
+domains. Their retained design contract, sequencing gate, completeness
+vocabulary and required Money-build receipt question live in
+[`BUDGET_FORECAST_NORTH_STAR.md`](BUDGET_FORECAST_NORTH_STAR.md).
+
+That North Star is active doctrine and **not** an active implementation lane.
+Until Skyline is operating and Money Build 4 is complete, there is no budget
+table, forecast writer, Budget & Forecast API, fifth Asset Management room or
+dead navigation control.
