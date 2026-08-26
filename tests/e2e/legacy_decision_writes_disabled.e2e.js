@@ -135,8 +135,12 @@ async function captureThrow(fn) {
   //  the CLEAR-AND-PASS branch — an event, a decision_cases row AND an
   //  obligation. That is what makes proofs 7-9 falsifiable rather than
   //  vacuous: re-open the writer and all three move.
+  //  `person_id` is set so that EVERY row a re-opened writer could create —
+  //  the event, the decision_cases row and the obligation — carries this
+  //  run's fixture person and is therefore removable by teardown. Without
+  //  it the writer's event rows are person-less and unscopeable.
   const VALID = {
-    property_id: prop, decided_by_person_id: person,
+    property_id: prop, decided_by_person_id: person, person_id: person,
     type: "writeoff", amount: 1234.56, reason_code: "hardship",
     note: STAMP + " would-write payload",
   };
@@ -276,9 +280,33 @@ async function captureThrow(fn) {
       auth && auth.cap === 0 && auth.role === null, JSON.stringify(auth));
   } finally { c.release(); }
 
-  // ── TEARDOWN · only rows this harness created ─────────────────────
-  await q("delete from decision_cases where id = $1", [historic]);
-  await q("delete from persons where id = $1", [person]);
+  // ── TEARDOWN · only rows tied to THIS run's fixture person ────────
+  //  Foreign-key ordered, and deliberately wider than the guarded state
+  //  needs. Under the closed writer there is nothing here but the seeded
+  //  history row. The wider deletes matter the moment the wall comes down:
+  //  a re-opened writer leaves an obligation and a decision_cases row
+  //  pointing at this person, and `delete from persons` then fails on
+  //  decision_cases_decided_by_person_id_fkey. A harness that cannot clean
+  //  up after the very failure it exists to detect pollutes whatever
+  //  database proved the point — found by running the falsification.
+  let teardownError = null;
+  try {
+    const mine = await q(
+      `select id from decision_cases
+        where property_id = $1 and (person_id = $2 or decided_by_person_id = $2)`,
+      [prop, person]);
+    const ids = mine.rows.map((r) => r.id);
+    if (ids.length) {
+      await q(`delete from obligations
+                where related_type = 'decision_case' and related_id = any($1::uuid[])`, [ids]);
+      await q(`delete from decision_cases where id = any($1::uuid[])`, [ids]);
+    }
+    await q("delete from obligations where property_id = $1 and person_id = $2", [prop, person]);
+    await q("delete from events where property_id = $1 and person_id = $2", [prop, person]);
+    await q("delete from persons where id = $1", [person]);
+  } catch (e) { teardownError = e; }
+  must("harness teardown completed without error", !teardownError,
+    teardownError && teardownError.message);
   const leftover = await q(
     "select count(*)::int n from persons where name like $1", [STAMP + "%"]);
   must("harness fixtures removed", leftover.rows[0].n === 0);
