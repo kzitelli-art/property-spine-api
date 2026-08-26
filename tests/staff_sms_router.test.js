@@ -58,6 +58,12 @@ ok("an attachment always stays on the technician path",
   !!routesTo("technician", "What pricing is published?", [{ id: "ME1" }]));
 ok("a vague question stays on the technician path",
   !!routesTo("technician", "Can you help?"));
+ok("a vague lease update creates no conversational write path",
+  !!routesTo("technician", "lease update"));
+ok("postboard feedback stays on the technician rail because no postboard owner exists",
+  !!routesTo("technician", "postboard feedback"));
+ok("maintenance feedback remains on the canonical technician rail",
+  !!routesTo("technician", "the elevator repair is holding this up"));
 ok("a statement about pricing is not mistaken for a question",
   !!routesTo("technician", "Pricing changed yesterday"));
 ok("an application-send request is not mistaken for an application-status read",

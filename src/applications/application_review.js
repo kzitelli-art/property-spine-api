@@ -145,6 +145,43 @@ async function latestPacket(client, applicationId) {
   return packet;
 }
 
+// One application-signing projection, derived only from the packet facts this
+// canonical review already loads. It adds no lifecycle vocabulary: resident
+// parties are outstanding only after their links are issued and before their
+// own required signature evidence is complete; the company signer is
+// outstanding only in the existing `resident_executed` packet state.
+function packetSigningStanding(packet) {
+  if (!packet || packet.voided_at || packet.superseded_at) {
+    return {
+      signing_started: false,
+      resident_executed_at: packet ? (packet.resident_executed_at || null) : null,
+      company_executed_at: packet ? (packet.company_executed_at || null) : null,
+      outstanding_signers: [],
+    };
+  }
+
+  const parties = Array.isArray(packet.signing_parties) ? packet.signing_parties : [];
+  const residentSigningStarted = !!packet.sent_at || parties.some((party) => !!party.link_issued_at);
+  const outstanding = residentSigningStarted
+    ? parties.filter((party) => !party.complete).map((party) => ({
+        signer_role: party.signer_role,
+        display_name: party.display_name ||
+          (party.signer_role === "guarantor" ? "Guarantor" : "Resident"),
+      }))
+    : [];
+
+  if (packet.status === "resident_executed" && !packet.company_executed_at) {
+    outstanding.push({ signer_role: "company", display_name: "Authorized company signer" });
+  }
+
+  return {
+    signing_started: residentSigningStarted || !!packet.resident_executed_at,
+    resident_executed_at: packet.resident_executed_at || null,
+    company_executed_at: packet.company_executed_at || null,
+    outstanding_signers: outstanding,
+  };
+}
+
 // The proposed-terms confirmation the application currently points at.
 async function loadConfirmation(client, app) {
   const cid = app && app.proposed_terms_confirmation_id;
@@ -184,6 +221,7 @@ async function buildReviewList(client, propertyId) {
     const verdict = await applicationTermsComplete(app, client);
     const packet = await latestPacket(client, app.id);
     const currency = packetCurrency(app, packet);
+    const signing = packetSigningStanding(packet);
     rows.push({
       application_id: app.id, applicant_name: app.applicant_name || null,
       unit_label: app.unit_label || null, status: app.status,
@@ -191,9 +229,28 @@ async function buildReviewList(client, propertyId) {
       missing_count: verdict.missing.length, packet_status: currency.status,
       concession_status: app.concession_status || "unknown",
       main_blocker: mainBlocker(verdict.complete, verdict.missing, currency),
+      signing,
     });
   }
-  return { property_id: propertyId, count: rows.length, applications: rows };
+  const outstandingSigners = rows.flatMap((row) =>
+    row.signing.outstanding_signers.map((signer) => ({
+      application_id: row.application_id,
+      applicant_name: row.applicant_name,
+      unit_label: row.unit_label,
+      signer_role: signer.signer_role,
+      display_name: signer.display_name,
+    })));
+  return {
+    property_id: propertyId,
+    count: rows.length,
+    applications: rows,
+    signing: {
+      applications_waiting_on_signature_count:
+        new Set(outstandingSigners.map((signer) => String(signer.application_id))).size,
+      outstanding_signer_count: outstandingSigners.length,
+      outstanding_signers: outstandingSigners,
+    },
+  };
 }
 
 // Build the DETAIL payload for one scoped application (or a scope error).
@@ -471,4 +528,7 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
   };
 }
 
-module.exports = { buildReviewList, buildReviewDetail, packetCurrency, concessionDetail, mainBlocker };
+module.exports = {
+  buildReviewList, buildReviewDetail, packetCurrency, concessionDetail, mainBlocker,
+  packetSigningStanding,
+};

@@ -2,7 +2,8 @@
    staff invite + OTP acceptance -> native slot -> booked tour -> post-tour
    capture -> exact-bed application SMS -> public application -> separate
    resident/guarantor execution -> authorized company execution -> exact-bed
-   tenancy. Dashboard and staff SMS read the same personal Ask Spine answer.
+   tenancy. Dashboard and staff SMS read the same personal and property-signing
+   Ask Spine answers from canonical server reads.
    The E2E launcher forces fake_sms_preload.js, so no real SMS can leave. */
 "use strict";
 
@@ -282,6 +283,30 @@ async function waitForStaffReply(providerMessageId) {
       && acceptedIdentity.has_staff_context && acceptedIdentity.has_leasing_assignment
       && acceptedIdentity.primary_for_modules.includes("leasing"),
     "acceptance creates Mike's bridge, staff context, access, and work assignment together");
+
+  async function comparePropertySigning(stage, inspect) {
+    const question = "Which signer is still outstanding?";
+    const dashboard = requireOk(await api("POST", "/operator/ask-spine/ask", {
+      token: staffToken, body: { question },
+    }), `${stage} property-wide signing dashboard read`);
+    const sid = `SM_E2E_SIGNER_${stage.toUpperCase()}_${suffix}`;
+    await sendStaffSms({ from: mikePhone, to: operationsLine, sid, body: question });
+    const sms = await waitForStaffReply(sid);
+    const review = requireOk(await api("GET", "/operator/leasing/applications-review", {
+      token: staffToken,
+    }), `${stage} canonical application review list`);
+    expect(dashboard.outcome === "answered" && sms.reply_reason === "governed_read"
+        && sms.body === dashboard.answer,
+      `${stage}: dashboard and staff SMS return the same deterministic signer answer`,
+      JSON.stringify({ dashboard, sms }));
+    expect(dashboard.grounded_on.applications_waiting_on_signature_count
+          === review.signing.applications_waiting_on_signature_count
+        && dashboard.grounded_on.outstanding_signer_count
+          === review.signing.outstanding_signer_count,
+      `${stage}: conversational grounding equals the canonical Application Review projection`,
+      JSON.stringify({ grounded_on: dashboard.grounded_on, signing: review.signing }));
+    inspect({ dashboard, sms, review });
+  }
 
   for (const [question, subject, sidLabel] of [
     ["has Skyline signed Jane's lease", "leasing_person", "LEASE_READ"],
@@ -701,6 +726,15 @@ async function waitForStaffReply(providerMessageId) {
     "guarantor-first submission leaves the applicant terms-review work open",
     JSON.stringify(guarantorFirstState));
 
+  await comparePropertySigning("resident", ({ dashboard, review: propertyReview }) => {
+    const current = propertyReview.signing.outstanding_signers.filter(
+      (signer) => String(signer.application_id) === String(appId));
+    expect(current.length === 1 && current[0].signer_role === "tenant"
+        && current[0].display_name === name && dashboard.answer.includes(name),
+      "the property-wide read names the exact resident still outstanding",
+      JSON.stringify({ current, answer: dashboard.answer }));
+  });
+
   const waitingReviewResult = await api(
     "GET", `/operator/leasing/application-review?application_id=${appId}`, { token: staffToken }
   );
@@ -775,6 +809,15 @@ async function waitForStaffReply(providerMessageId) {
   expect((await q("select count(*)::int n from persons where name=$1", [guarantorName])).rows[0].n === 0,
     "the guarantor remains packet-scoped instead of becoming a fabricated Person");
 
+  await comparePropertySigning("company", ({ dashboard, review: propertyReview }) => {
+    const current = propertyReview.signing.outstanding_signers.filter(
+      (signer) => String(signer.application_id) === String(appId));
+    expect(current.length === 1 && current[0].signer_role === "company"
+        && /Authorized company signer/.test(dashboard.answer),
+      "asking again moves the same application to the authorized company signer",
+      JSON.stringify({ current, answer: dashboard.answer }));
+  });
+
   const review = requireOk(await api(
     "GET", `/operator/leasing/application-review?application_id=${appId}`, { token: staffToken }
   ), "application review after resident and guarantor signatures");
@@ -802,6 +845,14 @@ async function waitForStaffReply(providerMessageId) {
   expect(lease && lease.space_id === bedB.id, "the executed tenancy is anchored to exact Bed B");
   expect(Number(lease.rent) === 1025 && Number(lease.security_deposit) === 1025,
     "the tenancy carries the confirmed economics");
+
+  await comparePropertySigning("complete", ({ dashboard, review: propertyReview }) => {
+    const current = propertyReview.signing.outstanding_signers.filter(
+      (signer) => String(signer.application_id) === String(appId));
+    expect(current.length === 0 && !dashboard.answer.includes(name),
+      "asking again after company execution removes this application from outstanding signatures",
+      JSON.stringify({ current, answer: dashboard.answer }));
+  });
 
   const finalReview = requireOk(await api(
     "GET", `/operator/leasing/application-review?application_id=${appId}`, { token: staffToken }

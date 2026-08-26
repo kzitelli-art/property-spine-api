@@ -67,6 +67,10 @@ const leasingCycleConfig = require("../leasing/leasing_cycle.js");
 //  second place where entitlement, the four silences and the truth walls
 //  are implemented, and those diverge silently.
 const leasingStandingRead = require("../leasing/leasing_standing_read.js");
+// The property-wide application review is the existing canonical owner of
+// packet and signer facts on the dashboard. Ask Spine reads its projection;
+// it never infers signature standing from the work queue or raw tables.
+const applicationReviewRead = require("../applications/application_review.js");
 const economicPicture = require("../money/economic_picture.js");
 const { readTourScheduleStanding } = require("../leasing/tour_availability_service.js");
 
@@ -232,8 +236,87 @@ const TENANCY_TERMS =
 //  person-leasing vocabulary in it belongs to Leasing, and Tenancy yields
 //  — the same suppression rule already used for contracted_service and
 //  equity, and for the same reason: shared words, different domains.
-const LEASING_PERSON_TERMS =
-  /\b(appl(?:y|ie[sd]|ication|icant)s?|sign(?:s|ed|ing|ature|atures)?|countersign|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|toured?|packets?)\b/i;
+/*  ⚠ TWO OF THESE TOKENS NEVER MATCHED WHAT THEY WERE WRITTEN FOR, AND
+ *  BOTH FAILED SILENTLY — the sentence simply fell through to `work`,
+ *  which is the default, so nothing ever looked broken.
+ *
+ *    `toured?`     is `toure` + an optional `d`. It matches "toured" and
+ *                  the non-word "toure"; it has NEVER matched the bare
+ *                  noun "tour". "What happened after yesterday's tour?"
+ *                  went to `work`.
+ *    `countersign` carries no suffix group at all, and "countersigned" —
+ *                  the only form anyone actually types — has no word
+ *                  boundary before "sign", so the neighbouring
+ *                  `sign(?:...)` alternative could not rescue it either.
+ *                  "Has Skyline countersigned?" went to `work`.
+ *
+ *  A regex that matches a form nobody says is indistinguishable from an
+ *  absent rule, and the default hides it. Measured against the phrases,
+ *  not read.
+ *
+ *  The `holding ... up` alternative is widened by NAMING THE DOMAIN'S OWN
+ *  NOUNS rather than by loosening the object slot. "holding this lease
+ *  up" is leasing; "holding the elevator up" must stay Maintenance's, and
+ *  a `holding .* up` wildcard would have taken it.
+ *
+ *  `tours?` is deliberately bare, and it is safe because tourSchedule
+ *  already suppresses leasingPerson below: a sentence about BOOKING a
+ *  tour goes to tour_schedule, a sentence about what happened AT one
+ *  belongs to the person who was there.  */
+/*  ── STRONG AND WEAK LEASING VOCABULARY, AND WHY THE SPLIT EXISTS ────
+ *  These used to be ONE list, and `work` yielded to all of it. That made
+ *  four maintenance sentences into leasing questions — measured, not
+ *  supposed:
+ *
+ *      "sign maintenance work"                  → leasing_person
+ *      "sign off on the repair"                 → leasing_person
+ *      "signature paint color"                  → leasing_person
+ *      "the elevator repair is holding this up" → leasing_person
+ *
+ *  The cause is that some leasing words are unambiguous and some are
+ *  ordinary English that leasing happens to use. "Application",
+ *  "countersign", "packet" and "signer" belong to leasing wherever they
+ *  appear. A bare "sign", and "holding this up", belong to whoever the
+ *  sentence is actually about — and a technician signs off on work every
+ *  day.
+ *
+ *  STRONG wins outright. WEAK wins only when the sentence carries no
+ *  explicit maintenance vocabulary. That is a stated precedence rule
+ *  rather than regex ordering, so the next person can see it and argue
+ *  with it.
+ *
+ *  `signature` is NOT weak leasing vocabulary — it is strong only in the
+ *  constructions that ask about an OUTSTANDING one ("waiting on a
+ *  signature"). As a bare noun it is an ordinary adjective, which is how
+ *  "signature paint color" became a lease question.
+ *
+ *  ⚠ NO GENERIC `sign` SUBSTRING MATCHING. Every alternative below is
+ *  word-bounded, so "assign", "assigned", "design" and "resignation"
+ *  cannot reach leasing through a substring.                            */
+const LEASING_PERSON_STRONG =
+  /\b(appl(?:y|ie[sd]|ication|icant)s?|countersign(?:s|ed|ing)?|signers?|execut(?:e[sd]?|ing|ion)|where is|where'?s|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|tours?|toured|touring|packets?|(?:waiting on|pending|outstanding|missing|awaiting|needs?|requires?) (?:a |an |the |their |his |her )?signatures?|holding (?:this|the|his|her|their|my|our) (?:lease|application|packet|file|approval|signing|renewal|move[- ]?in) up|holding up (?:[a-z]+'?s? )?(?:lease|application|packet|file|approval|signing|renewal|move[- ]?in))\b/i;
+/*  Ordinary English that leasing uses. Yields to explicit maintenance
+ *  vocabulary — see `leasingPerson` below.                              */
+const LEASING_PERSON_WEAK =
+  /\b(sign(?:s|ed|ing)?|holding (?:this|it|things) up)\b/i;
+/*  ⚠ THE ECONOMICS TIE-BREAK IS DELIBERATELY NARROWER, AND I BROKE IT
+ *  ONCE BY "SIMPLIFYING" IT. This list is NOT the union of STRONG and
+ *  WEAK. It answers a different question — "does this pricing sentence
+ *  also carry PERSON-leasing detail?" — and the difference that matters
+ *  is `applicants?` rather than the full `appl…ication` group.
+ *
+ *  "What is the application fee?" is a PRICING question. Deriving this
+ *  list from STRONG made `application` match, so the sentence looked
+ *  like two domains at once and came back composition_unavailable — a
+ *  refusal to answer a question Economics answers perfectly well. Caught
+ *  by economics_ask_spine.test.js, which existed precisely because
+ *  someone had already thought about this.
+ *
+ *  It carries the same token repairs as STRONG (suffixed countersign,
+ *  bare tour, signers, both holding-up orders) so the two cannot drift,
+ *  but it keeps its own narrower applicant vocabulary on purpose.       */
+const LEASING_PERSON_DETAIL_TERMS =
+  /\b(applicants?|sign(?:s|ed|ing|ature|atures)?|countersign(?:s|ed|ing)?|signers?|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|holding (?:this|the|his|her|their|my|our) (?:lease|application|packet|file|approval|signing|renewal|move[- ]?in) up|holding up (?:[a-z]+'?s? )?(?:lease|application|packet|file|approval|signing|renewal|move[- ]?in)|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|tours?|toured|touring|packets?)\b/i;
 const DEBT_TERMS =
   /\b(debt (?:position|service)|mortgage(?: loan)?|loan (?:balance|maturity|payment|rate|terms?|pricing)|lender|servicer|principal balance|payoff (?:quote|amount)|interest rate|maturity date|extension option|debt-service reserve)\b/i;
 const ECONOMICS_SPECIFIC_TERMS =
@@ -241,27 +324,63 @@ const ECONOMICS_SPECIFIC_TERMS =
 const BARE_PRICING_TERM = /\bpricing\b/i;
 const UTILITY_DETAIL_TERMS =
   /\b(electric(?:ity)?|gas|water|sewer|meters?|submeters?|provider|utility account|account ending|peco|bills? residents|utility setup)\b/i;
-const LEASING_PERSON_DETAIL_TERMS =
-  /\b(applicants?|sign(?:s|ed|ing|ature|atures)?|countersign|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|toured?|packets?)\b/i;
 const TENANCY_STANDING_TERMS =
   /\b(rent ?roll|occupanc(?:y|ies)|occupied|vacan(?:t|cy|cies)|residents?|move[- ]?(?:in|out)s?|beds?|who lives|how many (?:units|beds|positions|residents))\b/i;
 const EXPLICIT_WORK_TERMS =
   /\b(work[ -]?order|repair|maintenance|technician|task|job|assigned|assignment)\b/i;
 const TOUR_SCHEDULE_TERMS =
-  /\b(tours? (?:times?|schedule|availability|openings?|slots?|hosts?|coverage)|(?:hosting|covering) tours?|book(?:ing)? (?:a )?tour|schedule (?:a )?tour|when can (?:we|i|someone) tour)\b/i;
+  /\b(tours? (?:times?|schedule|availability|openings?|slots?|hosts?|coverage)|(?:hosting|covering) tours?|book(?:ing)? (?:a )?tour|schedule (?:a )?tour|when can (?:we|i|someone) tour|(?:next|upcoming) tours?|when (?:is|are) (?:my|our|the) (?:next |upcoming )?tours?)\b/i;
 const ECONOMICS_MODULES = new Set(["leasing", "management", "asset_management"]);
 
 //  One person-scoped operating question. This is shared by the dashboard and
 //  staff SMS router so neither surface gets to decide independently that "my"
 //  means the property queue or a technician command.
 const PERSONAL_ATTENTION_TERMS = [
-  /^\s*what should i (?:do|work on)(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  //  "focus on" sits beside "do" and "work on" as a third way of saying
+  //  the same sentence. It is the phrasing, not the meaning, that was
+  //  missing — so it joins the existing pattern rather than starting a
+  //  second list.
+  /^\s*what should i (?:do|work on|focus on)(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  /*  ── PERSONAL MEANS A PRONOUN, NOT A KEYWORD ────────────────────
+   *  "assigned" and "work order" are NOT enough on their own: "What
+   *  work is assigned to Jane?" and "Who is assigned to the elevator
+   *  repair?" are property questions, and answering either from Mike's
+   *  own queue would be the wrong answer delivered confidently. Every
+   *  pattern below therefore requires a first-person marker — me, my or
+   *  mine — and is anchored end to end so a personal phrase buried in a
+   *  longer property question cannot capture it.
+   *
+   *  `work(?: orders?)?` exists because "work orders" missed the older
+   *  `work` pattern by exactly one word, and Mike got the property
+   *  queue where he had asked for his own.  */
+  /^\s*what (?:work(?: orders?)?|tasks?|jobs?) (?:is|are) assigned to me(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  /^\s*what (?:work(?: orders?)?|tasks?|jobs?) (?:is|are) mine(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  /^\s*what (?:work(?: orders?)?|tasks?|jobs?) (?:needs?|require[sd]?) my attention(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  /^\s*(?:show|give) me my (?:[a-z]+ )?(?:work(?: orders?)?|tasks?|jobs?|priorities|queue)(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
+  //  The passive form of the same question. "What needs my attention"
+  //  and "what should I do" are one intent; a person picks between them
+  //  by habit, and Spine must not answer only the one it happens to
+  //  recognise.
+  /^\s*what (?:needs|requires) my attention(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
   /^\s*what do i (?:need|have) to do(?: today| next| first)?(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
   /^\s*what(?:'s| is) (?:on )?my (?:list|plate|queue|agenda)(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
   /^\s*what(?:'s| is) (?:open|assigned) for me(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
   /^\s*what (?:work|tasks?|jobs?) (?:is|are) assigned to me(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
   /^\s*(?:show|give) me my (?:work|tasks?|jobs?|priorities|queue)(?: (?:at|for) .+?)?\s*[?!.]*\s*$/i,
 ];
+
+// Deliberately narrow: named-person signing questions continue through
+// resolveLeasingSubject/readLeasingStanding. These patterns only recognize a
+// question that explicitly asks for the property's outstanding signer census.
+const PROPERTY_SIGNER_QUESTION_TERMS = [
+  /^\s*(?:which|what)\s+signers?\s+(?:is|are)\s+(?:still\s+)?(?:outstanding|pending|missing|awaiting)(?:\s+(?:at|for)\s+.+?)?\s*[?!.]*\s*$/i,
+  /^\s*who\s+(?:still\s+)?needs?\s+to\s+(?:sign|countersign)(?:\s+(?:at|for)\s+.+?)?\s*[?!.]*\s*$/i,
+];
+
+function isPropertyWideSignerQuestion(question) {
+  const text = String(question || "").trim();
+  return PROPERTY_SIGNER_QUESTION_TERMS.some((pattern) => pattern.test(text));
+}
 
 function isPersonalAttentionQuestion(question) {
   const text = String(question || "").trim();
@@ -305,7 +424,12 @@ function questionSubject(question) {
    *                                                       so the composition
    *                                                       guard must see both
    */
-  const leasingPerson = LEASING_PERSON_TERMS.test(text) && !tourSchedule && !contractedService && !equity && !debt
+  /*  STRONG outright; WEAK only when no explicit maintenance vocabulary
+   *  is present. `work` still yields to leasingPerson below, so this is
+   *  the only place a technician's sentence can hold its ground.  */
+  const leasingSignal = LEASING_PERSON_STRONG.test(text)
+    || (LEASING_PERSON_WEAK.test(text) && !EXPLICIT_WORK_TERMS.test(text));
+  const leasingPerson = leasingSignal && !tourSchedule && !contractedService && !equity && !debt
     && !(economics && !LEASING_PERSON_DETAIL_TERMS.test(text));
   const tenancy = tenancyThing && !tourSchedule && !contractedService && !equity && !leasingPerson
     && !(economics && !TENANCY_STANDING_TERMS.test(text));
@@ -343,7 +467,50 @@ function withoutDatabaseIds(value) {
   if (!value || typeof value !== "object") return value;
   const clean = {};
   for (const [key, child] of Object.entries(value)) {
-    if (key === "id" || /_id$/.test(key) || (/_identifier$/.test(key) && !/_masked$/.test(key))) {
+    /*  ── AND HASHES, WHICH THIS SANITIZER USED TO LET THROUGH ────────
+     *  An artifact hash is an internal identity wearing a value's
+     *  clothes. It names a specific retained document without being an
+     *  `id`, so the id rules above never touched it — and a payload
+     *  census through the real door found exactly two reaching the
+     *  model: `leasing_person.lease.instrument_package_sha256` and
+     *  `leasing_person.lease.executed_lease.document_sha256`. A model
+     *  holding one can repeat it, correlate two answers by it, or offer
+     *  it as a reference Spine never resolved, which is the same failure
+     *  §40.8 forbids for record ids.
+     *
+     *  ONE SANITIZER, EXTENDED — not a leasing-only second pass. The
+     *  leak was found in leasing and the rule is not: any reader that
+     *  ever returns a hash is covered the day it lands, without anyone
+     *  remembering to add it.
+     *
+     *  WHAT IS MEASURED, AND WHAT IS THE STATED RULE. Only `_sha256`
+     *  was ever measured leaving a real reader: a census found exactly
+     *  two, both in leasing standing. `hash`, `token` and `secret` are
+     *  matched because the governing rule names them — the model
+     *  receives narrative facts, never identities — and because
+     *  `executed_lease_records.payload_hash` is a real NOT NULL column
+     *  sitting one SELECT away from emission. No reader emits any of
+     *  those three keys today, checked across every reader reachable
+     *  from gatherFacts, so nothing narrative is at risk: these three
+     *  shapes are a wall built before the leak, not after it.
+     *
+     *  ⚠ THIS COMMENT USED TO BLESS `property_id` REACHING THE MODEL,
+     *  on the reasoning that a server-derived scope is not really a
+     *  record identifier and that an existing proof already asserted it.
+     *  Both halves were wrong. A server-derived scope is still a
+     *  database UUID, and the rule is not "identifiers the model could
+     *  plausibly misuse" but "the model receives narrative facts" — the
+     *  server needs the id to scope its readers; the model needs the
+     *  story. An existing test documents behaviour; it does not make
+     *  behaviour canonical.
+     *
+     *  `property_id` is now removed at the FINAL serialization boundary
+     *  rather than here, because it is set on `facts` before any reader
+     *  runs and so never passes through this function at all. See the
+     *  model call site: ONE sanitizer, applied twice — per domain as
+     *  readers return, and once over the whole envelope on the way out.  */
+    if (key === "id" || /_id$/.test(key) || (/_identifier$/.test(key) && !/_masked$/.test(key))
+        || /_sha256$/.test(key) || /(^|_)(hash|token|secret)$/.test(key)) {
       continue;
     }
     clean[key] = withoutDatabaseIds(child);
@@ -395,6 +562,24 @@ function utilityEvidenceReferences(standing) {
  *  through the same services those surfaces use. Nothing is derived a
  *  second time, so Ask Spine cannot disagree with the board about a fact
  *  they both show.  */
+
+/*  ── ONE SILENCE, SAID THE SAME WAY EVERY TIME (§40.7) ────────────────
+ *  Eight domains failed eight ways. Two set no fact key at all, so an
+ *  absent key was indistinguishable from a domain nobody asked about.
+ *  Five reported a timeout as a plain failure. Three got it right, and
+ *  only because their ask adapters set error.code.
+ *
+ *  A failure says NOTHING about the property, so `standing` stays null
+ *  here and truth_state is never asserted — "we could not look" and "we
+ *  looked and there is nothing" are different answers and only one is
+ *  safe to act on.                                                      */
+function silenceFor(e) {
+  return (e && e.code === "READ_TIMED_OUT") ? "READ_TIMED_OUT" : "READ_FAILED";
+}
+function failedRead(e, extra = {}) {
+  return { read_state: silenceFor(e), standing: null, ...extra };
+}
+
 async function gatherFacts(db, {
   property_id, allowed_modules, subject = "work", mintComplianceReference,
   complianceReader = complianceRead, utilityReader = utilityAskRead,
@@ -406,6 +591,7 @@ async function gatherFacts(db, {
   equityService = equityPositionService, equityRead = equityPositionRead,
   tenancyReader = tenancyStandingRead,
   leasingReader = leasingStandingRead,
+  applicationReviewReader = applicationReviewRead,
   economicReader = economicPicture,
   tourScheduleReader = readTourScheduleStanding,
   //  The canonical application lifecycle service. Accepted as a value OR a
@@ -425,7 +611,11 @@ async function gatherFacts(db, {
       && (allowed_modules || []).some(module => module === "leasing" || module === "management")) {
     try {
       facts.tour_schedule = await tourScheduleReader(db, { propertyId: property_id, limit: 12 });
-    } catch (e) { failures.push("tour_schedule"); }
+    } catch (e) {
+      const state = silenceFor(e);
+      facts.tour_schedule = failedRead(e);
+      failures.push(state === "READ_TIMED_OUT" ? "tour_schedule_timed_out" : "tour_schedule");
+    }
   }
 
   if (subject === "work") {
@@ -462,7 +652,10 @@ async function gatherFacts(db, {
           is_unassigned: !!i.is_unassigned,
           open: { kind: i.open.kind, id: i.open.id },
         }));
-    } catch (e) { failures.push("attention"); }
+    } catch (e) {
+      facts.attention = failedRead(e);
+      failures.push(silenceFor(e) === "READ_TIMED_OUT" ? "attention_timed_out" : "attention");
+    }
 
     try {
       const wo = await workOrderRead.readPropertyWorkOrderStatuses(db,
@@ -483,7 +676,10 @@ async function gatherFacts(db, {
           opened_at: w.work_order && w.work_order.opened_at,
         })),
       };
-    } catch (e) { failures.push("work_orders"); }
+    } catch (e) {
+      facts.work_orders = failedRead(e);
+      failures.push(silenceFor(e) === "READ_TIMED_OUT" ? "work_orders_timed_out" : "work_orders");
+    }
   }
 
   if (subject === "compliance") {
@@ -523,7 +719,11 @@ async function gatherFacts(db, {
           token: reference.opener.token,
         },
       }));
-    } catch (e) { failures.push("compliance"); }
+    } catch (e) {
+      const state = silenceFor(e);
+      facts.compliance = failedRead(e);
+      failures.push(state === "READ_TIMED_OUT" ? "compliance_timed_out" : "compliance");
+    }
   }
 
   // Entitlement excludes the facts themselves, not merely their links.
@@ -617,8 +817,8 @@ async function gatherFacts(db, {
         ],
       });
     } catch (e) {
-      facts.economics = { read_state: "READ_FAILED" };
-      failures.push("economics");
+      facts.economics = failedRead(e);
+      failures.push(silenceFor(e) === "READ_TIMED_OUT" ? "economics_timed_out" : "economics");
     }
   }
 
@@ -653,8 +853,8 @@ async function gatherFacts(db, {
         });
       }
     } catch (e) {
-      facts.equity = { read_state: "READ_FAILED" };
-      failures.push("equity");
+      facts.equity = failedRead(e);
+      failures.push(silenceFor(e) === "READ_TIMED_OUT" ? "equity_timed_out" : "equity");
     }
   }
 
@@ -686,7 +886,13 @@ async function gatherFacts(db, {
     try {
       const subj = await leasingReader.resolveLeasingSubject(db, { property_id, text: question });
       if (!subj.resolved) {
-        facts.leasing_person = {
+        if (subj.reason === "no_person_named" && isPropertyWideSignerQuestion(question)) {
+          const review = await applicationReviewReader.buildReviewList(db, property_id);
+          facts.leasing_signing = withoutDatabaseIds({
+            ...review.signing,
+            read_state: "OK",
+          });
+        } else facts.leasing_person = {
           read_state: subj.reason === "ambiguous" ? "AMBIGUOUS_SUBJECT" : "NO_SUBJECT",
           //  Names, never database ids — the model must not be handed
           //  identifiers it could echo into an answer.
@@ -704,8 +910,9 @@ async function gatherFacts(db, {
         });
       }
     } catch (e) {
-      failures.push({ domain: "leasing_person", detail: e.message });
-      facts.leasing_person = { read_state: "READ_FAILED", detail: e.message };
+      failures.push({ domain: "leasing_person", detail: e.message,
+        read_state: silenceFor(e) });
+      facts.leasing_person = failedRead(e, { detail: e.message });
     }
   } else if (subject === "leasing_person") {
     facts.leasing_person = { read_state: "NOT_AUTHORIZED",
@@ -803,7 +1010,7 @@ async function gatherFacts(db, {
       } else {
         const instruments = [];
         for (const id of ids) {
-          const history = await debtService.loadHistory(db, id);
+          const history = await debtService.loadHistory(db, id, asOf);
           if (!history) throw new Error("governed Debt instrument history is unavailable");
           instruments.push(debtRead.standingProjection(debtRead.position(history, asOf)));
         }
@@ -815,12 +1022,55 @@ async function gatherFacts(db, {
         });
       }
     } catch (e) {
-      facts.debt = { read_state: "READ_FAILED" };
-      failures.push("debt");
+      facts.debt = failedRead(e);
+      failures.push(silenceFor(e) === "READ_TIMED_OUT" ? "debt_timed_out" : "debt");
     }
   }
 
   facts.reads_that_failed = failures;
+
+  /*  ── COMPOSITE SILENCE, COMPUTED (§40.7) ────────────────────────────
+   *  "Composite silence may only mean 'nothing needs attention' when
+   *  every required reader successfully returned — computed from reader
+   *  outcomes IN CODE, NEVER PROMPTED."
+   *
+   *  Before this, `reads_that_failed` was a list handed to the model and
+   *  the prompt asked it not to confuse a failed read with "nothing to
+   *  report". That is the distinction being prompted, which is the one
+   *  thing §40.7 forbids: a model that mostly gets it right still
+   *  decides it, and the failure mode is silence reading as health (§5).
+   *
+   *  The verdict is decided here, from what the readers actually did:
+   *
+   *    BLIND      at least one reader did not return. Silence CANNOT
+   *               mean health, whatever else is true.
+   *    ATTENTION  everything returned, and something is pending.
+   *    QUIET      everything returned, and nothing is pending.
+   *
+   *  The model is handed the verdict, not the evidence to infer one.   */
+  const gathered = Object.entries(facts).filter(
+    ([, v]) => v && typeof v === "object" && typeof v.read_state === "string");
+  const blind = gathered.filter(([, v]) => v.read_state !== "OK");
+  if (blind.length) {
+    facts.composite_silence = {
+      state: "BLIND",
+      unread: blind.map(([k, v]) => ({ domain: k, read_state: v.read_state })),
+      why: "at least one required reader did not return, so silence cannot mean health",
+    };
+  } else {
+    const pending = gathered.filter(([, v]) => {
+      const s = v.standing || v;
+      const unknowns = s && s.important_unknowns;
+      return Boolean((s && s.next_milestone)
+        || (Array.isArray(unknowns) && unknowns.length)
+        || v.attention_state === "ATTENTION_REQUIRED");
+    });
+    facts.composite_silence = pending.length
+      ? { state: "ATTENTION", domains: pending.map(([k]) => k) }
+      : { state: "QUIET",
+          why: "every reader returned and none reports anything pending" };
+  }
+
   return facts;
 }
 
@@ -898,15 +1148,24 @@ function systemPrompt(subject = "work") {
     "   change anything. If asked to, say what you can see and that doing it is",
     "   not something you can do yet. Do not describe an action as though you",
     "   performed it.",
-    "3. If `reads_that_failed` is non-empty, say that part of the picture could",
-    "   not be read. Do not report a failed read as 'nothing to report' — those",
-    "   are different facts and confusing them is the worst thing you can do.",
+    "3. `composite_silence` is COMPUTED by the server, not by you. Read its",
+    "   `state` and say what it says:",
+    "     BLIND     part of the picture could not be read. Name what was unread",
+    "               from `composite_silence.unread`. NEVER report this as",
+    "               'nothing to report' — those are different facts.",
+    "     ATTENTION something is pending in the named domains.",
+    "     QUIET     everything was read and nothing is pending.",
+    "   Do not derive this verdict yourself from `reads_that_failed`, and do",
+    "   not contradict it. It is a fact, like any other fact here.",
     "   For Utilities, READ_FAILED means Spine could not read it; READ_TIMED_OUT",
     "   means the read exceeded its bound; QUIET means the read succeeded and",
     "   nothing requires attention. None of those means there are no accounts.",
     "   The same failure and quiet-state distinctions apply to Contracted Services.",
-    "4. Nothing being open is a real, good answer. Say it plainly and stop.",
-    "   Do not manufacture concerns to seem useful.",
+    "4. Nothing being open is a real, good answer — but ONLY when",
+    "   `composite_silence.state` is QUIET. Say it plainly and stop.",
+    "   Do not manufacture concerns to seem useful. If the state is BLIND,",
+    "   an empty-looking picture is NOT good news and must not be reported",
+    "   as though it were.",
     "5. The FACTS contain only one authorized subject. Never combine Compliance,",
     "   Utilities, Contracted Services, Debt, Equity or Tenancy with work, residents,",
     "   finances or any absent domain. Composition authority",
@@ -1072,6 +1331,56 @@ function personalAttentionResponse(out) {
   };
 }
 
+function propertySigningResponse(facts) {
+  const signing = facts && facts.leasing_signing;
+  if (!signing || signing.read_state !== "OK") {
+    return {
+      outcome: "unavailable",
+      answer: "I couldn't read the property's application signing standing just then. Try again in a moment.",
+      grounded_on: {
+        leasing_signing_read_state: signing ? signing.read_state : "READ_FAILED",
+        applications_waiting_on_signature_count: null,
+        outstanding_signer_count: null,
+      },
+      references: [],
+    };
+  }
+
+  const outstanding = Array.isArray(signing.outstanding_signers)
+    ? signing.outstanding_signers : [];
+  if (!outstanding.length) {
+    return {
+      outcome: "answered",
+      answer: "No application at this property is currently waiting on a signature.",
+      grounded_on: {
+        leasing_signing_read_state: "OK",
+        applications_waiting_on_signature_count: 0,
+        outstanding_signer_count: 0,
+      },
+      references: [],
+    };
+  }
+
+  const items = outstanding.map((signer) => {
+    const application = signer.applicant_name
+      ? `${signer.applicant_name}'s lease` : "an application";
+    const role = signer.signer_role === "tenant" ? "resident" : signer.signer_role;
+    return `${application} — ${signer.display_name} (${role})`;
+  });
+  const applications = Number(signing.applications_waiting_on_signature_count || 0);
+  return {
+    outcome: "answered",
+    answer: `${applications} application${applications === 1 ? " is" : "s are"} waiting on ` +
+      `signature${outstanding.length === 1 ? "" : "s"}: ${items.join("; ")}.`,
+    grounded_on: {
+      leasing_signing_read_state: "OK",
+      applications_waiting_on_signature_count: applications,
+      outstanding_signer_count: outstanding.length,
+    },
+    references: [],
+  };
+}
+
 /**
  * Answer a typed question about one property.
  *
@@ -1081,7 +1390,8 @@ function personalAttentionResponse(out) {
 async function answer(db, anthropic, {
   property_id, allowed_modules, question, mintComplianceReference, complianceReader,
   utilityReader, contractedServiceReader, debtService, debtRead, equityService, equityRead,
-  tenancyReader, economicReader, tourScheduleReader, applicationsService,
+  tenancyReader, leasingReader, applicationReviewReader, economicReader,
+  tourScheduleReader, applicationsService,
   operator_user_id, primary_for_modules,
 }) {
   if (!property_id) throw new Error("ask_spine.answer requires a server-derived property_id");
@@ -1128,6 +1438,36 @@ async function answer(db, anthropic, {
     return {
       outcome: "not_authorized",
       answer: "The rent roll is not available in your current access for this property.",
+      grounded_on: null,
+      references: [],
+    };
+  }
+  /*  ── LEASING, AT THE GRAIN OF ONE PERSON ──────────────────────────
+   *  This refusal was MISSING, and its absence was measured rather than
+   *  assumed: an asset-management-only session asking "has Marisol Trejo
+   *  signed" came back `outcome: "answered"`. The canonical reader was
+   *  correctly skipped inside gatherFacts, so no leasing fact ever
+   *  reached the model and §40.8's letter held — but the model WAS
+   *  called, and it was called with a marker word, NOT_AUTHORIZED, that
+   *  the system prompt never defines. READ_FAILED, NOT_ESTABLISHED and
+   *  NOT_CONFIGURED each get explicit named instructions; this one got
+   *  none, so the refusal SENTENCE an unentitled operator saw was the
+   *  model's to invent.
+   *
+   *  A refusal a person can see is product copy (§5), and product copy is
+   *  not something a model composes fresh each time. It is written here,
+   *  once, in Spine's own words, and returned BEFORE gatherFacts and
+   *  BEFORE Anthropic — exactly like every sibling domain.
+   *
+   *  The inner NOT_AUTHORIZED envelope in gatherFacts is KEPT. It is not
+   *  redundant: gatherFacts is exported and independently callable, so
+   *  removing its guard would leave a second door into the same reader.
+   *  This one is the product; that one is depth.  */
+  if (subject === "leasing_person"
+      && !modules.includes("leasing") && !modules.includes("management")) {
+    return {
+      outcome: "not_authorized",
+      answer: "A person's leasing standing is not available in your current access for this property.",
       grounded_on: null,
       references: [],
     };
@@ -1181,6 +1521,14 @@ async function answer(db, anthropic, {
     return personalAttentionResponse(personal);
   }
 
+  if (subject === "leasing_person" && isPropertyWideSignerQuestion(q)) {
+    const facts = await gatherFacts(db, {
+      property_id, allowed_modules: modules, subject, question: q,
+      leasingReader, applicationReviewReader, applicationsService,
+    });
+    return propertySigningResponse(facts);
+  }
+
   //  NO KEY IS NOT AN EMPTY ANSWER. Without this the operator would ask a
   //  question and get silence, which reads as "nothing is happening here".
   if (!anthropic) {
@@ -1209,12 +1557,35 @@ async function answer(db, anthropic, {
       //  ENDS ON THE USER TURN. Nothing may follow it — see DECISION_SCHEMA
       //  for what the assistant prefill that used to sit here cost.
       messages: [
-        //  `__refs` is STRIPPED HERE. The model gets labels and dates and
-        //  never a record id — see gatherFacts for why a model holding ids
-        //  is a model that can compose a link Spine did not resolve.
+        /*  ── THE FINAL MODEL-PAYLOAD FIREWALL ────────────────────────
+         *  ONE sanitizer, applied at TWO points, and the second is not
+         *  redundant. Per-domain sanitizing runs as each reader returns,
+         *  so it can only clean what a reader produced. Anything the
+         *  COMPOSER itself puts on the envelope — `property_id`,
+         *  `gathered_at`, `question_subject`, `composite_silence`,
+         *  `reads_that_failed` — never passed through it at all, and
+         *  `property_id` rode out to the model that way for the entire
+         *  life of this file.
+         *
+         *  This pass is over the COMPLETE envelope, on the way out. It
+         *  is the last thing that happens before bytes leave for
+         *  Anthropic, so a field added to `facts` anywhere is covered
+         *  the day it lands rather than the day someone remembers. A
+         *  second sanitizer would have to be kept in step with this one;
+         *  there is only ever one.
+         *
+         *  `__refs` is stripped by the replacer as well. It is
+         *  server-owned and reaches the HTTP response, never the model:
+         *  a model holding a record id can compose a link Spine did not
+         *  resolve.
+         *
+         *  WHAT SURVIVES is narrative — names, statuses, dates, amounts,
+         *  labels, form codes, uncertainty and refusal states. The
+         *  server keeps `property_id` for reader scope, authorization
+         *  and the response it echoes; the model gets the story.  */
         { role: "user",
           content: `QUESTION SUBJECT: ${subject}\nFACTS:\n`
-                   + `${JSON.stringify(facts, (k, v) => (k === "__refs" ? undefined : v), 2)}`
+                   + `${JSON.stringify(withoutDatabaseIds(facts), (k, v) => (k === "__refs" ? undefined : v), 2)}`
                    + `\n\nOPERATOR ASKED: ${q}` },
       ],
     });
@@ -1278,7 +1649,15 @@ async function answer(db, anthropic, {
     grounded_on: {
       open_items: facts.attention ? facts.attention.total_open : null,
       work_orders: facts.work_orders ? facts.work_orders.count : null,
-      compliance_items: facts.compliance ? facts.compliance.items.length : null,
+      //  ⚠ These two dereference an ARRAY, so `facts.X ? …` is not enough
+      //  a guard: it tests that the KEY exists, and a failed read now
+      //  produces a key with a read_state and no payload. Before Build 3
+      //  a failed compliance read deleted the key entirely, which made
+      //  this line accidentally safe — the absent key WAS the guard.
+      //  Making the silence visible surfaced that assumption. Guard on
+      //  the array, not on the key.
+      compliance_items: Array.isArray(facts.compliance && facts.compliance.items)
+        ? facts.compliance.items.length : null,
       compliance_as_of: facts.compliance ? facts.compliance.as_of : null,
       composition_authorization: facts.compliance
         ? facts.compliance.composition_authorization : null,
@@ -1299,7 +1678,8 @@ async function answer(db, anthropic, {
       debt_important_unknown_count: facts.debt && facts.debt.instruments
         ? facts.debt.instruments.reduce((count, instrument) =>
             count + ((instrument.important_unknowns || []).length), 0) : null,
-      equity_position_count: facts.equity ? facts.equity.positions.length : null,
+      equity_position_count: Array.isArray(facts.equity && facts.equity.positions)
+        ? facts.equity.positions.length : null,
       equity_read_state: facts.equity ? facts.equity.read_state : null,
       equity_coverage_gap_count: facts.equity && facts.equity.coverage_gaps
         ? facts.equity.coverage_gaps.length : null,
@@ -1321,6 +1701,51 @@ async function answer(db, anthropic, {
         ? facts.economics.completeness.overall : null,
       economics_monthly_total_withheld: facts.economics && facts.economics.combined_monthly_total
         ? !!facts.economics.combined_monthly_total.withheld : null,
+      /*  ── LEASING, MADE CHECKABLE ──────────────────────────────────
+       *  Leasing was the ONE domain with a reader and no grounding: an
+       *  answered question about a named human returned a grounded_on
+       *  object in which every key was null, while tenancy carried six,
+       *  contracted_service four and debt three. The surface shows
+       *  grounded_on so a claim can be checked; the domain that speaks
+       *  about a PERSON was the one whose answer could not be.
+       *
+       *  Read from facts.leasing_person, which gatherFacts has already
+       *  passed through withoutDatabaseIds — so no id can arrive here
+       *  even by accident. Nothing is recomputed and nothing is taken
+       *  from the model: every value below is the canonical read's, or
+       *  null because the canonical read did not establish it. null is a
+       *  real answer here and never a zero (§5).
+       *
+       *  Deliberately NOT included: hashes (instrument_package_sha256,
+       *  document_sha256), any reference or token, and anything the
+       *  model selected. Grounding is what Spine can stand behind, not
+       *  what would be interesting to print.  */
+      leasing_read_state: facts.leasing_person ? facts.leasing_person.read_state : null,
+      leasing_subject_name: facts.leasing_person && facts.leasing_person.subject_name
+        ? facts.leasing_person.subject_name : null,
+      leasing_relationship_stage: facts.leasing_person && facts.leasing_person.current_position
+        ? facts.leasing_person.current_position.stage : null,
+      leasing_application_status: facts.leasing_person && facts.leasing_person.application
+        ? facts.leasing_person.application.status : null,
+      leasing_packet_status: facts.leasing_person && facts.leasing_person.lease
+        ? facts.leasing_person.lease.packet_status : null,
+      //  TWO SEPARATE ACTS, NEVER ONE "signed" (§40.5). A resident
+      //  signing and the company countersigning are different facts on
+      //  different clocks, and collapsing them is how a surface reports
+      //  a lease as executed when only one party has signed.
+      leasing_resident_executed_at: facts.leasing_person && facts.leasing_person.lease
+        ? (facts.leasing_person.lease.resident_executed_at || null) : null,
+      leasing_company_executed_at: facts.leasing_person && facts.leasing_person.lease
+        ? (facts.leasing_person.lease.company_executed_at || null) : null,
+      leasing_next_action_code: facts.leasing_person && facts.leasing_person.next
+        && facts.leasing_person.next.action
+        ? facts.leasing_person.next.action.code : null,
+      //  A COUNT, NOT A VERDICT. The uncertainty entries themselves stay
+      //  in the answer's own reading; what grounding carries is how many
+      //  there were, so an empty list cannot be mistaken on the surface
+      //  for "we did not look" (§40.7).
+      leasing_uncertainty_count: facts.leasing_person && Array.isArray(facts.leasing_person.uncertainty)
+        ? facts.leasing_person.uncertainty.length : null,
       tour_schedule_read_state: facts.tour_schedule ? facts.tour_schedule.read_state : null,
       tour_schedule_open_count: facts.tour_schedule ? facts.tour_schedule.next_open_times.length : null,
       tour_schedule_coverage_attention_count: facts.tour_schedule ? facts.tour_schedule.coverage_attention.length : null,
@@ -1331,6 +1756,7 @@ async function answer(db, anthropic, {
 }
 
 module.exports = {
-  answer, gatherFacts, questionSubject, isPersonalAttentionQuestion, personalAttentionResponse,
+  answer, gatherFacts, questionSubject, isPersonalAttentionQuestion,
+  isPropertyWideSignerQuestion, personalAttentionResponse, propertySigningResponse,
   systemPrompt, MODEL, SUPPORTED_SCOPE, OUT_OF_SCOPE_ANSWER,
 };

@@ -12,7 +12,7 @@ const { Pool } = require("pg");
 const receipt = require("./_run_receipt");
 const leasePacketsModule = require("../src/applications/leasepackets");
 const { executeSpineLease } = require("../src/applications/spine_lease_execution");
-const { buildReviewDetail } = require("../src/applications/application_review");
+const { buildReviewList, buildReviewDetail } = require("../src/applications/application_review");
 const { readLeasingStanding } = require("../src/leasing/leasing_standing_read");
 
 const CONN = receipt.harnessConnectionString();
@@ -273,6 +273,20 @@ async function api(base, method, path, body) {
     ok("issued signer controls are structurally frozen",
       /field evidence is frozen/i.test(issuedFieldRewriteError && issuedFieldRewriteError.message));
 
+    const issuedReview = await buildReviewList(pool, propertyId);
+    const issuedApplication = issuedReview.applications.find(
+      (application) => String(application.application_id) === String(first.applicationId));
+    ok("the canonical property review names both outstanding resident-side signers after issue",
+      issuedApplication && issuedApplication.signing.outstanding_signers.length === 2
+        && issuedApplication.signing.outstanding_signers.map((signer) => signer.signer_role)
+          .sort().join(",") === "guarantor,tenant");
+    const otherPropertyId = (await q(
+      "insert into properties(name) values ('Other signer proof property') returning id"
+    )).rows[0].id;
+    const otherReview = await buildReviewList(pool, otherPropertyId);
+    ok("the signer census is scoped to the server-derived property",
+      otherReview.count === 0 && otherReview.signing.outstanding_signer_count === 0);
+
     const tenantData = await api(base, "GET", `/t/lease/${encodeURIComponent(first.tokens.tenant)}/data`);
     const guarantorData = await api(base, "GET", `/t/lease/${encodeURIComponent(first.tokens.guarantor)}/data`);
     ok("resident link exposes only resident controls", tenantData.status === 200
@@ -298,6 +312,13 @@ async function api(base, method, path, body) {
       tenantFirst.submitted.body.packet.status === "tenant_in_progress");
     ok("the first receipt names the actual outstanding signer",
       /Guarantor 1/.test(tenantFirst.submitted.body.receipt || ""));
+    const tenantFirstReview = await buildReviewList(pool, propertyId);
+    const tenantFirstStanding = tenantFirstReview.applications.find(
+      (application) => String(application.application_id) === String(first.applicationId));
+    ok("the property review rereads only the guarantor as outstanding after the resident signs",
+      tenantFirstStanding && tenantFirstStanding.signing.outstanding_signers.length === 1
+        && tenantFirstStanding.signing.outstanding_signers[0].signer_role === "guarantor"
+        && tenantFirstStanding.signing.outstanding_signers[0].display_name === first.guarantorName);
 
     let earlyCompanyError = null;
     const early = await pool.connect();
@@ -328,6 +349,12 @@ async function api(base, method, path, body) {
       guarantorSecond.completed.status === 200 && guarantorSecond.submitted.status === 200);
     ok("the final required signer advances the package to resident execution",
       guarantorSecond.submitted.body.packet.status === "resident_executed");
+    const residentExecutedReview = await buildReviewList(pool, propertyId);
+    const residentExecutedStanding = residentExecutedReview.applications.find(
+      (application) => String(application.application_id) === String(first.applicationId));
+    ok("the same property review moves the application to the authorized company signer",
+      residentExecutedStanding && residentExecutedStanding.signing.outstanding_signers.length === 1
+        && residentExecutedStanding.signing.outstanding_signers[0].signer_role === "company");
     const signerState = (await q(
       "select signer_role,submitted_at from lease_packet_signers where lease_packet_id=$1 order by signer_role",
       [first.packetId])).rows;
@@ -354,6 +381,11 @@ async function api(base, method, path, body) {
     }
     ok("company execution succeeds after every required resident-side signer",
       (await q("select status from lease_packets where id=$1", [first.packetId])).rows[0].status === "executed");
+    const executedReview = await buildReviewList(pool, propertyId);
+    const executedStanding = executedReview.applications.find(
+      (application) => String(application.application_id) === String(first.applicationId));
+    ok("the property review removes the application from outstanding signatures after company execution",
+      executedStanding && executedStanding.signing.outstanding_signers.length === 0);
     let evidenceDeleteError = null;
     try {
       await q("delete from lease_packet_fields where id=$1", [first.fields.tenant]);
