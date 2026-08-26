@@ -170,7 +170,7 @@ function packetSigningStanding(packet) {
       }))
     : [];
 
-  if (packet.status === "resident_executed" && !packet.company_executed_at) {
+  if (packet.status === "submitted" && !packet.company_executed_at) {
     outstanding.push({ signer_role: "company", display_name: "Authorized company signer" });
   }
 

@@ -1585,7 +1585,7 @@ async function answer(db, anthropic, {
          *  and the response it echoes; the model gets the story.  */
         { role: "user",
           content: `QUESTION SUBJECT: ${subject}\nFACTS:\n`
-                   + `${JSON.stringify(withoutDatabaseIds(facts), (k, v) => (k === "__refs" ? undefined : v), 2)}`
+                   + `${JSON.stringify(facts, (k, v) => (k === "__refs" ? undefined : v), 2)}`
                    + `\n\nOPERATOR ASKED: ${q}` },
       ],
     });
