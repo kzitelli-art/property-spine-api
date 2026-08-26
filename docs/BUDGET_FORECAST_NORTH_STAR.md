@@ -20,6 +20,9 @@ Read this beside:
 
 - [MONEY_THESIS.md](MONEY_THESIS.md) — why institutional financial outputs are
   derived from governed operating truth;
+- [RAMP_ACTUATOR_ALIGNMENT.md](RAMP_ACTUATOR_ALIGNMENT.md) — why an execution
+  provider may contribute Actual and Cash evidence but never liability,
+  recognition, planning or the economic decision;
 - [STANDING_ECONOMIC_OBLIGATIONS_SOURCE_READ.md](STANDING_ECONOMIC_OBLIGATIONS_SOURCE_READ.md)
   — which dated economic terms exist today and which do not;
 - [FUTURE_OPERATING_READINESS_TRACE.md](FUTURE_OPERATING_READINESS_TRACE.md)
@@ -184,6 +187,17 @@ series later.
 Ramp remains an actuator. It may supply execution and cash evidence. It does not
 author planning assumptions or the budget.
 
+The distinction between authorization, clearing and settlement is also
+load-bearing for Planning. They are separate dated provider/cash facts, not one
+amount that advances through a mutable transaction status. A decision may carry
+a ceiling or no amount; Actual and Cash quantify from the facts that occur.
+Unknown and unresolved amounts remain `UNQUANTIFIED`, never zero.
+
+The full provider boundary, including the prohibition on cardholder-selected GL
+meaning, payer-versus-liability separation, split-allocation stop, effective-
+dated entity ownership and vendor-identity question, is governed by
+[RAMP_ACTUATOR_ALIGNMENT.md](RAMP_ACTUATOR_ALIGNMENT.md).
+
 ## One dated economic inventory
 
 Planning and Recognition share one source inventory. Do not create separate
@@ -267,6 +281,8 @@ record the stale Asset Management header correction
 run the Dated Economic Series Inventory
 continue the Teams economic-decision inventory
 rule unresolved Planning / Recognition questions where necessary
+confirm the Ramp sandbox capability matrix and unresolved actuator contracts
+without beginning adapter implementation
 
 AFTER SKYLINE
 Money Builds 0.75 → 1 → 2 → 3 → 4

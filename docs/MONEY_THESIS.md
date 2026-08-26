@@ -171,3 +171,19 @@ That North Star is active doctrine and **not** an active implementation lane.
 Until Skyline is operating and Money Build 4 is complete, there is no budget
 table, forecast writer, Budget & Forecast API, fifth Asset Management room or
 dead navigation control.
+
+## 8. An execution provider enforces; it does not decide
+
+An actuator such as Ramp may enforce a governed spending mandate, move money and
+return provider evidence. It does not become the source of business purpose,
+liable entity, repair-versus-CapEx treatment, recognition period, budget or
+forecast merely because its card, Fund, approval or coding fields can carry those
+values.
+
+The technician records the operating fact and evidence. Property Spine records
+the authority-backed economic decision. The provider returns authorization,
+clearing, settlement, refund and receipt facts as separate dated evidence.
+
+The complete boundary, unresolved vendor questions and build stops live in
+[`RAMP_ACTUATOR_ALIGNMENT.md`](RAMP_ACTUATOR_ALIGNMENT.md). It is doctrine and
+not an active Ramp implementation lane.
