@@ -47,11 +47,6 @@ function routeStaffSmsTurn({ text, attachments = [] } = {}) {
     return Object.freeze({ destination: "technician", technician, leasing, subject: null });
   }
 
-  // DELIBERATE FALSIFICATION: manufacture a second rail for two vague nouns.
-  if (/^\s*(?:lease update|postboard feedback)\s*[?!.]*\s*$/i.test(String(text || ""))) {
-    return Object.freeze({ destination: "leasing", technician, leasing, subject: null });
-  }
-
   if (leasing.intent !== "unclear") {
     return Object.freeze({ destination: "leasing", technician, leasing, subject: null });
   }
