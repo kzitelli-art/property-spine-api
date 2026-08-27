@@ -3565,12 +3565,6 @@ app.use("/", demoModule({ pool, submissionService: __applicationSubmission._serv
 //    no deletes, reversible, fail-closed to the Demo Building. (demo_reset.js) ──
 app.use("/", require("./src/leasing/demo_reset")({ pool, leasingLifecycle }));
 
-// ── Agent Stage 0: model capability proof (operator-gated, NO schema, NO secrets
-//    exposed). One real generation to confirm the live model path works before any
-//    agent architecture is built on it. GET /agent/capability → { ok, reachable, model }. ──
-const agentCapabilityModule = require("./src/leasing/agentcapability");
-app.use("/", agentCapabilityModule({ anthropic, INGEST_MODEL }));
-
 // ── Agent Stage A: supervised, grounded, draft-first conversation loop. The agent
 //    PROPOSES; nothing reaches a lead until a human dispatches it. Two-transaction
 //    model call, monotonic thread versioning, obligation-backed review, server-derived

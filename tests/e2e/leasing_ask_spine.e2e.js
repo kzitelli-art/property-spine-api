@@ -40,6 +40,10 @@ const { pool, q, ctx, toPacket, residentSigns, api } = require("./leasing_e2e_li
   ].some((key) => Object.prototype.hasOwnProperty.call(body || {}, key));
 
   try {
+    const retiredCapability = await api("GET", "/agent/capability");
+    must("the retired public Stage-0 model probe is not mounted",
+      retiredCapability.status === 404, JSON.stringify(retiredCapability));
+
     const assignment = (await q(
       `select allowed_modules, primary_for_modules
          from property_team_assignments
