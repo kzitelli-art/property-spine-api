@@ -12,6 +12,7 @@ const fs = require("fs");
 const { Pool } = require("pg");
 const { databaseSsl } = require("../../src/shared/database_ssl");
 const staffSessions = require("../../src/identity/staff_session_service");
+const communicationsBoundary = require("../../src/comms/communications_boundary");
 const { routeStaffSmsTurn } = require("../../src/conversation/staff_sms_router");
 const { resolveLeasingSubject } = require("../../src/leasing/leasing_standing_read");
 
@@ -190,6 +191,62 @@ async function waitForStaffReply(providerMessageId) {
               inbound_enabled,outbound_enabled,outbound_policy,status)
            values ('+12155559999','property_facing',$1,'external','residents_and_prospects',
                    true,true,'proactive','active')`, [propertyId]);
+
+  // The canonical outbound resolver, not properties.sms_number, decides
+  // whether this exact send path may reach transport. This is a service-level
+  // Class 3 control against the real migrated database; the injected transport
+  // records calls in memory and cannot reach a provider.
+  const lineCalls = [];
+  const lineBoundary = communicationsBoundary({
+    pool,
+    sms: {
+      enabled: () => true,
+      sendSms: async (message) => {
+        lineCalls.push(message);
+        return { sent: true, status: "queued", sid: `SM_LINE_${lineCalls.length}` };
+      },
+    },
+  });
+  const priorSendMode = process.env.SMS_SEND_MODE;
+  const priorProofCell = process.env.SMS_PROOF_CELL;
+  const proofCell = "+15005550199";
+  try {
+    process.env.SMS_SEND_MODE = "proof_only";
+    process.env.SMS_PROOF_CELL = proofCell;
+    const enabled = await lineBoundary.sendPropertySms({
+      property_id: propertyId, recipient: proofCell, body: "line authority proof",
+      purpose: "proof_text",
+    });
+    expect(enabled.sent === true && lineCalls.length === 1
+        && lineCalls[0].from === "+12155559999",
+      "an enabled canonical property line reaches the fake transport exactly once");
+
+    await q(`update communication_lines
+                set outbound_enabled=false, outbound_policy='disabled'
+              where property_id=$1 and line_type='property_facing' and status='active'`,
+      [propertyId]);
+    const projection = (await q(
+      "select sms_number from properties where id=$1", [propertyId]
+    )).rows[0].sms_number;
+    const disabled = await lineBoundary.sendPropertySms({
+      property_id: propertyId, recipient: proofCell, body: "must not leave",
+      purpose: "proof_text",
+    });
+    expect(projection === "+12155559999"
+        && disabled.sent === false && disabled.reason === "outbound_not_enabled"
+        && lineCalls.length === 1,
+      "an active outbound-disabled line refuses canonically and projection drift cannot send",
+      JSON.stringify({ projection, disabled, provider_calls: lineCalls.length }));
+  } finally {
+    if (priorSendMode === undefined) delete process.env.SMS_SEND_MODE;
+    else process.env.SMS_SEND_MODE = priorSendMode;
+    if (priorProofCell === undefined) delete process.env.SMS_PROOF_CELL;
+    else process.env.SMS_PROOF_CELL = priorProofCell;
+    await q(`update communication_lines
+                set outbound_enabled=true, outbound_policy='proactive'
+              where property_id=$1 and line_type='property_facing' and status='active'`,
+      [propertyId]);
+  }
   await q(`update communication_lines
               set status='retired', inbound_enabled=false,
                   outbound_policy='disabled', outbound_enabled=false
