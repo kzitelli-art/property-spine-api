@@ -27,8 +27,8 @@ SILO A ─ Release 0
   src/technician/lifecycle_service.js
   src/technician/evidence_service.js
   src/maintenance/proof_evaluation_service.js
-  tests/gate_completion_writers.js
-  tests/gate_migration_137_promotion.js
+  tests/gates/gate_completion_writers.js
+  tests/gates/gate_migration_137_promotion.js
   tools/steps23/**
   tools/scale/**
   docs/RELEASE_0_*

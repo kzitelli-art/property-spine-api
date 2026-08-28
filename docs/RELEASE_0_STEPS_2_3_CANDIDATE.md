@@ -31,7 +31,7 @@ Produced by removing that file's own `begin;`/`commit;` and replacing its
 header comment. Nothing else. Retyping it would have made the scale proof a
 statement about a different file.
 
-`tests/gate_migration_137_promotion.js` compares the two **statement by
+`tests/gates/gate_migration_137_promotion.js` compares the two **statement by
 statement** on every run — 85 comparison units, byte-identical — and refuses if
 normalisation ever eats enough content to make two files trivially equal.
 

@@ -252,6 +252,6 @@ service, and resolved by the canonical establishment tool before any Debt row
 was written.
 
 Ask Spine follows the same governed read after that. Debt's registry entry in
-`tests/gate_ask_spine_readers.js` stays `pending` until it does — deliberately,
+`tests/gates/gate_ask_spine_readers.js` stays `pending` until it does — deliberately,
 per that file's own comment: Debt Build 1 stops at the canonical read, and this
 is not something to wire early just to change that count.

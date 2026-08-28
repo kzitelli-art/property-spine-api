@@ -42,7 +42,7 @@ property only.
 
 ## It is asserted, not merely believed
 
-`tests/smoke_release3.deployed.js` B1–B5 run against the **deployed** instance and
+`tests/scenarios/smoke_release3.deployed.js` B1–B5 run against the **deployed** instance and
 require all five legacy doors to be gone:
 
 ```text
@@ -53,7 +53,7 @@ B4  legacy door gone: PATCH /obligations/:id/satisfy
 B5  legacy door gone: PATCH /obligations/:id/complete
 ```
 
-`tests/operator_obligations_security_proof.db.js` covers the same paths against a
+`tests/proofs/operator_obligations_security_proof.db.js` covers the same paths against a
 real database. So this is not a one-time fix that could silently regress: a
 reintroduction turns the deployed smoke red.
 

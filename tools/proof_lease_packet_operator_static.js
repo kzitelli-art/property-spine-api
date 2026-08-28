@@ -4,7 +4,7 @@
 const fs = require("fs");
 const path = require("path");
 const root = path.join(__dirname, "..", "..");
-const lp = fs.readFileSync(path.join(root, "leasepackets.js"), "utf8");
+const lp = fs.readFileSync(path.join(root, "lease_packets.js"), "utf8");
 const op = fs.readFileSync(path.join(root, "operator.js"), "utf8");
 const sv = fs.readFileSync(path.join(root, "server.js"), "utf8");
 

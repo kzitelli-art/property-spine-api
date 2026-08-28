@@ -23,9 +23,9 @@ credentials logged or stored    NO
 ```text
 MOD  src/comms/sms.js                   +206   fetchMedia, APP_BASE_URL enforcement
 MOD  src/technician/evidence_service.js  +45   verified-MIME boundary, cap passed in
-NEW  tests/media_transport.test.js              37 assertions
-NEW  tests/media_evidence_integration.test.js   32 assertions, real Postgres
-NEW  tests/media_falsify.test.js                12 assertions
+NEW  tests/unit/media_transport.test.js              37 assertions
+NEW  tests/unit/media_evidence_integration.test.js   32 assertions, real Postgres
+NEW  tests/unit/media_falsify.test.js                12 assertions
 ```
 
 Nothing else. No canonical writer change, no resident transport change, no

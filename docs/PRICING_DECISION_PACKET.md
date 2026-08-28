@@ -296,7 +296,7 @@ mistake as the env-var change that did not restart the process.
 
 ## 10. Proof
 
-- `tests/pricing_foundation_proof.js` — **53/53**
-- `tests/pricing_decision_packet_proof.js` — **75/75**
+- `tests/proofs/pricing_foundation_proof.js` — **53/53**
+- `tests/proofs/pricing_decision_packet_proof.js` — **75/75**
 - Adapter still dark: its only consumer repo-wide is the dry-run preview, and
   `src/agent/agent.js` does not reference it. **Live quoting is unchanged.**

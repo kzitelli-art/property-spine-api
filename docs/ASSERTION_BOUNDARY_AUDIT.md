@@ -38,7 +38,7 @@ proposing floors. **Source answers it: none exists.**
   `git show HEAD:<file>`, `git diff --name-only <sha>`, `git rev-parse HEAD`,
   `git ls-files`. These read repository history to assert a change landed; they
   do not run tests.
-- **Two spawn `node <path>`**, both in `tests/test_identity_bridge.db.js:586,592`
+- **Two spawn `node <path>`**, both in `tests/proofs/test_identity_bridge.db.js:586,592`
   — and they are **not** an aggregator. They are a **negative control**: J1 runs
   `gate_no_raw_bridge_joins.js` and requires it to pass; J2 plants a violating
   file, requires the gate to **fail**, then removes it (`:588–596`).
@@ -251,7 +251,7 @@ occurred here**:
 
 | # | Case | Real instance |
 |---|---|---|
-| 1 | Loads with an error, executes zero assertions | `tests/test_adapter_seam.db.js:13` — `receipt` undeclared. **Still dead; verified this session.** |
+| 1 | Loads with an error, executes zero assertions | `tests/proofs/test_adapter_seam.db.js:13` — `receipt` undeclared. **Still dead; verified this session.** |
 | 2 | Data-driven harness receives an empty dataset | `test_conversion_rail.db.js` — the defect that ran for 204 commits |
 | 3 | Child prints success text but exits non-zero | no instance today (no aggregator) — synthetic |
 | 4 | Producer fails, consumer succeeds in a pipeline | the two root shell scripts, false-green row 4 — **fixed and proven this session** |
@@ -288,7 +288,7 @@ it in this branch.**
 |---|---|
 | **Do not build a test runner** | Ruled. Option 2 above is rejected. |
 | **`_run_receipt.js` defaulting `expectedAtLeast` to 1** | **Registered as a proof-integrity gap.** Not fixed here. A harness that runs one setup assertion and skips every semantic case satisfies the default and reports green. |
-| **The dead harness stays broken** | `tests/test_adapter_seam.db.js:13` remains the real negative control for the load-time-error case. **It must not be tidied up.** Correct it only after a boundary demonstrably rejects it. |
+| **The dead harness stays broken** | `tests/proofs/test_adapter_seam.db.js:13` remains the real negative control for the load-time-error case. **It must not be tidied up.** Correct it only after a boundary demonstrably rejects it. |
 | **Node-version exposure** (no `engines`; 3 harnesses on default rejection semantics) | **Parked.** Recorded, not actioned. |
 | **Per-harness semantic / dataset floors** | **Parked.** Recorded, not actioned. |
 | **Unmeasured: how many harnesses are data-driven** | Remains open and deliberately uncounted (see *What this report does not establish*). |

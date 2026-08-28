@@ -87,8 +87,8 @@ merged and not production-active.**
 
 | # | Piece | Now | Proof |
 |---|---|---|---|
-| 3 | Structured intent | `src/conversation/intent.js` — `classifyMessage`, `recognizeAnswer` | `tests/conversation_intent_extraction.test.js` · 45/45 |
-| 4 | Clarification / confirmation | `src/conversation/clarification.js` — the ladder and the §7.4 confirmation decision | `tests/conversation_clarification_and_receipt.test.js` · 150/150 |
+| 3 | Structured intent | `src/conversation/intent.js` — `classifyMessage`, `recognizeAnswer` | `tests/unit/conversation_intent_extraction.test.js` · 45/45 |
+| 4 | Clarification / confirmation | `src/conversation/clarification.js` — the ladder and the §7.4 confirmation decision | `tests/unit/conversation_clarification_and_receipt.test.js` · 150/150 |
 | 6 | Execution receipt | `src/conversation/receipt.js` — **operating** and **delivery** receipts, permanently separate | same harness, §10 |
 
 Piece 6 was not merely moved. Composing the acknowledgment at the same place

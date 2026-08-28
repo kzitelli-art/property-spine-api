@@ -29,7 +29,7 @@ Ask Spine named-file overlap with this cut: **none.** Its non-doc source is
 |---|---|
 | implementation | `src/evidence/conversion.js:150–167` |
 | registration | `src/evidence/metric_contract.js:88–94` — `s9.conversion.completed_tour_to_submitted_application.v1` |
-| proof | `tests/slice9_evidence_proof.js` §E, §F, §G |
+| proof | `tests/proofs/slice9_evidence_proof.js` §E, §F, §G |
 | consumer | `src/evidence/evidence_projection.js:58` → `src/identity/operator.js:1704` (`marketEvidenceProjection`) |
 
 **One route consumer.** No other caller anywhere in `src/`, `server.js` or `tools/`.

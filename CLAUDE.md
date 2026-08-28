@@ -311,7 +311,7 @@ The rulings a builder trips over first:
   ship with a domain's first build; *"why did it increase?"* requires recorded
   causal linkage and must not be implicitly promised. Say which one shipped.
 
-**Enforced by `tests/gate_ask_spine_readers.js`, not by memory** (§40.11). It
+**Enforced by `tests/gates/gate_ask_spine_readers.js`, not by memory** (§40.11). It
 discovers domains from their canonical standing reads, so a domain that lands
 without registering goes red on its own.
 
@@ -452,7 +452,7 @@ The screen is one projection of that truth; the conversational reader is another
 
 Proof ladder: Reported → Locally exercised → Built-but-dormant → **Proven** (real DB + real HTTP) → **Browser verified**. For operator workflows, browser verification is part of "done." Do not call something live/deployed/enforced without the matching evidence.
 
-**And a domain is not done until Ask Spine can read it** (§40.2) — its governed standing state available to entitled users, registered, and proven in the browser. This is a rung on the ladder, not a note beneath it: a domain browser-verified in the operator UI but unreadable by Ask Spine is done as a **screen** and not done as a **domain**. Say it that way in the receipt. Enforced by `tests/gate_ask_spine_readers.js` (§40.11).
+**And a domain is not done until Ask Spine can read it** (§40.2) — its governed standing state available to entitled users, registered, and proven in the browser. This is a rung on the ladder, not a note beneath it: a domain browser-verified in the operator UI but unreadable by Ask Spine is done as a **screen** and not done as a **domain**. Say it that way in the receipt. Enforced by `tests/gates/gate_ask_spine_readers.js` (§40.11).
 
 ## Build discipline (§30)
 

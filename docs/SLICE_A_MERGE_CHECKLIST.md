@@ -99,7 +99,7 @@ with `✓ RECONCILED` and applied ceiling **129**.
 **If Slice 10B has taken 130:** renumber THIS branch to the next free number. Do
 not renumber or overwrite their work. Renaming touches
 `migrations/130_communication_lines.sql` and the `M("130_…")` reference in
-`tests/communication_lines_slice_a.db.js`; re-run step 4 afterwards.
+`tests/proofs/communication_lines_slice_a.db.js`; re-run step 4 afterwards.
 
 ---
 
@@ -113,15 +113,15 @@ Proof does not survive a merge. Re-run everything.
 export HARNESS_DATABASE_URL="postgresql://postgres@127.0.0.1:55432/postgres"
 unset DATABASE_URL
 
-node tests/communication_lines_slice_a.db.js      # expect 61 run · 61 passed · exit 0
-node tests/property_line_hardening.db.js          # expect 41 run · 41 passed · exit 0
-node tests/migration_ledger_inverse_gate.db.js    # expect 24 run · 24 passed · exit 0
-node tests/migration_ledger_verdict.test.js       # expect 40 run · 40 passed · exit 0
-node tests/migration_release_gate.test.js         # expect 11 passed · 0 failed
-node tests/obligation_engine_one_implementation.test.js   # 14/0
-node tests/obligation_engine_import_smoke.test.js
-node tests/gate_closure_boundary.js               # PASS
-node tests/gate_no_raw_bridge_joins.js            # PASS
+node tests/proofs/communication_lines_slice_a.db.js      # expect 61 run · 61 passed · exit 0
+node tests/proofs/property_line_hardening.db.js          # expect 41 run · 41 passed · exit 0
+node tests/proofs/migration_ledger_inverse_gate.db.js    # expect 24 run · 24 passed · exit 0
+node tests/unit/migration_ledger_verdict.test.js       # expect 40 run · 40 passed · exit 0
+node tests/unit/migration_release_gate.test.js         # expect 11 passed · 0 failed
+node tests/unit/obligation_engine_one_implementation.test.js   # 14/0
+node tests/unit/obligation_engine_import_smoke.test.js
+node tests/gates/gate_closure_boundary.js               # PASS
+node tests/gates/gate_no_raw_bridge_joins.js            # PASS
 npm run verify                                    # 8/8 — all source-governance gates
 ```
 
@@ -133,7 +133,7 @@ exit code:
 
 ```bash
 HARNESS_DATABASE_URL="postgres://…<disposable full-schema branch>…" \
-  node tests/slice_a_full_schema_suite.js
+  node tests/scenarios/slice_a_full_schema_suite.js
 ```
 
 It refuses to start unless: `HARNESS_DATABASE_URL` is set (no fallback); it does
@@ -167,7 +167,7 @@ no run receipt — and **both COMMIT fixtures**. `DB_HARNESS_ISOLATION.md` cover
 **and** `tools/`: **87 scripts** connect via `DATABASE_URL` with no guard, **67
 write-capable**, against **8** covered `*.db.js` files — plus **5 more** that
 require `HARNESS_DATABASE_URL` but never perform its same-target refusal. Enforcement against
-further growth is `tests/gate_harness_isolation.js`; remediation is its own
+further growth is `tests/gates/gate_harness_isolation.js`; remediation is its own
 governed slice **after** Slice A. Only these two are a Slice A merge requirement,
 because only these two are in its required proof set.
 

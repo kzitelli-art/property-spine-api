@@ -63,7 +63,7 @@ Render is production.
 
 **Severity: high. This is the third occurrence of the repository's signature defect.**
 
-`tests/test_adapter_seam.db.js:13`:
+`tests/proofs/test_adapter_seam.db.js:13`:
 
 ```js
 const CONN = receipt.harnessConnectionString();
@@ -177,12 +177,12 @@ one place where a guard applied naively would break a live endpoint.
 
 | File | Guard call | Pool | Receipt import | Assertion floor |
 |---|---|---|---|---|
-| `tests/db_preflight.js` | `:25` | `:27` | `:21` | own fatal logic |
-| `tests/test_conversion_rail.db.js` | `:20` | `:21` | yes | **yes** |
-| `tests/test_identity_bridge.db.js` | `:27` | `:33` | yes | **yes** |
-| `tests/test_release3.db.js` | `:17` | `:21` | yes | **yes** |
-| `tests/test_scheduling_interactions.db.js` | `:13` | `:14` | `:8` | no |
-| `tests/test_adapter_seam.db.js` | `:13` | `:14` | **MISSING** | no |
+| `tests/scenarios/db_preflight.js` | `:25` | `:27` | `:21` | own fatal logic |
+| `tests/proofs/test_conversion_rail.db.js` | `:20` | `:21` | yes | **yes** |
+| `tests/proofs/test_identity_bridge.db.js` | `:27` | `:33` | yes | **yes** |
+| `tests/proofs/test_release3.db.js` | `:17` | `:21` | yes | **yes** |
+| `tests/proofs/test_scheduling_interactions.db.js` | `:13` | `:14` | `:8` | no |
+| `tests/proofs/test_adapter_seam.db.js` | `:13` | `:14` | **MISSING** | no |
 
 **Unguarded — 96 files.** Every one constructs its own pool from
 `process.env.DATABASE_URL`. Enumerated in full:
@@ -253,7 +253,7 @@ does not call it is simply unaffected.
 | Bypass | Files | Reaches production? |
 |---|---|---|
 | Self-built `new Pool({connectionString: process.env.DATABASE_URL})` | 96 Class S + 4 Class B | **Yes**, whenever the shell carries production `DATABASE_URL` — which the Render Shell does |
-| Hardcoded local fallback via `\|\|` | 2 — `tests/night_harness.js:10`, `src/shared/no076_failclosed_check.js:18` | No, but silently retargets to a local database when the variable is unset, so a run can appear to work against the wrong target |
+| Hardcoded local fallback via `\|\|` | 2 — `tests/scenarios/night_harness.js:10`, `src/shared/no076_failclosed_check.js:18` | No, but silently retargets to a local database when the variable is unset, so a run can appear to work against the wrong target |
 | `psql "$DATABASE_URL"` in shell | 2 — `setup_clean_qa_record.sh` (`:25,34,40,65`), `setup_fresh_record_and_prove.sh` (`:13,23,31,54`) | **Yes** — and no JavaScript guard can ever intercept these; they never enter Node |
 | Boot path | `migrations/migrate.js` via `prestart` | **Yes, authorized** |
 
@@ -277,7 +277,7 @@ Catalogued, not fixed.
 | # | Source | Mechanism | Live? |
 |---|---|---|---|
 | 1 | **root `migrate.js`** | `MIGRATIONS_DIR = __dirname` (`:32`) is the repo root, which holds no `NNN_*.sql`. `readdirSync` filtered by `/^\d{3}_.*\.sql$/` (`:62–65`) matches nothing — `schema.sql` fails the pattern — so it prints `"No migration files found. Nothing to do."` (`:68`) and returns normally. **Exit 0, zero migrations applied.** | **Yes.** `package.json:7` correctly calls `migrations/migrate.js`, so boot is safe; the trap is anyone running `node migrate.js` from the repo root, which is the natural guess. |
-| 2 | **`tests/test_adapter_seam.db.js`** | `ReferenceError` at load; zero assertions. Exits non-zero, so `$?` catches it — invisible only under piped/eyeballed output. | **Yes.** See FINDING 1. |
+| 2 | **`tests/proofs/test_adapter_seam.db.js`** | `ReferenceError` at load; zero assertions. Exits non-zero, so `$?` catches it — invisible only under piped/eyeballed output. | **Yes.** See FINDING 1. |
 | 3 | **No assertion floor on 104 of 107 files** | Only `test_conversion_rail`, `test_identity_bridge` and `test_release3` pass `expectedAtLeast` to `receipt.complete()`, which fails a run that executed fewer assertions than expected (`_run_receipt.js:128–133`). Everywhere else the pattern is `process.exit(fail ? 1 : 0)` — correct for failures, but **exit 0 when zero assertions ran**. Any harness whose assertions sit inside a loop over query results reports success on an empty result set. | **Yes.** This is the conversion-rail defect generalised; the floor was built but applied to three files. |
 | 4 | **`psql` pipes in shell setup scripts** | `setup_clean_qa_record.sh:31,45,51,56,61` and `setup_fresh_record_and_prove.sh:18,50` pipe `curl` into `head`/`grep`, so `$?` reports the **last** command in the pipeline, not `curl`. **Both scripts set `-e`** (`:14` and `:5`) but **neither sets `pipefail`**, so `set -e` never fires on those pipelines — the guard is present but ineffective exactly where the row applies. | **Yes.** *(Corrected — an earlier version of this row wrongly stated `setup_clean_qa_record.sh` lacks `set -e`. See Appendix G6.)* |
 
@@ -293,7 +293,7 @@ Every one wraps a `rollback`, `pool.end()`, `res.json()` or cleanup call in a
 propagating. Standard practice, not a false green.
 
 **Corrected during this audit:** an initial heuristic flagged
-`tests/shadow_import.test.js` as unable to fail. It exits correctly at `:232`
+`tests/unit/shadow_import.test.js` as unable to fail. It exits correctly at `:232`
 (`process.exit(FAIL === 0 ? 0 : 1)`); the detector missed the uppercase
 identifier. No such file exists — the exit-code discipline across the proof
 suite is sound. The gap is the assertion floor, not the exit code.
@@ -436,10 +436,10 @@ compliant. The two documents disagree; this one applies the stated rule.
 
 | Number | Location | Class | Exposure |
 |---|---|---|---|
-| `+17243098434` | `migrations/090_admin_users.sql:25,39`; `src/identity/phone_identity.js:8`; `src/comms/communications_boundary.js:688`; `src/leasing/leasingleads.js:201`; `tests/qa_lifecycle_arc.js:35`; `tests/night_harness.js:224`; `tests/demo_authority_ruling_proof.js:64` | R, S | **The expected occurrence — Kameron's real cell, intentionally present.** Its exposure is not the identity but the *placement*: `090_admin_users.sql:39` inserts it as a real `users` row — `role='property_manager'`, `auth_provider='phone_otp'`, `is_active=true`, `status='active'`. That is a migration, so it was written through the authorized path. **Correction (see Appendix — A090-3):** it does *not* run on every production boot — `migrate.js:178–181` skips applied versions, so 090 executes **once per database** and the row is durable thereafter. This is a live operator account with a live phone, not a fixture. Whether that is intended is an owner question; it is reported here because a migration-created account is durable, reachable by any outbound path that selects active property managers, and cannot be removed by fixture cleanup. |
+| `+17243098434` | `migrations/090_admin_users.sql:25,39`; `src/identity/phone_identity.js:8`; `src/comms/communications_boundary.js:688`; `src/leasing/leasingleads.js:201`; `tests/arcs/qa_lifecycle_arc.js:35`; `tests/scenarios/night_harness.js:224`; `tests/proofs/demo_authority_ruling_proof.js:64` | R, S | **The expected occurrence — Kameron's real cell, intentionally present.** Its exposure is not the identity but the *placement*: `090_admin_users.sql:39` inserts it as a real `users` row — `role='property_manager'`, `auth_provider='phone_otp'`, `is_active=true`, `status='active'`. That is a migration, so it was written through the authorized path. **Correction (see Appendix — A090-3):** it does *not* run on every production boot — `migrate.js:178–181` skips applied versions, so 090 executes **once per database** and the row is durable thereafter. This is a live operator account with a live phone, not a fixture. Whether that is intended is an owner question; it is reported here because a migration-created account is durable, reachable by any outbound path that selects active property managers, and cannot be removed by fixture cleanup. |
 | `+18626683053` | `migrations/090_admin_users.sql:24,38` | R | Second real number in the same migration, same row shape, `tmysl@me.com` (Tom). Identical exposure. **This one is not covered by the contract's expected-occurrence note.** |
 | `+12153591082` | `tools/seed_solo_facts.js:132` | S | Written into `agent_facts` as an office contact — *"(215) 359-1082. Office hours are Monday–Friday, 9:00 AM–4:30 PM ET."* Agent facts are **AI-quotable**, so this number can be spoken to a real prospect. A real-looking Philadelphia number in a prospect-facing fact is materially different from one in a fixture. |
-| `+12154452021` | `tests/demo_book_route_proof.js:47`; `tests/prove_escalate_move.js:100`; `tests/prove_one_in_one_out.js:99`; `tests/prove_persona_v6.js:75`; `tests/tour_booking_proof.js:193`; `tests/http_negative_smoke.js:67`; +1 more | S | Inserted as `properties.sms_number` for `'Property Spine Demo Building'` across seven harnesses. Real-looking 215 number. If this is the live Demo Building line, these harnesses are writing a **production inbound-routing value** — and `properties.sms_number` has no unique index (ITEM 4), so a duplicate is not refused. |
+| `+12154452021` | `tests/proofs/demo_book_route_proof.js:47`; `tests/scenarios/prove_escalate_move.js:100`; `tests/scenarios/prove_one_in_one_out.js:99`; `tests/scenarios/prove_persona_v6.js:75`; `tests/proofs/tour_booking_proof.js:193`; `tests/scenarios/http_negative_smoke.js:67`; +1 more | S | Inserted as `properties.sms_number` for `'Property Spine Demo Building'` across seven harnesses. Real-looking 215 number. If this is the live Demo Building line, these harnesses are writing a **production inbound-routing value** — and `properties.sms_number` has no unique index (ITEM 4), so a duplicate is not refused. |
 
 **Fictional-but-outside-block** — 555-shaped, wrong line range, or 555 in the
 area-code position. Reachability is the same question for all: they are written
@@ -549,11 +549,11 @@ Created by name at runtime, no fixed ID:
 
 | Name | Creator | Note |
 |---|---|---|
-| **`'Solo on Chestnut'`** | `tests/test_conversion_rail.db.js` | **Collides with the real Solo property's name.** `DB_HARNESS_ISOLATION.md` §1.4 establishes that name alone can never prove a row is synthetic. |
-| `'Bridge Proof Property'`, `'Other Property (the wall)'` | `tests/test_identity_bridge.db.js` | distinguishable |
-| `'R3 Prop <ms>'`, `'R3 Prop2 <ms>'` | `tests/test_release3.db.js` | timestamped, distinguishable |
+| **`'Solo on Chestnut'`** | `tests/proofs/test_conversion_rail.db.js` | **Collides with the real Solo property's name.** `DB_HARNESS_ISOLATION.md` §1.4 establishes that name alone can never prove a row is synthetic. |
+| `'Bridge Proof Property'`, `'Other Property (the wall)'` | `tests/proofs/test_identity_bridge.db.js` | distinguishable |
+| `'R3 Prop <ms>'`, `'R3 Prop2 <ms>'` | `tests/proofs/test_release3.db.js` | timestamped, distinguishable |
 | `'Property Spine Demo Building'` | 7 harnesses, with `sms_number` `+12154452021` | **Also a name collision** — same name as the real Demo Building |
-| `'Demo'` / `'Solo Real'` | `tests/night_harness.js:80,81` | `sms_number` `+15550000010` / `+15550000011` |
+| `'Demo'` / `'Solo Real'` | `tests/scenarios/night_harness.js:80,81` | `sms_number` `+15550000010` / `+15550000011` |
 | `'__CB_NO076__P'` | `src/shared/no076_failclosed_check.js:40` | marker-prefixed, distinguishable |
 
 ### 4. Unknown from source
@@ -561,7 +561,7 @@ Created by name at runtime, no fixed ID:
 - The four `property_id: null` registry entries — real deals with no property row in source.
 - `e9a7659f-ee1a-4bde-9e0c-02c6632ff066` — a **user**, not a property; the QA
   operator, hardcoded in `migrations/087_internal_qa_leasing_coverage.sql:27` and
-  named `FAKE_USER` in `tests/proof_proposed_terms.js:33` while being described
+  named `FAKE_USER` in `tests/scenarios/proof_proposed_terms.js:33` while being described
   in the same line as a real QA operator. The naming contradicts itself; which it
   is cannot be settled from source.
 - `16b442ee-…` (Jordan Avery, demo lead person), `ede3fe95-…` (tenant person) —

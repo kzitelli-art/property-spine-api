@@ -12,7 +12,7 @@
    thing the same way.
 
    STRUCTURALLY READ-ONLY, in the pattern of
-   tests/prod_smoke_missed_readonly.js: everything happens inside
+   tests/scenarios/prod_smoke_missed_readonly.js: everything happens inside
    `begin transaction read only`, and it PROVES it cannot write before it
    reads anything. That is why this may point at DATABASE_URL when every
    .db.js harness may not — it cannot mutate the database it inspects, and

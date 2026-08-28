@@ -39,7 +39,7 @@ Definitions that decide most cases:
 
 For each capability also determine:
   - CANONICAL OWNER (file paths), HTTP ROUTE (grep server.js AND src/surfaces/), MIGRATION (migrations/NNN_*.sql)
-  - ASK SPINE: check ${API}/tests/gate_ask_spine_readers.js REGISTRY for a key, and grep
+  - ASK SPINE: check ${API}/tests/gates/gate_ask_spine_readers.js REGISTRY for a key, and grep
     ${API}/src/agent/ask_spine_answer.js for a real 'facts.<name> =' branch. Report both. Note that the gate's
     STANDING_READ_DIRS is ["src/asset","src/tenancy"] only, so most areas are structurally undiscoverable by it.
   - KNOWN GAP: quote verbatim any "blocked on"/"not established"/"pending"/"DORMANT"/"NOT yet"/"never" language

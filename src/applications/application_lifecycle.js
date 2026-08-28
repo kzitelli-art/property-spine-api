@@ -65,7 +65,7 @@ const LADDER = Object.freeze([
 // ── STATUS GROUPS ───────────────────────────────────────────────────
 //  DRIFT WARNING: these three groups also exist in migration 124's
 //  compatibility trigger and in staged migration 125. All three copies must
-//  agree exactly. tests/slice9_status_group_drift_proof.js parses all three
+//  agree exactly. tests/proofs/slice9_status_group_drift_proof.js parses all three
 //  and fails on any single-source mutation.
 const SUBMISSION_REACHED = Object.freeze([
   "submitted", "approved", "lease_ready", "tenant_signed",

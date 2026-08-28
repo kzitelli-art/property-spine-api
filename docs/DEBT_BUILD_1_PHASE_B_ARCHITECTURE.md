@@ -218,7 +218,7 @@ stale balance                 position() carries as_of; it never says "today"
 Only the eighth — *reader failure must not read as health* — is genuinely about
 Ask Spine, and it is already covered by §40.7's four silences.
 
-**Proposal: the seven become `tests/debt_position_falsification.db.js`, written
+**Proposal: the seven become `tests/proofs/debt_position_falsification.db.js`, written
 against real Postgres in Phase B, before any UI exists.** Phase G then proves the
 *conversational* rendering of walls that are already proven to hold in the read.
 That is also the honest reading of "the walls are the product": they are the

@@ -73,7 +73,7 @@ const { datedPropertyPositions } = require("../src/tenancy/dated_positions");
 /*  ⚠ READ AT THE CONNECTION SITE ON PURPOSE — see the same note in
  *  tools/turn_readiness_census.js and GAP 2 in
  *  docs/build1/INTEGRITY_GAPS.md. An alias here is invisible to
- *  tests/gate_harness_isolation.js. */
+ *  tests/gates/gate_harness_isolation.js. */
 if (!process.env.DATABASE_URL) {
   console.error("\n  DATABASE_URL is required — point it at the database holding the FRESH import.\n");
   process.exit(2);

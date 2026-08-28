@@ -52,7 +52,7 @@ Current/Next or dated position state. Searched `src/`, `server.js`, `tools/`,
 
 **Authority is not in dispute.** `position_classifier.js` is pure, was extracted
 verbatim in July after `notice_given` was found re-derived three ways, and is
-covered by `tests/position_classifier_characterization.js` (which runs the
+covered by `tests/scenarios/position_classifier_characterization.js` (which runs the
 pre-extraction implementation and the current one against the same live data
 and asserts deep equality). It is the correct home for anything that means
 *"what is contractually true about this position."*

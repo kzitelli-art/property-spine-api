@@ -7,7 +7,7 @@ until the current client/property creation architecture is understood.* It
 answers one question and classifies every component that bears on it.
 
 Nothing in this audit changes product behaviour. The only executable artifact is
-`tests/gate_property_creation_paths.js`, which pins the measured state so Build 1
+`tests/gates/gate_property_creation_paths.js`, which pins the measured state so Build 1
 has to change it deliberately rather than accidentally.
 
 ---
@@ -500,7 +500,7 @@ remaining gates as NOT RUN, so **`gate_property_creation_paths.js` will not run 
 the standard path until that is resolved.** It passes 11/11 when invoked directly:
 
 ```
-node tests/gate_property_creation_paths.js     → 11 run · 11 passed · 0 failed
+node tests/gates/gate_property_creation_paths.js     → 11 run · 11 passed · 0 failed
 ```
 
 Resolving the isolation debt is a Release 0 decision about those three tools'
@@ -511,7 +511,7 @@ fixing it.
 
 ## 12. The gate
 
-`tests/gate_property_creation_paths.js` · DB-free · on the standard path in
+`tests/gates/gate_property_creation_paths.js` · DB-free · on the standard path in
 `tests/verify_source_governance.js`.
 
 | | |

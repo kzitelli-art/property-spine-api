@@ -200,7 +200,7 @@ Until these are answered, the honest state is the one the system now reports:
 
 ## 7. Proof
 
-- **Harness:** `tests/pricing_foundation_proof.js` — **52 passed, 0 failed**
+- **Harness:** `tests/proofs/pricing_foundation_proof.js` — **52 passed, 0 failed**
   against live Neon.
 - **HTTP:** `GET /operator/pricing/effective` → 200 as the QA operator.
   `absence.reason = no_published_pricing_version`, 9 governed types,

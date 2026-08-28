@@ -37,7 +37,7 @@
    of completion_photo or completion_note. Presence (`IS NOT NULL`) is
    permitted and is checked; contents are not. Enforced by review against
    docs/RELEASE_0_AUDIT_PLAN.md §5 and by
-   tests/release0_audit_forbidden_fields.test.js, which reads this file's
+   tests/unit/release0_audit_forbidden_fields.test.js, which reads this file's
    own source.
 
    ── DETERMINISM ─────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ Defects found by evidence, whose repair requires a ruling this thread does not
 have the authority to make. Nothing here is fixed. Nothing here is folded into
 the branch that exposed it.
 
-Both items below were surfaced by repairing `tests/test_conversion_rail.db.js`,
+Both items below were surfaced by repairing `tests/proofs/test_conversion_rail.db.js`,
 which had been **dead for 204 commits** — it threw at build time before any
 assertion ran, and reported nothing an eye would flag. Neither defect is caused
 by the branch that found them; both predate it on `main`. The dead harness was
@@ -62,7 +62,7 @@ So a crossed follow-up window records nothing at all.
 
 ### Why it stayed invisible
 
-`tests/test_conversion_rail.db.js` scenario 8 is the only thing that exercises
+`tests/proofs/test_conversion_rail.db.js` scenario 8 is the only thing that exercises
 the missed path, and that harness had not run since the closure-authority guard
 was introduced. Absence of red was mistaken for green.
 
@@ -146,7 +146,7 @@ overloading lifecycle status.
 
 Closed when a crossed recovery window writes durable history — event plus
 threshold plus timestamp — the lifecycle status is left intact, and
-`tests/test_conversion_rail.db.js` scenario 8 asserts the two-axis model rather
+`tests/proofs/test_conversion_rail.db.js` scenario 8 asserts the two-axis model rather
 than a `missed` lifecycle value. **Scenario 8's current assertion
 (`ob.status === "missed"`) encodes the rejected model and must itself be
 rewritten as part of that slice.**
@@ -246,7 +246,7 @@ against resolved ownership.
 
 ### Pinned, not certified
 
-`tests/test_conversion_rail.db.js` scenario 4b pins the observed value as
+`tests/proofs/test_conversion_rail.db.js` scenario 4b pins the observed value as
 **attribution only**, with an explicit comment that downstream ownership
 semantics remain unresolved. It does not certify current behavior as correct.
 

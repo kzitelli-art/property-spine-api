@@ -15,7 +15,7 @@
 const path = require("path");
 const ROOT = path.join(__dirname, "..", "..");
 const { Pool } = require(path.join(ROOT, "node_modules", "pg"));
-const buildStaffBridge = require(path.join(ROOT, "src/identity/staffbridge.js"));
+const buildStaffBridge = require(path.join(ROOT, "src/identity/staff_bridge.js"));
 const { resolveAuthority } = require(path.join(ROOT, "src/identity/authority_resolution.js"));
 const { pricingAuthority } = require(path.join(ROOT, "src/money/pricing_authority.js"));
 const { resolveSpaceEconomics } = require(path.join(ROOT, "src/money/effective_pricing.js"));

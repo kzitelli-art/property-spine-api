@@ -185,18 +185,18 @@ contact; `HARNESS_DATABASE_URL` only, no fallback.
 
 | Harness | Result | Exit |
 |---|---|---|
-| `tests/migration_ledger_verdict.test.js` (decision logic, DB-free) | **40 run · 40 passed · 0 failed** | 0 |
-| `tests/migration_ledger_inverse_gate.db.js` (real Postgres, read-only role) | **24 run · 24 passed · 0 failed** | 0 |
+| `tests/unit/migration_ledger_verdict.test.js` (decision logic, DB-free) | **40 run · 40 passed · 0 failed** | 0 |
+| `tests/proofs/migration_ledger_inverse_gate.db.js` (real Postgres, read-only role) | **24 run · 24 passed · 0 failed** | 0 |
 
 Regression — unchanged by this work:
 
 | Harness | Result | Exit |
 |---|---|---|
-| `tests/migration_release_gate.test.js` (ITEM 5) | 11 passed · 0 failed | 0 |
-| `tests/obligation_engine_one_implementation.test.js` | 14 passed · 0 failed | 0 |
-| `tests/obligation_engine_import_smoke.test.js` | pass | 0 |
-| `tests/gate_closure_boundary.js` | PASS | 0 |
-| `tests/gate_no_raw_bridge_joins.js` | PASS | 0 |
+| `tests/unit/migration_release_gate.test.js` (ITEM 5) | 11 passed · 0 failed | 0 |
+| `tests/unit/obligation_engine_one_implementation.test.js` | 14 passed · 0 failed | 0 |
+| `tests/unit/obligation_engine_import_smoke.test.js` | pass | 0 |
+| `tests/gates/gate_closure_boundary.js` | PASS | 0 |
+| `tests/gates/gate_no_raw_bridge_joins.js` | PASS | 0 |
 
 The real-database harness runs `migrate.js` as a child process through a role
 created with `default_transaction_read_only = on` and no write grants, and

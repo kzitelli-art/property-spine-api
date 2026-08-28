@@ -78,8 +78,8 @@ silently disabling a send mode is the runner deciding what the evidence means.
 ## 5. FIRST — repair the two unsafe harnesses (merge requirement)
 
 ```text
-tests/work_order_authority_proof.js
-tests/work_order_canonical_path_proof.js
+tests/proofs/work_order_authority_proof.js
+tests/proofs/work_order_canonical_path_proof.js
 ```
 
 Both read `process.env.DATABASE_URL` **directly** — no guard, no run receipt —
@@ -106,7 +106,7 @@ executed is a claim, not a control — the failure this repository has recorded
 three times.
 
 When repaired, **remove both entries from `FROZEN_INVENTORY`** in
-`tests/gate_harness_isolation.js`; the gate fails if a repaired entry is left
+`tests/gates/gate_harness_isolation.js`; the gate fails if a repaired entry is left
 behind, so the register shrinks honestly.
 
 ---
@@ -116,7 +116,7 @@ behind, so the register shrinks honestly.
 One governed command:
 
 ```bash
-HARNESS_DATABASE_URL="postgres://…" node tests/slice_a_full_schema_suite.js
+HARNESS_DATABASE_URL="postgres://…" node tests/scenarios/slice_a_full_schema_suite.js
 ```
 
 ```text
@@ -160,7 +160,7 @@ REPAIRED     work_order_authority_proof.js
                via runner      exit ____
              FROZEN_INVENTORY entries removed?  ____
 
-SUITE        tests/slice_a_full_schema_suite.js   exit ____
+SUITE        tests/scenarios/slice_a_full_schema_suite.js   exit ____
                resident_sms_work_order_proof.js          exit ____
                resident_sms_route_proof.js               exit ____
                work_order_authority_proof.js             exit ____

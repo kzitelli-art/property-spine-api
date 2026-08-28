@@ -114,9 +114,9 @@ Real Postgres 16.13, real HTTP, real constraints. **42 assertions, 0 failures**,
 both harnesses re-runnable against the same database.
 
 ```
-tests/property_creation_canonical.db.js    25 run · 25 passed · 0 failed
-tests/property_creation_http.db.js         17 run · 17 passed · 0 failed
-tests/gate_property_creation_paths.js      17 run · 17 passed · 0 failed
+tests/proofs/property_creation_canonical.db.js    25 run · 25 passed · 0 failed
+tests/proofs/property_creation_http.db.js         17 run · 17 passed · 0 failed
+tests/gates/gate_property_creation_paths.js      17 run · 17 passed · 0 failed
 ```
 
 **The DB harness (the service).** Authority containment A1–A6 including the

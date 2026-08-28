@@ -36,7 +36,7 @@ const { computeOnboardingState } = require("../onboarding/onboarding_funnel"); /
 module.exports = function desksModule({ pool }) {
   const router = express.Router();
 
-  // Same fail-closed operator gate as tenantlink/board. (Phase 0 auth
+  // Same fail-closed operator gate as tenant_link/board. (Phase 0 auth
   // pass should centralize this — third copy is the signal.)
   function requireOperator(req, res, next) {
     const expected = process.env.OPERATOR_KEY;

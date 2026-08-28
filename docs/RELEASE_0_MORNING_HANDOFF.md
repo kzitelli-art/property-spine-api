@@ -74,8 +74,8 @@ NEW   docs/release-0-audit/RECEIPT_TEMPLATE.md         for the real run
 NEW   docs/release-0-audit/isolated_run.txt            raw tool output
 NEW   tests/fixtures/release0_audit_populations.sql    edge populations
 NEW   tests/fixtures/release0_audit_schema.sql         faithful schema subset
-NEW   tests/release0_audit_forbidden_fields.test.js    §5 enforcement
-NEW   tests/release0_readonly_ordering.test.js         ordering regression guard
+NEW   tests/unit/release0_audit_forbidden_fields.test.js    §5 enforcement
+NEW   tests/unit/release0_readonly_ordering.test.js         ordering regression guard
 NEW   tools/release0_proof_audit.js                    the instrument
 
 MOD   tools/ledger_reconcile.js                        ordering + guarded connect
@@ -117,7 +117,7 @@ asserted:
 the query set                                   untouched
 docs/RELEASE_0_AUDIT_PLAN.md                    untouched
 tests/fixtures/release0_audit_*.sql             untouched
-tests/release0_audit_forbidden_fields.test.js   untouched
+tests/unit/release0_audit_forbidden_fields.test.js   untouched
 ```
 
 Only statement ordering, connection-failure handling, their comments, the two
@@ -156,7 +156,7 @@ EXIT  COMMAND
    1  node <falsified test: completion_note injected into C0>
    1  psql -c "delete from work_orders"             (as release0_auditor)
         → ERROR: permission denied for table work_orders
-   0  node tests/release0_audit_forbidden_fields.test.js       24 passed · 0 failed
+   0  node tests/unit/release0_audit_forbidden_fields.test.js       24 passed · 0 failed
    0  node tests/verify_source_governance.js        7 gates, all exit 0
    0  git push -u origin claude/release-0-audit-plan-55r5kd    ×4
 
@@ -202,7 +202,7 @@ EXIT  COMMAND
    2  falsified ledger_reconcile              5 statements, probe only
    2  ledger_reconcile, unreachable database  refuses in its own voice
    2  ledger_reconcile, DATABASE_URL unset
-   0  node tests/release0_readonly_ordering.test.js   18 passed · 0 failed
+   0  node tests/unit/release0_readonly_ordering.test.js   18 passed · 0 failed
    1  falsified: identity query moved back above the read-only begin
         → 3 assertions fire, and they are the right 3
    0  regression: findings byte-identical, --json digest unchanged b73aada8,

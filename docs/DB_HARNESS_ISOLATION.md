@@ -24,7 +24,7 @@ acceptable test environment.** They make the pollution quieter.
 services* are inferred from the call graph and must be confirmed by the
 read-only queries in §1.4 before any cleanup plan is drafted.
 
-### 1.1 `tests/test_conversion_rail.db.js` — per run
+### 1.1 `tests/proofs/test_conversion_rail.db.js` — per run
 
 | Table | Count | Values written |
 |---|---|---|
@@ -48,7 +48,7 @@ person row, its user row, `Priya Raman`, and one conversion with its rung,
 ledger and event rows.** That is my addition to the contamination and it should
 be counted as such.
 
-### 1.2 `tests/test_identity_bridge.db.js` — per run
+### 1.2 `tests/proofs/test_identity_bridge.db.js` — per run
 
 | Table | Count | Values written |
 |---|---|---|
@@ -63,7 +63,7 @@ be counted as such.
 | `user_person_bridge_audit` | many | one per link/relink/unlink, plus `request_id` idempotency keys |
 | `person_contexts` | ~8 | `context_type='staff'` |
 
-### 1.3 `tests/test_release3.db.js` — per run
+### 1.3 `tests/proofs/test_release3.db.js` — per run
 
 | Table | Count | Values written |
 |---|---|---|
@@ -232,7 +232,7 @@ That is evidence of an unsafe **capability**. It is **not** evidence that every
 script has executed against production, nor that every one has caused pollution.
 Do not overstate it in either direction.
 
-## Enforcement — `tests/gate_harness_isolation.js`
+## Enforcement — `tests/gates/gate_harness_isolation.js`
 
 A receipt-bearing gate classifies every script under `tests/` and `tools/` **by
 behaviour, never by filename**:

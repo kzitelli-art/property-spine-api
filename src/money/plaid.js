@@ -3,7 +3,7 @@
 //
 // THE ONE IDEA: Plaid is not a new bank pipeline. The manual path today is
 //   bank PDF → typed lines → POST /bank/accounts/:id/transactions
-// (bankintake.js, migration 012). Plaid replaces the TYPING: it pulls the
+// (bank_intake.js, migration 012). Plaid replaces the TYPING: it pulls the
 // same statement lines from the bank over an API and lands them in the same
 // bank_transactions table, in the same { txn_date, amount, description,
 // txn_type } shape. The instant a row lands, the existing engine —
@@ -14,7 +14,7 @@
 //   2. maps Plaid's reported sub-accounts to OUR bank_accounts rows
 //   3. on demand, pulls new transactions and normalizes them into the
 //      existing claim shape, then routes them through the SAME staging
-//      logic bankintake.js uses.
+//      logic bank_intake.js uses.
 //
 // CREDENTIAL DISCIPLINE (hard):
 //   • PLAID_CLIENT_ID / PLAID_SECRET live in Render env vars, NEVER in code
@@ -32,7 +32,7 @@
 //
 // SIGNED-AMOUNT TRANSLATION (the one real gotcha):
 //   Plaid: amount POSITIVE means money LEFT the account (a debit).
-//   Spine: amount NEGATIVE means money out (bankintake.js convention).
+//   Spine: amount NEGATIVE means money out (bank_intake.js convention).
 //   So spine_amount = -plaid.amount. Proven against the 012 schema comment:
 //   "positive = credit (money in), negative = debit (money out)."
 //
@@ -84,7 +84,7 @@ function plaidClient() {
 // existing engine's job — we do not re-implement an inch of it.
 function plaidTxnType(pt) {
   // Plaid signals the rail via payment_channel + transaction_code. Map to
-  // the bankintake.js enum: check | ach | wire | card | deposit | fee | other.
+  // the bank_intake.js enum: check | ach | wire | card | deposit | fee | other.
   const channel = (pt.payment_channel || "").toLowerCase();
   const code = (pt.transaction_code || "").toLowerCase();
   const name = (pt.name || "").toLowerCase();
@@ -295,7 +295,7 @@ module.exports = function plaidModule({ pool }) {
   // The pull. Calls /transactions/sync with the saved cursor (page until
   // has_more is false), normalizes every ADDED transaction into the Spine
   // claim shape, groups by mapped bank account, and routes each group
-  // through the SAME insert logic bankintake.js uses — so identification,
+  // through the SAME insert logic bank_intake.js uses — so identification,
   // exception flags, and idempotency all apply identically. Transactions
   // from UNMAPPED Plaid accounts are reported as skipped, never guessed.
   //
@@ -399,7 +399,7 @@ module.exports = function plaidModule({ pool }) {
 
 // ── shared staging helper ─────────────────────────────────────────────
 // One source of truth for "a bank line becomes a claim." This is the SAME
-// logic POST /bank/accounts/:id/transactions runs in bankintake.js: the
+// logic POST /bank/accounts/:id/transactions runs in bank_intake.js: the
 // alias-match identification, the unresolved-queue auto-register, the
 // exception flags, and the idempotent insert keyed on
 // (bank_account_id, txn_date, description, amount). Kept here as a local

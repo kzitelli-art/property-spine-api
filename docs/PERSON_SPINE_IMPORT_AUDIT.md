@@ -7,7 +7,7 @@ residents"* — it is *"how does a resident arriving in an external rent roll
 enter the durable Person architecture that already exists, and where is the
 first exact divergence."*
 
-Method: `tests/person_spine_import_audit.db.js` runs the **real** import path
+Method: `tests/proofs/person_spine_import_audit.db.js` runs the **real** import path
 (`snapshot_loader.loadSnapshot`) against real Postgres, then interrogates the
 result with the **real** canonical reads — the Person Card's own property-wall
 SQL, `relationship_stage.js`, and the three lookup keys from

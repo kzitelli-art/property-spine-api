@@ -20,7 +20,7 @@
 
    ── WHY IT READS DATABASE_URL DIRECTLY ──────────────────────────────
    Because production is the subject. Registered as PRODUCTION_APPROVED in
-   tests/gate_harness_isolation.js with that reason. It is read-only by
+   tests/gates/gate_harness_isolation.js with that reason. It is read-only by
    construction, which is what makes the approval defensible.
 
    ── WHAT IT WILL TELL YOU ───────────────────────────────────────────

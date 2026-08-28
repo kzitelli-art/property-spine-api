@@ -182,7 +182,7 @@ be retired, is recorded as an open question below and was not otherwise investig
 > and can never be `'ready'`. The `turnComplete` branch was unreachable; `ready` became
 > unreachable with it; **`marketable_now` would have gone to zero portfolio-wide.**
 >
-> Worse, it would have shipped green: `tests/cross_surface_invariants.js:163` defines
+> Worse, it would have shipped green: `tests/scenarios/cross_surface_invariants.js:163` defines
 > `marketable` as requiring `physical_readiness === "ready"`, so with `ready`
 > unreachable the marketable set is empty and every *"X is never marketable"* assertion
 > passes **vacuously**. Same at `availability_canonical_proof.js:59`.

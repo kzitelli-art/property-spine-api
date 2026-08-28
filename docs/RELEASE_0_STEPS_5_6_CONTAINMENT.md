@@ -233,6 +233,6 @@ Found while doing this, not pursued — none blocks correctness or safety here:
 · property-spine-app has ~20 *.test.js files at the repo root and no runner
   registering them. A gate nobody invokes is documentation — the exact
   failure the API's verify_source_governance.js exists to fix.
-· tests/tenant_setup_page_parses.test.js (API) is not registered in
+· tests/unit/tenant_setup_page_parses.test.js (API) is not registered in
   verify_source_governance.js, so it runs only if someone remembers.
 ```

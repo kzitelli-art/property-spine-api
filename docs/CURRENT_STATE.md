@@ -108,19 +108,47 @@ with evidence — which is the failure this file exists to end.
 
 ---
 
+## STRUCTURE THREAD — 2026-08-27 (file renames, server.js decomposition, tests reorg)
+
+A structure-only thread. **No route path changed, no mount order changed, no
+behavior changed by intent.** Proof: route-registration inventory extracted from
+`git show HEAD:server.js` vs the new structure is set-identical (36 moved
+registrations, 1:1, only `app.*` → `router.*` prefixes differ), and
+`./tests/e2e/verify_all.sh` ran **ALL PROOFS PASSED** against a real local
+Postgres 16 (schema built from the real migration chain via
+`tests/e2e/apply_migrations.sh`) — twice, before and after the test reorg.
+Browser rung SKIPPED locally (no Chromium) — same honest skip CI reports.
+
+What moved:
+
+| Change | Detail |
+|---|---|
+| 20 `src/` files renamed | fused/camelCase → snake_case: `leasingleads.js` → `leasing_leads.js`, `teamaccess.js` → `team_access.js`, `leasingShadowImport.js` → `leasing_shadow_import.js`, etc. Full list in git history. Two **pinned git-history references** inside tests (`git show <sha>:src/comms/tenantlink.js` in the conversation gates) initially corrupted by the sweep — restored; pinned SHAs keep the pre-rename path on purpose |
+| `server.js` 3,648 → 836 lines | Inline blocks extracted **verbatim** per the organ pattern (docs/architecture.md): Release-0 baseline routes → `src/baseline/baseline_routes.js` (NOT `src/release0/` — that dir is the dormant activation boundary, enforced by `gate_activation_dormant.js`); lease lifecycle → `src/tenancy/lease_lifecycle_routes.js`; AI ingest pipeline + routes → `src/agent/document_ingest.js` + `document_ingest_routes.js`; space-position read → `src/tenancy/space_position_routes.js`; sms-proof → `src/comms/sms_proof_route.js`. Each mount sits at the exact line position its inline block occupied |
+| `tests/` reorganized | 290 flat files moved by their existing naming conventions: `gates/` (14) · `proofs/` (68 `*.db.js` + 89 `*_proof.js`) · `unit/` (90 `*.test.js`) · `arcs/` (4) · `scenarios/` (25) · `e2e/`, `fixtures/`, `support/`, `_engine.js`, `_run_receipt.js`, `verify_source_governance.js` unchanged. Runner resolves bare names from `gates/` and slash entries from `tests/` root. CI and `verify_all.sh` needed no changes (they reference only `e2e/` + the runner) |
+
+Rung reality check, stated honestly: the 12 e2e proofs exercise the server and a
+slice of the moved routes end-to-end; the other moved routes are proven by the
+inventory-identity argument plus the 38 gates, not by individual HTTP proofs.
+`gate_property_creation_paths.js` caught a real extraction miss (the baseline
+block's `propertyCreation` dependency) — the gate discipline is load-bearing.
+
+---
+
 ## ⛔ KNOWN LIVE DEFECTS
 
 | # | Defect | Evidence |
 |---|---|---|
+| 28 | **`migrations/migrate.js` hardcodes SSL, so `--apply` cannot build a schema on a local non-SSL Postgres.** Found while building a local harness DB for the structure thread's real-Postgres proof. Same defect class the `src/shared/database_ssl.js` header documents (the rule lives where only one file can reach it) — but this one is the migration runner itself. Production (Neon, SSL) and CI are unaffected; the documented disaster-recovery path (defect #22) is the story this compounds. Fix: use `databaseSsl()` in migrate.js, not a hardcoded `ssl` object. | `migrations/migrate.js:173` — `new Client({ connectionString: url, ssl: { rejectUnauthorized: false } })` |
 | 1 | **DEPLOYED, 2026-08-20 — NOT YET `PRODUCTION_PROVEN`.** ~~The leasing agent quotes `units.market_rent` directly to prospects~~ — fixed (PR #128), and now live in production at commit `bcd3089` (main's head at deploy time), deployed manually from the Render dashboard, confirmed live by the owner directly. **Deploying is not proving** — nobody has yet asked the live agent a price question and observed a governed answer or an honest handoff. That single observation is what moves this row to `PRODUCTION_PROVEN`; until then it stays at the rung the e2e proof earned. | `git show origin/main:src/agent/agent.js`; deploy confirmed by owner |
 | 2 | **PARTLY FIXED — and this row was itself stale, corrected 2026-08-20.** `docs/deployment.md:51` **now reads correctly**: *"prestart: node migrations/migrate.js (VERIFIES the schema — applies nothing)"*, with line 58 explicitly recording the correction. Somebody fixed it and this file didn't notice — exactly the decay this file exists to prevent, caught by wave 3's critic. **The falsehood survives elsewhere**: `migrations/README.md:36` still says migrate.js *"runs whatever hasn't run yet. Safe to run as many times as you want"* — a migration-001-era document still instructing hand-run production migrations. Fix that file, not `deployment.md`. | `migrations/README.md:36` (still wrong); `docs/deployment.md:51,58` (fixed) |
 | 3 | **An operator screen calls routes that 404.** A whole activation flow written, never mounted. | `src/identity/activation.js`; `grep -c "identity/activation" server.js` = **0** |
-| 4 | **A test defaults to hitting PRODUCTION**, with no run receipt anywhere. | `tests/full_lifecycle_arc.js:47` |
+| 4 | **A test defaults to hitting PRODUCTION**, with no run receipt anywhere. | `tests/arcs/full_lifecycle_arc.js:47` |
 | 5 | **Ask Spine has two obligation readers** (§7 violation). Its own header: *"Its QUERY LOGIC is sound and is re-expressed here."* | `src/agent/ask_spine_service.js` |
-| 6 | **The §40.11 gate scans 2 of ~15 domain dirs** — `["src/asset","src/tenancy"]`. Leasing, applications, maintenance, technician, comms, obligations, money, onboarding, **and now `src/meeting_evidence/`** cannot fail it. | `tests/gate_ask_spine_readers.js:100` |
+| 6 | **The §40.11 gate scans 2 of ~15 domain dirs** — `["src/asset","src/tenancy"]`. Leasing, applications, maintenance, technician, comms, obligations, money, onboarding, **and now `src/meeting_evidence/`** cannot fail it. | `tests/gates/gate_ask_spine_readers.js:100` |
 | 7 | **RESOLVED, 2026-08-20 (PR #128).** ~~Production does not run `main`~~ — the branch production was deployed from (`30cb992`) is now confirmed an ancestor of `main`, and `main`'s migration files run through 187, matching what's reportedly released to production. `main` should now boot cleanly against the live database. **Not yet re-verified end to end after this merge** — the next real deploy is the actual test of this, not a git check. | `git merge-base --is-ancestor 30cb992 origin/main` → **YES** (was NO as of 2026-08-19/20 morning) |
 | 8 | **A signed-in operator's Invite button silently fakes success.** The app only calls the real invite route `if(key())` — a hidden, `aria-hidden` field populated *only* from an internal-only key in `localStorage` that the real SMS sign-in flow never sets. Without it, the button pushes a fake row and shows: *"Demo invite pending locally. Add an operator key to create a live invite."* This is the exact mechanism behind "no staff member other than the account owner has ever completed a real invite," and it's a direct violation of CLAUDE.md's own non-negotiable — *"Never fixture-fallback... in a signed-in operator workflow."* | `main-app/index.html:12152-12178` (`inviteTeamMember`), `:5953` (`#opKey`), `:8024` (`key()`) |
-| 9 | **The team roster read has no property-scope check — unlike every sibling route in the same file.** `GET /properties/:id/team` sits behind the shared `x-operator-key` gate (not public), but performs *no* staff-session resolution and *no* check that the key-holder has any relationship to the `:id` in the URL. Any operator-key holder can read any property's full roster — names, phones, emails — by changing the URL. | `src/identity/teamaccess.js` — roster handler, compare to `my-access`'s enforced *"BRICK ONE property wall"* two routes below it |
+| 9 | **The team roster read has no property-scope check — unlike every sibling route in the same file.** `GET /properties/:id/team` sits behind the shared `x-operator-key` gate (not public), but performs *no* staff-session resolution and *no* check that the key-holder has any relationship to the `:id` in the URL. Any operator-key holder can read any property's full roster — names, phones, emails — by changing the URL. | `src/identity/team_access.js` — roster handler, compare to `my-access`'s enforced *"BRICK ONE property wall"* two routes below it |
 | 10 | **Two inbound Twilio SMS webhooks, two different security postures.** `/communications/inbound-sms` documents itself as fail-closed on signature verification. `/intake/twilio` (a second, separate webhook) is gated only by a phone-number allowlist (`INTAKE_ALLOWED_NUMBERS`) — no signature check found. | `src/onboarding/intake.js:220` vs `src/comms/communications_boundary.js` |
 | 11 | **`CLAUDE.md`'s own deploy description doesn't match reality.** States *"Deploys to Render on merge to main,"* which reads as automatic push-to-deploy. The actual mechanism is `deploy.sh` — a manual script calling Render's API directly, run by a human. If it's meant to be automatic, it currently isn't. | `deploy.sh` vs `CLAUDE.md`'s "Repo orientation" section |
 | 12 | **RULED 2026-08-20 — ACCEPTED AS INTENDED, WITH A REVISIT TRIGGER.** ~~A real hole in published-pricing immutability~~ — `delete from properties` cascades through the freeze that direct term deletion correctly refuses. Owner's ruling: **allow it for now.** Deleting a property should delete its pricing. **Revisit trigger, stated by the owner: "when we start dealing with more real properties."** Recorded rather than closed, because the day that trigger fires, this becomes a schema change nobody will remember was a deliberate choice. | `tests/e2e/agent_pricing_wall.e2e.js` teardown comments |
@@ -134,14 +162,14 @@ with evidence — which is the failure this file exists to end.
 | 18 | **RULED 2026-08-20 — DELIBERATE, NOT AN OVERSIGHT.** `main` is not branch-protected, so a red CI does not block a merge. Owner's ruling: **not yet.** Recorded so nobody "fixes" it as a bug later without knowing it was a choice. ⚠ **This ruling makes #17 cheap and safe**: wiring the unrun tests into CI can only inform, never block a merge — so turning them on carries no delivery risk today. If branch protection is ever turned on, revisit #17's status first. | GitHub branches API — every branch sampled returns `"protected": false` |
 | 19 | **The fake-pool population is 10 files, not 3.** Seven were previously unnamed. Definition: a real Express router on a real socket driven by real `fetch`, with a hand-built object passed as `pool` and no `require("pg")` in the file. All ten opened and confirmed individually. Includes `ask_spine_http_proof.js:61` (`const pool = { async query(...) }` mounted at `:99` against *"the REAL router"*). Any rung resting on one of these is `LOCALLY_EXERCISED`, not `HTTP_PROVEN`. | wave 3 census; `docs/current-state-build/06_WAVE3_RESULTS.md` |
 | 20 | **47 test files are pinned to a hardcoded demo property UUID; 42 never create it, and no migration inserts it.** `a50fbdd0-3642-431e-b532-0dcd6ab8a4fe` ("Property Spine Demo Building"). The migration chain only references or `UPDATE`s it — never inserts. So 42 files must find a row that nothing in the repo guarantees exists. **This supersedes defect #13's "four dead tests"** — that was the visible tip; the real number is 47 pinned, 42 unguaranteed. | `src/surfaces/owner.js:171`; `src/leasing/demo_preflight.js:20`; migrations 073/087/123 reference-only |
-| 21 | **PROVEN DEAD BY EXECUTION — two test files can never pass again.** `tests/pricing_guards_proof.js` asserts a guard is ABSENT at `git show HEAD:` — valid only while the fix sat uncommitted; the fix is now at HEAD, so four assertions are permanently false. `tests/operator_language_proof.js` bounds a diff against pinned SHA `62b25e8` and asserts *"exactly one migration file added"* — 61 have landed since. Both are database-free and were **re-executed verbatim at `b7720b2`** to confirm, not inferred. | `tests/pricing_guards_proof.js:33,47`; `tests/operator_language_proof.js:428,439-443` |
+| 21 | **PROVEN DEAD BY EXECUTION — two test files can never pass again.** `tests/proofs/pricing_guards_proof.js` asserts a guard is ABSENT at `git show HEAD:` — valid only while the fix sat uncommitted; the fix is now at HEAD, so four assertions are permanently false. `tests/proofs/operator_language_proof.js` bounds a diff against pinned SHA `62b25e8` and asserts *"exactly one migration file added"* — 61 have landed since. Both are database-free and were **re-executed verbatim at `b7720b2`** to confirm, not inferred. | `tests/proofs/pricing_guards_proof.js:33,47`; `tests/proofs/operator_language_proof.js:428,439-443` |
 | 22 | **The documented from-scratch schema build does not work.** `migrations/migrate.js --apply` — the exact command the tool's own refusal message tells you to run — cannot build the schema from an empty database. It stops at `083_terms_review_and_packet_versioning.sql`. This is the documented disaster-recovery path. | wave 3 critic; `migrations/migrate.js`, `migrations/083_*.sql` |
 | 23 | **The app repository has no CI at all.** No `.github` directory, no workflow files. Its **23 browser proofs and 34 test harnesses run only when a human runs them** — including every browser proof backing a `BROWSER_VERIFIED` rung in this file. | `main-app/` — no `.github`; `ls *.browser.js` = 23 |
 | 24 | **`property_controls` — a complete compliance/licensing schema built in migration 001 that the Compliance domain built again in migration 168 never mentions.** Zero references in `src/` or `server.js`. Three sibling tables from `001_baseline.sql` are also fully orphaned: `bids`, `documents`, `inventory`. **This is the exact "rebuilt what already existed" failure this whole document was created to stop — found in the schema, 167 migrations apart.** | `migrations/001_baseline.sql` vs `migrations/168_compliance_canonical_truth.sql` |
 | 25 | **51 of the 65 environment variables the code actually reads are documented nowhere.** `.env.example` documents 15. Several already known to change real behavior (`EXECUTED_LEASE_INTAKE_ENABLED`, `COMMITMENT_LEDGER_MODE`, `DEMO_MODE`). Which properties have which capability enabled is knowable only by reading the live Render dashboard against seven separate source files. | `grep -o "process\.env\.[A-Z_]*"` across `src/`, `server.js`, `migrations/` = 65 distinct; `.env.example` = 15 |
 | 26 | **`DEMO_MODE` boot hook writes durable rent-roll data while bypassing the synthetic-data perimeter its own sibling routes enforce.** In `src/shared/`, beside a fixture-injection door wired to a button in the signed-in operator UI. Directly contradicts the non-negotiable *"Demo data may exist. Demo paths may not."* | `src/shared/` — see `06_WAVE3_RESULTS.md`; `src/shared/synthetic_data_perimeter.js` |
 
-**Correction, not a new defect — the exclusion wall is better than earlier feared, for one route.** `tests/phase_zero_property_boundary.db.js` genuinely proves, with real Postgres and real HTTP, that a second real user without a property assignment is refused by the property-switcher (`GET/POST /operator/properties[/select]`). The earlier "only tested from inside" concern was wrong for *that* route — but confirmed true, and worse than described, for the roster route above (defect #9): not "only tested from inside," not tested at all, and structurally missing the check its own sibling routes have.
+**Correction, not a new defect — the exclusion wall is better than earlier feared, for one route.** `tests/proofs/phase_zero_property_boundary.db.js` genuinely proves, with real Postgres and real HTTP, that a second real user without a property assignment is refused by the property-switcher (`GET/POST /operator/properties[/select]`). The earlier "only tested from inside" concern was wrong for *that* route — but confirmed true, and worse than described, for the roster route above (defect #9): not "only tested from inside," not tested at all, and structurally missing the check its own sibling routes have.
 
 ---
 
@@ -192,7 +220,7 @@ outside this tree, not treated as confirmed.**
 | Equity — canonical domain | `HTTP_PROVEN` | registered | PR #114. `equity_routes_http.db.js`: real `pg.Pool`, real router, real socket, canonical writers, serialized reads. Migration 174 released; **zero production rows, correctly** |
 | Equity — Ask Spine reader | `LOCALLY_EXERCISED` | registered | PR #114. Test *"FAKES THE SAME TWO FUNCTIONS THE CAPITAL STACK UI CALLS"* — no real Ask Spine HTTP/DB proof |
 | Equity — ownership reconciliation | `LOCALLY_EXERCISED`/`HTTP_PROVEN` split | registered | PR #114. Real Postgres proves a 77.57% schedule stays `INCOMPLETE` (`equity_position_falsification.db.js`); the real-HTTP test only proves the `NOT_ESTABLISHED` case, not populated reconciliation. *"`accrued_preferred_return` is always `NOT_ESTABLISHED` for every preferred position, unconditionally, for Build 1."* Governing source clause pending |
-| Funding boundary wall | enforced | — | `tests/gate_funding_boundary.js` — tax/insurance funding cannot cross into economics |
+| Funding boundary wall | enforced | — | `tests/gates/gate_funding_boundary.js` — tax/insurance funding cannot cross into economics |
 
 ## Leasing lifecycle — `src/{leasing,applications,tenancy,onboarding}/`
 
@@ -201,11 +229,11 @@ outside this tree, not treated as confirmed.**
 | Capability | Rung | Files / note |
 |---|---|---|
 | **Deal Setup / Opening Tenancy** | `HTTP_PROVEN` + `BROWSER_VERIFIED` | `deal_setup_http.db.js` **spawns real `server.js`**, real socket, restart persistence. **Best-proven capability in the repo** |
-| Lead intake | `LOCALLY_EXERCISED` | `leasingleads.js` |
+| Lead intake | `LOCALLY_EXERCISED` | `leasing_leads.js` |
 | Tours / appointment attribution | `LOCALLY_EXERCISED` | `appointment_attribution.js`, `appointment_journey.js`, `tour_outcome.js` |
 | `tour_chips` · `capture_chase` · `capture_receipt` | `BUILT_BUT_DORMANT` | **no caller in `src/` or `server.js`** |
-| Post-tour conversion rail | `LOCALLY_EXERCISED`; one seam `HTTP_PROVEN` | `leasingconversion.js`. **BLOCKING ruling open** on `conversation_owner_user_id` |
-| AI Leasing Strategy | `LOCALLY_EXERCISED` | ⚠ docs say *dormant*; code is wired into the live first-response path (`leasingleads.js:614`). **Unresolved** |
+| Post-tour conversion rail | `LOCALLY_EXERCISED`; one seam `HTTP_PROVEN` | `leasing_conversion.js`. **BLOCKING ruling open** on `conversation_owner_user_id` |
+| AI Leasing Strategy | `LOCALLY_EXERCISED` | ⚠ docs say *dormant*; code is wired into the live first-response path (`leasing_leads.js:614`). **Unresolved** |
 | Leasing Desk | `LOCALLY_EXERCISED` | `leasing_desk.js`, `leasing_desk_loader.js`. Handoff claims HTTP proof; file inspection contradicts it |
 | Application submission / lifecycle | `LOCALLY_EXERCISED` | `application_lifecycle.js`. **Migration 125 does not exist** (124→126) |
 | Application target authority (unit/bed) | `LOCALLY_EXERCISED` | `application_target_authority.js`. Unit with >1 space → 409 refusal |
@@ -237,7 +265,7 @@ outside this tree, not treated as confirmed.**
 | **Turnovers / move-out** | `HTTP_PROVEN` | `turnover_service.js`, `operator_turnover.js`. **Exists — do not rebuild** |
 | Unit triage · turn scope · work acceptance · readiness | real-DB service layer, **no HTTP harness** | `unit_triage_service.js`, `unit_turn_scope_service.js`, `work_acceptance_service.js`, `readiness_service.js` |
 | Communications boundary | `HTTP_PROVEN` (line layer) | **SMS RAIL FROZEN** — *"no `operations` line row at all"* |
-| Tenant link (resident SMS) | `HTTP_PROVEN` | `tenantlink.js` |
+| Tenant link (resident SMS) | `HTTP_PROVEN` | `tenant_link.js` |
 | Move-in delivery correlation | `LOCALLY_EXERCISED` | `delivery.js` — test uses a **hand-mocked** `client.query` |
 | Prospect fact capture | `LOCALLY_EXERCISED` | `prospect_capture.js` |
 
@@ -254,7 +282,7 @@ producing a valid completion through it is not.
 | Legal entity primitive | `HTTP_PROVEN` + `BROWSER_VERIFIED` | `legal_entity_service.js` |
 | Ask Spine (slices 1–2) | `HTTP_PROVEN` | Gathers: `attention, work_orders, compliance, utility, contracted_service, equity, tenancy, debt`. ⚠ *"`references[]` IS NOT IN PRODUCTION"* |
 | Asset Management shell | `HTTP_PROVEN` + `BROWSER_VERIFIED` | `asset_management.js` 260/260. Property Expenses **capped** — can never read `established` |
-| Money events / accounting | `HTTP_PROVEN` | `money.js`, `bankbridge.js`, `plaid.js` — lifecycle-arc harnesses only |
+| Money events / accounting | `HTTP_PROVEN` | `money.js`, `bank_bridge.js`, `plaid.js` — lifecycle-arc harnesses only |
 | Governed pricing & charges (~26 files) | mixed | *"Everything else economic is **unpublished**."* `$99` admin fee **BLOCKED on one ruling** |
 | `concession_schedule_compiler` | `BUILT_BUT_DORMANT` | *"ACTIVATES NOTHING"*; `free_rent_period` *"SPECIFIED BUT NOT IMPLEMENTED"* |
 | `economic_adapter` · `pricing_adapter` | `BUILT_BUT_DORMANT` | *"DARK BY CONSTRUCTION."* **See defect #1** |

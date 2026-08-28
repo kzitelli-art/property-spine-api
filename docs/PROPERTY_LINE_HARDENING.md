@@ -151,7 +151,7 @@ migration will pick.
 
 ## 6. Proof
 
-`tests/property_line_hardening.db.js` — **41 run · 41 passed · 0 failed · exit 0**.
+`tests/proofs/property_line_hardening.db.js` — **41 run · 41 passed · 0 failed · exit 0**.
 PostgreSQL 16.13, isolated scratch database, `HARNESS_DATABASE_URL` only, no
 fallback, no production contact.
 

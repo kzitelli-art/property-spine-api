@@ -23,7 +23,7 @@ level and would merge alongside it:
 | Slice | Proof level |
 |---|---|
 | Resident SMS → work order | **Proven** — real Postgres + real HTTP |
-| Governed Operating Context (migration **121**) | **Locally exercised only.** Migration 121 has never been applied to any database. Its harness (`tests/ai_leasing_operating_context_proof.js`) contains zero `DATABASE_URL` references — it is pure/mock only. Its two DB triggers (`protect_ai_leasing_operating_rule_lineage`, the retirement-audit transition rule) have **never executed**. Its routes have never been called over authenticated HTTP. Its UI is explicitly not approved design. |
+| Governed Operating Context (migration **121**) | **Locally exercised only.** Migration 121 has never been applied to any database. Its harness (`tests/proofs/ai_leasing_operating_context_proof.js`) contains zero `DATABASE_URL` references — it is pure/mock only. Its two DB triggers (`protect_ai_leasing_operating_rule_lineage`, the retirement-audit transition rule) have **never executed**. Its routes have never been called over authenticated HTTP. Its UI is explicitly not approved design. |
 
 **Merging this branch merges an unapplied, never-executed migration.** That is
 not what the SMS proof gate was about, and it should not ride in on its
@@ -42,14 +42,14 @@ SMS SLICE (proven)
   src/shared/obligation_transitions.js       NEW — transitionObligation
   src/comms/communications_boundary.js       double-send guard
   server.js                                  engine import + injection
-  tests/resident_sms_work_order_proof.js     NEW
-  tests/resident_sms_route_proof.js          NEW
+  tests/proofs/resident_sms_work_order_proof.js     NEW
+  tests/proofs/resident_sms_route_proof.js          NEW
   docs/RESIDENT_SMS_WORK_ORDER_CONTRACT.md   NEW
 
 GOVERNED OPERATING CONTEXT (NOT proven — see above)
   migrations/121_ai_leasing_operating_context.sql
   src/leasing/ai_leasing_operating_context.js
-  tests/ai_leasing_operating_context_proof.js
+  tests/proofs/ai_leasing_operating_context_proof.js
   src/identity/operator.js                   ai-settings / ai-rules routes
   src/agent/agent.js                         operating-context injection
   src/leasing/leasingleads.js                first-response context
@@ -84,9 +84,9 @@ GOVERNED OPERATING CONTEXT (NOT proven — see above)
 
 | Layer | Command | Result |
 |---|---|---|
-| Pure | `node tests/resident_sms_work_order_proof.js` (Part A) | **15/15** |
+| Pure | `node tests/proofs/resident_sms_work_order_proof.js` (Part A) | **15/15** |
 | Real Postgres | same file, Part B | **78 passed / 0 failed** @ `d51443d` |
-| Real Postgres + real HTTP | `node tests/resident_sms_route_proof.js` | **31 passed / 0 failed** @ `7a1f213` |
+| Real Postgres + real HTTP | `node tests/proofs/resident_sms_route_proof.js` | **31 passed / 0 failed** @ `7a1f213` |
 | Regression (DB-free) | 35 harnesses | **28 green / 8 red — identical to baseline** |
 | App suite | `./run_harnesses.sh` | **753/753** |
 

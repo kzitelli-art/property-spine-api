@@ -27,7 +27,7 @@
 //         opens the transaction, calls the service, and commits/rolls
 //         back. The perimeter's server-derived actor is passed IN.
 //
-//  ── ERROR CONTRACT (house pattern — mirrors leasingleads.completeTourService) ─
+//  ── ERROR CONTRACT (house pattern — mirrors leasing_leads.completeTourService) ─
 //    Every controlled early-exit throws svcErr(status, body): an Error
 //    carrying { svc:true, http:<status>, body:<json> } — the EXACT
 //    response the route should send. The route translates with the same
@@ -75,7 +75,7 @@ module.exports = function tenancyAnchorService(deps) {
   }
 
   // ── service-error: carries the EXACT http status + json body the route
-  //    should send. Identical shape to leasingleads.svcErr so the two
+  //    should send. Identical shape to leasing_leads.svcErr so the two
   //    existing service callers' translation line works unchanged. ──
   function svcErr(status, body) {
     const e = new Error((body && (body.receipt || body.error)) || ("HTTP " + status));

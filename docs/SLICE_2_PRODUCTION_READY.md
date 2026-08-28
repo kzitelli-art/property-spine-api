@@ -183,7 +183,7 @@ unpinned by design. Making it mandatory would have broken them — which is wort
 knowing, because "just require it everywhere" is the obvious fix and it is
 wrong.
 
-**Release Slice 2 pinned.** `tests/migration_release_gate.test.js` refuses a
+**Release Slice 2 pinned.** `tests/unit/migration_release_gate.test.js` refuses a
 deliberately wrong sha off Render, accepts the exact HEAD, and refuses a
 verified pin with an untracked migration on disk — and it is registered in
 `verify_source_governance.js` so it runs without anyone remembering.

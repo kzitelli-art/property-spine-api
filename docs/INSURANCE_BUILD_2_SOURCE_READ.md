@@ -25,7 +25,7 @@ src/asset/insurance_establishment.js        POST evidence · POST establish
 src/asset/insurance_document_read.js        propose() — label scan, no authority
 ```
 
-`tests/gate_insurance_economic_independence.js` scans all seven and **fails the
+`tests/gates/gate_insurance_economic_independence.js` scans all seven and **fails the
 build** on financing, escrow, installment or payment vocabulary.
 
 ### ⚠ F1 · NO FUNDING PRIMITIVE EXISTS ANYWHERE. Measured.
@@ -147,7 +147,7 @@ src/asset/insurance_funding_read.js      NEW read
 **The gate boundary is the architectural act of Part 2.** These files
 necessarily contain `installment`, `down_payment`, `finance_charge`, `escrow`
 — every token
-`tests/gate_insurance_economic_independence.js` fails on. They therefore must
+`tests/gates/gate_insurance_economic_independence.js` fails on. They therefore must
 sit **outside** `CHAIN`, and the gate needs a second, inverse assertion:
 
 ```text

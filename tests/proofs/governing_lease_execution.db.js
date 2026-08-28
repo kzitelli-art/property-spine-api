@@ -1,0 +1,129 @@
+/* ════════════════════════════════════════════════════════════════════
+   governing_lease_execution.db.js — A PLACEHOLDER CANNOT BE EXECUTED.
+   REAL POSTGRES.
+
+   Migration 034 built the resident-signing mechanism and was honest about
+   why it was not a lease: `is_placeholder` is TRUE "until a real lease
+   template fills the body", and generation "refuses to pretend
+   otherwise". Migration 184 keeps that honesty and gives it teeth — the
+   database now refuses to execute a packet that has no governing
+   instrument, instead of relying on a caller to remember.
+
+   ── WHAT IS PROVEN ──────────────────────────────────────────────────
+   · a placeholder cannot reach resident_executed or executed;
+   · an instrument with no identifying hash cannot be signed — a
+     signature is a signature ON something, and "the packet" is not
+     specific enough when a packet is versioned;
+   · the company cannot sign before the resident. That order is the
+     business's wall, not a UI concern, so it is enforced where a UI
+     cannot route around it;
+   · a company signer can now EXIST at all (034 checked
+     signer_role in ('tenant') and no company row was insertable);
+   · a real instrument executes cleanly, resident then company.
+
+   WHAT IT DOES NOT PROVE, DELIBERATELY: that the captured evidence is
+   legally sufficient. 034's own note — "audit, not legal proof, see
+   counsel note" — is a legal/product ruling and is recorded as open
+   ruling R1 in THREAD_HANDOFF, not answered here.
+
+   ISOLATION: HARNESS_DATABASE_URL, refused if it matches DATABASE_URL.
+   Requires migrations 034 and 184.
+
+   Run:
+     HARNESS_DATABASE_URL=postgresql://postgres@127.0.0.1:5432/spine_proof \
+       node tests/proofs/governing_lease_execution.db.js
+   ════════════════════════════════════════════════════════════════════ */
+"use strict";
+
+const receipt = require("../_run_receipt.js");
+const CONN = receipt.harnessConnectionString();
+const { Pool } = require("pg");
+const pool = new Pool({ connectionString: CONN });
+
+let pass = 0, fail = 0; const failures = [];
+const ok = (l, c, d) => {
+  if (c) { pass++; console.log("  ok    " + l); }
+  else { fail++; failures.push(l); console.log("  FAIL  " + l + (d ? "\n          " + d : "")); }
+};
+async function refuses(label, sql, params) {
+  try { await pool.query(sql, params); ok(label, false, "ACCEPTED — it should have refused"); }
+  catch (e) { ok(label, true); return e.message; }
+}
+async function accepts(label, sql, params) {
+  try { await pool.query(sql, params); ok(label, true); }
+  catch (e) { ok(label, false, e.message.slice(0, 110)); }
+}
+
+(async () => {
+  const q = (s, p) => pool.query(s, p);
+  const prop = (await q("insert into properties (name) values ('Execution Proof') returning id")).rows[0].id;
+  const unit = (await q("insert into units (property_id, unit_number) values ($1,'3B') returning id", [prop])).rows[0].id;
+  const person = (await q("insert into persons (name) values ('Jane Smith') returning id")).rows[0].id;
+  const signer = (await q("insert into users (name, role) values ('Authorised Signer','property_manager') returning id")).rows[0].id;
+  const appId = (await q(
+    `insert into lease_applications (property_id, unit_id, person_id, applicant_name, status)
+     values ($1,$2,$3,'Jane Smith','lease_ready') returning id`, [prop, unit, person])).rows[0].id;
+
+  const mkPacket = async (version, placeholder, hash) => (await q(
+    `insert into lease_packets (property_id, application_id, unit_id, version, status, is_placeholder,
+                                instrument_body_sha256, instrument_form_code)
+     values ($1,$2,$3,$4,'submitted',$5,$6,$7) returning id`,
+    [prop, appId, unit, version, placeholder, hash, hash ? "SKYLINE_RESIDENTIAL" : null])).rows[0].id;
+
+  console.log("\n── 1 · A PLACEHOLDER CANNOT BE EXECUTED ───────────────────────");
+  const ph = await mkPacket(1, true, null);
+  const m1 = await refuses("a placeholder cannot reach resident_executed",
+    "update lease_packets set status='resident_executed', resident_executed_at=now() where id=$1", [ph]);
+  ok("…and the refusal says why", /placeholder/i.test(m1 || ""), m1);
+  await refuses("a placeholder cannot reach executed",
+    "update lease_packets set status='executed' where id=$1", [ph]);
+  await accepts("…but it can still be voided (034 lifecycle intact)",
+    "update lease_packets set status='voided', voided_at=now() where id=$1", [ph]);
+
+  console.log("\n── 2 · A SIGNATURE IS A SIGNATURE *ON* SOMETHING ──────────────");
+  const noHash = await mkPacket(2, false, null);
+  const m2 = await refuses("a real body with no instrument hash cannot be executed",
+    "update lease_packets set status='resident_executed', resident_executed_at=now() where id=$1", [noHash]);
+  ok("…named as missing instrument identity", /instrument/i.test(m2 || ""), m2);
+
+  console.log("\n── 3 · THE RESIDENT SIGNS FIRST ───────────────────────────────");
+  const real = await mkPacket(3, false, "a".repeat(64));
+  const m3 = await refuses("the company cannot sign before the resident",
+    "update lease_packets set status='executed', company_executed_at=now() where id=$1", [real]);
+  ok("…and the refusal names the order", /resident/i.test(m3 || ""), m3);
+
+  console.log("\n── 4 · A REAL INSTRUMENT EXECUTES, IN ORDER ───────────────────");
+  await accepts("resident executes the governing instrument",
+    "update lease_packets set status='resident_executed', resident_executed_at=now() where id=$1", [real]);
+  await accepts("then the company executes it",
+    "update lease_packets set status='executed', company_executed_at=now() where id=$1", [real]);
+  const done = (await q("select status, resident_executed_at, company_executed_at from lease_packets where id=$1", [real])).rows[0];
+  ok("both instants are recorded, not inferred",
+     !!done.resident_executed_at && !!done.company_executed_at && done.status === "executed");
+
+  console.log("\n── 5 · A COMPANY SIGNER CAN EXIST AT ALL (034 forbade it) ─────");
+  await accepts("a tenant signature field still inserts",
+    `insert into lease_packet_fields (lease_packet_id, field_key, section_key, label, field_type, signer_role, completed, signed_by_person_id)
+     values ($1,'tenant_sig','execution','Resident signature','signature','tenant',true,$2)`, [real, person]);
+  await accepts("a COMPANY signature field now inserts",
+    `insert into lease_packet_fields (lease_packet_id, field_key, section_key, label, field_type, signer_role, completed, signed_by_user_id)
+     values ($1,'company_sig','execution','Company signature','signature','company',true,$2)`, [real, signer]);
+  await refuses("an unknown signer role is still refused",
+    `insert into lease_packet_fields (lease_packet_id, field_key, section_key, label, field_type, signer_role)
+     values ($1,'other_sig','execution','Somebody','signature','notary')`, [real]);
+  const who = (await q(
+    "select signer_role, signed_by_user_id, signed_by_person_id from lease_packet_fields where lease_packet_id=$1 order by field_key", [real])).rows;
+  ok("the company signature names a durable user, not a typed name",
+     who.find((r) => r.signer_role === "company").signed_by_user_id === signer);
+
+  console.log("\n════════════════════════════════════════════════════════════════");
+  console.log(`  ${pass} passed · ${fail} failed`);
+  if (fail) failures.forEach((f) => console.log("   ✗ " + f));
+  console.log("════════════════════════════════════════════════════════════════");
+  await pool.end();
+  process.exit(fail ? 1 : 0);
+})().catch(async (e) => {
+  console.error("DIED:", e && e.message);
+  try { await pool.end(); } catch (_) {}
+  process.exit(1);
+});

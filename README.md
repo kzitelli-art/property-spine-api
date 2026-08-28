@@ -30,8 +30,9 @@ server.js             — Express entry point; mounts all routers
 migrations/           — Numbered SQL migration files + migrate.js runner
 schema.sql            — Snapshot of the full schema (reference only)
 src/
-  agent/              — AI document ingestion (Anthropic Claude)
+  agent/              — AI document ingestion (Anthropic Claude) + Ask Spine + staff agent
   applications/       — Rental applications, lease packets, execution
+  baseline/           — Release-0 HTTP primitives (health, properties, units, persons, events, users)
   comms/              — SMS transport, communications boundary, tenant links
   identity/           — Auth: staff sessions, phone OTP, team access
   leasing/            — Leads, tours, conversions, leasing desk
@@ -40,8 +41,9 @@ src/
   onboarding/         — Property onboarding, deal intake, rent-roll import
   shared/             — Cross-domain utilities and contracts
   surfaces/           — Operator-facing read surfaces (board, desks, portfolio)
-  tenancy/            — Move-in, move-out, occupancy, availability
-tests/                — Test harnesses and arc/beat scripts
+  tenancy/            — Move-in, move-out, occupancy, availability, lease lifecycle routes
+tests/                — gates/ · proofs/ (real-Postgres *.db.js + *_proof.js) · unit/ · arcs/ ·
+                        scenarios/ · e2e/ · fixtures/ · support/
 tools/                — Dev utilities
 docs/                 — Architecture docs and design specs
 ```

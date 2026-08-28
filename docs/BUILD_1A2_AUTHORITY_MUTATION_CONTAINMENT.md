@@ -284,9 +284,9 @@ word *identity*. **The leak is the word, not the format**; the list now says so.
 Real Postgres 16.13, real HTTP, real Chromium. **100 assertions, 0 failures.**
 
 ```
-tests/authority_mutation_containment.db.js     38 run · 38 passed · 0 failed
-tests/property_creation_canonical.db.js        25 run · 25 passed · 0 failed   (1A-1, re-run)
-tests/property_creation_http.db.js             17 run · 17 passed · 0 failed   (1A-1, re-run)
+tests/proofs/authority_mutation_containment.db.js     38 run · 38 passed · 0 failed
+tests/proofs/property_creation_canonical.db.js        25 run · 25 passed · 0 failed   (1A-1, re-run)
+tests/proofs/property_creation_http.db.js             17 run · 17 passed · 0 failed   (1A-1, re-run)
 property-spine-app/property_creation_experience.browser.js
                                                20 run · 20 passed · 0 failed
 ```

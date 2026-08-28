@@ -19,7 +19,7 @@
 > **zero times**. Its rung 3 was a hardcoded literal — "a month free right now on a one year
 > lease ending July 2027" — in deployed source, so retiring a fact could never have reached
 > it. Never fired: no comm_event matches. **Removed 2026-07-27** by owner decision;
-> harness-proven in `tests/pricing_guards_proof.js`.
+> harness-proven in `tests/proofs/pricing_guards_proof.js`.
 >
 > **3. Q4's interpretation is refuted.** `units.market_rent` is **not** "a mix of asking and
 > in-place rents." Across 114 studios with active leases it equals the in-place lease rent in

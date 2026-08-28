@@ -325,7 +325,7 @@ encoded.** Shape validated against real operating evidence, not data.
 ## 6. EVIDENCE
 
 ```text
-tests/asset_management_shell.db.js    46/46   real Postgres + real HTTP
+tests/proofs/asset_management_shell.db.js    46/46   real Postgres + real HTTP
 asset_management_shell.browser.js     75/75   real Chromium
 npm run verify                        12/12   all source-governance gates
 APP run_harnesses.sh                  1041/0  23 harnesses, 0 red
