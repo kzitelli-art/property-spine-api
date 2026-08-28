@@ -19,10 +19,17 @@
 //  for four consecutive runs. A rule that has to be remembered per file
 //  is a rule that will be forgotten per file. It is stated here once.
 //
-//  PRODUCTION BEHAVIOUR IS UNCHANGED. Neon is not a local host, so it
-//  still gets SSL with the same options it always had. Only a connection
-//  to 127.0.0.1 / localhost / ::1 / a unix socket relaxes, and only
-//  because such a host is by definition not crossing a network.
+//  ══ THE RULE, STATED ONCE ════════════════════════════════════════════
+//  SSL is ON unless the connection itself declares it should not be:
+//    · a local host (127.0.0.1 / localhost / ::1 / a unix socket) — by
+//      definition not crossing a network, or
+//    · an explicit `sslmode=disable` in the URL — the Postgres-standard
+//      way for a caller to say "this host does not speak SSL". Added for
+//      docker-compose local dev, where the API container reaches the
+//      database by its service name (`db`) — not a local host, and a
+//      postgres:16 container with no TLS. The caller declares it in the
+//      URL; this module respects the declaration. `sslmode=require` (Neon)
+//      is untouched and still gets SSL with the options it always had.
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
@@ -31,13 +38,15 @@ const LOCAL_HOSTS = ["127.0.0.1", "localhost", "::1", ""];
 
 function databaseSsl(url) {
   try {
+    const parsed = new URL(String(url || ""));
     //  URL.hostname keeps the brackets on an IPv6 literal — "[::1]", not
     //  "::1" — so the ::1 entry in the list below never matched and IPv6
     //  loopback was being told to use SSL. Carried over from the original
     //  in server.js and found by checking the rule's answers one by one
     //  rather than assuming a list membership test did what it read like.
-    const host = new URL(String(url || "")).hostname.replace(/^\[|\]$/g, "");
+    const host = parsed.hostname.replace(/^\[|\]$/g, "");
     if (LOCAL_HOSTS.includes(host)) return false;
+    if (parsed.searchParams.get("sslmode") === "disable") return false;
   } catch (_) { /* unparseable — fall through to the safe default */ }
   return { rejectUnauthorized: false };
 }

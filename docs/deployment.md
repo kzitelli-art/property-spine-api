@@ -163,28 +163,66 @@ npm install
 npm start
 ```
 
-### Docker Compose (local Postgres)
+### Docker Compose (local Postgres + local app)
+
+Requires a checkout of the frontend repo as a sibling directory
+(`../property-spine-app`; override the location with
+`PROPERTY_SPINE_APP_DIR=/your/path`). Then:
 
 ```bash
-docker-compose up
+docker compose up
 ```
 
 This starts:
-- `db` — Postgres 16 on port 5432 (credentials: `spine`/`spine`, db: `property_spine`)
-- `api` — the API server on port 3000, connected to the local Postgres
 
-The compose file overrides `DATABASE_URL` with the local container connection. All other env vars (Anthropic key, etc.) are read from `.env`.
+- `db` — Postgres 16 on port 5432 (credentials: `spine`/`spine`, db: `property_spine`)
+- `migrate` — a one-shot local schema release: it reads the local ledger,
+  then releases with exactly that ceiling, so a FRESH volume is built from
+  empty through the real governed runner. When a data-dependent migration
+  stops the chain (087, 110), it applies that version's canonical
+  precondition fixture from `tests/e2e/preconditions/` and resumes — the
+  same wiring CI uses. Refuses to run against anything that is not a
+  local-dev database shape (loopback, or an explicit `sslmode=disable`).
+- `api` — the API on port 3000, connected to the local Postgres. Its
+  prestart verifies the schema before boot, as everywhere.
+- `app` — the frontend repo served on port 8080 by a small dev static
+  server (`tools/dev_static_server.js`), which rewrites the app's
+  hardcoded production API origin to `http://localhost:3000`, so a local
+  browser lands on local data, not the deployed API. The app repo is not
+  modified.
+
+CORS is wired automatically: the compose file overrides
+`OPERATOR_APP_ORIGIN` to `http://localhost:8080` for the `api` service
+(`/operator/*` cross-origin requests allow exactly that origin and
+nothing else).
+
+Caveat: if you previously pointed the app at production in this browser,
+localStorage wins — clear `ps_api_base` (or set it to
+`http://localhost:3000`) once. All other env vars (Anthropic key, etc.)
+come from `.env`.
 
 ```bash
-# First run — migrations apply automatically
-docker-compose up
+# First run — the schema is built from empty through the real migration chain
+docker compose up
+
+# Daily loop — the migrate step is idempotent ("everything already up to date")
+docker compose up
 
 # Rebuild after dependency changes
-docker-compose up --build
+docker compose up --build
 
-# Stop and remove containers
-docker-compose down
+# Stop and remove containers (keep the volume)
+docker compose down
+
+# Stop and THROW AWAY the local database — next up rebuilds from empty
+docker compose down -v
 ```
+
+The `migrate` and `app` services are class-2 local-dev scaffolding with
+removal conditions stated in `tools/dev_migration_release.js` and
+`tools/dev_static_server.js`. Production deploys never touch any of this:
+Render still verifies-only on boot, and schema releases remain a separate,
+deliberate act.
 
 ---
 

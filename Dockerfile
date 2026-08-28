@@ -2,9 +2,11 @@ FROM node:22-alpine
 
 WORKDIR /app
 
-# Install dependencies first (layer caching)
-COPY package.json ./
-RUN npm install --omit=dev
+# Install dependencies first (layer caching). From the LOCKFILE — the
+# lockfile ignored outright means every build resolves fresh versions, so a
+# desynced package.json silently ships different code than CI verified.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 # Copy application source
 COPY . .

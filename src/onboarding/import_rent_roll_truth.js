@@ -58,7 +58,13 @@ function arg(name) {
   if (!document) { console.log("FAILED: no truth document found in the data file."); process.exit(1); }
 
   // 3. Wire the DEPLOYED loader and validate with ITS validator.
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  //  SSL comes from the one answer (src/shared/database_ssl.js) — the
+  //  hardcoded object here was correct for Neon and fatal against the
+  //  docker-compose local Postgres, which does not speak SSL. Same defect
+  //  class as migrations/migrate.js (CURRENT_STATE #28); production
+  //  behaviour is unchanged.
+  const { databaseSsl } = require("../shared/database_ssl");
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: databaseSsl(process.env.DATABASE_URL) });
   const router = require("../shared/snapshot_loader")({ pool });
   const H = router.helpers;
 

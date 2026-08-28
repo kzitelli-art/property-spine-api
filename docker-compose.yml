@@ -1,3 +1,18 @@
+# ══════════════════════════════════════════════════════════════════════
+# LOCAL DEV ONLY — production runs on Render (API) and Cloudflare Pages
+# (app); deploys there are manual and never migrate (see docs/deployment.md).
+#
+# What this stack does that production does not:
+#   · `migrate` reads the local ledger, then releases schema onto the
+#     volume — so a fresh `docker compose up` actually comes up. The API's
+#     prestart is verify-only and will never build a schema itself.
+#   · `app` serves the sibling property-spine-app checkout and rewrites
+#     its hardcoded production API origin to THIS stack, so a local
+#     browser lands on local data instead of driving the deployed API.
+# Both dev helpers are class-2 scaffolding with removal conditions stated
+# in tools/dev_migration_release.js and tools/dev_static_server.js.
+# ══════════════════════════════════════════════════════════════════════
+
 services:
   db:
     image: postgres:16-alpine
@@ -15,6 +30,21 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    build: .
+    env_file:
+      - .env
+    environment:
+      # sslmode=disable is the URL declaring "this Postgres has no TLS" —
+      # src/shared/database_ssl.js honors it; a bare service-name host
+      # would otherwise be told to use SSL and refused.
+      DATABASE_URL: postgres://spine:spine@db:5432/property_spine?sslmode=disable
+    command: ["node", "tools/dev_migration_release.js"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   api:
     build: .
     ports:
@@ -22,10 +52,36 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgres://spine:spine@db:5432/property_spine
+      DATABASE_URL: postgres://spine:spine@db:5432/property_spine?sslmode=disable
+      # The app is served locally on :8080. /operator/* CORS allows EXACTLY
+      # this origin and nothing else — fail closed (see server.js).
+      OPERATOR_APP_ORIGIN: http://localhost:8080
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  app:
+    image: node:22-alpine
+    ports:
+      - "8080:8080"
+    environment:
+      STATIC_ROOT: /srv/app
+      PORT: "8080"
+      REWRITE_API_ORIGIN_TO: http://localhost:3000
+    volumes:
+      - ./tools/dev_static_server.js:/srv/dev_static_server.js:ro
+      # The app repo, expected as a sibling checkout. If yours lives
+      # elsewhere: PROPERTY_SPINE_APP_DIR=/your/path docker compose up
+      - ${PROPERTY_SPINE_APP_DIR:-../property-spine-app}:/srv/app:ro
+    command: ["node", "/srv/dev_static_server.js"]
 
 volumes:
   pgdata:
