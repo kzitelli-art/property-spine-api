@@ -2,18 +2,19 @@
 //  ask_spine.js — THE ASK SPINE DOOR
 //
 //  GET  /operator/ask-spine/attention    slice 1 — the one fixed question
-//  POST /operator/ask-spine/ask          slice 2 — a question the operator typed
+//  POST /operator/ask-spine/ask          slice 2 — read-only compatibility door
+//  POST /operator/ask-spine/message      one conversational prose door
 //
 //  Same authority seam as the staff agent and every maintenance door —
-//  property is server-derived and never accepted from the browser. It is
-//  its question endpoints remain read-only siblings of staff_agent.js. One
-//  separately named application-send action is mounted here because the
-//  dashboard and staff SMS must meet at the same canonical command. It is
+//  property is server-derived and never accepted from the browser. Its
+//  question endpoints remain read-only siblings of staff_agent.js. The
+//  message door selects the one supported application action on the server;
+//  all other prose delegates to the established Ask Spine answer owner. It is
 //  not a generic conversational writer and records no dashboard transcript.
 //
-//  The two question doors below still write nothing. The separately named
-//  action doors are explicit mutation boundaries: proposal writes nothing;
-//  confirmation delegates to the one canonical application-send command.
+//  The fixed and compatibility question doors below still write nothing.
+//  A message-selected proposal writes nothing; the separately named opaque
+//  confirmation door delegates to the one canonical application-send command.
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
@@ -24,6 +25,7 @@ module.exports = function askSpine(deps) {
   const staffSessions = require("../identity/staff_session_service");
   const askSpineService = require("./ask_spine_service");
   const askSpineAnswer = require("./ask_spine_answer");
+  const staffLeasingIntent = require("../leasing/staff_sms_intent");
   const { createComplianceReferenceService } =
     require("../asset/compliance_references");
 
@@ -83,6 +85,37 @@ module.exports = function askSpine(deps) {
 
   const gate = [requireOperator, refuseClientProperty];
 
+  const MESSAGE_ACTION_INTENTS = new Set([
+    "capture_tour", "clarify_tour_standing", "send_application", "application_target",
+  ]);
+
+  async function answerForOperator(req, question) {
+    return askSpineAnswer.answer(pool, options.anthropic, {
+      property_id: req.operator.property_id,
+      allowed_modules: req.operator.allowed_modules,
+      operator_user_id: req.operator.id,
+      primary_for_modules: req.operator.primary_for_modules,
+      question,
+      mintComplianceReference: complianceReferences.mintReference,
+      // Late-bound because the applications module is composed below this one.
+      applicationsService: options.applicationsService || null,
+    });
+  }
+
+  function readEnvelope(operator, out, { discriminated = false } = {}) {
+    return {
+      ...(discriminated ? {
+        kind: out.outcome === "answered" ? "answer" : "clarification_or_refusal",
+      } : {}),
+      property_id: operator.property_id,
+      asked_at: new Date().toISOString(),
+      outcome: out.outcome,
+      answer: out.answer,
+      grounded_on: out.grounded_on,
+      references: out.references || [],
+    };
+  }
+
   // ── "What needs attention?" ───────────────────────────────────────
   //  Property and module entitlement both come from the resolved
   //  session. Nothing in the request influences either.
@@ -121,35 +154,14 @@ module.exports = function askSpine(deps) {
   //  client-supplied property_id is refused, not ignored.
   router.post("/operator/ask-spine/ask", ...gate, async (req, res) => {
     try {
-      const out = await askSpineAnswer.answer(pool, options.anthropic, {
-        property_id: req.operator.property_id,
-        allowed_modules: req.operator.allowed_modules,
-        operator_user_id: req.operator.id,
-        primary_for_modules: req.operator.primary_for_modules,
-        question: (req.body && req.body.question) || "",
-        mintComplianceReference: complianceReferences.mintReference,
-        //  Late-bound: this module mounts above the applications module in
-        //  server.js, so the service is read at request time, not at mount.
-        applicationsService: options.applicationsService || null,
-      });
+      const out = await answerForOperator(req, (req.body && req.body.question) || "");
 
       //  200 for every OUTCOME, including `unavailable`. The request was
       //  handled correctly; the assistant being unreachable is an answer
       //  about the assistant, and the caller distinguishes it by
       //  `outcome` rather than by having to parse an error shape. A 5xx
       //  here would make a working door look broken.
-      return res.json({
-        property_id: req.operator.property_id,   // echoed from the session
-        asked_at: new Date().toISOString(),
-        outcome: out.outcome,
-        answer: out.answer,
-        grounded_on: out.grounded_on,
-        //  Openable records the answer is about, resolved by the service
-        //  rather than parsed out of the model's sentence. Absent on any
-        //  outcome that is not `answered`, because there is nothing the
-        //  operator was told about to go and look at.
-        references: out.references || [],
-      });
+      return res.json(readEnvelope(req.operator, out));
     } catch (e) {
       //  A genuine server failure. Never shaped like an empty answer.
       console.error("ask-spine/ask error", e);
@@ -157,24 +169,33 @@ module.exports = function askSpine(deps) {
     }
   });
 
-  // ── ONE ACTION · post-tour application send ─────────────────────
-  //  The browser supplies prose for proposal and an opaque server receipt
-  //  for confirmation. It never supplies property, module, Person,
-  //  conversion, unit, space, actor, action code or idempotency identity.
-  //  The injected action object is the SAME instance used by staff SMS.
-  router.post("/operator/ask-spine/application-send/propose", ...gate, async (req, res) => {
+  // ── ONE CONVERSATIONAL DOOR · reads + one application action ─────
+  //  The browser supplies only prose. The server's canonical leasing intent
+  //  classifier selects the sole supported action; every other message goes
+  //  to the existing read-only Ask Spine owner. The parsed intent is passed
+  //  into the SAME action instance used by staff SMS, so it is classified
+  //  exactly once and no browser vocabulary selects the writer.
+  router.post("/operator/ask-spine/message", ...gate, async (req, res) => {
     res.set("Cache-Control", "no-store");
-    if (!exactBody(req, ["request"]) || hasQueryClaims(req)) {
+    if (!exactBody(req, ["message"]) || hasQueryClaims(req)) {
       return res.status(400).json({
+        kind: "clarification_or_refusal",
         outcome: "invalid_request",
-        receipt: "Send only the conversational request. Scope and action authority are server-derived.",
+        answer: "Send only the conversational message. Scope and action authority are server-derived.",
       });
     }
+    const message = String(req.body.message || "");
+    const intent = staffLeasingIntent.readStaffLeasingIntent(message);
     try {
+      if (!MESSAGE_ACTION_INTENTS.has(intent.intent)) {
+        const out = await answerForOperator(req, message);
+        return res.json(readEnvelope(req.operator, out, { discriminated: true }));
+      }
       const out = await conversationalApplicationAction().run(pool, {
         transport: "dashboard",
         userId: req.operator.id,
-        body: String(req.body.request || ""),
+        body: message,
+        intent,
         propertyContext: {
           outcome: "one",
           propertyId: req.operator.property_id,
@@ -183,15 +204,26 @@ module.exports = function askSpine(deps) {
       });
       const status = Number(out.http_status) || 200;
       delete out.http_status;
-      return res.status(status).json(out);
+      return res.status(status).json({
+        kind: out.confirmation_required && out.confirmation
+          ? "application_send_proposal"
+          : "clarification_or_refusal",
+        ...out,
+      });
     } catch (error) {
-      console.error("ask-spine/application-send/propose error", error);
+      console.error("ask-spine/message error", error);
       return res.status(error.httpStatus || 500).json({
+        kind: "clarification_or_refusal",
         outcome: error.code || "unavailable",
-        receipt: error.publicMessage || "The application-send proposal is unavailable. Nothing was sent.",
+        answer: error.publicMessage || "That message could not be handled. Nothing was sent.",
       });
     }
   });
+
+  // ── OPAQUE CONFIRMATION · no prose classification ────────────────
+  //  The browser may return only the token from an application_send_proposal.
+  //  It never supplies property, module, Person, conversion, unit, space,
+  //  actor, action code or idempotency identity.
 
   router.post("/operator/ask-spine/application-send/confirm", ...gate, async (req, res) => {
     res.set("Cache-Control", "no-store");

@@ -359,8 +359,8 @@ async function waitForStaffReply(providerMessageId) {
 
   async function comparePropertySigning(stage, inspect) {
     const question = "Which signer is still outstanding?";
-    const dashboard = requireOk(await api("POST", "/operator/ask-spine/ask", {
-      token: staffToken, body: { question },
+    const dashboard = requireOk(await api("POST", "/operator/ask-spine/message", {
+      token: staffToken, body: { message: question },
     }), `${stage} property-wide signing dashboard read`);
     const sid = `SM_E2E_SIGNER_${stage.toUpperCase()}_${suffix}`;
     await sendStaffSms({ from: mikePhone, to: operationsLine, sid, body: question });
@@ -368,7 +368,8 @@ async function waitForStaffReply(providerMessageId) {
     const review = requireOk(await api("GET", "/operator/leasing/applications-review", {
       token: staffToken,
     }), `${stage} canonical application review list`);
-    expect(dashboard.outcome === "answered" && sms.reply_reason === "governed_read"
+    expect(dashboard.kind === "answer" && dashboard.outcome === "answered"
+        && sms.reply_reason === "governed_read"
         && sms.body === dashboard.answer,
       `${stage}: dashboard and staff SMS return the same deterministic signer answer`,
       JSON.stringify({ dashboard, sms }));
@@ -613,58 +614,86 @@ async function waitForStaffReply(providerMessageId) {
     "post-tour capture and proposal create no application intent, invitation, event, child obligation, or application",
     JSON.stringify(actionBefore));
 
-  const keyOnlyProposal = await api("POST", "/operator/ask-spine/application-send/propose", {
-    key: true, body: { request: `Send ${name} the application for Unit 3B, Bed B.` },
+  const keyOnlyProposal = await api("POST", "/operator/ask-spine/message", {
+    key: true, body: { message: `Send ${name} the application for Unit 3B, Bed B.` },
   });
   expect(keyOnlyProposal.status === 401,
     "the dashboard action has no x-operator-key authentication fallback");
-  const claimedScope = await api("POST", "/operator/ask-spine/application-send/propose", {
+  const claimedScope = await api("POST", "/operator/ask-spine/message", {
     token: staffToken,
     body: {
-      request: `Send ${name} the application for Unit 3B, Bed B.`,
+      message: `Send ${name} the application for Unit 3B, Bed B.`,
       property_id: "00000000-0000-0000-0000-000000000001",
     },
   });
   expect(claimedScope.status === 403,
     "a dashboard-supplied property claim is refused before the action");
-  const inventedAuthority = await api("POST", "/operator/ask-spine/application-send/propose", {
+  const inventedAuthority = await api("POST", "/operator/ask-spine/message", {
     token: staffToken,
     body: {
-      request: `Send ${name} the application for Unit 3B, Bed B.`,
+      message: `Send ${name} the application for Unit 3B, Bed B.`,
       person_id: intake.person_id,
     },
   });
   expect(inventedAuthority.status === 400,
     "the dashboard cannot supply a Person or any action payload beside its request");
   const queryScope = await api(
-    "POST", `/operator/ask-spine/application-send/propose?property_id=${propertyId}`, {
+    "POST", `/operator/ask-spine/message?property_id=${propertyId}`, {
       token: staffToken,
-      body: { request: `Send ${name} the application for Unit 3B, Bed B.` },
+      body: { message: `Send ${name} the application for Unit 3B, Bed B.` },
     }
   );
   expect(queryScope.status === 400,
     "even a matching property query is refused because action scope is session-only");
-  const unsupported = await api("POST", "/operator/ask-spine/application-send/propose", {
-    token: staffToken, body: { request: "Update the lease." },
+  const unsupported = await api("POST", "/operator/ask-spine/message", {
+    token: staffToken, body: { message: "Update the lease." },
   });
-  expect(unsupported.status === 422 && unsupported.body.outcome === "unsupported_action",
+  expect(unsupported.status === 200
+      && unsupported.body.kind === "clarification_or_refusal"
+      && unsupported.body.outcome !== "answered",
     "vague lease-update wording is refused without a generic conversational writer");
-  const missingSubject = await api("POST", "/operator/ask-spine/application-send/propose", {
-    token: staffToken, body: { request: "Send the application for Unit 3B, Bed B." },
+  const missingSubject = await api("POST", "/operator/ask-spine/message", {
+    token: staffToken, body: { message: "Send the application for Unit 3B, Bed B." },
   });
   expect(missingSubject.status === 200
       && missingSubject.body.outcome === "leasing_clarification"
       && missingSubject.body.confirmation === null && missingSubject.body.sent === false,
     "the dashboard must name the subject even when only one follow-up is open");
 
-  const proposal = requireOk(await api(
+  const retiredProposalDoor = await api(
     "POST", "/operator/ask-spine/application-send/propose", {
       token: staffToken,
       body: { request: `Send ${name} the application for Unit 3B, Bed B.` },
     }
-  ), "dashboard application-send proposal");
+  );
+  expect(retiredProposalDoor.status === 404,
+    "the dashboard has no second prose proposal door");
+
+  const canonicalReadQuestion = "Which signer is still outstanding?";
+  const readCompatibility = requireOk(await api("POST", "/operator/ask-spine/ask", {
+    token: staffToken, body: { question: canonicalReadQuestion },
+  }), "read-only Ask Spine compatibility result");
+  const readThroughMessage = requireOk(await api("POST", "/operator/ask-spine/message", {
+    token: staffToken, body: { message: canonicalReadQuestion },
+  }), "single-door Ask Spine read");
+  expect(readThroughMessage.kind === "answer"
+      && readThroughMessage.outcome === readCompatibility.outcome
+      && readThroughMessage.answer === readCompatibility.answer
+      && JSON.stringify(readThroughMessage.grounded_on) === JSON.stringify(readCompatibility.grounded_on)
+      && JSON.stringify(readThroughMessage.references) === JSON.stringify(readCompatibility.references),
+    "ordinary dashboard prose delegates to the byte-equivalent canonical Ask Spine answer owner");
+  expect(JSON.stringify(await applicationActionState()) === JSON.stringify(actionBefore),
+    "ordinary and unsupported message prose create no application writes");
+
+  const proposal = requireOk(await api(
+    "POST", "/operator/ask-spine/message", {
+      token: staffToken,
+      body: { message: `Send ${name} the application for Unit 3B, Bed B.` },
+    }
+  ), "single-door dashboard application-send proposal");
   const confirmation = proposal.confirmation && proposal.confirmation.token;
-  expect(proposal.outcome === "application_send_proposed"
+  expect(proposal.kind === "application_send_proposal"
+      && proposal.outcome === "application_send_proposed"
       && proposal.action_code === "send_application_after_tour"
       && proposal.confirmation_required === true && !!confirmation
       && proposal.sent === false && proposal.subject.display_name === name
@@ -736,10 +765,10 @@ async function waitForStaffReply(providerMessageId) {
     "cross-transport replay creates zero duplicate provider calls");
 
   const askAgainQuestion = `Has ${name}'s application link been sent?`;
-  const askAgain = requireOk(await api("POST", "/operator/ask-spine/ask", {
-    token: staffToken, body: { question: askAgainQuestion },
+  const askAgain = requireOk(await api("POST", "/operator/ask-spine/message", {
+    token: staffToken, body: { message: askAgainQuestion },
   }), "post-action Ask Spine read");
-  expect(askAgain.outcome === "answered"
+  expect(askAgain.kind === "answer" && askAgain.outcome === "answered"
       && askAgain.grounded_on.leasing_read_state === "OK"
       && askAgain.grounded_on.leasing_opportunity_stage === "applicant_followup"
       && askAgain.grounded_on.application_link_sent === true
