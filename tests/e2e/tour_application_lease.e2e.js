@@ -143,7 +143,7 @@ async function waitForStaffReply(providerMessageId) {
 (async () => {
   console.log("\n== tour to exact-bed lease ==");
   const property = (await q(
-    "select id,organization_id from properties where name='Skyline E2E' order by created_at desc limit 1"
+    "select id,organization_id,name,display_name from properties where name='Skyline E2E' order by created_at desc limit 1"
   )).rows[0];
   expect(!!property, "Skyline-shaped disposable fixture exists");
   const propertyId = property.id;
@@ -223,38 +223,54 @@ async function waitForStaffReply(providerMessageId) {
      values ('Mike Grivna',$1,$1,'lead','team_invite_fixture') returning id`,
     [mikePhone]
   )).rows[0];
-  const invited = requireOk(await api("POST", `/properties/${propertyId}/team-invites`, {
-    token: companyToken,
-    body: {
-      invited_name: "Mike Grivna", phone_number: mikePhone,
-      role_key: "leasing_agent", scope_type: "property", person_id: mikePerson.id,
-    },
-  }), "Mike staff invite");
-  expect(invited.delivery === "sms_sent" && invited.person_id === mikePerson.id,
-    "the governed invite texts the manager-confirmed Person");
-  const inviteToken = String(invited.link || "").split("/join/")[1];
-  const inviteText = await waitForSms(
-    (message) => message.to === mikePhone && /\/join\//.test(message.body || ""),
-    "the staff invitation"
+  let invited, inviteToken, inviteText, otpStarted, otpText;
+  await q(
+    "update properties set name='Property Spine Demo Building', display_name='Skyline' where id=$1",
+    [propertyId]
   );
-  expect(!!inviteToken && inviteText.to === mikePhone,
-    "the fake carrier records the exact invite without reaching a phone");
-  const joinResponse = await fetch(invited.link, { redirect: "error" });
-  const joinHtml = await joinResponse.text();
-  expect(joinResponse.status === 200
-      && /Set up your Property Spine access/i.test(joinHtml)
-      && !/Missing or wrong x-operator-key/i.test(joinHtml),
-    "the literal text link reaches the public staff acceptance door without an operator key");
+  try {
+    invited = requireOk(await api("POST", `/properties/${propertyId}/team-invites`, {
+      token: companyToken,
+      body: {
+        invited_name: "Mike Grivna", phone_number: mikePhone,
+        role_key: "leasing_agent", scope_type: "property", person_id: mikePerson.id,
+      },
+    }), "Mike staff invite");
+    expect(invited.delivery === "sms_sent" && invited.person_id === mikePerson.id,
+      "the governed invite texts the manager-confirmed Person");
+    inviteToken = String(invited.link || "").split("/join/")[1];
+    inviteText = await waitForSms(
+      (message) => message.to === mikePhone && /\/join\//.test(message.body || ""),
+      "the staff invitation"
+    );
+    expect(!!inviteToken && inviteText.to === mikePhone,
+      "the fake carrier records the exact invite without reaching a phone");
+    expect(/added to Skyline on Property Spine/.test(inviteText.body || "")
+        && !/Property Spine Demo Building/.test(inviteText.body || ""),
+      "the staff invitation uses the property display name without leaking its internal name");
+    const joinResponse = await fetch(invited.link, { redirect: "error" });
+    const joinHtml = await joinResponse.text();
+    expect(joinResponse.status === 200
+        && /Set up your Property Spine access/i.test(joinHtml)
+        && !/Missing or wrong x-operator-key/i.test(joinHtml),
+      "the literal text link reaches the public staff acceptance door without an operator key");
 
-  const otpStarted = requireOk(await api("POST", "/auth/sms/start", {
-    body: { token: inviteToken },
-  }), "Mike invite OTP start");
-  expect(otpStarted.delivery === "sms_sent" && otpStarted.flow === "invite_accept",
-    "the invite uses the shared phone-verification door");
-  const otpText = await waitForSms(
-    (message) => message.to === mikePhone && /access code is \d{6}/.test(message.body || ""),
-    "the staff access code"
-  );
+    otpStarted = requireOk(await api("POST", "/auth/sms/start", {
+      body: { token: inviteToken },
+    }), "Mike invite OTP start");
+    expect(otpStarted.delivery === "sms_sent" && otpStarted.flow === "invite_accept",
+      "the invite uses the shared phone-verification door");
+    otpText = await waitForSms(
+      (message) => message.to === mikePhone && /access code is \d{6}/.test(message.body || ""),
+      "the staff access code"
+    );
+    expect(/Your Skyline access code is \d{6}/.test(otpText.body || "")
+        && !/Property Spine Demo Building/.test(otpText.body || ""),
+      "the staff OTP uses the property display name without leaking its internal name");
+  } finally {
+    await q("update properties set name=$2, display_name=$3 where id=$1",
+      [propertyId, property.name, property.display_name]);
+  }
   const otpCode = String(otpText.body || "").match(/access code is (\d{6})/)[1];
   const accepted = requireOk(await api("POST", "/auth/sms/verify", {
     body: { token: inviteToken, code: otpCode },
