@@ -214,7 +214,6 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridg
 
       const prop = (await pool.query(
         `select id, name,
-                coalesce(nullif(btrim(display_name), ''), name) as display_name,
                 sms_number, organization_id
            from properties where id=$1`, [propertyId])).rows[0];
       if (!prop) return res.status(404).json({ error: "property not found" });
@@ -317,7 +316,7 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridg
 
       const base = String(process.env.APP_BASE_URL || `https://${req.headers.host}`).replace(/\/+$/, "");
       const link = `${base}/auth/join/${token}`;
-      const smsText = `You've been added to ${prop.display_name} on Property Spine. Tap to set up your access: ${link}`;
+      const smsText = `You've been added to ${prop.name} on Property Spine. Tap to set up your access: ${link}`;
 
       // COMMUNICATIONS BOUNDARY: staff-invite is explicitly classified
       // credential transport (purpose='staff_invite'); the gate derives
@@ -465,10 +464,10 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridg
         [otpHash(code, inviteRow.token), String(OTP_TTL_MIN), inviteRow.id]);
 
       const prop = (await pool.query(
-        `select coalesce(nullif(btrim(display_name), ''), name) as display_name,
+        `select name,
                 sms_number
            from properties where id=$1`, [inviteRow.property_id])).rows[0];
-      const body = `Your ${prop.display_name} access code is ${code}. It expires in ${OTP_TTL_MIN} minutes.`;
+      const body = `Your ${prop.name} access code is ${code}. It expires in ${OTP_TTL_MIN} minutes.`;
 
       // COMMUNICATIONS BOUNDARY: staff OTP is explicitly classified
       // credential transport (purpose='staff_otp') through the gate.

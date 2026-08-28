@@ -534,17 +534,14 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       }
     }
 
-    // Server-derived canonical line and policy. properties.sms_number is a
-    // compatibility projection, never send authority: an active line whose
-    // outbound policy is disabled must refuse even if that projection still
-    // contains its number.
-    const resolved = await lines.resolveOutboundLine(q, { propertyId: property_id });
-    if (!resolved.line) {
-      await stamp("refused", `gate:${resolved.refusal}`);
-      console.error(`sendPropertySms REFUSED property=${property_id} purpose=${purpose} reason=${resolved.refusal} policy=${resolved.policy}`);
-      return { sent: false, reason: resolved.refusal, sid: null };
+    // Server-derived property line. No line → NO SEND, never a
+    // Messaging Service default fallback.
+    const from = await propertyLine(q, property_id);
+    if (!from) {
+      await stamp("refused", "gate:no_property_line");
+      console.error(`sendPropertySms REFUSED property=${property_id} purpose=${purpose} reason=no_property_line`);
+      return { sent: false, reason: "no_property_line", sid: null };
     }
-    const from = resolved.line.e164;
 
     const elig = await canSendSmsForRecord(
       { property_id, recipient, person_id, purpose, from }, q
