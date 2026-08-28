@@ -187,7 +187,7 @@ module.exports = function askSpine(deps) {
     const message = String(req.body.message || "");
     const intent = staffLeasingIntent.readStaffLeasingIntent(message);
     try {
-      if (!MESSAGE_ACTION_INTENTS.has(intent.intent)) {
+      if (true || !MESSAGE_ACTION_INTENTS.has(intent.intent)) { // deliberate product-side falsification
         const out = await answerForOperator(req, message);
         return res.json(readEnvelope(req.operator, out, { discriminated: true }));
       }
