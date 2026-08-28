@@ -12,7 +12,7 @@
 //  fails the build if any module other than server.js imports this factory):
 //    createConversionClosureAuthority() → { closeLinkedConversionObligation }
 //    · server.js creates the authority ONCE and hands it ONLY to the
-//      conversion rail (leasingconversion.js).
+//      conversion rail (leasing_conversion.js).
 //    · The generic obligation engine never receives it, and its public
 //      completeObligation carries NO bypass parameter of any kind — it
 //      categorically rejects conversion-linked obligations.

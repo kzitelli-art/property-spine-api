@@ -47,7 +47,7 @@ module.exports = function boardModule({ pool }) {
     }
   }
 
-  // Same fail-closed operator gate as tenantlink — the board reads tenant
+  // Same fail-closed operator gate as tenant_link — the board reads tenant
   // message counts and the property's whole operating state.
   function requireOperator(req, res, next) {
     const expected = process.env.OPERATOR_KEY;
@@ -189,7 +189,7 @@ module.exports = function boardModule({ pool }) {
       if (ingest.status === "ok" && ingest.pending_units > 0)
         needs_you.push({ headline: `${ingest.pending_units} unit${ingest.pending_units === 1 ? "" : "s"} from uploads waiting to be confirmed`, go: "candidates" });
       if (tenantLine.status === "ok" && tenantLine.occupants > 0 && tenantLine.connected < tenantLine.occupants)
-        needs_you.push({ headline: `${tenantLine.occupants - tenantLine.connected} of ${tenantLine.occupants} occupants not on the tenant line yet`, go: "tenantlink" });
+        needs_you.push({ headline: `${tenantLine.occupants - tenantLine.connected} of ${tenantLine.occupants} occupants not on the tenant line yet`, go: "tenant_link" });
 
       // ── PROOF MISSING — honest consequences, no buttons.
       const proof_missing = [];

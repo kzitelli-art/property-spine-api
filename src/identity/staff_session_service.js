@@ -39,7 +39,7 @@ const staffIdentity = require("./staff_identity_resolver.js"); // 067: THE user-
 const ISSUANCE_POLICY = {
   demo:             { ttlHours: 6 },   // fenced Demo Building presentation sessions
   bootstrap_invite: { ttlHours: 12 },  // Class 2 interim proof (this brick)
-  sms_otp:          { ttlHours: 24 * 14 }, // preserve teamaccess's existing 14-day policy
+  sms_otp:          { ttlHours: 24 * 14 }, // preserve team_access's existing 14-day policy
 };
 
 const sha256 = (s) => crypto.createHash("sha256").update(s, "utf8").digest("hex");
@@ -137,14 +137,14 @@ async function issueStaffSession(client, { userId, propertyId, purpose }) {
 // LEGACY RAW-TOKEN SUNSET (Gate 2, explicit in code  not a memo)
 //
 //   Pre-cutover sessions store a raw token (token_digest IS NULL). The
-//   longest TTL any such session can carry is teamaccess's 14-day OTP
+//   longest TTL any such session can carry is team_access's 14-day OTP
 //   policy, so every legacy row is dead within LEGACY_MAX_TTL_DAYS of the
 //   cutover. The fallback branch below therefore refuses ANY raw-token row
 //   whose created_at is older than LEGACY_MAX_TTL_DAYS  the branch cannot
 //   outlive the sessions it exists to honor, even if the cleanup release
 //   is late. SESSION-DIGEST-CLEANUP then deletes the branch + raw column.
 // ---------------------------------------------------------------------------
-const LEGACY_MAX_TTL_DAYS = 14; // = max pre-cutover session lifetime (teamaccess SESSION_TTL_DAYS)
+const LEGACY_MAX_TTL_DAYS = 14; // = max pre-cutover session lifetime (team_access SESSION_TTL_DAYS)
 
 // THE resolver query, defined once. resolveStaffSession() binds it; the
 // proof harness EXPLAINs this exact constant  byte-identical, sunset
@@ -185,7 +185,7 @@ async function resolveStaffSession(db, token) {
     session_id: row.session_id,
     id: row.id,                       // user id (kept as `id` for drop-in
     name: row.name,                   // compatibility with req.operator)
-    phone: row.phone,                 // teamaccess callers use me.phone
+    phone: row.phone,                 // team_access callers use me.phone
     email: row.email,
     role: row.global_role,            // global role (users.role)
     global_role: row.global_role,

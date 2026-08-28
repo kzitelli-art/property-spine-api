@@ -4,7 +4,7 @@
 //  DOCTRINE (Identity Bridge contract, Part 3):
 //    No other API module may join users.person_id to assignments, directly
 //    or indirectly. Every route needing staff identity or task ownership
-//    calls THIS module. tests/gate_no_raw_bridge_joins.js enforces it.
+//    calls THIS module. tests/gates/gate_no_raw_bridge_joins.js enforces it.
 //
 //  THE RESOLUTION CHAIN:
 //    authenticated user
@@ -64,7 +64,7 @@
 //
 //      WHAT DID NOT CHANGE. The two identity systems are NOT merged; that
 //      remains the later structural fix. Manager COVERAGE
-//      (leasingconversion.resolveSendActionBasis) is untouched and still
+//      (leasing_conversion.resolveSendActionBasis) is untouched and still
 //      lets an authorised manager act on work they do not own — coverage
 //      authority must never make a manager a default owner. Completion
 //      attribution is untouched: closure records closed_by_user_id and
@@ -268,7 +268,7 @@ function freeTextClaim(name) {
 //  coverageRows(client) — the raw read behind the bridge coverage +
 //  divergence report. Lives HERE because it joins users↔persons↔
 //  assignments: the static gate forbids that read anywhere else.
-//  Shaping (bridge_state, divergence flags) belongs to staffbridge.js.
+//  Shaping (bridge_state, divergence flags) belongs to staff_bridge.js.
 // ════════════════════════════════════════════════════════════════════
 async function coverageRows(client) {
   const r = await client.query(`

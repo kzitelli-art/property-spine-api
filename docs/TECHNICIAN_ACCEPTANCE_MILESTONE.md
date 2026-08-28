@@ -7,9 +7,9 @@ reached.** Not merged, not deployed, not production-active.
 |---|---|
 | Branch | `claude/conversational-seams-and-technician-loop` |
 | Migration claimed | **131** — verified free across every remote branch (130 is Slice A's, and only Slice A's) |
-| DB-free proof | `tests/technician_work_selection.test.js` — **66/66**, exit 0 |
+| DB-free proof | `tests/unit/technician_work_selection.test.js` — **66/66**, exit 0 |
 | `npm run verify` | **6/6 gates**, exit 0 |
-| DB proof | `tests/technician_acceptance.db.js` — **written, NEVER RUN** (§5) |
+| DB proof | `tests/proofs/technician_acceptance.db.js` — **written, NEVER RUN** (§5) |
 
 ---
 
@@ -123,7 +123,7 @@ exist yet.
 
 ## 5. ⚠ What has NOT been proven
 
-`tests/technician_acceptance.db.js` is written and **has never run.** No
+`tests/proofs/technician_acceptance.db.js` is written and **has never run.** No
 PostgreSQL server exists in this session — `psql` is installed, no server is.
 
 It proves what only a database can: that the four constraints refuse **by
@@ -142,7 +142,7 @@ so it does not need a copy of production — any disposable PostgreSQL 16 will
 do:
 
 ```bash
-HARNESS_DATABASE_URL="postgres://…disposable…" node tests/technician_acceptance.db.js
+HARNESS_DATABASE_URL="postgres://…disposable…" node tests/proofs/technician_acceptance.db.js
 ```
 
 It refuses to start without `HARNESS_DATABASE_URL`, has no fallback to

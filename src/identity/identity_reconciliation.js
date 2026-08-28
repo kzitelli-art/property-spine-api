@@ -2,7 +2,7 @@
 //  identity_reconciliation.js — DRY-RUN FIRST, IDEMPOTENT, RECEIPTED
 //
 //  Proposes user→person links from DETERMINISTIC evidence and applies them
-//  through the EXISTING governed bridge (staffbridge._service.linkBridge),
+//  through the EXISTING governed bridge (staff_bridge._service.linkBridge),
 //  which already owns the transaction, the row lock and the
 //  user_person_bridge_audit trail.
 //

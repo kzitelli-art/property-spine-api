@@ -36,7 +36,7 @@ Definitions that matter:
 Also determine, for each capability:
   - CANONICAL OWNER: the service/read file(s) that own this truth
   - HTTP ROUTE: is one mounted? grep server.js and src/surfaces/ in the API worktree
-  - ASK SPINE: check ${API}/tests/gate_ask_spine_readers.js REGISTRY for a matching key and report its exact
+  - ASK SPINE: check ${API}/tests/gates/gate_ask_spine_readers.js REGISTRY for a matching key and report its exact
     'state' value; then grep ${API}/src/agent/ask_spine_answer.js for a real gatherFacts branch. Report both.
   - MIGRATION: which migrations/NNN_*.sql file(s) create this domain's schema
   - KNOWN GAP/BLOCKER: quote verbatim any "blocked on" / "not established" / "pending" / "NOT yet" language
@@ -79,7 +79,7 @@ const CLUSTERS = [
     key: 'meeting_evidence',
     prompt: `Inventory MEETING EVIDENCE. Schema: migrations 175_meeting_evidence_provider_inbox.sql,
 176_meeting_receipt_v0.sql, 181_meeting_evidence_binding_finality_lineage.sql. Tests to open:
-tests/meeting_evidence_hardening.db.js, meeting_evidence_ingress.test.js, meeting_receipt_extractor_v0.test.js,
+tests/proofs/meeting_evidence_hardening.db.js, meeting_evidence_ingress.test.js, meeting_receipt_extractor_v0.test.js,
 meeting_receipt_runtime_v0.test.js, meeting_receipt_v0.test.js. Find the owning src/ files (look in src/evidence,
 src/conversation, src/agent). Relevant commits: 2de23cd, f6317b9, 9a6a347, a127a48. Treat "meeting receipt
 pipeline", "evidence ingress", and "binding finality/lineage" as potentially SEPARATE capabilities - report each
@@ -88,7 +88,7 @@ one you can distinguish with its own row.`,
   {
     key: 'person_ingress',
     prompt: `Inventory the PERSON INGRESS BOUNDARY / person spine. Schema: migrations/177_person_ingress_resolution_kind.sql.
-Tests: tests/person_ingress_hostile.db.js, tests/person_spine_import_audit.db.js, tests/resident_id_evidence_study.js.
+Tests: tests/proofs/person_ingress_hostile.db.js, tests/proofs/person_spine_import_audit.db.js, tests/scenarios/resident_id_evidence_study.js.
 Relevant commits: feef925, 03b0248, d62e791, 20e2356, b4556c7. Find the owning src/ files (look in src/entity,
 src/identity, src/tenancy). Note carefully whether "external resident identity" is BUILT or only PROPOSED - the
 commit messages distinguish proposing from building, and that distinction must survive into the row.`,
@@ -106,10 +106,10 @@ determine the CURRENT state, and quote the vocabulary ruling in 42470df (term_bl
   {
     key: 'rent_roll_grain',
     prompt: `Inventory the RENT ROLL / inventory grain work. Schema: migrations/179_activation_source_supersession.sql,
-migrations/180_inventory_retirement.sql. API tests: tests/rent_roll_occupancy_correction.db.js (719 lines),
-tests/skyline_rent_roll_model.db.js, tests/skyline_rent_roll_read.db.js, tests/skyline_bed_grain_activation.db.js,
-tests/inventory_retirement.db.js, tests/ledger_grain_reconciliation.db.js, tests/surplus_placeholder_repair.db.js,
-tests/tracker_intake.db.js. APP: skyline_rent_roll_units.browser.js (1734 lines) - OPEN IT, report assertion count.
+migrations/180_inventory_retirement.sql. API tests: tests/proofs/rent_roll_occupancy_correction.db.js (719 lines),
+tests/proofs/skyline_rent_roll_model.db.js, tests/proofs/skyline_rent_roll_read.db.js, tests/proofs/skyline_bed_grain_activation.db.js,
+tests/proofs/inventory_retirement.db.js, tests/proofs/ledger_grain_reconciliation.db.js, tests/proofs/surplus_placeholder_repair.db.js,
+tests/proofs/tracker_intake.db.js. APP: skyline_rent_roll_units.browser.js (1734 lines) - OPEN IT, report assertion count.
 Also tests/rent_roll_row_semantics.test.js, rent_roll_server_classification.test.js, rent_roll_cutover_app.test.js.
 Commits: 750335d, e16fe4d, b8ec878, 408c8e6, 38500a5, 812065e, bd3ac15, 3ba8180, 3efffb6.
 CRITICAL: docs/RENT_ROLL_CORRECTION_RELEASE_PACKET.md exists in the APP repo and commit 72c7a8e says "production
@@ -119,8 +119,8 @@ Distinguish "Current Rent Roll" from "Forward Leasing" - they are different capa
   },
   {
     key: 'tenancy',
-    prompt: `Inventory TENANCY. Tests: tests/tenancy_standing_read.db.js, tests/tenancy_ask_spine.test.js,
-tests/tenancy_ask_spine_http.db.js. Commit 234e347 "Tenancy: register the domain with Ask Spine, and make the gate
+    prompt: `Inventory TENANCY. Tests: tests/proofs/tenancy_standing_read.db.js, tests/unit/tenancy_ask_spine.test.js,
+tests/proofs/tenancy_ask_spine_http.db.js. Commit 234e347 "Tenancy: register the domain with Ask Spine, and make the gate
 that enforces 40.2 go red". Find the owning src/tenancy/ files. CRITICAL DISTINCTION the doctrine insists on:
 "pending tenancy" and "active/current resident" may be DIFFERENT capabilities with DIFFERENT proof levels. Do not
 conflate them. If the evidence proves pending-tenancy creation but NOT active-resident transition, say so with two
@@ -130,7 +130,7 @@ confirmProposal too" and report what that wall is and where it is enforced.`,
   {
     key: 'release_rail',
     prompt: `Inventory the RELEASE / DEPLOY MACHINERY itself - this is a capability like any other and the ledger needs
-a truthful row for it. Read: ${API}/migrations/migrate.js, tests/migration_release_gate.test.js,
+a truthful row for it. Read: ${API}/migrations/migrate.js, tests/unit/migration_release_gate.test.js,
 docs/release/*.md, and commits 9cbdc11 ("Correct the release rail and the handoff ceiling - both documents were
 stale"), 35cf732 ("EXPECTED_SHA is read from git, not copied from a document"), 471f2e0, ed8b7ac ("Close the
 untracked-migration hole the SHA fix opened"), 2577f81 ("Document deliberate Render release flow").

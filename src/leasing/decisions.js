@@ -32,7 +32,7 @@
 //
 //  All consequential logic lives on _service (transaction-aware,
 //  client-first) — routes are the thin HTTP skin, same shape as
-//  leasingconversion/agent.
+//  leasing_conversion/agent.
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");

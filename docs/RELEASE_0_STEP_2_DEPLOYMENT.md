@@ -21,7 +21,7 @@ sha256 ae4b9b774cd9be8568ea24219d4ee4a98350b2bce3a03baf8de33d0cfcc2ea4d
 
 Produced by removing that file's own `begin;`/`commit;` and replacing its header.
 Nothing else — retyping it would have made the scale proof a statement about a
-different file. `tests/gate_migration_137_promotion.js` compares them statement
+different file. `tests/gates/gate_migration_137_promotion.js` compares them statement
 by statement, 85 units, on every `npm run verify`.
 
 **The wrapper had to come out.** `migrate.js` inserts the `schema_migrations` row

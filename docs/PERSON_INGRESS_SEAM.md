@@ -179,7 +179,7 @@ separate** — that is the coupling the audit isolated.
 ### 2.5 The gate that makes it structural
 
 ```text
-tests/gate_person_ingress.js     NEW · Class 3
+tests/gates/gate_person_ingress.js     NEW · Class 3
 ```
 
 Scans **the whole repo** — `src/`, `server.js`, `tools/`, `seeds/` — for
@@ -230,7 +230,7 @@ external-ID table, no `yardi_id`, no new UI.
 
 ## 3 · The hostile proof matrix
 
-`tests/person_ingress_hostile.db.js` — real Postgres, real writers. Each row is
+`tests/proofs/person_ingress_hostile.db.js` — real Postgres, real writers. Each row is
 the failure it exists to prevent, not a feature it demonstrates.
 
 | # | Hostile case | Required outcome |

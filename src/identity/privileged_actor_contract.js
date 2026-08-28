@@ -1,7 +1,7 @@
 // ════════════════════════════════════════════════════════════════════
 //  privileged_actor_contract.js — WHO MAY CLAIM TO BE WHOM
 //
-//  The permanent contract for privileged services. commitmentledger.js takes
+//  The permanent contract for privileged services. commitment_ledger.js takes
 //  `published_by_person_id`, `granted_by_person_id` and `spoken_by_person_id`
 //  FROM ITS CALLER. Today that is unreachable from a browser session — the
 //  routes sit behind the operator-key gate, every table is empty, and no
@@ -134,10 +134,10 @@ function actorAttribution(actor) {
   };
 }
 
-// ── the migration plan for commitmentledger.js ──────────────────────
+// ── the migration plan for commitment_ledger.js ──────────────────────
 // Recorded here rather than in a document so it travels with the contract.
 const LEDGER_MIGRATION = {
-  target: "src/money/commitmentledger.js",
+  target: "src/money/commitment_ledger.js",
   current_shape: "publishPricingVersion(spec) reads spec.published_by_person_id; " +
     "recordConcessionIncident reads spec.spoken_by_person_id; " +
     "grantOffer reads spec.granted_by_person_id.",

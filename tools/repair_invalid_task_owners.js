@@ -5,7 +5,7 @@
 //
 //  Open tasks whose named owner no longer resolves as an eligible owner
 //  are returned to UNASSIGNED through the GOVERNED path
-//  (leasingconversion._service.reassignTask with to_user_id = null), so
+//  (leasing_conversion._service.reassignTask with to_user_id = null), so
 //  the former owner is preserved in leasing_conversion_obligation_events
 //  and nothing is silently erased.
 //
@@ -40,7 +40,7 @@ const PROPERTY = process.argv.find((a) => /^[0-9a-f-]{36}$/i.test(a))
   // the history entry, so this is the real one, not a stub.
   const { createConversionClosureAuthority } =
     require(path.join(__dirname, "..", "src", "leasing", "conversion_obligation_closure.js"));
-  const conversion = require(path.join(__dirname, "..", "src", "leasing", "leasingconversion.js"))({
+  const conversion = require(path.join(__dirname, "..", "src", "leasing", "leasing_conversion.js"))({
     pool,
     closureAuthority: createConversionClosureAuthority({ pool }),
   })._service;

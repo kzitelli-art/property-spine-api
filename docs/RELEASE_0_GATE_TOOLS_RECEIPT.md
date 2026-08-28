@@ -16,7 +16,7 @@ NEW  tools/activation/technician_fixture_proof.js   Gate 4   read-only
 NEW  tools/activation/evidence_ingress_proof.js     Gate 8+10 read-only
 NEW  tools/activation/supersede_operations_line.js  Gate 9   WRITE by design
 NEW  tools/activation/gate_tools_falsify.sh         23 controls, isolated only
-MOD  tests/gate_harness_isolation.js                three register entries
+MOD  tests/gates/gate_harness_isolation.js                three register entries
 ```
 
 ## Design decisions that matter

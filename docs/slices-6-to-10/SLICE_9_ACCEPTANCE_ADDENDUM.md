@@ -157,7 +157,7 @@ permitted at submission.
 
 ## 3 · CROSS-DOMAIN MATRIX — ALL 20 × 9 CELLS
 
-Produced by `tests/slice9_cross_domain_matrix.js`, which now prints every
+Produced by `tests/scenarios/slice9_cross_domain_matrix.js`, which now prints every
 domain. `38/38` is the assertion count; **this table is the coverage.**
 
 | # | Scenario | Application target | Invitation | Submission | Packet | Future commitment | Marketing | Turn priority | Economic tenancy | Refusal reason |

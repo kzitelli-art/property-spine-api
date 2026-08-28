@@ -14,7 +14,7 @@
 > ```text
 > PHILOSOPHY.md §40                        what Ask Spine IS — doctrine, 11 rulings
 > PHILOSOPHY.md §40.2 / §33                a domain is not done until it can be asked
-> tests/gate_ask_spine_readers.js          the gate that enforces §40.2
+> tests/gates/gate_ask_spine_readers.js          the gate that enforces §40.2
 > ASK_SPINE_CANONICAL_READ_LAYER.md        the next build. Taxes + Insurance.
 > ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md   transcript evidence, second
 > ```

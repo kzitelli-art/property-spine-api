@@ -27,7 +27,7 @@ Therefore:
 
 ## 1. Read-only production smoke
 
-`tests/prod_smoke_missed_readonly.js` — the ONLY harness permitted against
+`tests/scenarios/prod_smoke_missed_readonly.js` — the ONLY harness permitted against
 production. Every other `.db.js` harness commits fixtures and is structurally
 refused by the `HARNESS_DATABASE_URL` guard.
 
@@ -48,7 +48,7 @@ primitive contains no `update obligations set status` · no half-written
 recognition rows · no obligation holds a `missed` lifecycle status.
 
 ```bash
-SMOKE_DATABASE_URL="<production>" node tests/prod_smoke_missed_readonly.js
+SMOKE_DATABASE_URL="<production>" node tests/scenarios/prod_smoke_missed_readonly.js
 ```
 
 ---

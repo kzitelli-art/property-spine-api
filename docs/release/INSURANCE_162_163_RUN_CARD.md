@@ -157,9 +157,9 @@ From the 160/161 closeout, still true:
 
 ```text
 API  branch head 53edb5d
-     tests/insurance_establishment.db.js   141/141   real PG + real HTTP
-     tests/insurance_truth.db.js            52/52
-     tests/asset_management_shell.db.js     46/46
+     tests/proofs/insurance_establishment.db.js   141/141   real PG + real HTTP
+     tests/proofs/insurance_truth.db.js            52/52
+     tests/proofs/asset_management_shell.db.js     46/46
      npm run verify                         14/14    (unshallowed first)
 
 APP  branch head 4390db3
@@ -173,6 +173,6 @@ APP  branch head 4390db3
 **What is NOT proven:** anything in production, and PDF bytes → text
 (that is server.js's existing `fileToText`, injected rather than
 reimplemented; the label scan over its output is proven directly).
-`tests/deal_setup_http.db.js` could not run here — it needs the full
+`tests/proofs/deal_setup_http.db.js` could not run here — it needs the full
 schema, which cannot rebuild from empty (`012_bank_intake` / `yardi_code`).
 That predates this work.

@@ -269,7 +269,7 @@ defect and **must not** be changed in the current resident or engine slice.
 # Communication Line Hardening — BUILT AND MERGED (`a08c1da`, migration 129)
 
 **Status: all five points below are implemented and proven against isolated real
-PostgreSQL and real HTTP — `tests/property_line_hardening.db.js` 41/41, exit 0.**
+PostgreSQL and real HTTP — `tests/proofs/property_line_hardening.db.js` 41/41, exit 0.**
 **NOT yet production-active:** migration 129 is merged and unreleased. See
 `docs/PROPERTY_LINE_HARDENING.md` for the slice and
 `docs/PROPERTY_LINE_ACTIVATION.md` for the release runbook.

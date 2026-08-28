@@ -165,7 +165,7 @@ demoted them from the primary path; they remain mounted deliberately.
 
 ### Test or harness (7)
 
-`tests/unit_triage_proof.js` · `unit_turn_scope_proof.js` ·
+`tests/proofs/unit_triage_proof.js` · `unit_turn_scope_proof.js` ·
 `work_acceptance_proof.js` · `readiness_certification_proof.js` ·
 `staff_agent_proof.js` · `unit_turn_page_proof.js` ·
 `operator_language_proof.js`
@@ -224,7 +224,7 @@ duplicated `require`.
 
 ### One real finding — a stale assertion in the Build 6B harness
 
-`tests/operator_language_proof.js` §8 asserts that Build 6B changed only a
+`tests/proofs/operator_language_proof.js` §8 asserts that Build 6B changed only a
 named allow-list of files. Build 6B's own final commit (`b562339`) added
 `docs/BUILD_6B_DEFERRED_DISPLAY_LANGUAGE.md`, which is **not in that list**,
 so the assertion fails **at the frozen Build 6B tip**:
@@ -393,7 +393,7 @@ Because:
 
 1. One pre-merge commit on a fix branch: add
    `docs/BUILD_6B_DEFERRED_DISPLAY_LANGUAGE.md` to `ALLOWED` in
-   `tests/operator_language_proof.js`. **Nothing else.**
+   `tests/proofs/operator_language_proof.js`. **Nothing else.**
 2. Re-run all seven harnesses. Expect 910/0.
 3. Re-run the conflict simulation — main may have moved by then.
 4. Fast-forward or `--no-ff` merge API `b562339` and app `f60511a`.

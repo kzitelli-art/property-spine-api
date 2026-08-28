@@ -46,8 +46,8 @@ REPORTED / dead        ~3
 
 | Capability | Proof rung | Ask Spine | Production | Critical evidence |
 |---|---|---|---|---|
-| **Compliance** | **HTTP_PROVEN + BROWSER_VERIFIED** (real PG both) | `registered` | unknown | `tests/compliance_http.db.js` (real PG + `app.listen`, 64 assertions); `app/compliance_browser_proof.browser.js` (real Chromium + real PG, 39). **No THREAD_HANDOFF section exists for it at all** — best-proven domain, entirely undocumented |
-| **Utilities** | **LOCALLY_EXERCISED** ⚠ | `registered` (+`governed_detail`) | unknown | `tests/utility_http.test.js` = real HTTP but **hand-built fake pool**; `utility_persistence.db.js` = real PG but **no router**. The two never combine. `app/utilities_door.browser.js` uses `fakePool()`. **Registered and shipped-looking; never proven end-to-end** |
+| **Compliance** | **HTTP_PROVEN + BROWSER_VERIFIED** (real PG both) | `registered` | unknown | `tests/proofs/compliance_http.db.js` (real PG + `app.listen`, 64 assertions); `app/compliance_browser_proof.browser.js` (real Chromium + real PG, 39). **No THREAD_HANDOFF section exists for it at all** — best-proven domain, entirely undocumented |
+| **Utilities** | **LOCALLY_EXERCISED** ⚠ | `registered` (+`governed_detail`) | unknown | `tests/unit/utility_http.test.js` = real HTTP but **hand-built fake pool**; `utility_persistence.db.js` = real PG but **no router**. The two never combine. `app/utilities_door.browser.js` uses `fakePool()`. **Registered and shipped-looking; never proven end-to-end** |
 | **Contracted Services** | **LOCALLY_EXERCISED** ⚠ | `registered` (+`governed_detail`) | no | Same fake-pool pattern as Utilities. Doc: *"evidence-backed population rehearsal, not a production canonical write"* |
 | **Insurance** | HTTP_PROVEN + BROWSER_VERIFIED | **`pending`** | **explicitly NO** | `insurance_establishment.db.js` 141 assertions. Doc: *"Insurance rendering real truth — NEVER seen on a production page by an entitled account… Do not describe Insurance as production-verified"* |
 | **Tax** | HTTP_PROVEN + BROWSER_VERIFIED | **`pending`** | **contradicted** | `philadelphia_tax_http.db.js` 106 assertions. THREAD_HANDOFF says *"APPLIED… ceiling 167"* AND *"release 162–167 nothing is in production"* — same section |
@@ -86,7 +86,7 @@ cannot see this entire lifecycle. Not `pending`, not `waived`. Invisible.
 | Renewals | LOCALLY_EXERCISED (real DB) | HTTP proof is opt-in (`API_BASE`) and skipped by default. Handoff claims browser proof; **no renewals `.browser.js` exists** |
 | `followup_ladder` / `followup_runner` | **BUILT_BUT_DORMANT** | self-declared: *"DORMANT. Nothing calls this yet. It decides; it cannot send"* |
 
-⚠ `tests/full_lifecycle_arc.js` **defaults to `https://property-spine-api.onrender.com`** —
+⚠ `tests/arcs/full_lifecycle_arc.js` **defaults to `https://property-spine-api.onrender.com`** —
 walks the entire chain against PRODUCTION. No receipt anywhere shows it was ever run.
 
 ---

@@ -23,7 +23,7 @@ NEW  tools/activation/readonly_falsify.js   15 assertions, real Postgres
 MOD  tools/activation/verify_deployment.js  guard + savepoint-per-read + U5 repair
 MOD  tools/activation/rotation_proof.js     guard
 MOD  tools/activation/signature_controls.js guard on the census connection
-MOD  tests/gate_harness_isolation.js        three PRODUCTION_APPROVED entries
+MOD  tests/gates/gate_harness_isolation.js        three PRODUCTION_APPROVED entries
 ```
 
 No production source changed. `src/comms/sms.js` and

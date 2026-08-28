@@ -144,7 +144,7 @@ function activationPerimeter({ pool, loadApplication, eligibleStatuses, action, 
   const ACTION = action || "gated_activation";
   // ACTION POLICY (ruling caution #2): "assigned here" is NOT "authorized for
   // this consequential write." Lease-term ownership (countersign / confirm-
-  // term) is governed by the 'leasing' module (teamaccess ALLOWED_MODULES),
+  // term) is governed by the 'leasing' module (team_access ALLOWED_MODULES),
   // owned by the property_manager per migration 047. The perimeter answers
   // "may THIS actor perform THIS action at THIS property?" — module
   // entitlement, not mere assignment. Defaults to 'leasing'.

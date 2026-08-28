@@ -15,8 +15,8 @@ Deliverables 1–6 from the import-identity decision brief. Everything here is
 measured from real artifacts or read out of the tree; where something cannot
 be measured, that is said rather than estimated.
 
-Harnesses: `tests/resident_id_evidence_study.js` (files only, no database) and
-`tests/person_spine_import_audit.db.js` (unchanged from the audit).
+Harnesses: `tests/scenarios/resident_id_evidence_study.js` (files only, no database) and
+`tests/proofs/person_spine_import_audit.db.js` (unchanged from the audit).
 
 ---
 

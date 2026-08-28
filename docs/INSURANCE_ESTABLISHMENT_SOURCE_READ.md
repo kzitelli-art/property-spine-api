@@ -293,7 +293,7 @@ portfolio/owner dashboard · TEAM redesign · document management
 ```
 
 **Cash & Financing must still read NOT ESTABLISHED after a successful insurance
-establishment.** That is the wall holding. `tests/gate_insurance_economic_independence.js`
+establishment.** That is the wall holding. `tests/gates/gate_insurance_economic_independence.js`
 already fails the build on financing vocabulary in the migration or the
 services — **extend its scan to any new route file**, or the gate will assert
 less than the claim it is making.
@@ -306,7 +306,7 @@ less than the claim it is making.
 schema           migration 162 applied in a scoped harness schema
                  (the full chain cannot rebuild from empty — 012_bank_intake /
                  yardi_code. Use the scoped-schema pattern from
-                 tests/insurance_truth.db.js)
+                 tests/proofs/insurance_truth.db.js)
 services         the confirm path writes ONLY through the existing writers
 HTTP             real authenticated request, real Postgres
 refusals         currency missing · over-allocation · stated-without-external

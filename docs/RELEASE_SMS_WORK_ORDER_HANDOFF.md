@@ -137,13 +137,13 @@ browser proof, real Chromium driving real HTTP against a real Express API.
 
 | Harness | Result |
 |---|---|
-| `tests/communication_lines_slice_a.db.js` | 61 / 61 |
-| `tests/property_line_hardening.db.js` | 41 / 41 |
-| `tests/migration_ledger_inverse_gate.db.js` | 24 / 24 |
-| `tests/technician_acceptance.db.js` | 32 / 32 |
-| `tests/operations_reply_policy.db.js` | 32 / 32 |
-| `tests/technician_route_proof.db.js` | 48 / 48 |
-| `tests/technician_lifecycle_proof.db.js` | 62 / 62 |
+| `tests/proofs/communication_lines_slice_a.db.js` | 61 / 61 |
+| `tests/proofs/property_line_hardening.db.js` | 41 / 41 |
+| `tests/proofs/migration_ledger_inverse_gate.db.js` | 24 / 24 |
+| `tests/proofs/technician_acceptance.db.js` | 32 / 32 |
+| `tests/proofs/operations_reply_policy.db.js` | 32 / 32 |
+| `tests/proofs/technician_route_proof.db.js` | 48 / 48 |
+| `tests/proofs/technician_lifecycle_proof.db.js` | 62 / 62 |
 | app `work_lifecycle_browser_proof.browser.js` | **99 / 99** |
 | `npm run verify` (source governance) | 7 gates, exit 0 |
 | 4 pure unit suites (clarification, intent, selection, language) | exit 0 |

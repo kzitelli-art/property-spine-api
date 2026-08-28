@@ -13,7 +13,7 @@
 
 const crypto = require("crypto");
 const { Pool } = require("pg");
-const leasePacketsModule = require("../src/applications/leasepackets.js");
+const leasePacketsModule = require("../src/applications/lease_packets.js");
 const applicationsModule = require("../src/applications/applications.js");
 const { buildReviewDetail } = require("../src/applications/application_review.js");
 

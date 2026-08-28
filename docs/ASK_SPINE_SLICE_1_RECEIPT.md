@@ -130,7 +130,7 @@ belongs to the same property.
 
 The filter exists in the query (`module = ANY($2::text[])`) and `$2` is
 `req.operator.allowed_modules` — never a request value. **Proven over real HTTP**
-(`tests/ask_spine_http_proof.js`, assertions M1–M8):
+(`tests/proofs/ask_spine_http_proof.js`, assertions M1–M8):
 
 | Scenario | Proven behaviour |
 |---|---|
@@ -190,10 +190,10 @@ Each runs independently and exits non-zero on failure.
 ```bash
 # 1. Service contract — 31 assertions, floor 24
 cd property-spine-api && npm install
-node tests/ask_spine_contract_proof.js
+node tests/proofs/ask_spine_contract_proof.js
 
 # 2. Real HTTP transport — 19 assertions, floor 18
-node tests/ask_spine_http_proof.js
+node tests/proofs/ask_spine_http_proof.js
 
 # 3. Browser UI path — 16 assertions
 mkdir -p /tmp/pw && cd /tmp/pw && npm install playwright
@@ -363,7 +363,7 @@ DATABASE_URL=postgres://postgres@127.0.0.1:55432/askspine_proof node migrations/
 
 # real-Postgres rung
 HARNESS_DATABASE_URL=postgres://postgres@127.0.0.1:55432/askspine_proof \
-  node tests/ask_spine_db_proof.db.js          # 23 assertions, floor 22
+  node tests/proofs/ask_spine_db_proof.db.js          # 23 assertions, floor 22
 
 # API-backed browser: seed, run the real API, resolve the pinned origin
 HARNESS_DATABASE_URL=… node tools/ask_spine_e2e_seed.js > session.json

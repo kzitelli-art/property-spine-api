@@ -44,9 +44,9 @@ fast-forward; no synthetic rebase was performed.
 | `src/agent/staff_agent_intent.js` | **FIX 3** — a concrete observed condition reaches initial triage |
 | `src/surfaces/unit_turn_read.js` | **FIX 2** — emits server-computed `capabilities` |
 | `src/surfaces/unit_turn.js` | **FIX 2** — passes server-derived `allowed_modules` into the read |
-| `tests/work_acceptance_proof.js` | Build 3 proof updated to verified attachments |
-| `tests/operator_language_proof.js` | allowlist correction; Build 3 range pinned |
-| `tests/release_candidate_proof.js` | pressure test + the three fixes + new failure modes |
+| `tests/proofs/work_acceptance_proof.js` | Build 3 proof updated to verified attachments |
+| `tests/proofs/operator_language_proof.js` | allowlist correction; Build 3 range pinned |
+| `tests/proofs/release_candidate_proof.js` | pressure test + the three fixes + new failure modes |
 | `docs/UNIT_TURN_RELEASE_CANDIDATE.md`, `docs/UNIT_TURN_THIN_LIVE_PROOF.md` | this file and the acceptance script |
 
 Plus `docs/BUILD_1_6B_INTEGRATION_READINESS.md`, carried by the cherry-pick.

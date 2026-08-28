@@ -416,7 +416,7 @@ per file.
 - `src/shared/database_ssl.js` states it once
 - `server.js` and the tool both take their answer from it; production
   behaviour is unchanged, since Neon is not a local host
-- `tests/gate_ci_path_ssl.js` stops a third file, and **discovers** its
+- `tests/gates/gate_ci_path_ssl.js` stops a third file, and **discovers** its
   subjects by reading what the e2e proofs actually shell out to rather than
   carrying a list that would go stale the same silent way
 

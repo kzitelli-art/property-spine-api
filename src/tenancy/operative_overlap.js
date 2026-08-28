@@ -56,7 +56,7 @@ const RETIRED_SQL_LIST = RETIRED_STATUSES.map((s) => {
 
 /*  ── THE PREDICATE ──────────────────────────────────────────────────
  *  Parameter order is part of the contract and is pinned by
- *  tests/executed_lease_overlap_contract.test.js:
+ *  tests/unit/executed_lease_overlap_contract.test.js:
  *
  *      $1  space_id
  *      $2  lease id to exclude, or null   ← the caller's own lease, never

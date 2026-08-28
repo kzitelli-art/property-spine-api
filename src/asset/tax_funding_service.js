@@ -4,7 +4,7 @@
    the City was paid.
 
    ── IT LIVES ON THE FUNDING SIDE OF AN EXECUTABLE WALL ──────────────
-   `tests/gate_funding_boundary.js` asserts, structurally:
+   `tests/gates/gate_funding_boundary.js` asserts, structurally:
 
        the tax economic chain may never import this file, transitively
        this file may REFERENCE the obligation it funds — reads, FKs

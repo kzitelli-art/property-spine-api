@@ -32,7 +32,7 @@
    ── IT KNOWS NOTHING ABOUT FINANCING ────────────────────────────────
    Same wall migration 161 and the two services hold, for the same
    reason: what insurance COSTS must be establishable without knowing how
-   it was PAID FOR. tests/gate_insurance_economic_independence.js scans
+   it was PAID FOR. tests/gates/gate_insurance_economic_independence.js scans
    this file for financing vocabulary and fails the build on a hit.
 
    ── WHY IT IS ITS OWN FILE ──────────────────────────────────────────

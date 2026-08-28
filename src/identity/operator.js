@@ -120,7 +120,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     return crypto.timingSafeEqual(ha, hb); // both 32 bytes, always
   }
 
-  // ── the SHARED staff-session resolver (twin of teamaccess.currentUser) ──
+  // ── the SHARED staff-session resolver (twin of team_access.currentUser) ──
   // Resolves x-staff-session → real users row. Returns null if absent/invalid/expired.
   // Returns { id, name, email, role, property_id } — property_id is the SESSION scope.
   async function resolveSession(req) {
@@ -814,7 +814,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
 
   // POST /operator/leasing/conversations/:conversationId/reply
   // The Person Card's human-text door. This is a THIN staff-session adapter over
-  // leasinginteractions.recordOutboundText — the one interaction ledger + the
+  // leasing_interactions.recordOutboundText — the one interaction ledger + the
   // one communications boundary. The browser supplies only body text. Property,
   // person, recipient, and actor are all server-derived and scope-verified.
   router.post("/operator/leasing/conversations/:conversationId/reply", requireOperator, requireLeasingModuleAccess, async (req, res) => {
@@ -958,7 +958,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   //  AUTHORITY (locked + tested): close_not_fit / reopen are a REOPENABLE disposition —
   //  they do NOT write leasing_leads.status. The lead stays in the open set (so reopen
   //  always works) and leaves/re-enters the ACTIVE queue purely by projection. Terminal
-  //  'lost' remains owned by the lead module (leasingleads.recordLeadEvent), not here.
+  //  'lost' remains owned by the lead module (leasing_leads.recordLeadEvent), not here.
   // ════════════════════════════════════════════════════════════════════
 
   const conversationOperating = require("../shared/conversation_operating_contract");
@@ -1306,7 +1306,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
 
   // GET /operator/leasing/follow-ups — THE CADENCE DUE-ENGINE (read side).
   // The rungs already exist and already carry due_by at spawn (24h → 72h →
-  // 48h, leasingconversion.js); what never existed was anything that SURFACES
+  // 48h, leasing_conversion.js); what never existed was anything that SURFACES
   // them. This is that surface: a rung is DUE when now() ≥ due_by — computed
   // server-side at read time (queue_projection pattern: the browser is never
   // the source of truth). DISPATCH deliberately does not live here — actually
@@ -2796,7 +2796,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   // cursor. A null owner, null due date, or sibling type NEVER hides a row.
   // ── resolvePropertyOperatingTimeZone ─────────────────────────────────
   //  Resolved through the ONE shared resolver (property_timezone.js) — the SAME
-  //  truth leasingleads.js uses for agent tour-offer local times. An
+  //  truth leasing_leads.js uses for agent tour-offer local times. An
   //  UNCONFIGURED property gets an honest null (never an invented day).
   const { loadPropertyOperatingTimeZone } = require("../shared/property_timezone");
   // The board's DAY CONTRACT — offsets, clamping, and the SQL fragments that
@@ -2811,7 +2811,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   // ══════════════════════════════════════════════════════════════════
   //  LIVE TOUR SURFACE (session door) — the reads/writes that let the
   //  operator app complete a tour on the session's property through the
-  //  ONE canonical completion service (leasingleads.js completeTourService).
+  //  ONE canonical completion service (leasing_leads.js completeTourService).
   //  Same two-plane authz as the task queue: session + leasing module.
   // ══════════════════════════════════════════════════════════════════
 
@@ -3049,7 +3049,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   });
 
   // Session-authed tour completion. The SAME transaction the operator-key
-  // door runs (no fork): leasingleads.js completeTourService, with
+  // door runs (no fork): leasing_leads.js completeTourService, with
   //   • the RECORDER server-derived from the staff session (req.operator.id)
   //     — a body actor_id can never override it on this door, and
   //   • the property wall enforced from the session scope: the tour must
@@ -3599,9 +3599,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   // ══════════════════════════════════════════════════════════════════
   //  APPLICATION INVITATION — the PERMANENT live-operator entry point.
   //  Staff-session authenticated; actor SERVER-DERIVED (req.operator.id).
-  //  Calls the existing applicationSubmission services — NO duplicate
+  //  Calls the existing application_submission services — NO duplicate
   //  invitation logic. (The legacy shared-key /leasing/application-invitations
-  //  route in applicationSubmission.js is marked for retirement.)
+  //  route in application_submission.js is marked for retirement.)
   //
   //  Two verbs, preserving prepared vs. manually_sent:
   //   POST /operator/leasing/application-invitations
@@ -4475,7 +4475,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   });
 
   // LEASE-PACKET OPERATOR ADAPTERS — staff-session doors over
-  // leasepackets.js's one canonical service.
+  // lease_packets.js's one canonical service.
   router.post(
     "/operator/leasing/applications/:id/lease-packet",
     dormantWriteGuard,
@@ -4487,7 +4487,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       if (!leasePacketsService ||
           typeof leasePacketsService.generateLeasePacket !== "function") {
         return res.status(503).json({
-          receipt: "Lease-packet generation is not wired on this deploy. Deploy leasepackets.js, operator.js, and server.js together.",
+          receipt: "Lease-packet generation is not wired on this deploy. Deploy lease_packets.js, operator.js, and server.js together.",
         });
       }
       const op = req.operator;
@@ -4533,7 +4533,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       if (!leasePacketsService ||
           typeof leasePacketsService.issueLeasePacketLink !== "function") {
         return res.status(503).json({
-          receipt: "Lease-packet issue is not wired on this deploy. Deploy leasepackets.js, operator.js, and server.js together.",
+          receipt: "Lease-packet issue is not wired on this deploy. Deploy lease_packets.js, operator.js, and server.js together.",
         });
       }
       const op = req.operator;

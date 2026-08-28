@@ -200,7 +200,7 @@ server-derived scope leaves the cross-property defect intact.
 |---|---|
 | `src/obligations/operator_obligations.js` | **new** — `GET /operator/obligations`, gated exactly like `ask_spine.js`: `resolveStaffSession` → `req.operator.property_id`, refuse a mismatched client `property_id` with 403, module entitlement from the session |
 | `server.js` | **route registration only**, plus removal of `app.get("/obligations", …)` at `:733` |
-| `tests/operator_obligations_security_proof.db.js` | **new** — real Postgres + authenticated HTTP, explicit assertion floor |
+| `tests/proofs/operator_obligations_security_proof.db.js` | **new** — real Postgres + authenticated HTTP, explicit assertion floor |
 | app · `index.html` | migrate `loadObligations()` to the new route via `loadResource`; **one appended `LIVE_RESOURCES` entry** |
 
 **Ask Spine is not touched, and the new route does not depend on the old one.**
@@ -403,7 +403,7 @@ UUID. A key holder can claim work **as any user**, on **any property**.
 
 | | |
 |---|---|
-| **Callers** | `tests/smoke_release2.deployed.js:70,93` · `tests/smoke_release3.deployed.js:89,109` — **deployed smoke tests**, calling with the shared key and `body: {}` |
+| **Callers** | `tests/scenarios/smoke_release2.deployed.js:70,93` · `tests/scenarios/smoke_release3.deployed.js:89,109` — **deployed smoke tests**, calling with the shared key and `body: {}` |
 | Request | `{ completed_by? }` — **spoofable actor** |
 | Canonical service? | **Yes — `completeObligation`** |
 | Property authority | **none** at the route |
@@ -513,9 +513,9 @@ to call.
 | `src/obligations/operator_obligations.js` | **new** — thin route: session, authority refusal, HTTP mapping |
 | `src/obligations/operator_obligation_actions.js` | **new** — self-claim |
 | `server.js` | register two routers; **retire all five legacy routes** |
-| `tests/operator_obligations_security_proof.db.js` | **new** — 21 assertions, floor 20 |
-| `tests/obligation_completion_canonical_proof.db.js` | **new** — 12 assertions, floor 12 |
-| `tests/smoke_release2.deployed.js`, `smoke_release3.deployed.js` | legacy calls retargeted; boundary smoke added |
+| `tests/proofs/operator_obligations_security_proof.db.js` | **new** — 21 assertions, floor 20 |
+| `tests/proofs/obligation_completion_canonical_proof.db.js` | **new** — 12 assertions, floor 12 |
+| `tests/scenarios/smoke_release2.deployed.js`, `smoke_release3.deployed.js` | legacy calls retargeted; boundary smoke added |
 | app `index.html` | `loadObligations()` migrated; `claimObligation()` migrated; **both interceptors extended**; one appended manifest entry; one named write action |
 
 ### Consumers migrated

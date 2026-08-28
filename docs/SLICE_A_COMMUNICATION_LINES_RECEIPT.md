@@ -16,7 +16,7 @@
 | Migration claimed | **130** — `130_communication_lines.sql` |
 | Design | `docs/COMMUNICATION_LINE_MODEL_DESIGN.md` (approved, rulings 2026-08-03) |
 | Database | PostgreSQL **16.13**, isolated scratch database, `HARNESS_DATABASE_URL` only |
-| Harness | `tests/communication_lines_slice_a.db.js` |
+| Harness | `tests/proofs/communication_lines_slice_a.db.js` |
 | Result | **61 run · 61 passed · 0 failed** |
 | Exit code | **0** |
 

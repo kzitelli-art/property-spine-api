@@ -226,7 +226,7 @@ const GET = async (p, headers = {}) => {
     const j2 = await POST("/operator/session/revoke", {}, { "x-staff-session": jTok });
     ok(j2.status === j1.status && JSON.stringify(j2.json) === JSON.stringify(j1.json), "second revoke: identical receipt (idempotent, no oracle)");
 
-    // ================= K — cross-property wall (teamaccess) =================
+    // ================= K — cross-property wall (team_access) =================
     hdr("K — property wall on /properties/:id/my-access");
     if (!otherProp) { wr("no second property found — skipped"); }
     else {

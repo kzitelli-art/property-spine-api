@@ -12,7 +12,7 @@ execution path existed, so nothing was removed and no code was changed.**
 
 | # | required property | verdict | evidence |
 |---|---|---|---|
-| 1 | not imported by application runtime | **PASS** | the only `require` of it anywhere in the repo is its own proof (`tests/slice9_attribution_backfill_proof.js:20`). Zero references in `src/` or `server.js`. |
+| 1 | not imported by application runtime | **PASS** | the only `require` of it anywhere in the repo is its own proof (`tests/proofs/slice9_attribution_backfill_proof.js:20`). Zero references in `src/` or `server.js`. |
 | 2 | not called by migration startup or deployment hooks | **PASS** | `prestart` is `node migrations/migrate.js`; `start` is `node server.js`. No `render.yaml`, no `Procfile`, no other hook file exists. No migration references it. |
 | 3 | does not run automatically | **PASS** | instrumented `Module.prototype.require` while loading `server.js`: **0** backfill requires observed. Importing the module directly opens no connection and attempts no write — the CLI body is behind `if (require.main === module)` (line 134). |
 | 4 | supports read-only / dry-run mode | **PASS** | dry run is the **default posture**. `--apply` is required to write; the CLI issues `rollback` unless `apply` is set. |

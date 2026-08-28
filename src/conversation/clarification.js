@@ -2,7 +2,7 @@
    conversation/clarification.js — CLARIFICATION & CONFIRMATION STATE.
 
    The second shared conversational seam, extracted from the resident SMS
-   path in src/comms/tenantlink.js where the ladder lived inline inside
+   path in src/comms/tenant_link.js where the ladder lived inline inside
    processInboundClaim. See docs/AGENT_CAPABILITY_SEAMS.md.
 
    ── WHAT IT DECIDES (the whole of it) ──────────────────────────────
@@ -45,7 +45,7 @@
    order.
 
    ── MOVE, NOT REDESIGN ─────────────────────────────────────────────
-   Every branch below is the tenantlink original. One state is new and is
+   Every branch below is the tenant_link original. One state is new and is
    declared rather than smuggled: `unusable_question_context` — an open
    clarification whose recorded question text is missing or blank. It
    terminates in `hold_for_human`. Previously that row reached the model

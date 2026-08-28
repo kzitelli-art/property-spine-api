@@ -110,7 +110,7 @@ function cleanStatus(v, section) {
  *  writes people the Skyline identifier was never parsed out at all — not
  *  merely unstorable, unextracted. That is why a re-import had nothing to
  *  recognise with and forked the human even after the ingress seam existed:
- *  proven by H8 in tests/person_ingress_hostile.db.js, which failed until
+ *  proven by H8 in tests/proofs/person_ingress_hostile.db.js, which failed until
  *  this function learned the second dialect.
  *
  *  parseResident() has always known the embedded form; this is that same

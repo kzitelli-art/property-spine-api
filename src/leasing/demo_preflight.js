@@ -50,7 +50,7 @@ function checkEnv() {
   const sendMode  = (process.env.SMS_SEND_MODE || "").trim();
   const allowRaw  = process.env.PROSPECT_ACTIVATION_PROPERTY_IDS || "";
 
-  // Parsed exactly the way leasingleads.js parses it — comma split, trimmed.
+  // Parsed exactly the way leasing_leads.js parses it — comma split, trimmed.
   const allow = new Set(allowRaw.split(",").map(s => s.trim()).filter(Boolean));
 
   demoMode === "true"

@@ -338,7 +338,7 @@ async function runClaim(c, mod, args) {
     const { spawnSync } = require("child_process");
     const orig = fs.readFileSync(MIGRATION, "utf8");
     fs.writeFileSync(MIGRATION, orig.replace("on delete restrict", "on delete cascade"));
-    const r = spawnSync(process.execPath, [path.join(ROOT, "tests/gate_migration_137_promotion.js")],
+    const r = spawnSync(process.execPath, [path.join(ROOT, "tests/gates/gate_migration_137_promotion.js")],
                         { encoding: "utf8" });
     fs.writeFileSync(MIGRATION, orig);
     ok("F9  altering migration bytes turns the promotion gate RED", r.status !== 0,
@@ -356,7 +356,7 @@ async function runClaim(c, mod, args) {
     fs.writeFileSync(CONV, orig +
       "\n// falsification: a direct completion write outside the canonical service\n" +
       "async function __rogue(c,id){ return c.query(`update work_orders set status='complete' where id=$1`,[id]); }\n");
-    const r = spawnSync(process.execPath, [path.join(ROOT, "tests/gate_completion_writers.js")],
+    const r = spawnSync(process.execPath, [path.join(ROOT, "tests/gates/gate_completion_writers.js")],
                         { encoding: "utf8" });
     fs.writeFileSync(CONV, orig);
     ok("F10 a THIRD completion writer turns the writer gate RED", r.status !== 0,
