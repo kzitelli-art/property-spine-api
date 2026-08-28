@@ -1,24 +1,19 @@
 // ════════════════════════════════════════════════════════════════════
-//  ask_spine.js — THE ASK SPINE DOOR (read-only)
+//  ask_spine.js — THE ASK SPINE DOOR
 //
 //  GET  /operator/ask-spine/attention    slice 1 — the one fixed question
 //  POST /operator/ask-spine/ask          slice 2 — a question the operator typed
 //
 //  Same authority seam as the staff agent and every maintenance door —
 //  property is server-derived and never accepted from the browser. It is
-//  a READ-ONLY SIBLING of staff_agent.js, not an extension of it: no
-//  proposal, no confirmation, no canonical mutation, and the operator's
-//  question is NOT recorded as a staff-agent message.
+//  its question endpoints remain read-only siblings of staff_agent.js. One
+//  separately named application-send action is mounted here because the
+//  dashboard and staff SMS must meet at the same canonical command. It is
+//  not a generic conversational writer and records no dashboard transcript.
 //
-//  Slice 1's header said "there is deliberately no POST here", which was
-//  true of a door that answered exactly one question. Slice 2 adds one,
-//  and the reasoning it was standing on has NOT changed: the POST carries
-//  a question in a body and still writes nothing. The verb reflects a
-//  request payload, not a mutation.
-//
-//  What would make that sentence true again is Ask Spine being able to DO
-//  something. That is a different slice with its own authority rules, and
-//  it does not arrive by adding a route to this file.
+//  The two question doors below still write nothing. The separately named
+//  action doors are explicit mutation boundaries: proposal writes nothing;
+//  confirmation delegates to the one canonical application-send command.
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
@@ -39,6 +34,27 @@ module.exports = function askSpine(deps) {
     createComplianceReferenceService({
       secret: options.complianceReferenceSecret || process.env.COMPLIANCE_REFERENCE_SECRET,
     });
+
+  function conversationalApplicationAction() {
+    const action = typeof options.conversationalApplicationAction === "function"
+      ? options.conversationalApplicationAction()
+      : options.conversationalApplicationAction;
+    if (!action || typeof action.run !== "function") {
+      throw Object.assign(new Error("conversational application action is unavailable"), {
+        httpStatus: 503,
+      });
+    }
+    return action;
+  }
+
+  function exactBody(req, allowed) {
+    const keys = Object.keys((req && req.body) || {}).sort();
+    return keys.length === allowed.length && keys.every((key, index) => key === allowed[index]);
+  }
+
+  function hasQueryClaims(req) {
+    return !!(req && req.query && Object.keys(req.query).length);
+  }
 
   //  Identical to the staff-agent gate. Copied rather than shared so this
   //  door carries no dependency on the proposal machinery next to it.
@@ -138,6 +154,78 @@ module.exports = function askSpine(deps) {
       //  A genuine server failure. Never shaped like an empty answer.
       console.error("ask-spine/ask error", e);
       return res.status(500).json({ error: "Could not answer that." });
+    }
+  });
+
+  // ── ONE ACTION · post-tour application send ─────────────────────
+  //  The browser supplies prose for proposal and an opaque server receipt
+  //  for confirmation. It never supplies property, module, Person,
+  //  conversion, unit, space, actor, action code or idempotency identity.
+  //  The injected action object is the SAME instance used by staff SMS.
+  router.post("/operator/ask-spine/application-send/propose", ...gate, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!exactBody(req, ["request"]) || hasQueryClaims(req)) {
+      return res.status(400).json({
+        outcome: "invalid_request",
+        receipt: "Send only the conversational request. Scope and action authority are server-derived.",
+      });
+    }
+    try {
+      const out = await conversationalApplicationAction().run(pool, {
+        transport: "dashboard",
+        userId: req.operator.id,
+        body: String(req.body.request || ""),
+        propertyContext: {
+          outcome: "one",
+          propertyId: req.operator.property_id,
+          allowedModules: req.operator.allowed_modules,
+        },
+      });
+      const status = Number(out.http_status) || 200;
+      delete out.http_status;
+      return res.status(status).json(out);
+    } catch (error) {
+      console.error("ask-spine/application-send/propose error", error);
+      return res.status(error.httpStatus || 500).json({
+        outcome: error.code || "unavailable",
+        receipt: error.publicMessage || "The application-send proposal is unavailable. Nothing was sent.",
+      });
+    }
+  });
+
+  router.post("/operator/ask-spine/application-send/confirm", ...gate, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!exactBody(req, ["confirmation"]) || hasQueryClaims(req)) {
+      return res.status(400).json({
+        outcome: "invalid_request",
+        receipt: "Send only the server-issued confirmation receipt. Nothing was sent.",
+      });
+    }
+    try {
+      const out = await conversationalApplicationAction().run(pool, {
+        transport: "dashboard",
+        userId: req.operator.id,
+        body: "",
+        intent: {
+          intent: "confirm_application",
+          confirmation: String(req.body.confirmation || ""),
+          sendApplication: true,
+        },
+        propertyContext: {
+          outcome: "one",
+          propertyId: req.operator.property_id,
+          allowedModules: req.operator.allowed_modules,
+        },
+      });
+      const status = Number(out.http_status) || 200;
+      delete out.http_status;
+      return res.status(status).json(out);
+    } catch (error) {
+      console.error("ask-spine/application-send/confirm error", error);
+      return res.status(error.httpStatus || 500).json({
+        outcome: error.code || "unavailable",
+        receipt: error.publicMessage || "The application confirmation could not be completed. Nothing was sent.",
+      });
     }
   });
 

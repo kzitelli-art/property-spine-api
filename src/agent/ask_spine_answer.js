@@ -382,6 +382,20 @@ function isPropertyWideSignerQuestion(question) {
   return PROPERTY_SIGNER_QUESTION_TERMS.some((pattern) => pattern.test(text));
 }
 
+// Deliberately narrower than the general application vocabulary. This is the
+// one post-action observation the conversational send command can establish:
+// whether a named person's application invitation has been sent. It remains a
+// read of Leasing's standing projection; it is not a second send-state query.
+const APPLICATION_SEND_STATE_TERMS = [
+  /^\s*has\s+.+?'?s?\s+application\s+(?:link|invite|invitation)\s+been\s+sent\s*[?!.]*\s*$/i,
+  /^\s*did\s+(?:we|you|spine)\s+send\s+.+?'?s?\s+application(?:\s+(?:link|invite|invitation))?\s*[?!.]*\s*$/i,
+];
+
+function isApplicationSendStateQuestion(question) {
+  const text = String(question || "").trim();
+  return APPLICATION_SEND_STATE_TERMS.some((pattern) => pattern.test(text));
+}
+
 function isPersonalAttentionQuestion(question) {
   const text = String(question || "").trim();
   return PERSONAL_ATTENTION_TERMS.some((pattern) => pattern.test(text));
@@ -1381,6 +1395,70 @@ function propertySigningResponse(facts) {
   };
 }
 
+function applicationSendStateResponse(facts) {
+  const person = facts && facts.leasing_person;
+  if (!person || ["READ_FAILED", "READ_TIMED_OUT"].includes(person.read_state)) {
+    return {
+      outcome: "unavailable",
+      answer: "I couldn't read that person's application standing just then. Try again in a moment.",
+      grounded_on: {
+        leasing_read_state: person ? person.read_state : "READ_FAILED",
+        leasing_opportunity_stage: null,
+      },
+      references: [],
+    };
+  }
+  if (person.read_state === "NO_SUBJECT") {
+    return {
+      outcome: "clarification",
+      answer: "Which person at this property do you mean? Name the prospect whose application you want me to check.",
+      grounded_on: { leasing_read_state: "NO_SUBJECT", leasing_opportunity_stage: null },
+      references: [],
+    };
+  }
+  if (person.read_state === "AMBIGUOUS_SUBJECT") {
+    const names = Array.isArray(person.candidates) ? person.candidates.filter(Boolean) : [];
+    return {
+      outcome: "clarification",
+      answer: names.length
+        ? `More than one person matches that name: ${names.join(" or ")}. Which person do you mean?`
+        : "More than one person matches that name. Which person do you mean?",
+      grounded_on: { leasing_read_state: "AMBIGUOUS_SUBJECT", leasing_opportunity_stage: null },
+      references: [],
+    };
+  }
+
+  const opportunityReadFailed = Array.isArray(person.uncertainty)
+    && person.uncertainty.some((item) => item && item.kind === "read_failed"
+      && item.subject === "opportunity");
+  const stage = person.opportunity && person.opportunity.current_stage || null;
+  if (opportunityReadFailed) {
+    return {
+      outcome: "unavailable",
+      answer: "I couldn't read that person's application standing just then. Try again in a moment.",
+      grounded_on: { leasing_read_state: "READ_FAILED", leasing_opportunity_stage: null },
+      references: [],
+    };
+  }
+
+  const sentStages = new Set(["applicant_followup", "lease_signature_followup"]);
+  const sent = sentStages.has(stage);
+  const name = person.subject_name || "That person";
+  return {
+    outcome: "answered",
+    answer: sent
+      ? `Yes — ${name}'s application link has been sent.`
+      : `No — ${name}'s application link has not been sent.`,
+    grounded_on: {
+      leasing_read_state: "OK",
+      leasing_subject_name: person.subject_name || null,
+      leasing_opportunity_stage: stage,
+      application_link_sent: sent,
+    },
+    references: [],
+  };
+}
+
 /**
  * Answer a typed question about one property.
  *
@@ -1527,6 +1605,14 @@ async function answer(db, anthropic, {
       leasingReader, applicationReviewReader, applicationsService,
     });
     return propertySigningResponse(facts);
+  }
+
+  if (subject === "leasing_person" && isApplicationSendStateQuestion(q)) {
+    const facts = await gatherFacts(db, {
+      property_id, allowed_modules: modules, subject, question: q,
+      leasingReader, applicationReviewReader, applicationsService,
+    });
+    return applicationSendStateResponse(facts);
   }
 
   //  NO KEY IS NOT AN EMPTY ANSWER. Without this the operator would ask a
@@ -1757,6 +1843,7 @@ async function answer(db, anthropic, {
 
 module.exports = {
   answer, gatherFacts, questionSubject, isPersonalAttentionQuestion,
-  isPropertyWideSignerQuestion, personalAttentionResponse, propertySigningResponse,
+  isPropertyWideSignerQuestion, isApplicationSendStateQuestion,
+  personalAttentionResponse, propertySigningResponse, applicationSendStateResponse,
   systemPrompt, MODEL, SUPPORTED_SCOPE, OUT_OF_SCOPE_ANSWER,
 };

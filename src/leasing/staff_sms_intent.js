@@ -3,6 +3,7 @@
 const TOUR_RX = /\b(tour|showing|showed|walk[- ]?through)\b/i;
 const SEND_APPLICATION_RX = /\b(send|text|share|give)\b[^.!?]{0,48}\bapplication\b|\bapplication\b[^.!?]{0,48}\b(send|text|share)\b/i;
 const TARGET_REPLY_RX = /\b(unit|bed|space|room)\s*[#-]?\s*[a-z0-9][a-z0-9-]*\b/i;
+const CONFIRM_APPLICATION_RX = /^\s*confirm\s+(sca1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\s*[.!]?\s*$/i;
 const QUESTION_RX = /\?\s*$|^\s*(who|what|where|when|why|how|is|are|do|does|did|can|could|would|should)\b/i;
 
 const STANDING_PATTERNS = Object.freeze([
@@ -40,6 +41,18 @@ function readStaffLeasingIntent(text) {
   const standing = standingFrom(raw);
   const hasTarget = TARGET_REPLY_RX.test(raw);
   const isQuestion = QUESTION_RX.test(raw);
+  const confirmation = raw.match(CONFIRM_APPLICATION_RX);
+
+  if (confirmation) {
+    return Object.freeze({
+      intent: "confirm_application",
+      confirmation: confirmation[1],
+      standing: null,
+      sendApplication: true,
+      hasTarget: false,
+      text: raw,
+    });
+  }
 
   if (standing && !isQuestion && (hasTour || isBareStandingReply(raw, standing))) {
     return Object.freeze({
@@ -61,7 +74,10 @@ function readStaffLeasingIntent(text) {
     });
   }
 
-  if (sendApplication) {
+  // Passive "has ... been sent?" wording is a read of canonical standing,
+  // not a command. Imperative and permission-shaped send requests retain the
+  // established action route; only the already-asked-about result stays out.
+  if (sendApplication && !/^\s*(?:has|have|had)\b/i.test(raw)) {
     return Object.freeze({
       intent: "send_application",
       standing: null,
@@ -98,6 +114,7 @@ module.exports = {
     TOUR_RX,
     SEND_APPLICATION_RX,
     TARGET_REPLY_RX,
+    CONFIRM_APPLICATION_RX,
     QUESTION_RX,
   },
 };

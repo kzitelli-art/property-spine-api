@@ -497,10 +497,11 @@ async function waitForStaffReply(providerMessageId) {
   expect(captureReply.reply_reason === "execution_receipt"
       && /Recorded .* tour as Ready to Apply/.test(captureReply.body),
     "Mike's ordinary post-tour wording records the explicit Ready to Apply standing");
-  expect(/I found Unit 3B, Bed B/.test(captureReply.body)
+  const capturedConfirmation = String(captureReply.body).match(/Confirm (sca1\.[A-Za-z0-9_.-]+)/);
+  expect(/Unit 3B, Bed B/.test(captureReply.body)
       && /Nothing was sent/.test(captureReply.body)
-      && new RegExp(`Send ${name} the application for Unit 3B, Bed B`).test(captureReply.body),
-    "Spine resolves Bed B inside the toured unit and asks Mike to confirm the consequential send");
+      && !!capturedConfirmation,
+    "Spine resolves Bed B inside the toured unit and issues an opaque explicit-confirmation receipt");
   const capturedInbound = (await q(
     `select body,actor_user_id,communication_line_id,needs_human,classification
        from comm_events where sms_sid=$1`, [captureSid]
@@ -584,17 +585,118 @@ async function waitForStaffReply(providerMessageId) {
   expect(!!chosen && chosen.resolution_basis === "chosen_space",
     "the application selector offers exact Bed B instead of guessing");
 
+  async function applicationActionState() {
+    return (await q(
+      `select
+         (select count(*)::int from application_intents
+           where conversion_id=$1) as intent_count,
+         (select count(*)::int from application_invitations
+           where conversion_id=$1) as invitation_count,
+         (select count(*)::int from events e
+           where e.id in (select event_id from application_intents where conversion_id=$1)) as event_count,
+         (select count(*)::int from obligations o
+           where (o.related_type='leasing_conversion' and o.related_id=$1
+                    and o.type='prepare_application_link')
+              or (o.related_type='application_invitation'
+                    and o.related_id in (select id from application_invitations where conversion_id=$1)
+                    and o.type='send_application_link')) as child_obligation_count,
+         (select count(*)::int from lease_applications
+           where conversion_id=$1) as application_count`,
+      [completed.conversion_id]
+    )).rows[0];
+  }
+
+  const actionBefore = await applicationActionState();
+  expect(actionBefore.intent_count === 0 && actionBefore.invitation_count === 0
+      && actionBefore.event_count === 0 && actionBefore.child_obligation_count === 0
+      && actionBefore.application_count === 0,
+    "post-tour capture and proposal create no application intent, invitation, event, child obligation, or application",
+    JSON.stringify(actionBefore));
+
+  const keyOnlyProposal = await api("POST", "/operator/ask-spine/application-send/propose", {
+    key: true, body: { request: `Send ${name} the application for Unit 3B, Bed B.` },
+  });
+  expect(keyOnlyProposal.status === 401,
+    "the dashboard action has no x-operator-key authentication fallback");
+  const claimedScope = await api("POST", "/operator/ask-spine/application-send/propose", {
+    token: staffToken,
+    body: {
+      request: `Send ${name} the application for Unit 3B, Bed B.`,
+      property_id: "00000000-0000-0000-0000-000000000001",
+    },
+  });
+  expect(claimedScope.status === 403,
+    "a dashboard-supplied property claim is refused before the action");
+  const inventedAuthority = await api("POST", "/operator/ask-spine/application-send/propose", {
+    token: staffToken,
+    body: {
+      request: `Send ${name} the application for Unit 3B, Bed B.`,
+      person_id: intake.person_id,
+    },
+  });
+  expect(inventedAuthority.status === 400,
+    "the dashboard cannot supply a Person or any action payload beside its request");
+  const queryScope = await api(
+    "POST", `/operator/ask-spine/application-send/propose?property_id=${propertyId}`, {
+      token: staffToken,
+      body: { request: `Send ${name} the application for Unit 3B, Bed B.` },
+    }
+  );
+  expect(queryScope.status === 400,
+    "even a matching property query is refused because action scope is session-only");
+  const unsupported = await api("POST", "/operator/ask-spine/application-send/propose", {
+    token: staffToken, body: { request: "Update the lease." },
+  });
+  expect(unsupported.status === 422 && unsupported.body.outcome === "unsupported_action",
+    "vague lease-update wording is refused without a generic conversational writer");
+  const missingSubject = await api("POST", "/operator/ask-spine/application-send/propose", {
+    token: staffToken, body: { request: "Send the application for Unit 3B, Bed B." },
+  });
+  expect(missingSubject.status === 200
+      && missingSubject.body.outcome === "leasing_clarification"
+      && missingSubject.body.confirmation === null && missingSubject.body.sent === false,
+    "the dashboard must name the subject even when only one follow-up is open");
+
+  const proposal = requireOk(await api(
+    "POST", "/operator/ask-spine/application-send/propose", {
+      token: staffToken,
+      body: { request: `Send ${name} the application for Unit 3B, Bed B.` },
+    }
+  ), "dashboard application-send proposal");
+  const confirmation = proposal.confirmation && proposal.confirmation.token;
+  expect(proposal.outcome === "application_send_proposed"
+      && proposal.action_code === "send_application_after_tour"
+      && proposal.confirmation_required === true && !!confirmation
+      && proposal.sent === false && proposal.subject.display_name === name
+      && proposal.target.label === "Unit 3B, Bed B",
+    "the authenticated dashboard receives a server-selected proposal and opaque confirmation",
+    JSON.stringify(proposal));
+  const visibleProposal = JSON.stringify(proposal);
+  expect(![propertyId, completed.conversion_id, intake.person_id, unit.id, bedB.id, mike.id]
+      .some((id) => visibleProposal.includes(String(id))),
+    "the dashboard proposal exposes no property, conversion, Person, target, or actor database identifiers");
+  expect(JSON.stringify(await applicationActionState()) === JSON.stringify(actionBefore),
+    "dashboard proposal and all refusals leave canonical application state unchanged");
+
+  const wrongActor = await api("POST", "/operator/ask-spine/application-send/confirm", {
+    token: companyToken, body: { confirmation },
+  });
+  expect(wrongActor.status === 403 && wrongActor.body.outcome === "confirmation_actor_mismatch",
+    "another staff session cannot use Mike's confirmation receipt");
+  expect(JSON.stringify(await applicationActionState()) === JSON.stringify(actionBefore),
+    "wrong-session confirmation refusal writes nothing");
+
   const targetSid = `SM_E2E_TARGET_${suffix}`;
   await sendStaffSms({
     from: mikePhone,
     to: operationsLine,
     sid: targetSid,
-    body: `Skyline E2E: send ${name} the application for Unit 3B, Bed B.`,
+    body: `Confirm ${confirmation}`,
   });
   const targetReply = await waitForStaffReply(targetSid);
   expect(targetReply.reply_reason === "execution_receipt"
       && /Application sent to .* for Unit 3B, Bed B/.test(targetReply.body),
-    "Mike's exact-bed reply invokes the canonical application send command");
+    "Mike's SMS confirmation invokes the canonical application send command selected by the dashboard");
   const invitation = (await q(
     `select id,conversion_id,unit_id,space_id,status
        from application_invitations
@@ -606,11 +708,119 @@ async function waitForStaffReply(providerMessageId) {
     "the staff-text application invitation persists exact Bed B");
   expect(invitation.status === "provider_dispatched",
     "the provider acceptance is recorded separately from Ask Spine's reply to Mike");
+  const actionAfter = await applicationActionState();
+  expect(actionAfter.intent_count === 1 && actionAfter.invitation_count === 1
+      && actionAfter.event_count === 1 && actionAfter.child_obligation_count === 2
+      && actionAfter.application_count === 0,
+    "one confirmation creates exactly one canonical intent, event, invitation, and two governed child obligations",
+    JSON.stringify(actionAfter));
   const sms = await waitForSms(
     (message) => message.to === phone && /\/t\/application\//.test(message.body || ""),
     "the application text"
   );
   expect(sms.to === phone, "the application text was addressed to the prospect in the fake transport");
+
+  const replay = await api("POST", "/operator/ask-spine/application-send/confirm", {
+    token: staffToken, body: { confirmation },
+  });
+  expect(replay.status === 409 && replay.body.outcome === "confirmation_used"
+      && replay.body.sent === false && replay.body.replayed === true,
+    "dashboard replay receives a canonical used receipt and cannot claim a second send",
+    JSON.stringify(replay.body));
+  expect(JSON.stringify(await applicationActionState()) === JSON.stringify(actionAfter),
+    "cross-transport confirmation replay creates no second intent, event, invitation, obligation, or application");
+  const applicationTexts = smsMessages().filter(
+    (message) => message.to === phone && /\/t\/application\//.test(message.body || "")
+  );
+  expect(applicationTexts.length === 1,
+    "cross-transport replay creates zero duplicate provider calls");
+
+  const askAgainQuestion = `Has ${name}'s application link been sent?`;
+  const askAgain = requireOk(await api("POST", "/operator/ask-spine/ask", {
+    token: staffToken, body: { question: askAgainQuestion },
+  }), "post-action Ask Spine read");
+  expect(askAgain.outcome === "answered"
+      && askAgain.grounded_on.leasing_read_state === "OK"
+      && askAgain.grounded_on.leasing_opportunity_stage === "applicant_followup"
+      && askAgain.grounded_on.application_link_sent === true
+      && new RegExp(`Yes .*${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*has been sent`).test(askAgain.answer),
+    "ordinary Ask Spine reads the post-send applicant stage from canonical leasing standing",
+    JSON.stringify(askAgain));
+  const askAgainSid = `SM_E2E_ASK_AGAIN_${suffix}`;
+  await sendStaffSms({
+    from: mikePhone, to: operationsLine, sid: askAgainSid, body: askAgainQuestion,
+  });
+  const askAgainSms = await waitForStaffReply(askAgainSid);
+  expect(askAgainSms.reply_reason === "governed_read"
+      && askAgainSms.body === askAgain.answer,
+    "dashboard and SMS ask-again observe the same canonical updated standing");
+
+  const otherProperty = (await q(
+    `insert into properties (name,address,organization_id)
+     values ($1,'2 Scope Wall',$2) returning id`,
+    [`Conversation Scope ${suffix}`, property.organization_id]
+  )).rows[0];
+  await q(
+    `insert into property_team_assignments
+       (user_id,property_id,role_title,allowed_modules,primary_for_modules,active,can_manage_roles)
+     values ($1,$2,'leasing_agent','{leasing}','{leasing}',true,false)`,
+    [mike.id, otherProperty.id]
+  );
+  const noLeasingUser = (await q(
+    `insert into users (name,role,is_active,status,account_kind)
+     values ($1,'maintenance',true,'active','human_staff') returning id`,
+    [`Conversation No Leasing ${suffix}`]
+  )).rows[0];
+  await q(
+    `insert into property_team_assignments
+       (user_id,property_id,role_title,allowed_modules,primary_for_modules,active,can_manage_roles)
+     values ($1,$2,'maintenance','{maintenance}','{}',true,false)`,
+    [noLeasingUser.id, propertyId]
+  );
+  async function fixtureSession(userId, sessionPropertyId) {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const issued = await staffSessions.issueStaffSession(client, {
+        userId, propertyId: sessionPropertyId, purpose: "bootstrap_invite",
+      });
+      await client.query("commit");
+      return issued.session_token;
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  const wrongPropertyToken = await fixtureSession(mike.id, otherProperty.id);
+  const noLeasingToken = await fixtureSession(noLeasingUser.id, propertyId);
+  const wrongProperty = await api("POST", "/operator/ask-spine/application-send/confirm", {
+    token: wrongPropertyToken, body: { confirmation },
+  });
+  expect(wrongProperty.status === 403
+      && wrongProperty.body.outcome === "confirmation_property_mismatch",
+    "the same actor's session at another property cannot use the scoped receipt");
+  const noModule = await api("POST", "/operator/ask-spine/application-send/confirm", {
+    token: noLeasingToken, body: { confirmation },
+  });
+  expect(noModule.status === 403 && noModule.body.outcome === "leasing_module_required",
+    "a session without Leasing cannot cross the shared action boundary");
+  expect(JSON.stringify(await applicationActionState()) === JSON.stringify(actionAfter),
+    "wrong-property and missing-module confirmation refusals write nothing");
+  await q("delete from properties where id=$1", [otherProperty.id]);
+
+  const expiresAt = new Date(proposal.confirmation.expires_at).getTime();
+  const expiryWait = Math.max(0, expiresAt - Date.now() + 1100);
+  if (expiryWait) await new Promise((resolve) => setTimeout(resolve, expiryWait));
+  const expired = await api("POST", "/operator/ask-spine/application-send/confirm", {
+    token: staffToken, body: { confirmation: capturedConfirmation[1] },
+  });
+  expect(expired.status === 410 && expired.body.outcome === "confirmation_expired",
+    "an unused expired confirmation refuses without a write");
+  expect(JSON.stringify(await applicationActionState()) === JSON.stringify(actionAfter),
+    "expired confirmation refusal leaves canonical action state unchanged");
+
   const tokenMatch = String(sms.body).match(/\/t\/application\/([A-Za-z0-9_-]+)/);
   expect(!!tokenMatch, "the captured text contains the public application token");
   const applicationToken = tokenMatch[1];

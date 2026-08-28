@@ -62,6 +62,7 @@ const superAdminModule = require("./src/identity/super_admin");
 const orgAdminModule   = require("./src/identity/org_admin");
 const smsTransport = require("./src/comms/sms"); // SMS transport (Twilio) — fail-soft when unconfigured
 const communicationsBoundary = require("./src/comms/communications_boundary"); // the permanent communications boundary — one inbound resolver, one outbound gate
+const { makeStaffLeasingAction } = require("./src/leasing/staff_sms_action");
 const meetingEvidenceModule = require("./src/meeting_evidence/meeting_evidence_routes");
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
@@ -414,17 +415,19 @@ app.use("/", require("./src/obligations/operator_obligation_actions")({ pool }))
 //  policy — a suggestion the human confirms, never a write.
 app.use("/", require("./src/surfaces/asset_management")({ pool, fileToText }));
 
-// ── ASK SPINE (SLICE 1) — read-only sibling of the staff agent ───────────
-//  Answers "What needs attention?" from live obligations, property-scoped by
-//  the operator session. No proposals, no confirmations, no writes, and the
-//  question is not recorded as a staff-agent message. It shares the authority
+let __staffLeasingAction = null;
+// ── ASK SPINE — governed reads + one explicit application action ─────────
+//  Answers property questions and exposes one explicitly named application
+//  proposal/confirmation action, all scoped by the operator session. Questions
+//  are not recorded as staff-agent messages. The action shares the authority
 //  seam above and nothing else.
 app.use("/", require("./src/agent/ask_spine")({ pool, anthropic,
   //  A THUNK, read at request time. Ask Spine mounts here; the
   //  applications module is composed further down, so a value captured
   //  now would be undefined forever. Same reason as the lease-packet
   //  execution services above.
-  applicationsService: () => __applications && __applications._service })); 
+  applicationsService: () => __applications && __applications._service,
+  conversationalApplicationAction: () => __staffLeasingAction }));
 
 // ── MEETING EVIDENCE — governed capture binding/read surface ─────────
 //  The provider webhook is mounted above express.json(); these operator
@@ -505,6 +508,11 @@ const sms = smsTransport(); // SMS transport (Twilio) — disabled until env var
 const commBoundary = communicationsBoundary({ pool, sms }); // every business send goes through this gate; raw sms.sendSms is transport only
 
 app.use("/", require("./src/comms/sms_proof_route")({ commBoundary }));
+__staffLeasingAction = makeStaffLeasingAction({
+  getLeasingTourService: () => __leasingLeads && __leasingLeads._service,
+  getConversionService: () => __leasingConversion && __leasingConversion._service,
+  getApplicationInvitations: () => __applicationSubmission && __applicationSubmission._service,
+});
 app.use("/", tenantLinkModule({
   pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService,
   getAgentService: () => agentApp._service,
@@ -512,6 +520,7 @@ app.use("/", tenantLinkModule({
   getLeasingTourService: () => __leasingLeads && __leasingLeads._service,
   getConversionService: () => __leasingConversion && __leasingConversion._service,
   getApplicationInvitations: () => __applicationSubmission && __applicationSubmission._service,
+  staffLeasingAction: __staffLeasingAction,
 }));
 //  A2P 10DLC legal pages — /legal/privacy and /legal/sms-terms, plus .txt
 //  fallbacks. Public and unauthenticated by requirement: a carrier reviewer

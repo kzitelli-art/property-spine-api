@@ -88,17 +88,19 @@ module.exports = function tenantLinkModule({
   getLeasingTourService = null,
   getConversionService = null,
   getApplicationInvitations = null,
+  staffLeasingAction: injectedStaffLeasingAction = null,
 }) {
   const router = express.Router();
   const complianceReferences = complianceReferenceService || createComplianceReferenceService({
     secret: process.env.COMPLIANCE_REFERENCE_SECRET,
   });
   const staffGovernedRead = makeStaffGovernedRead({ askSpineAnswer });
-  const staffLeasingAction = makeStaffLeasingAction({
-    getLeasingTourService,
-    getConversionService,
-    getApplicationInvitations,
+  const staffLeasingAction = injectedStaffLeasingAction || makeStaffLeasingAction({
+    getLeasingTourService, getConversionService, getApplicationInvitations,
   });
+  if (!staffLeasingAction || typeof staffLeasingAction.run !== "function") {
+    throw new Error("tenant_link requires the canonical staff leasing action service");
+  }
 
   // ── DEPENDENCY ASSERTION (symmetric with maintenance.js) ──────────────
   //  POST /tenant/maintenance and /tenant/maintenance/:id/add delegate every

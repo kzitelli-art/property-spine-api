@@ -9,7 +9,7 @@ const { routeStaffSmsTurn } = require("../../src/conversation/staff_sms_router")
 const { makeStaffLeasingAction } = require("../../src/leasing/staff_sms_action");
 const { operatingReceipt } = require("../../src/conversation/receipt");
 
-const EXPECTED = 38;
+const EXPECTED = 55;
 let passed = 0;
 let failed = 0;
 const ok = (label, condition, detail = "") => {
@@ -48,6 +48,10 @@ ok("an application-status question is not a write intent",
   read("Where is Jane's application?").intent === "unclear");
 ok("an application-status question with a unit is still not a write intent",
   read("Where is Jane's application for Unit 302?").intent === "unclear");
+ok("a passive application-send-state question is not a write intent",
+  read("Has Jane's application link been sent?").intent === "unclear");
+ok("a server-issued confirmation is the only terse confirm action",
+  read("Confirm sca1.abc.def.ghi").intent === "confirm_application");
 ok("the shared router sends a capture to Leasing",
   routeStaffSmsTurn({ text: "Jane's tour is done and she is ready to apply" }).destination === "leasing");
 ok("the shared router sends an application command to Leasing",
