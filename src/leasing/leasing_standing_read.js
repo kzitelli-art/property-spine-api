@@ -386,6 +386,7 @@ async function resolveLeasingSubject(db, { property_id, text } = {}) {
         where p.name is not null and length(btrim(p.name)) >= 3
           and (exists (select 1 from leasing_leads   l where l.person_id=p.id and l.property_id=$2)
             or exists (select 1 from conversations   c where c.person_id=p.id and c.property_id=$2)
+            or exists (select 1 from lease_applications a where a.person_id=p.id and a.property_id=$2)
             or exists (select 1 from leasing_conversions v where v.person_id=p.id and v.property_id=$2))
      ), matches as (
        select p.id, p.name,

@@ -171,6 +171,13 @@ module.exports = function decisionsModule({ pool, spawnObligationFromEvent, comp
   // (client-first) so a future caller can fold it into its own atomic
   // unit — the HTTP route below owns its own transaction.
   async function createDecision(client, spec) {
+    //  ⛔ FIRST STATEMENT, DELIBERATELY. The refusal must land before
+    //  `spec` is destructured, before any lookup, before a transaction is
+    //  opened and before any durable write. Everything below this line is
+    //  the retained migration-059 writer, kept verbatim and unreachable so
+    //  the eventual ruling reassigns real code instead of reconstructing it.
+    throw legacyDecisionWritesDisabled();
+
     const {
       property_id, decided_by_person_id,
       type, amount, reason_code,
@@ -404,7 +411,13 @@ module.exports = function decisionsModule({ pool, spawnObligationFromEvent, comp
   // Create — both bands. Receipt says plainly which band it took.
   app.post("/decisions", async (req, res) => {
     try {
-      const out = await inTx((c) => createDecision(c, req.body || {}));
+      //  ⛔ NOT inTx. Wrapping a closed writer in a transaction would
+      //  acquire a pool connection and issue BEGIN before the refusal —
+      //  starting a transaction the containment contract says must never
+      //  start, then rolling it back to hide that it did. The service is
+      //  the authority boundary; this route only carries its refusal to
+      //  HTTP. Restoring inTx here is exactly what re-opens the writer.
+      const out = await createDecision(null, req.body || {});
       const d = out.decision;
       const receipt = out.band === "act_then_review"
         ? `Recorded and closed: ${TYPE_LABEL[d.type]} of ${money(d.amount)} (${d.reason_code}). Within your authority — no further action.`
