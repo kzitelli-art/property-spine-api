@@ -367,7 +367,7 @@ function writeTargetsFromSource(src) {
 
   const root = path.join(__dirname, "..", "..");
   const doctrine = fs.readFileSync(path.join(root, "CLAUDE.md"), "utf8");
-  const modelDoc = fs.readFileSync(path.join(root, "docs", "SOURCE_STATUS_MODEL_40_4.md"), "utf8");
+  const modelDoc = fs.readFileSync(path.join(root, "docs", "archive", "SOURCE_STATUS_MODEL_40_4.md"), "utf8");
   const migration = fs.readFileSync(path.join(root, "migrations", "176_meeting_receipt_v0.sql"), "utf8");
   const serviceSrc = fs.readFileSync(path.join(root, "src", "meeting_evidence", "meeting_receipt_service.js"), "utf8");
   const rendererSrc = fs.readFileSync(path.join(root, "src", "meeting_evidence", "meeting_receipt_renderer.js"), "utf8");

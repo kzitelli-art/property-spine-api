@@ -373,7 +373,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
 
     // Deterministic fallback — real slots when we have them, an honest ask when
     // we don't. No hardcoded times in either branch.
-    // OPENER SHAPE (docs/AI_VOICE.md §5 Case G). The prior opener listed two
+    // OPENER SHAPE (docs/archive/AI_VOICE.md §5 Case G). The prior opener listed two
     // specific slots and asked "which works better for you?" — a CLOSED question
     // whose only answers are two commitments. A real prospect answered it with
     // "why so pushy for tour i just filled out form". Offering a tour early is

@@ -364,7 +364,7 @@ const unknown = (field, why) => { R.unknowns.push({ field, why }); return { UNKN
     if (unsafe) {
       console.log("      → the shared Twilio account is live AND the send mode can send.");
       console.log("        outbound_policy is NOT protection on that path — see");
-      console.log("        docs/OUTBOUND_TRIGGER_AUDIT.md.");
+      console.log("        docs/archive/OUTBOUND_TRIGGER_AUDIT.md.");
     }
   } else {
     P("  SMS posture", "UNKNOWN — not read on the deployed instance");

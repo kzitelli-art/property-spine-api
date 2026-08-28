@@ -22,7 +22,7 @@
 //  their own and need a provisioned full-schema database, which this
 //  session does not have. resident_sms_work_order_proof.js and
 //  resident_sms_route_proof.js remain REQUIRED before this can merge —
-//  see docs/UNBLOCK_2_FULL_SCHEMA_HARNESS_DATABASE.md. Byte-identity plus
+//  see docs/archive/UNBLOCK_2_FULL_SCHEMA_HARNESS_DATABASE.md. Byte-identity plus
 //  behavioural pinning is strong evidence; it is not the route proof.
 //
 //  ── THE ARCHITECTURAL ASSERTIONS ────────────────────────────────────

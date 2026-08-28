@@ -57,31 +57,37 @@ That rule is the entire point. Follow it and drift can't happen again.
 
 ---
 
-## How to run a migration
+## How migrations actually run
 
-Open a terminal in this folder and run **one** of these:
+`prestart` runs `migrate.js` in **verify-only** mode on every boot — including
+every deploy. It applies nothing; it refuses to start the service if the
+ledger and the files disagree. **Deploying does not migrate.** Shipping a
+migration file and hitting deploy produces a *failed deploy*, not a migration.
 
-**Against your TEST database (the normal, safe case):**
+Releasing schema is a separate, deliberate act:
+
 ```
-DATABASE_URL="<your test connection string>" node migrate.js
+MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<what you just read from the ledger> \
+  EXPECTED_SHA=<deployed sha> node migrations/migrate.js --apply
 ```
 
-**Against PRODUCTION (only when you mean it):**
-```
-DATABASE_URL="<your Neon production connection string>" node migrate.js
-```
+`EXPECTED_LEDGER_CEILING` exists so a release cannot be run by someone who has
+not read the ledger. `--apply` refuses on a dirty tree and refuses if the
+ledger is not in the state you said you saw. This is the same command the
+release gate documents in `docs/deployment.md`.
 
-The connection string is the same kind of string already used by the API
-(`DATABASE_URL` in Render). The script prints exactly what it did. If anything
-goes wrong, it undoes that migration and stops — nothing is left half-applied.
+**A from-scratch build (`--apply` on an empty database) does not currently
+work** — see the ⚠ on `001_baseline.sql` above and defect #22. The working
+from-scratch path is `tests/e2e/apply_migrations.sh`, which handles the
+self-recording and data-dependent migrations via its precondition fixtures.
 
-> You need Node installed and the `pg` package available — both are already
-> true wherever the API runs, so the simplest path is to run this from the
-> same project where `server.js` lives.
+> Everything below the "About migration 002" heading is migration-001-era
+> planning prose, kept only as history. It predates the release gate, the
+> ledger ceiling, and migrations 002–187; do not follow it.
 
 ---
 
-## The recommended order (from the handoff)
+## Historical sections (migration-001 era — do not follow)
 
 1. **Baseline `001`** ✅ — done, this folder.
 2. **Test database** — make a separate Neon branch, get its connection string,

@@ -553,7 +553,7 @@ router.get("/events", async (req, res) => {
 //  Both were protected only by the portfolio-wide shared OPERATOR_KEY while
 //  taking property scope from the request (the collection) or ignoring it
 //  entirely (the detail read). Any key holder could read across every
-//  property. See docs/SECURITY_OBLIGATIONS_ROUTE.md.
+//  property. See docs/archive/SECURITY_OBLIGATIONS_ROUTE.md.
 //
 //  The collection read is replaced by the session-scoped
 //  GET /operator/obligations, registered below with the other operator doors.
@@ -577,7 +577,7 @@ router.get("/events", async (req, res) => {
 //  canonical services satisfyObligation and completeObligation are UNCHANGED
 //  and still enforce required inputs and the conversion rail; they are proven
 //  directly rather than through an exposed door kept alive for a test to call.
-//  See docs/SECURITY_OBLIGATIONS_ROUTE.md.
+//  See docs/archive/SECURITY_OBLIGATIONS_ROUTE.md.
 
 // ════════════════════════════════════════════════════════════════════
 //  USERS (minimal) — needed so obligations can belong to real people.

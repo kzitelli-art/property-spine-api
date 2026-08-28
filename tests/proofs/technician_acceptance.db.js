@@ -22,7 +22,7 @@
 //  is then executed UNMODIFIED against them. The full production schema is
 //  not built: the migration chain cannot rebuild from empty
 //  (012_bank_intake.sql fails on yardi_code — a known, owned defect
-//  outside this slice, see docs/UNBLOCK_2_FULL_SCHEMA_HARNESS_DATABASE.md).
+//  outside this slice, see docs/archive/UNBLOCK_2_FULL_SCHEMA_HARNESS_DATABASE.md).
 //
 //  What that costs: the zero-write assertions cover every table present,
 //  which is every table this path can reach. They prove nothing about

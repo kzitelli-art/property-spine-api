@@ -531,7 +531,7 @@ module.exports = function dealIntake(deps) {
 
     try {
       //  Build 1A-1: a staff session, not the shared operator key. See
-      //  docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md §2D. Nothing in the
+      //  docs/archive/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md §2D. Nothing in the
       //  deployed app calls this route.
       const session = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
       if (!session) {

@@ -10,7 +10,7 @@
 --    `create table if not exists vendors` is a no-op and its
 --    `create unique index ... on vendors (yardi_code)` at :43 then fails
 --    with `column "yardi_code" does not exist`. Known and recorded —
---    docs/MIGRATION_LEDGER_INVERSE_GATE.md §4.
+--    docs/archive/MIGRATION_LEDGER_INVERSE_GATE.md §4.
 --
 --  Repairing that history to make a test environment cooperate is
 --  explicitly out of bounds. So this file does what the audit fixture

@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════
 //  resident_sms_work_order_proof.js
-//  Contract: docs/RESIDENT_SMS_WORK_ORDER_CONTRACT.md (v3, 5eef41f)
+//  Contract: docs/archive/RESIDENT_SMS_WORK_ORDER_CONTRACT.md (v3, 5eef41f)
 //
 //  Part A — PURE. The obligation state machine and the closed vocabularies.
 //           Runs anywhere, no database.

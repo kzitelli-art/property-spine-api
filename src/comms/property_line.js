@@ -50,7 +50,7 @@
    different facts with different rules, and this slice does not get to
    change person identity. That leaves two phone normalizers in the system
    with different strictness. That is documented debt, not an accident —
-   see docs/PROPERTY_LINE_HARDENING.md §7.
+   see docs/archive/PROPERTY_LINE_HARDENING.md §7.
 
    ── WHY SQL DOES NOT REPLICATE THE NORMALIZER ────────────────────────
 

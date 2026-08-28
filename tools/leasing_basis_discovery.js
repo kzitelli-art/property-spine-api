@@ -49,7 +49,7 @@
 
    CLASS 3 — activation-acceptance tooling. Removal condition: delete once
    property_leasing_cycles.commitment_basis is established for the
-   property and the tracker is retired (docs/LEASING_CYCLE_AND_PACE_TRACE.md).
+   property and the tracker is retired (docs/archive/LEASING_CYCLE_AND_PACE_TRACE.md).
 
    Run:
      DATABASE_URL=<the db holding the FRESH import> \
