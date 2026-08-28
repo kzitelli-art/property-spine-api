@@ -48,6 +48,12 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { Client } = require("pg");
 const { classifyLedger } = require("./ledger_verdict");
+//  SSL is decided by the one module that owns the answer — NOT here. This
+//  file hardcoded `ssl: { rejectUnauthorized: false }`, which is correct for
+//  Neon and fatal against a local Postgres that does not speak SSL (a fresh
+//  docker-compose volume is exactly that). Recorded as CURRENT_STATE defect
+//  #28; the fix is the one the header of src/shared/database_ssl.js exists for.
+const { databaseSsl } = require("../src/shared/database_ssl");
 
 /*  WHICH BUILD IS THIS, REALLY.
  *
@@ -170,7 +176,7 @@ async function main() {
   //  run is allowed to write to the database at all.
   const APPLY = process.argv.includes("--apply") || process.env.MIGRATION_RELEASE === "1";
 
-  const client = new Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
+  const client = new Client({ connectionString: url, ssl: databaseSsl(url) });
   await client.connect();
   console.log(`\n  Connected to the database.  (${APPLY ? "RELEASE" : "verify-only"})`);
 
@@ -565,10 +571,22 @@ async function main() {
       //  re-runs it in a quiet window, on purpose.
       await client.query(`set local lock_timeout = '${LOCK_TIMEOUT}'`);
       await client.query(sql);
-      await client.query(
-        "insert into schema_migrations (version, name) values ($1, $2)",
+      //  Some migrations self-record their ledger row (083/084 do, with
+      //  "on conflict do nothing so both paths are safe" in their own
+      //  words). The runner is the other path — and it was not safe: on a
+      //  FRESH sequential build (the docker-compose local volume is the
+      //  first thing to ever run 001→187 through this runner) the file's
+      //  own insert collides with this one and the whole migration rolls
+      //  back. Defer to a row the file already recorded; the file's own
+      //  name normalizes to the same label the next verify expects.
+      const recorded = await client.query(
+        `insert into schema_migrations (version, name) values ($1, $2)
+         on conflict (version) do nothing`,
         [version, name]
       );
+      if (recorded.rowCount === 0) {
+        console.log(`    ! ledger row ${version} was self-recorded by the file itself; kept the file's own name.`);
+      }
       await client.query("commit");
       console.log(`    ✓ applied and recorded.`);
       ranAny = true;

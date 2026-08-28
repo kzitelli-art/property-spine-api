@@ -80,6 +80,7 @@ const CASES = [
   ["postgres://u:p@[::1]:5432/spine_verify",     false, "IPv6 loopback — URL.hostname keeps the brackets"],
   ["postgres://u:p@ep-x.aws.neon.tech/n?sslmode=require", true, "Neon — production, and SSL must stay on"],
   ["postgres://u:p@db.internal.example.com:5432/x", true, "any remote host"],
+  ["postgres://u:p@db:5432/property_spine?sslmode=disable", false, "docker-compose service name — the caller declared no SSL in the URL"],
   ["not a url at all",                          true, "unparseable falls to the SAFE side, not the open one"],
   [undefined,                                   true, "unset falls to the safe side too"],
 ];

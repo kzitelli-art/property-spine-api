@@ -168,6 +168,15 @@ console.log(`  (using the real migrations/ directory: ${files.length} files, new
   for (const f of fs.readdirSync(REAL)) {
     if (fs.statSync(path.join(REAL, f)).isFile()) fs.copyFileSync(path.join(REAL, f), path.join(MIGDIR, f));
   }
+  //  The runner takes its SSL answer from ../src/shared/database_ssl.js —
+  //  stage the real dependency at the same relative path, or this harness
+  //  exercises a migrate.js that exists nowhere (MODULE_NOT_FOUND, not a
+  //  verdict). Keep in step with migrate.js's actual require graph.
+  fs.mkdirSync(path.join(SCRATCH, "src", "shared"), { recursive: true });
+  fs.copyFileSync(
+    path.join(__dirname, "..", "..", "src", "shared", "database_ssl.js"),
+    path.join(SCRATCH, "src", "shared", "database_ssl.js"),
+  );
   const git = (...args) => execFileSync("git", args, { cwd: SCRATCH, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   git("init", "-q", "-b", "scratch");
   git("-c", "user.email=proof@spine.local", "-c", "user.name=proof", "add", "-A");
