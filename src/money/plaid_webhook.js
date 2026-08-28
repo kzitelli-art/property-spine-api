@@ -144,9 +144,7 @@ module.exports = function plaidWebhook({ pool, keyFetcher, now, keyCacheTtlMs } 
   router.post("/", express.raw({ type: "application/json", limit: RAW_BODY_LIMIT }), async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      // DELIBERATE PRODUCT-SIDE FALSIFICATION: leave the dedicated provider
-      // proof intact while allowing an unverified body to reach the handler.
-      await Promise.resolve();
+      await verifier.verify(req.get("Plaid-Verification"), req.body);
     } catch (error) {
       const status = error instanceof PlaidWebhookVerificationError ? error.httpStatus : 503;
       const outcome = error instanceof PlaidWebhookVerificationError
