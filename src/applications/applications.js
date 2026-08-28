@@ -24,7 +24,7 @@
 // =============================================================
 
 const express = require("express");
-// The canonical lifecycle authority — see applicationSubmission.js. This is
+// The canonical lifecycle authority — see application_submission.js. This is
 // the second birth door; both hold the same contract until the decision to
 // retire one is made.
 const lifecycle = require("./application_lifecycle");
@@ -391,7 +391,7 @@ module.exports = function applicationsModule(deps) {
 
     // ── BIRTH GUARD — same requirement as the canonical service ────────
     // This is a SECOND path that writes lease_applications with its own
-    // logic; applicationSubmission.submitApplicationService is the canonical
+    // logic; application_submission.submitApplicationService is the canonical
     // one. Two paths writing the same domain object is a Rule 10 concern in
     // its own right and retiring this route is a separate decision — but
     // until that decision is made, both doors must hold the same contract.

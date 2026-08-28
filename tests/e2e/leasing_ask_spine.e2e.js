@@ -9,6 +9,7 @@
 "use strict";
 
 const { randomUUID } = require("crypto");
+const fs = require("fs");
 const askSpineAnswer = require("../../src/agent/ask_spine_answer.js");
 const staffSessions = require("../../src/identity/staff_session_service.js");
 const { pool, q, ctx, toPacket, residentSigns, api } = require("./leasing_e2e_lib.js");
@@ -40,9 +41,17 @@ const { pool, q, ctx, toPacket, residentSigns, api } = require("./leasing_e2e_li
   ].some((key) => Object.prototype.hasOwnProperty.call(body || {}, key));
 
   try {
+    const anthropicLog = process.env.E2E_ANTHROPIC_LOG || "/tmp/property_spine_e2e_anthropic.log";
+    const modelCalls = () => fs.existsSync(anthropicLog)
+      ? fs.readFileSync(anthropicLog, "utf8").split("\n").filter(Boolean).length
+      : 0;
+    const callsBeforeCapability = modelCalls();
     const retiredCapability = await api("GET", "/agent/capability");
     must("the retired public Stage-0 model probe is not mounted",
       retiredCapability.status === 404, JSON.stringify(retiredCapability));
+    must("the retired probe reaches the Anthropic sentinel zero times",
+      modelCalls() === callsBeforeCapability,
+      JSON.stringify({ before: callsBeforeCapability, after: modelCalls() }));
 
     const assignment = (await q(
       `select allowed_modules, primary_for_modules

@@ -1,0 +1,475 @@
+# Ask Spine Slice 1 — proof receipt
+
+> ## ⚠ STATUS — 2026-08-12. THIS IS A DATED RECEIPT, NOT CURRENT STATE.
+>
+> The status line below was true when written and is **no longer the proof
+> state**. Slice 1 and slice 2 have both shipped, and the door now carries a POST
+> that answers typed questions. **`THREAD_HANDOFF.md` is the current state; read
+> it instead of this line.** The evidence recorded below remains an accurate
+> record of what was proven *on that date* — it is not restated here, because
+> re-asserting a proof rung without re-running it is exactly the claim this
+> repo's proof ladder exists to prevent.
+>
+> Doctrine that now governs this surface: `PHILOSOPHY.md` §40.
+
+**Status when written: Built and locally exercised. Awaiting real Postgres,
+canonical session, authenticated real HTTP, and end-to-end browser proof.**
+
+Base SHAs the branches were cut from:
+
+| Repo | Base | Branch |
+|---|---|---|
+| `property-spine-api` | `faec54b7e08f57e647402c1685c6fd0517807698` | `claude/ask-spine-slice-1` |
+| `property-spine-app` | `30e550b6c8f9b0e88beac426cbac5b6f35a0c37a` | `claude/ask-spine-slice-1` |
+
+---
+
+## Proof ceiling — exact labels
+
+| Evidence | Label | Not claimed |
+|---|---|---|
+| Service contract, stubbed db (31 assertions, floor 24) | **Locally exercised** | — |
+| Express + real router + real socket, stubbed pool (27, floor 26) | **Real HTTP transport exercised** | *not* authenticated live HTTP |
+| Chromium + real shipped loader + intercepted network (27, both viewports) | **Browser UI path exercised** | *not* end-to-end browser verified |
+| Real Postgres, real session resolution, real SQL rows | **Not yet exercised** | — |
+
+**The slice is NOT Proven.** Per §33 that requires real Postgres, real HTTP and
+actual browser observation against a running API.
+
+---
+
+## Property-input receipt
+
+Verifying that no unauthorized property or entitlement input exists anywhere in
+the new route or service. Run against
+`src/agent/ask_spine.js` and `src/agent/ask_spine_service.js`:
+
+| Check | Result |
+|---|---|
+| Request-body `property_id` used as scope | **NONE** |
+| Query-string `property_id` used as scope | **NONE** |
+| Fallback property | **NONE** |
+| Default property constant | **NONE** |
+| Hardcoded property UUID (`a50fbdd0`, `9e2bb96e`, `971c51ab`) | **NONE** |
+| `allowed_modules` assigned/overwritten anywhere | **NONE** |
+| `process.env` read | **NONE** |
+
+`req.query.property_id` and `req.body.property_id` **do** appear — on exactly
+one line, `ask_spine.js:42`, inside `refuseClientProperty`. That line reads the
+claimed value **solely to reject it** with a 403. It is never passed onward and
+never becomes scope.
+
+The only values that reach the service:
+
+```text
+ask_spine.js:60   property_id:     req.operator.property_id
+ask_spine.js:61   allowed_modules: req.operator.allowed_modules
+ask_spine.js:65   property_id:     req.operator.property_id   (echoed in the response)
+```
+
+Both are asserted at the source rung (2b, 2c) and over real HTTP (G3–G6, H2, H7).
+
+---
+
+## Qualification and ranking contract
+
+The exact behaviour of `GET /operator/ask-spine/attention`. This is the contract
+the UI's scope disclosure refers to.
+
+### Qualification — a row is eligible if and only if ALL hold
+
+| Predicate | Source |
+|---|---|
+| `property_id = <session property>` | `req.operator.property_id`. Never from the request. |
+| `status = 'open'` | closed / resolved obligations never appear |
+| `module = ANY(<session allowed_modules>)` | module entitlement is server-derived authority (§21) |
+
+**A missing due date does not disqualify.** An obligation with `due_at IS NULL`
+is still eligible and lands in tier 4.
+
+**Zero entitled modules yields an honest empty**, not an error and not
+everything: `items: []`, `total_open: 0`, `scope_note: "no_module_entitlement"`.
+
+### Two derived facts, computed read-time
+
+```text
+is_overdue     due_at IS NOT NULL AND due_at < now()
+is_unassigned  assigned_user_id IS NULL
+```
+
+Both are read-time. There is no job, no stored flag, and no clock to drift.
+
+### Ranking — four tiers, then a deterministic tiebreak
+
+```text
+tier 1   is_overdue AND is_unassigned      reason: overdue_unassigned
+tier 2   is_overdue                        reason: overdue
+tier 3   is_unassigned                     reason: unassigned
+tier 4   everything else                   reason: due_soonest
+
+then     due_at ASC NULLS LAST
+then     id ASC
+```
+
+**`id ASC` is a deterministic stability tiebreak, applied only after every
+meaningful priority fact has tied. It is not business priority and carries no
+product meaning** — a lower id does not mean more important. Its sole purpose is
+to prevent planner-order randomness: without it, rows tied on tier and `due_at`
+would return in whatever order the planner produced, which is the defect
+recorded as 4B in `DB_CONNECTION_INVENTORY.md`. Every ordering here terminates
+in a unique column.
+
+**No score exists.** Each `reason` names the recorded fact that placed the item,
+so an operator can be told *why* it ranked without a number that means nothing.
+
+### Module entitlement — proven, not merely asserted
+
+Property scope alone is not sufficient. A leasing-only operator must not receive
+management, financial, resident-sensitive or maintenance work merely because it
+belongs to the same property.
+
+The filter exists in the query (`module = ANY($2::text[])`) and `$2` is
+`req.operator.allowed_modules` — never a request value. **Proven over real HTTP**
+(`tests/proofs/ask_spine_http_proof.js`, assertions M1–M8):
+
+| Scenario | Proven behaviour |
+|---|---|
+| Session property A + **leasing** entitlement | query bound to `["leasing"]` only; no `management`, `maintenance`, `accounting` or `controls` reaches it |
+| Session property A + **broader** entitlement | query widens to exactly the session's modules |
+| Client sends `?module=` / `?modules=` / `?allowed_modules=` | **ignored** — entitlement stays the session's; the client cannot add `management` to itself |
+| **Zero** entitlement | 200 honest empty, `scope_note: "no_module_entitlement"`, and **no database query is issued at all** |
+
+Row-level filtering against real rows still needs the Postgres rung; what is
+proven here is that the correct, session-derived module list reaches the query
+and that no client input can alter it.
+
+### Cap
+
+Five, enforced **twice** — `LIMIT 5` in SQL and a `slice(0, MAX_ITEMS)` in the
+service. The cap is a contract of the function, so it does not depend on the
+query staying correct.
+
+`total_open` counts **the qualification predicate**, not the capped page, so
+"3 of 23" is truthful.
+
+### Navigation metadata
+
+First match wins; anything else returns `null`:
+
+| Order | Condition | Emitted |
+|---|---|---|
+| 1 | `person_id` present | `{kind:"person", id:person_id}` |
+| 2 | `related_type = 'application'` and `related_id` present | `{kind:"application", id:related_id}` |
+| 3 | `module` maps exactly to a desk — `leasing`, `maintenance`, `management` | `{kind:"desk", id:<desk>}` |
+| — | anything else, including `accounting` and `controls` | `null` |
+
+**`unit_id` is returned as context and is never navigation.** No unit opener
+exists in the app, and a link that goes nowhere is worse than no link.
+
+### Deliberately not part of the contract
+
+Money impact · missing proof · operational blockage · "someone waiting" · any
+inferred urgency. No recorded fact supports them today, so asserting them would
+be confident-wrong (§5). They are absent from the query, the response and the UI.
+
+### What a valid empty result means
+
+**"No open obligation currently qualifies as needing attention."**
+
+That is a statement about *this dataset under this contract* — nothing matched
+the predicates above. **It is not a statement that the property is healthy**, and
+the UI is asserted not to imply one. Work that is not recorded as an open
+obligation in an entitled module is outside what Ask Spine can see.
+
+---
+
+## Commands
+
+Each runs independently and exits non-zero on failure.
+
+```bash
+# 1. Service contract — 31 assertions, floor 24
+cd property-spine-api && npm install
+node tests/proofs/ask_spine_contract_proof.js
+
+# 2. Real HTTP transport — 19 assertions, floor 18
+node tests/proofs/ask_spine_http_proof.js
+
+# 3. Browser UI path — 16 assertions
+mkdir -p /tmp/pw && cd /tmp/pw && npm install playwright
+cd /path/to/property-spine-app
+SP=/tmp/pw node ask_spine_browser_proof.browser.js            # desktop
+SP=/tmp/pw VP=phone node ask_spine_browser_proof.browser.js  # phone
+
+# 4. Existing app suite — must stay green (17 harnesses, 749 passed)
+cd /path/to/property-spine-app
+bash run_harnesses.sh > /tmp/suite.txt 2>&1; echo "exit=$?"
+#    Redirect, never pipe — the runner warns that a pipeline's exit status is
+#    the LAST command's and would hide a red suite.
+```
+
+---
+
+## Still required before this can be called Proven
+
+```text
+real isolated Postgres
+→ real obligations rows across at least two properties
+→ real staff session scoped to Property A
+→ authenticated Ask Spine HTTP request
+→ only Property A obligations returned
+→ valid empty tested separately
+→ real failure tested separately
+→ real browser calls the actual API   (not network interception)
+→ underlying supported record opens
+```
+
+The database proof must cover, as distinct rows:
+
+1. overdue **assigned** obligation
+2. overdue **unassigned** obligation
+3. **future** obligation
+4. **closed** obligation
+5. obligation for **another property**
+6. **more than five** eligible obligations
+7. **empty** property
+8. **revoked or unauthorized** session
+
+---
+
+## Explicit exclusions — none of this is in the branch
+
+The unauthenticated cross-property `GET /obligations` (separate security lane) ·
+Slice 9 · S2 login · migrations · global assertion infrastructure · the
+preserved dead harness · any `tryJSON` caller · migration 090 · fixture
+phone-number cleanup · the staged migration · money prioritisation · writes,
+proposals or confirmations · general AI search.
+
+---
+
+## Known dependencies
+
+- **Real session verification.** The session resolver is stubbed in every rung
+  run so far. Nothing here proves `resolveStaffSession`'s live assignment join.
+- **Real database verification.** No Postgres server exists in the build
+  environment (`psql` client only), so the SQL has never executed.
+- **Defect 4B.** Which property the session carries is the subject of 4B in
+  `DB_CONNECTION_INVENTORY.md`. Ask Spine inherits that scope and does not work
+  around it.
+
+---
+
+# Real-runtime rung — completed 2026-08-02
+
+**Rebased first.** API branch rebased onto `f85f70b` (current `main` after PR #29
+merged); app `main` was unchanged. All evidence below applies to the rebased
+merge candidate.
+
+| Repo | Base | Branch head |
+|---|---|---|
+| api | `f85f70bafea172c1cd3d7ca09179f25df4b58177` | `claude/ask-spine-slice-1` |
+| app | `30e550b6c8f9b0e88beac426cbac5b6f35a0c37a` | `claude/ask-spine-slice-1` |
+
+## The four rungs
+
+| Rung | Assertions | Floor | Result |
+|---|---|---|---|
+| Service contract (stubbed db) | 31 | 24 | pass |
+| Real HTTP transport (stubbed pool) | 27 | 26 | pass |
+| **Real Postgres + real sessions + real HTTP** | **23** | **22** | **pass** |
+| **API-backed browser, no interception** | **11** | — | **pass (desktop)** |
+
+## Isolated database — never an operating property
+
+Local Postgres 16.13 on `127.0.0.1:55432`, database `askspine_proof`, created
+for this proof. **No Neon, no Demo Building, no real operating property.** The
+harness routes through `receipt.harnessConnectionString()`, so it refuses to run
+against `DATABASE_URL`.
+
+### A blocker found while building it — reported, not fixed
+
+**The migration chain cannot rebuild the schema from zero.** On a fresh database
+`012_bank_intake.sql` fails with `column "yardi_code" does not exist`, because
+`001_baseline.sql:238` already creates `vendors`, so `012:33`'s
+`create table if not exists vendors (…)` is **silently skipped** and `:43`
+then indexes a column that was never added.
+
+109 of 122 migrations applied; **15 skipped**, all downstream of that failure in
+the banking chain (`bank_transactions`, `bank_accounts`). **None is an Ask Spine
+table** — `obligations`, `users`, `properties`, `property_team_assignments` and
+`staff_sessions` all built correctly from the real migrations.
+
+**This belongs to its own lane, not Ask Spine.** It extends the Phase 1 thesis
+that a ledger entry is not evidence of applied schema: here the migrations
+themselves do not reconstruct, which means production's `vendors.yardi_code`
+arrived by some path not in `migrations/`.
+
+## Fixture (`tools/ask_spine_e2e_seed.js`, reproducible)
+
+Property A and B · a user with leasing+maintenance on A · a leasing-only user ·
+a user whose assignment is deactivated mid-proof · overdue assigned · overdue
+unassigned · future · closed · **no due date** · another property's work ·
+unauthorised-module work (`accounting`, `management`) · more than five
+qualifying · an empty case · a revoked-session case.
+
+## What real Postgres proved (23 assertions)
+
+Property comes from the session · a client `property_id` is refused 403 ·
+**Property B's row never appears in Property A's answer** · unauthorised-module
+rows excluded for the broader user · a leasing-only session sees no maintenance
+work while the broader session does · **a client `module` parameter cannot
+widen entitlement** · closed work excluded · future work does not outrank
+overdue · no-due-date work still qualifies · `total_open` counts every
+qualifying row · the cap holds at five · every returned row verified open and on
+Property A by a second query · genuine empty is `200`/`items:[]`/`total_open:0`
+· **deactivating the assignment makes the session stop resolving (401)** · a
+revoked response carries no items · `issueStaffSession` refuses to mint for an
+unassigned property · no session and a bogus token both 401.
+
+## What the API-backed browser proved (11 assertions, desktop)
+
+**No interception, no mocked loader, no fixture.** Real Chromium → real app
+artifact → real HTTPS → real API → real Postgres.
+
+The app **pins** its API origin (`PRODUCTION_ORIGIN`) so a staff token can only
+ever be sent to one host. Rather than modify the artifact, that hostname was
+**resolved** to the local API over real HTTPS via
+`--host-resolver-rules`. The browser issues a genuine request and the real
+server answers it. `--ignore-certificate-errors` is required only because the
+local certificate is self-signed. **Documented deviation: host resolution and a
+self-signed certificate. Nothing about the request or response is faked.**
+
+Proved: the real loader holds a real canonical session · Property Home opens with
+Ask Spine correctly placed · **"What should I focus on?"** — not the chip text —
+is accepted and hits `https://property-spine-api.onrender.com/operator/ask-spine/attention`
+· live items render from real rows, capped at five · **no other-property or
+unauthorised-module row reaches the browser** · clicking a result opens the
+underlying record · returning to Property Home leaves the composer and four desks
+intact · a **real** empty database state produces the truthful empty line · a
+**real** API outage is honest and is not the empty state · Retry is offered · no
+overflow.
+
+### Honest gap
+
+**Phone width reached E8.** The outage assertion did not reproduce at 390px in
+the API-backed run; it passes on desktop in this rung and at **both** viewports
+in the interception-based harness. Not claimed as proven at phone width.
+
+## Reproducing
+
+```bash
+# isolated Postgres, then the real migrations (expect 15 skipped — see above)
+DATABASE_URL=postgres://postgres@127.0.0.1:55432/askspine_proof node migrations/migrate.js
+
+# real-Postgres rung
+HARNESS_DATABASE_URL=postgres://postgres@127.0.0.1:55432/askspine_proof \
+  node tests/proofs/ask_spine_db_proof.db.js          # 23 assertions, floor 22
+
+# API-backed browser: seed, run the real API, resolve the pinned origin
+HARNESS_DATABASE_URL=… node tools/ask_spine_e2e_seed.js > session.json
+DATABASE_URL=… OPERATOR_APP_ORIGIN=http://127.0.0.1:8081 PORT=3001 node server.js
+SP=/tmp/pw node ask_spine_e2e_browser.browser.js   # in the app repo
+```
+
+## Status
+
+**Every case in the required real-runtime sequence passes.** Remaining before
+merge: final visual sign-off, then the deployment order — merge API → deploy →
+authenticated smoke → merge app → deploy → browser acceptance against the
+deployed API.
+
+---
+
+# Evidence boundary — what the database rung does and does not cover
+
+## Correct label
+
+> **Runtime-proven on an isolated Ask-Spine-complete schema**, pending visual
+> sign-off and deployed acceptance.
+
+**It is not a claim that the repository can rebuild its entire schema.** It is
+also not a dismissal of the rung: real tables, real SQL, real canonical
+sessions, the real router, real HTTP and a real browser path were all exercised.
+
+## The precise qualification
+
+> The isolated database was produced from the repository migration chain until
+> an unrelated banking migration defect blocked continuation. **All migrations
+> creating or modifying the tables and columns used by Ask Spine and canonical
+> staff-session resolution were confirmed applied before the proof ran.**
+
+## Tables the proof depends on
+
+| Table | Used for |
+|---|---|
+| `obligations` | the read itself — property, module, status, `due_at`, `assigned_user_id`, `person_id`, `unit_id`, `related_type`, `related_id`, `label`, `type` |
+| `properties` | property identity |
+| `users` | the operator |
+| `property_team_assignments` | **authority** — the resolver's active-assignment join, and `allowed_modules` |
+| `staff_sessions` | canonical session issuance and resolution |
+| `persons` | `person_id` navigation target |
+
+All six were confirmed present with the required columns before the proof ran.
+
+## Skipped migrations — none intersects that closure
+
+**Verified mechanically:** each skipped file was scanned for
+`create table` / `alter table` against all six tables. **No match.**
+
+Of the 15 skipped, only **one is a genuine defect**:
+
+| Class | Files | Cause |
+|---|---|---|
+| **Genuine defect** | `012_bank_intake.sql` | `vendors.yardi_code` — see the baseline lane |
+| **Cascade from 012** | `017`, `021`, `022`, `023`, `031`, `037` | depend on `bank_transactions` / `bank_accounts`, which 012 never created |
+| **Harness artifact — NOT a defect** | `053`, `054`, `087` | ledger-head preflight assertions (`expected head NNN`). They failed because this proof applied files **individually** and recorded versions afterwards, so the head did not match at check time. Through the real runner they would pass. |
+| **Cascade from the artifacts** | `077`, `106`, `110`, `120` | depend on objects from `053`/`054` |
+
+**Stated plainly: 15 files were skipped, but that is 1 defect + 6 cascade + 8
+artifacts of the application method — not 15 broken migrations.**
+
+---
+
+# Mobile real-outage proof — the last runtime gap, now closed
+
+Narrow, failure-only, at **390 × 844**. Real app, real API, real Postgres, real
+HTTPS to the pinned origin. **No interception.** Shutdown is deterministic: the
+TLS front is killed by **recorded PID**, and the harness then polls the port
+until it genuinely refuses before asserting anything.
+
+| # | Assertion |
+|---|---|
+| M1 | a successful Ask Spine response renders first (5 items) — so staleness is provable |
+| M2 | the API is deterministically down (PID kill; port confirmed refusing) |
+| M3 | the submitted request **genuinely failed at the network** (`requestfailed` observed) |
+| M4 | **stale items are removed** |
+| M5 | the unavailable message appears |
+| M6 | **Retry** appears |
+| M7 | **no empty-success claim appears** — asserted against both the empty line and any "nothing needs/requires" phrasing |
+| M8 | **no horizontal overflow at 390px** |
+
+**8 passed, 0 failed.** Harness: `ask_spine_mobile_outage.browser.js` (app repo).
+**No product code was changed to make it pass.**
+
+---
+
+# Post-Slice-9 compatibility check — recorded, to run after Slice 9 lands
+
+Slice 9 has **no code collision** with Ask Spine (verified: zero shared files),
+but it changes **which obligations are created and completed**. That is a
+downstream contract interaction, not a merge dependency. **Ask Spine does not
+wait for Slice 9, and the branches are not combined.**
+
+To run once Slice 9 is on `main`:
+
+```text
+Slice 9 creates a qualifying obligation
+→ Ask Spine displays it under the correct property and module
+
+Slice 9 completes or closes it
+→ Ask Spine no longer presents it as open work
+```
+
+Both are already expressible against the existing fixture harness — the
+qualification predicate (`status='open'`, property, module) is the contract
+under test.

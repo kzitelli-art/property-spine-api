@@ -12,8 +12,10 @@
 > ```
 >
 > If it appears there, your job is almost certainly to **extend or connect** it,
-> not to write it again. Absence from that file is **not** evidence something is
-> missing — only ~60% of the codebase is surveyed. Search the source, then add
+> not to write it again. The survey is complete as of 2026-08-20 — every `src/`
+> directory, all 176 migrations, all 292 test files, CI and both repos — but
+> **absence from that file is still not proof something is missing.** Only
+> decision-changing rows are promoted into its index. Search the source, then add
 > what you find.
 
 **Read [`docs/THREAD_HANDOFF.md`](docs/THREAD_HANDOFF.md) for HISTORY** — what happened, why, and the traps that cost time. It is 3,992 lines across 50 dated banners with 34 supersession notices, so **its present-tense claims may be stale and it is not current-state authority**. Do not reconstruct history from git.
@@ -309,7 +311,7 @@ The rulings a builder trips over first:
   ship with a domain's first build; *"why did it increase?"* requires recorded
   causal linkage and must not be implicitly promised. Say which one shipped.
 
-**Enforced by `tests/gate_ask_spine_readers.js`, not by memory** (§40.11). It
+**Enforced by `tests/gates/gate_ask_spine_readers.js`, not by memory** (§40.11). It
 discovers domains from their canonical standing reads, so a domain that lands
 without registering goes red on its own.
 
@@ -450,7 +452,7 @@ The screen is one projection of that truth; the conversational reader is another
 
 Proof ladder: Reported → Locally exercised → Built-but-dormant → **Proven** (real DB + real HTTP) → **Browser verified**. For operator workflows, browser verification is part of "done." Do not call something live/deployed/enforced without the matching evidence.
 
-**And a domain is not done until Ask Spine can read it** (§40.2) — its governed standing state available to entitled users, registered, and proven in the browser. This is a rung on the ladder, not a note beneath it: a domain browser-verified in the operator UI but unreadable by Ask Spine is done as a **screen** and not done as a **domain**. Say it that way in the receipt. Enforced by `tests/gate_ask_spine_readers.js` (§40.11).
+**And a domain is not done until Ask Spine can read it** (§40.2) — its governed standing state available to entitled users, registered, and proven in the browser. This is a rung on the ladder, not a note beneath it: a domain browser-verified in the operator UI but unreadable by Ask Spine is done as a **screen** and not done as a **domain**. Say it that way in the receipt. Enforced by `tests/gates/gate_ask_spine_readers.js` (§40.11).
 
 ## Build discipline (§30)
 
@@ -559,7 +561,7 @@ all of them turns a product build into a harness-inventory project.
 
 ## Repo orientation
 
-Node/Express API. `npm start` runs `prestart` then `server.js` (port 3000). DB is Neon Postgres (`DATABASE_URL`). Deploys to Render on merge to `main`. See `README.md` for module layout and `docs/` for architecture, auth, data-model, domains, and deployment.
+Node/Express API. `npm start` runs `prestart` then `server.js` (port 3000). DB is Neon Postgres (`DATABASE_URL`). **Deploys to Render are MANUAL** — merging to `main` deploys nothing. A human runs `deploy.sh` (or deploys from the Render dashboard); there is no push-to-deploy webhook. See `README.md` for module layout and `docs/` for architecture, auth, data-model, domains, and deployment.
 
 **A deploy does NOT migrate.** `prestart` runs `migrations/migrate.js` in **verify-only**
 mode: every migration file must already be in the ledger, or the service **refuses to

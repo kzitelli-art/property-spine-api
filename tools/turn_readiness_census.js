@@ -23,7 +23,7 @@
    transaction and rolls back, so it cannot write even by accident.
 
    CLASS 3 — migration-preparation tooling. Removal condition: delete once
-   `ready_date` is retired (see docs/TURN_READINESS_SEMANTICS_TRACE.md §4).
+   `ready_date` is retired (see docs/archive/TURN_READINESS_SEMANTICS_TRACE.md §4).
 
    Run:
      DATABASE_URL=<production or a replica> node tools/turn_readiness_census.js
@@ -36,7 +36,7 @@ const { Pool } = require("pg");
 
 /*  ⚠ WRITTEN THIS WAY ON PURPOSE — do not refactor into a local alias.
  *
- *  `tests/gate_harness_isolation.js` detects a production-facing script by
+ *  `tests/gates/gate_harness_isolation.js` detects a production-facing script by
  *  matching `connectionString: process.env.DATABASE_URL` AT THE CONNECTION
  *  SITE. The first draft of this file read the variable once into a `const`
  *  and passed the alias to `new Pool`, which is identical at runtime and
@@ -203,7 +203,7 @@ const QUERIES = [
   }
 
   console.log("\n════════════════════════════════════════════════════════════════");
-  console.log("  Paste this into docs/TURN_READINESS_SEMANTICS_TRACE.md §4 before");
+  console.log("  Paste this into docs/archive/TURN_READINESS_SEMANTICS_TRACE.md §4 before");
   console.log("  any backfill semantics are written. Where evidence does not");
   console.log("  support a reading, the answer stays UNKNOWN.");
   console.log("════════════════════════════════════════════════════════════════\n");

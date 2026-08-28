@@ -295,7 +295,7 @@ column wearing three meanings.
 ### 1.3 What the Equity harness proves
 
 Real Postgres, before any UI, before any conversation — 46/46 in
-`tests/equity_position_falsification.db.js`, covering E1–E10 AND the five
+`tests/proofs/equity_position_falsification.db.js`, covering E1–E10 AND the five
 Round-4 rulings against real survey specimens, including hostile fixtures
 that assert the schema itself refuses to store a collapsed distinction (an
 `'executed'` override with no execution date; a capital amount claim

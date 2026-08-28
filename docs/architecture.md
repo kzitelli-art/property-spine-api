@@ -98,7 +98,7 @@ migrations/migrate.js        — migration runner (runs on every boot)
 src/
   identity/
     staff_session_service.js — issues/validates staff session tokens (digest at rest)
-    teamaccess.js            — phone OTP login: /auth/sms/start + /auth/sms/verify
+    team_access.js            — phone OTP login: /auth/sms/start + /auth/sms/verify
     operator.js              — /operator/* routes: session gate, /operator/me
     operator_session_bootstrap.js — invite-code bootstrap (legacy/dev)
     registry.js              — property identity resolution
@@ -106,18 +106,18 @@ src/
     leasing_desk.js          — main leasing surface router
     leasing_desk_loader.js   — data loading for the leasing desk
     leasing_lifecycle_service.js — lease state machine
-    leasingleads.js          — prospect capture and lead management
+    leasing_leads.js          — prospect capture and lead management
   maintenance/
     maintenance.js           — work orders, urgency, turn tracking
     work_order_service.js    — work order lifecycle
   money/
     money.js                 — charges, payments, ledger
-    bankbridge.js            — Plaid bank feed integration
+    bank_bridge.js            — Plaid bank feed integration
     reporting.js             — T-12 and financial report generation
   comms/
     communications_boundary.js — the ONE outbound SMS gate
     sms.js                   — Twilio transport (fail-soft when unconfigured)
-    tenantlink.js            — tenant portal session and links
+    tenant_link.js            — tenant portal session and links
   agent/
     agent.js                 — AI ingestion via Anthropic Claude SDK
   surfaces/

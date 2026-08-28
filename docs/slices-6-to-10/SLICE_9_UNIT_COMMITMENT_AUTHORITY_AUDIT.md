@@ -181,7 +181,7 @@ any commitment-authority defect.
 | 3 | `keeps its durable residential use — an operating designation is not a use` | — | depends on #2 |
 | 4 | `a commenced-but-unactivated lease blocks marketing ()` | `()` | no pending lease exists |
 
-**Root cause, measured:** `tests/availability_canonical_proof.js:18` hardcodes
+**Root cause, measured:** `tests/proofs/availability_canonical_proof.js:18` hardcodes
 the Demo Building UUID and **seeds nothing**. In the isolated proof database the
 Demo Building property row exists but has **0 spaces** and there are **0 pending
 leases** repository-wide.

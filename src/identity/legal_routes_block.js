@@ -24,7 +24,7 @@
 //  only proof that a route exists is a request that returns it.
 //
 //  It is now an ordinary router module, mounted in server.js beside the
-//  other route modules, and covered by tests/tenant_setup_page_parses.test.js
+//  other route modules, and covered by tests/unit/tenant_setup_page_parses.test.js
 //  — which fetches all four pages, and fetches a never-existing /legal path
 //  that must still 404, so the 200s prove routing rather than a catch-all.
 // ════════════════════════════════════════════════════════════════════

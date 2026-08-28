@@ -160,7 +160,7 @@ const open = async () => {
   //
   //  The honest way to falsify a guard is to break the guard. The source
   //  on disk is NEVER edited — a variant is compiled in memory, exactly
-  //  as tests/media_falsify.test.js does it.
+  //  as tests/unit/media_falsify.test.js does it.
   {
     const RO_PATH = path.join(__dirname, "_readonly.js");
     const RO_SRC = fs.readFileSync(RO_PATH, "utf8");

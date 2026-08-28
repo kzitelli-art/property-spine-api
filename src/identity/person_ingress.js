@@ -31,7 +31,7 @@
 //  directly, and the rent-roll one keyed person reuse off a LEASE lookup
 //  containing a display name. A renewal moved the lease dates, the key
 //  missed, and the same human forked into two Spine identities — proven
-//  reproducibly in tests/person_spine_import_audit.db.js.
+//  reproducibly in tests/proofs/person_spine_import_audit.db.js.
 //
 //  The defect was never the missing external-id table. It was that a
 //  domain importer held the authority to mint a human at all.
@@ -101,7 +101,7 @@ function refuse(code, message, extra = {}) {
   return e;
 }
 
-//  E.164 exactly as leasingleads.js normalizes it. One definition of "the
+//  E.164 exactly as leasing_leads.js normalizes it. One definition of "the
 //  same number" or the two paths disagree about the same human.
 function normalizePhone(raw) {
   const d = String(raw == null ? "" : raw).replace(/\D/g, "");
@@ -272,7 +272,7 @@ async function createPerson(client, { evidence, authority }) {
   }
   const canon = normalizePhone(evidence.phone);
   const email = normalizeEmail(evidence.email);
-  //  names_seen from the first sighting. leasingShadowImport already uses
+  //  names_seen from the first sighting. leasing_shadow_import already uses
   //  this as a source-alias history; the rent-roll path never populated it,
   //  so a name variant across exports left no trace at all.
   const seen = evidence.name

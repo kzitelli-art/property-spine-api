@@ -2,7 +2,7 @@
 /* ════════════════════════════════════════════════════════════════════
    release0_proof_audit.js — READ-ONLY Release 0 proof-correction audit.
 
-   AUTHORIZED BY: docs/RELEASE_0_AUDIT_PLAN.md, under charter Open Ruling 4.
+   AUTHORIZED BY: docs/archive/RELEASE_0_AUDIT_PLAN.md, under charter Open Ruling 4.
    THAT PLAN MUST BE APPROVED AT A NAMED COMMIT BEFORE THIS RUNS.
    Being named "audit" is not authorization — Ruling 4 says so in those words.
 
@@ -29,15 +29,15 @@
    a failed statement aborts the whole transaction block, so an unwrapped
    probe kills every read after it and the tool reports nothing while
    appearing to have run. That is a documented incident on this repository,
-   not a hypothesis. See docs/MIGRATION_LEDGER_INVERSE_GATE.md §5.
+   not a hypothesis. See docs/archive/MIGRATION_LEDGER_INVERSE_GATE.md §5.
 
    ── WHAT IT MAY NOT SELECT ──────────────────────────────────────────
    No message bodies, no field notes, no titles or descriptions, no resident
    identity, no phone/email/media URL, no user names, and never the CONTENTS
    of completion_photo or completion_note. Presence (`IS NOT NULL`) is
    permitted and is checked; contents are not. Enforced by review against
-   docs/RELEASE_0_AUDIT_PLAN.md §5 and by
-   tests/release0_audit_forbidden_fields.test.js, which reads this file's
+   docs/archive/RELEASE_0_AUDIT_PLAN.md §5 and by
+   tests/unit/release0_audit_forbidden_fields.test.js, which reads this file's
    own source.
 
    ── DETERMINISM ─────────────────────────────────────────────────────
@@ -344,7 +344,7 @@ async function main() {
 
   const report = {
     tool: "tools/release0_proof_audit.js",
-    authorized_by: "docs/RELEASE_0_AUDIT_PLAN.md (Open Ruling 4)",
+    authorized_by: "docs/archive/RELEASE_0_AUDIT_PLAN.md (Open Ruling 4)",
     connection: { database: null, user: null, read_only_proof: null },
     findings: [],
     withheld_conclusions: WITHHELD_CONCLUSIONS,

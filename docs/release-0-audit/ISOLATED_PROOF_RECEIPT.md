@@ -244,7 +244,7 @@ DATABASE_URL unset      ✗ DATABASE_URL is not set.
 
 ### 4.8 Regression guard
 
-`tests/release0_readonly_ordering.test.js` — 18 assertions over **both** tools,
+`tests/unit/release0_readonly_ordering.test.js` — 18 assertions over **both** tools,
 static and database-free. Falsified by moving an identity query back above the
 read-only `begin`: three assertions fire, and they are the right three.
 
@@ -278,7 +278,7 @@ A receipt can therefore be diffed against a re-run instead of eyeballed.
 |---|---|---|
 | `tools/release0_proof_audit.js` | 3 — temporary instrument | Removed when Release 0 ships and its production receipt is preserved. |
 | `tests/fixtures/release0_audit_*.sql` | 3 — temporary | Removed with the tool. |
-| `tests/release0_audit_forbidden_fields.test.js` | 3 — temporary | Removed with the tool it guards. |
+| `tests/unit/release0_audit_forbidden_fields.test.js` | 3 — temporary | Removed with the tool it guards. |
 | This receipt | 1 — permanent record | Never removed. It is the evidence the instrument was proven before it was pointed at production. |
 
 ---

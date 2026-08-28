@@ -29,12 +29,12 @@
 
    Owner ruling 2026-08-03: the existing `normalizePhone` output is the
    canonical stored and compared form. This module is now the single home
-   of that function — tenantlink.js imports it rather than keeping the local
+   of that function — tenant_link.js imports it rather than keeping the local
    copy it had at :117.
 
    Three readings were in play before this change:
 
-     · comms/tenantlink.js:117   normalizePhone  — US-only; the ruled canonical form
+     · comms/tenant_link.js:117   normalizePhone  — US-only; the ruled canonical form
      · identity/phone_identity   normalizeE164   — same, PLUS a "+" passthrough
                                                    that accepts any already-prefixed
                                                    international string
@@ -50,7 +50,7 @@
    different facts with different rules, and this slice does not get to
    change person identity. That leaves two phone normalizers in the system
    with different strictness. That is documented debt, not an accident —
-   see docs/PROPERTY_LINE_HARDENING.md §7.
+   see docs/archive/PROPERTY_LINE_HARDENING.md §7.
 
    ── WHY SQL DOES NOT REPLICATE THE NORMALIZER ────────────────────────
 
@@ -83,7 +83,7 @@
 "use strict";
 
 /*  THE CANONICAL FORM. Ruled 2026-08-03: this is `normalizePhone` as it has
- *  existed in tenantlink.js, moved here unchanged so there is one copy.
+ *  existed in tenant_link.js, moved here unchanged so there is one copy.
  *
  *  US numbers only, and it says so by returning null rather than guessing:
  *  a number it cannot normalize can never match a stored line, so a bad

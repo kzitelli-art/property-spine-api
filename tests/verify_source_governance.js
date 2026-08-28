@@ -63,11 +63,11 @@ const GATES = [
     what: "no req.operator read of a field the staff session does not define" },
   { file: "gate_native_tour_scheduler.js",
     what: "one Spine-owned tour-slot command; staff scope and attribution stay server-derived" },
-  { file: "us_federal_holidays.test.js",
+  { file: "unit/us_federal_holidays.test.js",
     what: "federal holiday closures match the legal and OPM-observed calendar rules" },
-  { file: "tour_schedule_ask_spine.test.js",
+  { file: "unit/tour_schedule_ask_spine.test.js",
     what: "dashboard and staff SMS Ask Spine read the same native tour schedule standing" },
-  { file: "team_access_session_boundary.test.js",
+  { file: "unit/team_access_session_boundary.test.js",
     what: "Team roster, invite and access changes use the signed-in staff boundary without a browser operator key" },
   //  Steps 2–3 candidates. Both are source-only and DB-free, so they
   //  belong on the standard path rather than in a harness nobody runs.
@@ -78,7 +78,7 @@ const GATES = [
   //  (it stubs `pg`) and builds its own scratch git repository, so it
   //  belongs on the standard path. A safety check nobody runs is the exact
   //  failure this harness was written for; it does not get to be the third.
-  { file: "migration_release_gate.test.js",
+  { file: "unit/migration_release_gate.test.js",
     what: "EXPECTED_LEDGER_CEILING and EXPECTED_SHA are enforced, on Render and off it" },
   { file: "gate_completion_writers.js",
     what: "exactly the expected work-order completion writers; no third writer" },
@@ -92,7 +92,7 @@ const GATES = [
   //  is the highest-authority write in the product and was the least governed:
   //  four routes do it, they disagree on identity/hierarchy/authority, and none
   //  is exercised anywhere. This pins that measured state so Build 1 has to
-  //  change it deliberately. See docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md.
+  //  change it deliberately. See docs/archive/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md.
   { file: "gate_property_creation_paths.js",
     what: "exactly the known client/property creation paths; no fifth door" },
   //  The wall between insurance economics and premium financing. The June
@@ -116,90 +116,98 @@ const GATES = [
   //  a YEAR late) with every surrounding proof green, because those proofs
   //  asserted the implementation. This one asserts the City's published
   //  schedule, date by date, and requires the derivation to reproduce it.
-  { file: "philadelphia_tax_clocks.test.js",
+  { file: "unit/philadelphia_tax_clocks.test.js",
     what: "Philadelphia tax clocks agree with the City's published schedule" },
   //  The tax proposal adapter, against the extracted text of REAL City
   //  documents held in tests/fixtures/tax. Pure, so it runs here. A reader
   //  proven against an invented format is proven against nothing.
-  { file: "tax_document_read.test.js",
+  { file: "unit/tax_document_read.test.js",
     what: "tax document reader: reads real City bills and returns, refuses to guess" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery
   //  receipt cannot be collapsed into one claim.
-  { file: "conversation_intent_extraction.test.js",
+  { file: "unit/conversation_intent_extraction.test.js",
     what: "intent seam: one implementation, transport-independent, behaviour pinned" },
-  { file: "conversation_clarification_and_receipt.test.js",
+  { file: "unit/conversation_clarification_and_receipt.test.js",
     what: "clarification + receipt seams: wording unchanged, operating ≠ delivery" },
   //  The technician work-selection decisions. Every one of them is a refusal,
   //  and a refusal that only fires against a provisioned database is a refusal
   //  nobody has seen fire. These run with no credentials.
-  { file: "technician_work_selection.test.js",
+  { file: "unit/technician_work_selection.test.js",
     what: "technician: identity, scope, eligibility, replay, cross-property refusal" },
   //  Ask Spine slice 2. A chat box is the easiest place to ship a
   //  confident lie, so the honesty properties are on the standard path.
-  { file: "ask_spine_answer.test.js",
+  { file: "unit/ask_spine_answer.test.js",
     what: "Ask Spine: answers only from reads, names them, and an outage never reads as good news" },
-  { file: "ask_spine_contract_proof.js",
+  { file: "proofs/ask_spine_contract_proof.js",
     what: "Ask Spine attention: one canonical obligations reader, scoped ranking, no conversational SQL copy" },
-  { file: "staff_sms_router.test.js",
+  { file: "unit/staff_sms_router.test.js",
     what: "staff SMS: governed reads converge on Ask Spine while actions and one-work-order turns remain operational" },
-  { file: "staff_sms_leasing_action.test.js",
+  { file: "unit/staff_sms_leasing_action.test.js",
     what: "staff SMS leasing: explicit standing, exact target, canonical capture/send services, honest receipts" },
-  { file: "operations_line_transfer.test.js",
+  { file: "unit/operations_line_transfer.test.js",
     what: "staff line transfer: one atomic owner change, preserved history, fixed posture, server-derived authority" },
-  { file: "personal_attention_convergence.test.js",
+  { file: "unit/personal_attention_convergence.test.js",
     what: "personal attention: dashboard and SMS share one person-scoped read using recorded accountability only" },
   { file: "gate_ask_spine_readers.js",
     what: "Ask Spine: every canonical standing domain is registered, pending, or explicitly waived" },
+  //  ── docs/CURRENT_STATE.md CANNOT SILENTLY LOSE COVERAGE ────────────
+  //  That file exists because threads kept rebuilding what already existed.
+  //  Until 2026-08-20 the only thing keeping it true was people remembering
+  //  to update it — which is exactly what docs/CODEBASE_STATE.md relied on
+  //  before it was silently wrong two weeks later. Coverage only: this gate
+  //  does not and cannot verify that any row is TRUE.
+  { file: "gate_current_state.js",
+    what: "CURRENT_STATE.md: every src/ domain is named, rungs use the controlled vocabulary, defect numbering has not collided" },
   //  The gate above is the §40.2 enforcement, so it is the one gate whose
   //  own failure modes must be demonstrated rather than trusted. It ran
   //  green for months while scanning one directory and missing Tenancy
   //  entirely; a green gate that has never been seen to go red is a claim.
   //  This mutates the registration chain six ways and requires exit 1 each
   //  time, then requires green again on restore.
-  { file: "ask_spine_reader_gate_falsification.js",
+  { file: "scenarios/ask_spine_reader_gate_falsification.js",
     what: "the reader gate itself goes RED when registration, discovery or the gather is broken" },
-  { file: "tenancy_ask_spine.test.js",
+  { file: "unit/tenancy_ask_spine.test.js",
     what: "Tenancy Ask Spine: routing, entitlement before any read, the four silences, the truth walls" },
-  { file: "economics_ask_spine.test.js",
+  { file: "unit/economics_ask_spine.test.js",
     what: "Economics Ask Spine: one canonical picture, lease-term menu preserved, entitlement before read" },
   //  Slice 2's primitive is PURE, which is why its whole edge-case surface
   //  runs here in milliseconds instead of behind a Postgres. The DB rung
   //  (interval_positions.db.js) proves the same states on 160 real beds.
-  { file: "application_space_grain.test.js",
+  { file: "unit/application_space_grain.test.js",
     what: "Application space grain (182): the bed is durable from the aim, whole-unit behaviour is unchanged, a bed is never guessed, and the refusal prose stays out of the deployed app's false branch" },
-  { file: "application_future_target.test.js",
+  { file: "unit/application_future_target.test.js",
     what: "Future applications: the governed turn-ready date survives invitation, tenant submission, and application birth" },
-  { file: "interval_position_hostile.test.js",
+  { file: "unit/interval_position_hostile.test.js",
     what: "Interval tenancy: closed-interval arithmetic, which rights count, honest refusals, and the line it does not cross" },
-  { file: "meeting_evidence_ingress.test.js",
+  { file: "unit/meeting_evidence_ingress.test.js",
     what: "Meeting Evidence: Read AI raw-byte ingress, immutable inbox shape, and no Ask Spine/transcript fan-out" },
-  { file: "meeting_receipt_v0.test.js",
+  { file: "unit/meeting_receipt_v0.test.js",
     what: "Meeting Receipt v0: doctrine decomposition, transcript segments, validation, deterministic receipt, review ledger" },
-  { file: "meeting_receipt_extractor_v0.test.js",
+  { file: "unit/meeting_receipt_extractor_v0.test.js",
     what: "Meeting Receipt Extractor v0: release readiness, reject-not-repair runner, Aug 10 real-path distinctions, feedback routing" },
-  { file: "meeting_receipt_runtime_v0.test.js",
+  { file: "unit/meeting_receipt_runtime_v0.test.js",
     what: "Meeting Receipt runtime v0: official Read shape, model protocol, exact identity resolution, scoped API and review lineage" },
-  { file: "equity_writer_guards.test.js",
+  { file: "unit/equity_writer_guards.test.js",
     what: "Equity: provenance, class, transfer, attribution, and ownership reconciliation guards" },
-  { file: "equity_routes_contract.test.js",
+  { file: "unit/equity_routes_contract.test.js",
     what: "Equity HTTP: ownership reconciliation survives the canonical standing route" },
-  { file: "contracted_service_source_artifact.test.js",
+  { file: "unit/contracted_service_source_artifact.test.js",
     what: "Contracted Services evidence: accepted shapes and product-specific refusals" },
-  { file: "contracted_service_ask_spine.test.js",
+  { file: "unit/contracted_service_ask_spine.test.js",
     what: "Contracted Services Ask Spine: entitlement, question-bound facts, failures, and references" },
-  { file: "technician_language.test.js",
+  { file: "unit/technician_language.test.js",
     what: "technician language: plain phrases read correctly, nothing guessed into an action" },
-  { file: "compliance_document_read.test.js",
+  { file: "unit/compliance_document_read.test.js",
     what: "Compliance reader: real City license, explicit unknowns, hostile classification refusals" },
-  { file: "compliance_evidence_intake.test.js",
+  { file: "unit/compliance_evidence_intake.test.js",
     what: "Compliance intake: generic PDF retention, dedupe, retain-before-recognition failure" },
-  { file: "compliance_contracts.test.js",
+  { file: "unit/compliance_contracts.test.js",
     what: "Compliance contracts: exact proposal and frozen future writer/read/reference wires" },
-  { file: "asset_reader_capabilities.test.js",
+  { file: "unit/asset_reader_capabilities.test.js",
     what: "Insurance + Tax readers: retrieval declared; comparison and cause not claimed" },
-  { file: "compliance_user_journey.test.js",
+  { file: "unit/compliance_user_journey.test.js",
     what: "Compliance user journey: six natural questions, honest attention, server-minted openers" },
 ];
 
@@ -213,7 +221,10 @@ console.log(bar);
 
 const results = [];
 for (const g of GATES) {
-  const target = path.join(__dirname, g.file);
+  //  Entries with a slash are resolved from tests/ root; bare names live in gates/.
+  const target = g.file.includes("/")
+    ? path.join(__dirname, g.file)
+    : path.join(__dirname, "gates", g.file);
   if (!fs.existsSync(target)) {
     console.error(`\n  ✗ ${g.file} — NOT FOUND. A missing gate is a failure, not a skip.\n`);
     process.exit(2);

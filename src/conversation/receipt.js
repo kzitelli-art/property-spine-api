@@ -2,7 +2,7 @@
    conversation/receipt.js — RECEIPT COMPOSITION.
 
    The third shared conversational seam, extracted from the resident SMS
-   path in src/comms/tenantlink.js. See docs/AGENT_CAPABILITY_SEAMS.md.
+   path in src/comms/tenant_link.js. See docs/archive/AGENT_CAPABILITY_SEAMS.md.
 
    ── THE LOAD-BEARING DISTINCTION ───────────────────────────────────
    A successful operating action does not prove that a text was
@@ -39,7 +39,7 @@
    by construction — the composer has nothing to say and says nothing.
 
    ── MOVE, NOT REDESIGN ─────────────────────────────────────────────
-   Every string below is the tenantlink original, character for
+   Every string below is the tenant_link original, character for
    character, including the two holds that differ only in their opening
    word ("Got it —" vs "Thanks —"). Resident wording is unchanged, and
    tests/conversation_receipt_composition.test.js proves it against the

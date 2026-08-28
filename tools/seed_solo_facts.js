@@ -196,7 +196,7 @@ function buildSeed(deps) {
     // seeded here. The per-unit-type PRICES are deliberately NOT seeded: they
     // conflict with live `units` rows (the sheet says a studio is $1,450-1,600;
     // unit 530 quoted $1,687 to a live prospect), and unit truth is read LIVE
-    // from units by design. That conflict is logged in docs/SOLO_FACTS_PACK.md
+    // from units by design. That conflict is logged in docs/archive/SOLO_FACTS_PACK.md
     // for an owner to resolve, per this file's own rule.
     {
       fact_key: "current_concession",
@@ -207,9 +207,9 @@ function buildSeed(deps) {
     },
     // Matterport 3D tours. FLOOR-PLAN media, never unit media: the tour shows
     // the LAYOUT, not the specific apartment someone would lease. Sending one
-    // as "here's your apartment" is the media misrepresentation docs/AI_VOICE.md
+    // as "here's your apartment" is the media misrepresentation docs/archive/AI_VOICE.md
     // §9 exists to prevent. Only links VERIFIED to belong to this property and
-    // this layout are listed; the rest are held in docs/SOLO_FACTS_PACK.md §8.
+    // this layout are listed; the rest are held in docs/archive/SOLO_FACTS_PACK.md §8.
     {
       fact_key: "virtual_tours",
       rendered_text:

@@ -125,7 +125,7 @@ async function resolveAuthority(pool, { spec = {}, apply = false } = {}) {
   //
   //  Found by falsification, not by review: a chain proof withdrew the
   //  context it had just been granted and required the grantor to refuse
-  //  again. It did not. staffbridge — which OWNS this table — filters
+  //  again. It did not. staff_bridge — which OWNS this table — filters
   //  `active_to is null` everywhere; this consumer did not, and the two
   //  disagreed about who is staff.
   const staffCtx = person ? (await pool.query(
@@ -154,7 +154,7 @@ async function resolveAuthority(pool, { spec = {}, apply = false } = {}) {
       : linkedElsewhere.length ? `That person is already linked to another login (${linkedElsewhere[0].id}).`
       : user && user.person_id ? `This login is already linked to a different person (${user.person_id}).`
       : !accountStaff ? "Not eligible until the account is classified human_staff."
-      : "Eligible to link through staffbridge — a separate attributable write."));
+      : "Eligible to link through staff_bridge — a separate attributable write."));
 
   // ── 4. the person is entitled to the property ───────────────────
   const property = property_id ? (await pool.query(

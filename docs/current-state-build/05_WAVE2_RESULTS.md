@@ -183,7 +183,7 @@ Surveyed against api 9e09a64 / app c6769ba 2026-08-20.
 | tools/step4/preflight.js + tools/step4/prove_completion.js — Step 4 real-handset | REPORTED | tools/step4/preflight.js, tools/step4/prove_completion.js, t | BLOCKED on Twilio transport ... a real MMS from a real phone through the operations line. |
 | deploy.sh (root) — production deploy trigger | DEPLOYED | deploy.sh | NOT_FOUND |
 | setup_clean_qa_record.sh / setup_fresh_record_and_prove.sh (root) — canonical QA | BUILT_BUT_DORMANT | setup_clean_qa_record.sh, setup_fresh_record_and_prove.sh, _ | NOT_FOUND (no run receipt found; guard is present and would refuse an unacknowledged run) |
-| tests/gate_harness_isolation.js — repo-wide unsafe-DB-connection audit register  | LOCALLY_EXERCISED | tests/gate_harness_isolation.js | This is a TEMPORARY DEBT REGISTER, NOT AN APPROVAL LIST. Presence here means "known, measured, unrepaired" — never "reviewed and accepted". |
+| tests/gates/gate_harness_isolation.js — repo-wide unsafe-DB-connection audit register  | LOCALLY_EXERCISED | tests/gates/gate_harness_isolation.js | This is a TEMPORARY DEBT REGISTER, NOT AN APPROVAL LIST. Presence here means "known, measured, unrepaired" — never "reviewed and accepted". |
 
 ## Completeness critic findings (28)
 

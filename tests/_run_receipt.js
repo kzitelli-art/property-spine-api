@@ -2,7 +2,7 @@
 //  _run_receipt.js — TEST-ONLY. The standard proof preamble/postamble,
 //  and the FAIL-CLOSED database guard every DB harness must pass through.
 //
-//  WHY THE RECEIPT EXISTS. tests/test_conversion_rail.db.js threw at
+//  WHY THE RECEIPT EXISTS. tests/proofs/test_conversion_rail.db.js threw at
 //  construction and ran zero assertions for 204 commits. It produced no failing
 //  assertion — it produced an ABSENCE. Absence of red was read as green.
 //

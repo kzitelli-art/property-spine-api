@@ -14,7 +14,7 @@
 //
 //  Injected deps: { spawnObligationFromEvent }  (the shared engine helper)
 //  The emergency vocabulary + category derivation live here so the ONE
-//  service owns them; maintenance.js and tenantlink.js both call in.
+//  service owns them; maintenance.js and tenant_link.js both call in.
 // ════════════════════════════════════════════════════════════════════
 
 // ── The fixed emergency list (mirrors the operator vocabulary) ──

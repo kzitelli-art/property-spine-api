@@ -19,7 +19,7 @@
 //      it falls back to the normal human queue — exactly today's behavior.
 //
 // THE BOUNDARY (important): this module NEVER creates a money_event. The
-// bridge (bankbridge.js) remains the ONLY birth path for money. This
+// bridge (bank_bridge.js) remains the ONLY birth path for money. This
 // module only (a) reads history, (b) stores the switch + its audit, and
 // (c) answers a yes/no decision the bridge consults. The DB never
 // auto-confirms; app code does, and it does so through the same audited
@@ -32,7 +32,7 @@
 //     Enforced HERE, in decideAutoConfirm().
 //   • OVERRIDE → REVOKE: one human override of an auto-confirmed line
 //     snaps that vendor's switch back to off until it re-earns trust.
-//     Exposed HERE as revokeOnOverride(); bankbridge calls it when a human
+//     Exposed HERE as revokeOnOverride(); bank_bridge calls it when a human
 //     re-categorizes a line that was auto-confirmed.
 //
 // EARNED, NOT GRANTED DAY ONE. The read gates (shows eligibility); the
@@ -303,7 +303,7 @@ module.exports = function autoconfirm(deps) {
         await client.query("rollback");
         return res.status(409).json({
           error: "no category rule for this vendor at this property — nothing to graduate",
-          hint: "set a per-property rule first (bankbridge: set-property-vendor-category), or rely on the global default by creating the property rule",
+          hint: "set a per-property rule first (bank_bridge: set-property-vendor-category), or rely on the global default by creating the property rule",
         });
       }
 
@@ -373,7 +373,7 @@ module.exports = function autoconfirm(deps) {
   return router;
 };
 
-// Also expose helpers without mounting (for bankbridge to import the
+// Also expose helpers without mounting (for bank_bridge to import the
 // decision/revoke functions against the same pool).
 module.exports.helpers = function (deps) {
   const r = module.exports(deps);

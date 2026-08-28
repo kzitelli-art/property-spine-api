@@ -30,7 +30,7 @@
 
    A bed is committed for a cycle when a non-terminal governed lease
    OVERLAPS the cycle window. Measured against Mike's live tracker on
-   2026-08-16 (docs/FORWARD_RENT_TRACE.md §1.3): 126 of 126 beds where
+   2026-08-16 (docs/archive/FORWARD_RENT_TRACE.md §1.3): 126 of 126 beds where
    Spine had evidence agreed, and ZERO beds were classified differently.
    The residue was 17 beds signed after the rent roll's as-of date —
    absent data, not disagreement.
@@ -66,7 +66,7 @@ const { readTrackerClaims, _internal: intake } = require("./tracker_intake");
 const SIGNED_STATUSES = new Set(["active", "current", "executed", "signed", "renewed"]);
 const PENDING_STATUSES = new Set(["pending", "pending_signature", "out_for_signature"]);
 
-/*  A TERM SHAPE IS DERIVED, NEVER STORED (docs/FORWARD_RENT_TRACE.md §1.5).
+/*  A TERM SHAPE IS DERIVED, NEVER STORED (docs/archive/FORWARD_RENT_TRACE.md §1.5).
  *  Mike's `Full Year` / `Fall Only` labels reproduce from the lease end
  *  date alone — 43 of 44 bed-for-bed, with both differences explained by
  *  known defects. So Spine computes the label and does not add a column

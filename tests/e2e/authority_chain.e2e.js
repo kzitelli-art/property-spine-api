@@ -20,7 +20,7 @@
 const path = require("path");
 const ROOT = path.join(__dirname, "..", "..");
 const { Pool } = require(path.join(ROOT, "node_modules", "pg"));
-const buildStaffBridge = require(path.join(ROOT, "src/identity/staffbridge.js"));
+const buildStaffBridge = require(path.join(ROOT, "src/identity/staff_bridge.js"));
 const { resolveAuthority } = require(path.join(ROOT, "src/identity/authority_resolution.js"));
 const { pricingAuthority } = require(path.join(ROOT, "src/money/pricing_authority.js"));
 const { establishAuthorizedReviewer } = require(path.join(
@@ -88,7 +88,7 @@ async function throws(label, fn, wantFragment) {
     ? ok("refused: person_entitled_to_property", (dry1.blocking || []).join(", "))
     : bad("expected a refusal naming person_entitled_to_property", JSON.stringify(dry1.blocking));
 
-  console.log("\n── 3 · staffbridge grants the entitling context (attributed) ──");
+  console.log("\n── 3 · staff_bridge grants the entitling context (attributed) ──");
   const g = await tx((c) => svc.grantStaffContext(c, {
     person_id: person, property_id: sky, performed_by_user_id: admin,
     reason_detail: "chain proof" }));

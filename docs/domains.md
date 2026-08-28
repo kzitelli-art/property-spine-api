@@ -11,7 +11,7 @@ The full staff authentication stack.
 | File | What it does |
 |------|-------------|
 | `staff_session_service.js` | Issues and validates staff session tokens (digest stored at rest, never raw token) |
-| `teamaccess.js` | Phone OTP login: `POST /auth/sms/start` and `POST /auth/sms/verify` |
+| `team_access.js` | Phone OTP login: `POST /auth/sms/start` and `POST /auth/sms/verify` |
 | `operator.js` | `/operator/*` router: session gate, `/operator/me`, property-scoped access |
 | `operator_session_bootstrap.js` | Legacy invite-code bootstrap (`POST /demo/operator-session`) |
 | `registry.js` | Property identity resolution — maps string inputs to canonical property records |
@@ -31,18 +31,17 @@ The full leasing funnel from lead to executed lease.
 | `leasing_desk.js` | Main leasing surface router — mounts all leasing sub-routes |
 | `leasing_desk_loader.js` | Loads and assembles leasing desk data for the operator |
 | `leasing_lifecycle_service.js` | Lease state machine: lead → applicant → approved → executed → active |
-| `leasingleads.js` | Prospect capture, lead queue, tour scheduling |
-| `leasingconversion.js` | Lead-to-applicant conversion obligations |
-| `leasingscheduling.js` | Tour scheduling and calendar management |
-| `leasinginteractions.js` | Conversation and interaction tracking |
-| `leasingintel.js` | Leasing intelligence: velocity, pricing signals |
+| `leasing_leads.js` | Prospect capture, lead queue, tour scheduling |
+| `leasing_conversion.js` | Lead-to-applicant conversion obligations |
+| `leasing_scheduling.js` | Tour scheduling and calendar management |
+| `leasing_interactions.js` | Conversation and interaction tracking |
+| `leasing_intel.js` | Leasing intelligence: velocity, pricing signals |
 | `leasing_detail.js` | Per-unit leasing detail surface |
 | `leasing_inventory.js` | Available unit inventory for leasing |
 | `leasing_occupancy_facts.js` | Occupancy fact computation |
 | `leasing_condition_facts.js` | Unit condition facts for leasing |
 | `decisions.js` | Leasing decision routing and obligation creation |
 | `conversion_obligation_closure.js` | Closes conversion obligations on lease execution |
-| `agentcapability.js` | AI agent capabilities within leasing context |
 | `demo.js` / `demo_reset.js` / `demo_preflight.js` | Demo building data and reset |
 
 ---
@@ -52,11 +51,11 @@ The full leasing funnel from lead to executed lease.
 | File | What it does |
 |------|-------------|
 | `applications.js` | Application submission, review queue, status |
-| `applicationSubmission.js` | Public application submit endpoint (invitation-token gated) |
+| `application_submission.js` | Public application submit endpoint (invitation-token gated) |
 | `application_review.js` | Operator review surface for applications |
 | `application_send_command.js` | Sends application invitations |
 | `application_terms.js` | Application terms and conditions |
-| `leasepackets.js` | Generates and serves lease packet PDFs |
+| `lease_packets.js` | Generates and serves lease packet PDFs |
 | `executed_lease_service.js` | Records executed lease evidence |
 | `proposed_terms_service.js` | Manages proposed lease terms |
 | `autoconfirm.js` | Auto-confirmation logic for standard terms |
@@ -98,15 +97,15 @@ The full leasing funnel from lead to executed lease.
 | `money.js` | Core charges, payments, ledger routes |
 | `charges.js` | Charge scheduling and one-time charges |
 | `payments.js` | Payment recording and matching |
-| `bankbridge.js` | Plaid bank feed integration surface |
-| `bankintake.js` | Raw bank transaction intake and classification |
+| `bank_bridge.js` | Plaid bank feed integration surface |
+| `bank_intake.js` | Raw bank transaction intake and classification |
 | `plaid.js` | Plaid Link setup and token exchange |
 | `reporting.js` | T-12, rent roll, financial report generation |
 | `compare.js` | Budget vs. actual comparison |
 | `explain.js` | AI-powered transaction explanation |
 | `attributions.js` | Cost attribution across units/properties |
-| `moneyboard.js` | Money dashboard surface |
-| `commitmentledger.js` | Forward commitment tracking |
+| `money_board.js` | Money dashboard surface |
+| `commitment_ledger.js` | Forward commitment tracking |
 | `exposure.js` | Financial exposure calculation |
 
 ---
@@ -117,7 +116,7 @@ The full leasing funnel from lead to executed lease.
 |------|-------------|
 | `communications_boundary.js` | **The single outbound SMS gate.** All property SMS flows through here. Requires `sms_number` on the property. |
 | `sms.js` | Twilio transport wrapper. Fail-soft: logs when unconfigured, never throws. |
-| `tenantlink.js` | Tenant portal session provisioning and magic links |
+| `tenant_link.js` | Tenant portal session provisioning and magic links |
 | `delivery.js` | Delivery tracking and receipt |
 | `prospect_capture.js` | Inbound prospect capture from public-facing forms |
 
@@ -137,7 +136,7 @@ The full leasing funnel from lead to executed lease.
 |------|-------------|
 | `onboarding.js` | Property onboarding wizard |
 | `onboarding_funnel.js` | Onboarding step tracking |
-| `dealintake.js` | Deal intake from external sources |
+| `deal_intake.js` | Deal intake from external sources |
 | `intake.js` | Field event capture (Twilio webhook endpoint) |
 | `deal_registry.js` | Deal identity and deduplication |
 | `public_review.js` | Public-facing review/approval surface |
@@ -173,5 +172,5 @@ These are primarily read surfaces that aggregate data from multiple domains.
 | `seed_endpoint.js` / `seed_snapshot.js` / `facts-seed.js` | Development seed data |
 | `property_timezone.js` | Timezone utilities for property-local time calculations |
 | `tour_window.js` | Tour availability window computation |
-| `schedulingAdapterSeam.js` | Scheduling system adapter interface |
-| `outlookAcuitySync.js` | Outlook/Acuity calendar sync |
+| `scheduling_adapter_seam.js` | Scheduling system adapter interface |
+| `outlook_acuity_sync.js` | Outlook/Acuity calendar sync |

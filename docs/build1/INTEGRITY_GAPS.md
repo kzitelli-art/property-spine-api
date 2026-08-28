@@ -165,7 +165,7 @@ activation decision.
 ### The structural fact
 
 The gate classifies a script as production-facing by matching, in
-`tests/gate_harness_isolation.js`:
+`tests/gates/gate_harness_isolation.js`:
 
 ```js
 const CONNECTS = /connectionString:\s*process\.env\.DATABASE_URL|

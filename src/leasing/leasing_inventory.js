@@ -70,7 +70,7 @@ module.exports = function leasingInventoryModule({ pool }) {
      *  REMOVAL CONDITION for the whole date-blind predicate below:
      *  delete it once contractual interval + governed future operating
      *  readiness compose into the prospect-facing answer. See
-     *  docs/PROSPECT_INVENTORY_CUTOVER.md.  */
+     *  docs/archive/PROSPECT_INVENTORY_CUTOVER.md.  */
     if (!requested_start || !requested_end) {
       return {
         units: [],

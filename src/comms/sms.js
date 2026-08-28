@@ -4,7 +4,7 @@
 //  PURE TRANSPORT. This module knows how to put a text on the wire and
 //  how to prove an inbound webhook really came from Twilio. It knows
 //  NOTHING about tenants, conversations, classification, or the spine —
-//  that all lives in tenantlink.js. One spine, two doors; this is just
+//  that all lives in tenant_link.js. One spine, two doors; this is just
 //  the second door's hinge.
 //
 //  Fail-soft by design:

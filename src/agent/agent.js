@@ -2054,7 +2054,7 @@ Reply with ONLY the message text.`;
   //  key every other operator route uses — no key set means locked, not open.
   //
   //  REAL INBOUND SMS IS UNAFFECTED. Twilio does not come through here.
-  //  tenantlink owns the webhook and calls router._service.processInbound
+  //  tenant_link owns the webhook and calls router._service.processInbound
   //  in-process (server.js: getAgentService: () => agentApp._service), so
   //  there is one code path and no loopback HTTP boundary to authenticate.
   function requireOperator(req, res, next) {

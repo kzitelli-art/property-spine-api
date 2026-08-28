@@ -10,7 +10,7 @@
 // DEMO_052_PLAN.md once each owning module's service boundary is verified.
 //
 // Mount in server.js AFTER the application submission module (so its _service is in
-// scope), e.g. directly under the leasingShadowImport mount:
+// scope), e.g. directly under the leasing_shadow_import mount:
 //   const demoModule = require("./demo");
 //   app.use("/", demoModule({ pool, submissionService: __applicationSubmission._service }));
 //

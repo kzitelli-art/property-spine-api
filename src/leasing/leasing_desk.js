@@ -230,7 +230,7 @@ function normalizeApplicationRow(row) {
 // so a missing entry is safe, never wrong." They fall to UNAVAILABLE. A
 // missing entry is therefore neither safe nor invisible — it tells the
 // operator the app cannot do a thing it just offered them.
-// tests/leasing_action_deadend_audit.js exists to catch the next one.
+// tests/scenarios/leasing_action_deadend_audit.js exists to catch the next one.
 const COMMUNICATION_MOVE_CODES = new Set([
   "send_follow_up",
   "call_prospect",

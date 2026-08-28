@@ -352,7 +352,7 @@ const warn = (k, v, note) => { rows.push({ k, v, note, level: "warn" }); warned+
   //
   //  Proven in source by tests/gate_outbound_senders.js (S9:
   //  sendOperationsReply does not consult the mode) and measured in
-  //  docs/OUTBOUND_TRIGGER_AUDIT.md. What is NOT proven in source is
+  //  docs/archive/OUTBOUND_TRIGGER_AUDIT.md. What is NOT proven in source is
   //  that the DEPLOYED environment actually holds that configuration.
   //  This is where that gets read.
   //
@@ -400,7 +400,7 @@ const warn = (k, v, note) => { rows.push({ k, v, note, level: "warn" }); warned+
       `send (${modeShown}). Every operator door and every inbound reply can reach a ` +
       "real resident phone right now. Set SMS_SEND_MODE to disabled (or unset it) " +
       "BEFORE Step 4, and do not treat outbound_policy as protection — it is not on " +
-      "that path. See docs/OUTBOUND_TRIGGER_AUDIT.md.");
+      "that path. See docs/archive/OUTBOUND_TRIGGER_AUDIT.md.");
     if (twilioLive && !modeSends) {
       say("  → resident sends", "structurally refused at send_mode_disabled");
       say("  → technician replies", "available (sendOperationsReply ignores the mode)");

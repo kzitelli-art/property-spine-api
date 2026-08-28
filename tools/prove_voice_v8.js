@@ -8,7 +8,7 @@
 //   node tools/prove_voice_v8.js
 //
 // Class 3 (test-only). Removal condition: delete when the voice corpus in
-// AI_VOICE_TUNING.md is superseded by api/docs/AI_VOICE.md + its own suite.
+// AI_VOICE_TUNING.md is superseded by api/docs/archive/AI_VOICE.md + its own suite.
 
 const path = require("path");
 const mod = require(path.join(__dirname, "..", "src", "agent", "agent.js"));
@@ -156,7 +156,7 @@ check("area: occupancy observation still allowed",
 // real prospect. Offering a tour early is NOT the defect; naming two specific
 // times and asking which works IS. Asserted against the real drafter with the
 // model disabled, so this exercises the deterministic fallback path.
-const leasing = require(path.join(__dirname, "..", "src", "leasing", "leasingleads.js"))({
+const leasing = require(path.join(__dirname, "..", "src", "leasing", "leasing_leads.js"))({
   pool: { query: async () => ({ rows: [] }) }, anthropic: null, sms: null,
   leasingLifecycle: null, conversionServices: null, commBoundary: null,
 });

@@ -2,7 +2,7 @@
    conversation/intent.js — TRANSPORT-INDEPENDENT INTENT INTERPRETATION.
 
    The first of the shared conversational seams, extracted from
-   src/comms/tenantlink.js where it lived as a private closure reachable
+   src/comms/tenant_link.js where it lived as a private closure reachable
    only through the SMS route.
 
    WHY IT MOVED. AGENT_CAPABILITY_SEAMS.md records the extraction trigger:
@@ -12,7 +12,7 @@
    that second caller, so the trigger has fired. Extract once; do not copy
    processInboundClaim.
 
-   THIS IS A MOVE, NOT A REDESIGN. Both functions below are the tenantlink
+   THIS IS A MOVE, NOT A REDESIGN. Both functions below are the tenant_link
    originals, character-identical apart from de-indentation and taking
    `anthropic` / `model` as explicit dependencies rather than closing over
    the module factory's. SMS behaviour must be unchanged, and any behaviour

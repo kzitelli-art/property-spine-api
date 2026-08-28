@@ -204,8 +204,8 @@ falsified twice and went red both times.
 · the operator shell's PRODUCTION_ORIGIN pin and the sign-in / staff-OTP path
   — deliberate architecture, and owned by another thread
 · communication_lines, properties.sms_number, Twilio config, SMS_*/TWILIO_*
-· src/comms/communications_boundary.js, src/comms/tenantlink.js,
-  src/identity/teamaccess.js
+· src/comms/communications_boundary.js, src/comms/tenant_link.js,
+  src/identity/team_access.js
 ```
 
 ### The systemic lesson from both overnights
@@ -220,7 +220,7 @@ comments here are load-bearing contracts, and at least one was stale — a guard
 was built on 034's stated meaning of `is_placeholder` and the live writer
 meant something else.
 
-Corollary, recorded as backlog G1 in `docs/ENGINEERING_GATE_BACKLOG.md`:
+Corollary, recorded as backlog G1 in `docs/archive/ENGINEERING_GATE_BACKLOG.md`:
 *a test that is never invoked is functionally not a test.*
 
 ### Open rulings — legal/product, not engineering
@@ -304,7 +304,7 @@ have a second human act.
 ### Proven
 
 ```text
-tests/spine_lease_execution.db.js   24/24   real Postgres 16
+tests/proofs/spine_lease_execution.db.js   24/24   real Postgres 16
   refuses: not-executed packet · no company signer · missing resident
   signature · missing company signature · a DIFFERENT user recording someone
   else's signature · no instrument hash
@@ -457,7 +457,7 @@ That trigger is what converts 034's honest placeholder into an honest
 instrument: the mechanism no longer depends on a caller remembering the body
 is fake.
 
-Proven: `tests/governing_lease_execution.db.js` **15/15** against real
+Proven: `tests/proofs/governing_lease_execution.db.js` **15/15** against real
 Postgres 16, including that a placeholder can still be voided (034's
 lifecycle survives) and that an unknown signer role is still refused.
 
@@ -548,7 +548,7 @@ is not a human.
 ### Proven
 
 ```text
-tests/governed_lease_terms.db.js   24/24   real Postgres 16
+tests/proofs/governed_lease_terms.db.js   24/24   real Postgres 16
 npm run verify                     36/36
 ```
 
@@ -562,8 +562,8 @@ its message, which is immutable; this is the correction of record.
 **Both new proofs run separately**, per `docs/DB_HARNESS_ISOLATION.md`:
 
 ```bash
-HARNESS_DATABASE_URL=postgres://…/spine_proof node tests/space_economics.db.js
-HARNESS_DATABASE_URL=postgres://…/spine_proof node tests/governed_lease_terms.db.js
+HARNESS_DATABASE_URL=postgres://…/spine_proof node tests/proofs/space_economics.db.js
+HARNESS_DATABASE_URL=postgres://…/spine_proof node tests/proofs/governed_lease_terms.db.js
 ```
 
 
@@ -658,7 +658,7 @@ exist.
 ### Proven
 
 ```text
-tests/space_economics.db.js   19/19   real Postgres 16, Skyline-shaped fixture
+tests/proofs/space_economics.db.js   19/19   real Postgres 16, Skyline-shaped fixture
                                       (one 3-bed unit, three beds, one type)
 npm run verify                36/36
 ```
@@ -776,11 +776,11 @@ grain authority        src/applications/application_target_authority.js
   existing "isolated so it can be proven directly" treatment.
 birth door             application_lifecycle.js — space_id in BIRTH_FIELDS,
   deriveSpaceGrain() derives the parent and refuses a contradiction.
-lineage link           applicationSubmission.js — the invitation's bed becomes
+lineage link           application_submission.js — the invitation's bed becomes
   the application's bed at consume. Without that line the aim is recorded at
   the invitation and lost at the application, which is the gap itself.
 operator doors         both prepare routes carry the operator's bed choice.
-tests/application_space_grain.test.js   24/24, ON the governance chain
+tests/unit/application_space_grain.test.js   24/24, ON the governance chain
   FALSIFIED THREE WAYS: whole-unit basis drift → RED; guessing an unchosen
   bed → RED; refusal prose drifting into the app's false branch → RED.
 npm run verify                          36/36 gates (was 35)
@@ -858,8 +858,8 @@ promotion happened while destroying the identity of what it produced.
 ```
 
 `391 → 319 → 160`, proven through **unmodified** `intervalPropertyPositions`
-in `tests/inventory_retirement.db.js` (45/45) and
-`tests/surplus_placeholder_repair.db.js` (28/28).
+in `tests/proofs/inventory_retirement.db.js` (45/45) and
+`tests/proofs/surplus_placeholder_repair.db.js` (28/28).
 
 ### ⚠ Read this before touching retirement
 
@@ -958,7 +958,7 @@ RECONCILED WITH MAIN, PUSHED, NOT RELEASED AND NOT DEPLOYED
   APP   5964848   property-spine-app  claude/code-philosophy-review-xoiz8f
 ```
 
-Read `docs/SLICE_2_PRODUCTION_READY.md` before releasing it. Two things in it
+Read `docs/archive/SLICE_2_PRODUCTION_READY.md` before releasing it. Two things in it
 are corrections to its own first draft, and both would have cost time: the
 pre-release safety query selected the column 179 *creates*, and the numbers in
 the document were stale before the ink dried. **Read the ceiling from the
@@ -1112,7 +1112,7 @@ Ask Spine registry entry                  REGISTERED — src/agent/ask_spine_ans
                                            standingProjection() the UI reads; no new
                                            reader was built. 9/9 tests/
                                            equity_ask_spine.test.js
-funding-boundary gate coverage            DONE — tests/gate_funding_boundary.js
+funding-boundary gate coverage            DONE — tests/gates/gate_funding_boundary.js
                                            (table/file names updated to Round-4 shape)
 real 4125 establishment                   NOT BUILT — no retained documents
                                            confirmed for equity yet; every fixture
@@ -1215,7 +1215,7 @@ ends (`blocking_fact: "no_governed_turnover_duration"`). ANDing them would
 reject a unit that legitimately turns before a future start — replacing an
 over-offering bug with an under-offering one. Owner correction, and it stands.
 
-See `docs/FUTURE_OPERATING_READINESS_TRACE.md`: **future operating readiness
+See `docs/archive/FUTURE_OPERATING_READINESS_TRACE.md`: **future operating readiness
 is a genuinely missing primitive**, and `turnovers.ready_date` currently holds
 a TARGET (written at turn open from `expected_ready_date`) and an ACHIEVEMENT
 (written at completion) in one column — `turn_priority.js:219` already sorts
@@ -1241,15 +1241,15 @@ always             → may_promise: false. A survivor is contractually open
 `agent.js` no longer hardcodes "No units match" for every empty result — it
 carries the door's own sentence, so a refusal is never spoken as an inventory
 answer. Removal condition for the date-blind predicate is written in the
-source and in `docs/PROSPECT_INVENTORY_CUTOVER.md`.
+source and in `docs/archive/PROSPECT_INVENTORY_CUTOVER.md`.
 
 ### Proof
 
 ```text
-tests/forward_leasing_http.db.js            26/26
-tests/prospect_inventory_containment.db.js  21/21
-tests/interval_positions.db.js              31/31
-tests/interval_position_hostile.test.js     38/38
+tests/proofs/forward_leasing_http.db.js            26/26
+tests/proofs/prospect_inventory_containment.db.js  21/21
+tests/proofs/interval_positions.db.js              31/31
+tests/unit/interval_position_hostile.test.js     38/38
 property-spine-app browser                  160/160
 app suite (32 harnesses)                    1333 passed
 ```
@@ -1261,8 +1261,8 @@ app suite (32 harnesses)                    1333 passed
 ## ══════════════════════════════════════════════════════════════════
 
 **Branch (API):** `claude/code-philosophy-review-xoiz8f`. **Migrations: NONE.**
-Design: `docs/SLICE_2_FORWARD_LEASING_TRACE.md`. Cutover for the
-prospect-facing path: `docs/PROSPECT_INVENTORY_CUTOVER.md`.
+Design: `docs/archive/SLICE_2_FORWARD_LEASING_TRACE.md`. Cutover for the
+prospect-facing path: `docs/archive/PROSPECT_INVENTORY_CUTOVER.md`.
 
 ### What landed
 
@@ -1315,8 +1315,8 @@ interval 2027-09-01 → 2028-07-31
 ### Proof
 
 ```text
-tests/interval_position_hostile.test.js   38/38  pure, no database
-tests/interval_positions.db.js            31/31  real Postgres, 160 real beds
+tests/unit/interval_position_hostile.test.js   38/38  pure, no database
+tests/proofs/interval_positions.db.js            31/31  real Postgres, 160 real beds
   incl. a signed future lease moving the answer with NO Forward Leasing
   writer, a void returning it, by-bed and by-unit through one code path,
   and a DOWN position staying contractually_free with is_down carried beside
@@ -1358,7 +1358,7 @@ a stale exclusion goes red the way a stale registry entry already did.
 
 ### The gate has now failed on purpose, six ways
 
-`tests/ask_spine_reader_gate_falsification.js` mutates real files, runs the
+`tests/scenarios/ask_spine_reader_gate_falsification.js` mutates real files, runs the
 real gate as a subprocess, and requires **exit 1** each time — then requires
 green again on restore, and byte-identical files at the end:
 
@@ -1429,20 +1429,20 @@ Reported → Locally exercised → Built-but-dormant → PROVEN ← here
 ```
 
 ```text
-tests/tenancy_standing_read.db.js         41/41  real Postgres, 72 units /
+tests/proofs/tenancy_standing_read.db.js         41/41  real Postgres, 72 units /
                                                  160 beds from the real
                                                  07/31 export
-tests/tenancy_ask_spine_http.db.js        26/26  real Postgres + real
+tests/proofs/tenancy_ask_spine_http.db.js        26/26  real Postgres + real
                                                  Express + real socket +
                                                  real staff session; the
                                                  Anthropic client is a
                                                  STUB that captures what
                                                  crossed into model context
-tests/tenancy_ask_spine.test.js           43/43  routing, entitlement
+tests/unit/tenancy_ask_spine.test.js           43/43  routing, entitlement
                                                  before any read, the four
                                                  silences, the truth walls
-tests/ask_spine_reader_gate_falsification.js  24/24
-tests/gate_ask_spine_readers.js           72/72  8 domains · 5 registered
+tests/scenarios/ask_spine_reader_gate_falsification.js  24/24
+tests/gates/gate_ask_spine_readers.js           72/72  8 domains · 5 registered
                                                  · 3 pending · 0 waived
 app suite (31 harnesses)                  1297 passed · 0 failed
 ```
@@ -1580,10 +1580,10 @@ Availability and Applications — not the beige-card language above it.
 ### Proof
 
 ```text
-tests/inventory_materialization.db.js       26/26   real July XLSX
-tests/skyline_bed_grain_activation.db.js    19/19
-tests/skyline_rent_roll_read.db.js          22/22   incl. stable-ID contract
-tests/skyline_rent_roll_model.db.js         40/40
+tests/proofs/inventory_materialization.db.js       26/26   real July XLSX
+tests/proofs/skyline_bed_grain_activation.db.js    19/19
+tests/proofs/skyline_rent_roll_read.db.js          22/22   incl. stable-ID contract
+tests/proofs/skyline_rent_roll_model.db.js         40/40
 11 API source gates                         PASS
 app node tests (31 files)                   PASS   incl. 132/132 cutover
 property-spine-app/skyline_rent_roll_units.browser.js  96/96
@@ -1737,7 +1737,7 @@ $1,110,703 one-time COVID-19 debt service reserve              looked
 `debt_establishment_tool.db.js` now passes `19/19` against regular PostgreSQL,
 using isolated fixture digests substituted for the declaration's five real
 retained hashes. Ask Spine registration is deliberately still `pending` in
-`tests/gate_ask_spine_readers.js` — Build 1 stops at the canonical read on
+`tests/gates/gate_ask_spine_readers.js` — Build 1 stops at the canonical read on
 purpose; do not wire Ask Spine early just to change that.
 
 ### What is left — exact steps, in order
@@ -1817,7 +1817,7 @@ main      ## 40. Ask Spine Is a Governed Interface, Not an AI Layer
 ```
 
 **§40's subsections are cited by number** in `CLAUDE.md`, in
-`tests/gate_ask_spine_readers.js`, and throughout the Debt build. Merging tt6uoz
+`tests/gates/gate_ask_spine_readers.js`, and throughout the Debt build. Merging tt6uoz
 as written would either conflict or silently renumber the doctrine everything
 else references. Its two rulings are good and should land as **§42/§43**.
 
@@ -1858,7 +1858,7 @@ diagram, the eleven rulings in brief, and Eight-Question **6 extended** to
 demand the standing projection by name. §31 was NOT renumbered: six documents
 cite "the Eight Questions" and several are historical receipts.
 
-**`tests/gate_ask_spine_readers.js` enforces it (§40.11).** It **discovers**
+**`tests/gates/gate_ask_spine_readers.js` enforces it (§40.11).** It **discovers**
 domains from `src/asset/*_{position_read,establishment}.js` rather than from a
 hand-maintained list, so a domain that lands without registering goes red on
 its own — a list only knows what someone remembered to add.
@@ -2028,8 +2028,8 @@ HISTORY — stamped, do not build against
 ### ▶ NEXT — TWO DESIGNS, AND THE ORDER IS LOAD-BEARING
 
 ```text
-1  docs/ASK_SPINE_CANONICAL_READ_LAYER.md      Taxes + Insurance. LANDS FIRST.
-2  docs/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md   transcript evidence.
+1  docs/archive/ASK_SPINE_CANONICAL_READ_LAYER.md      Taxes + Insurance. LANDS FIRST.
+2  docs/archive/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md   transcript evidence.
 ```
 
 Both converge on the same composer. **Canonical reads first** — governed truth,
@@ -2058,7 +2058,7 @@ Owner is a RESERVED name — a different audience, possibly a different login.
 
 ### ▶ AND — meeting intelligence. FOUR RULINGS ARE FROZEN.
 
-Read **`docs/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md`** before designing any of
+Read **`docs/archive/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md`** before designing any of
 it. Nothing is built. It carries the owner's framing verbatim, four rulings the
 owner froze on 2026-08-12, the assertion ladder as an actual data contract, and
 one correction that a real transcript forced on the premise:
@@ -2300,7 +2300,7 @@ Those are different claims and only the second finishes the release.
 
 ### If you are about to touch work-order completion
 
-Read `docs/RELEASE_0_ACTIVATION_RUNBOOK.md` and
+Read `docs/archive/RELEASE_0_ACTIVATION_RUNBOOK.md` and
 `tools/step7/activate.js` first. The activation is the one irreversible act in
 the release: it draws a permanent line, and everything terminal after it must be
 provable.
@@ -2570,7 +2570,7 @@ Add Payment / Financing the funding capture sheet
 
 ### ⚠ THE WALL, AND IT IS EXECUTABLE
 
-`tests/gate_funding_boundary.js` asserts, structurally and in
+`tests/gates/gate_funding_boundary.js` asserts, structurally and in
 both directions:
 
 ```text
@@ -2742,7 +2742,7 @@ guard that catches that.
 > anything. Off Render the variable is still OPTIONAL — several Class-3
 > seeding tools release unpinned — but the release banner now says
 > `NOT PINNED — no build was authorised` in those words instead of printing
-> a reassuring blank. Proven in `tests/migration_release_gate.test.js`,
+> a reassuring blank. Proven in `tests/unit/migration_release_gate.test.js`,
 > which is now registered in `verify_source_governance.js`.
 >
 > **And that fix opened a second hole, found before release.** Scoping the
@@ -3012,7 +3012,7 @@ property whose position *was* established. Only a browser caught it.
 
 ```text
 API  deal read emits   p.opening_tenancy_position_id   ← pinned by H16b
-                       (tests/deal_setup_http.db.js:411, by name)
+                       (tests/proofs/deal_setup_http.db.js:411, by name)
 APP  index.html:26227  if (p.opening_tenancy_position_id)
                          true  → "Lease & occupancy established"
                          false → "Setup in progress"
@@ -3254,7 +3254,7 @@ normal governed expectation + unexpected operating consequence
 ```
 
 The `$1,840` maintenance-consequence work is **PARKED, not discarded** (see the
-Deal Setup section below and `docs/STANDING_ECONOMIC_OBLIGATIONS_SOURCE_READ.md`).
+Deal Setup section below and `docs/archive/STANDING_ECONOMIC_OBLIGATIONS_SOURCE_READ.md`).
 Do not let it define the current build.
 
 ### What is stale scaffolding, and must not dictate the new surface
@@ -3449,7 +3449,7 @@ does not have to. This is a claim about **these** greps, not about the tree:
 deal_setup_legacy_alias      warns at src/onboarding/deal_setup.js:132
                              rewrite at deal_setup.js:131-135
 bare_lease_writer_contained  refuses 410 at server.js:948-955
-                             asserted at tests/deal_setup_http.db.js:445
+                             asserted at tests/proofs/deal_setup_http.db.js:445
 ledger read file             version-for-version == origin/main migrations/
 five new onboarding modules  all present under src/onboarding/
 ```
@@ -3910,7 +3910,7 @@ condition on each step. It reorders nothing; the sequence is still the runbook's
 
 **The long pole is not engineering.** Step 4 is blocked on transport, and
 transport is **two** independent blockers recorded read-only on 2026-08-06
-(`docs/RELEASE_0_SMS_PREREQUISITE.md`): there is no `operations` line row at
+(`docs/archive/RELEASE_0_SMS_PREREQUISITE.md`): there is no `operations` line row at
 all, and `provider_config` is null on the only line that exists. Add A2P 10DLC
 carrier review on top. **Start that first — §1 of the run card can run in
 parallel with it; §3 cannot finish without it.**
@@ -3946,7 +3946,7 @@ Twilio credentials live + SMS_SEND_MODE disabled
 ```
 
 Source-proved by `tests/gate_outbound_senders.js` (S9: `sendOperationsReply`
-does not consult the mode) and `docs/OUTBOUND_TRIGGER_AUDIT.md`. **Verify the
+does not consult the mode) and `docs/archive/OUTBOUND_TRIGGER_AUDIT.md`. **Verify the
 deployed mode BEFORE adding credentials, not after** — the §1 preflight scores
 it and the acceptance receipt records it. Do not treat
 `property_facing.outbound_policy = 'reply_only'` as protection: the policy
@@ -4046,7 +4046,7 @@ production                  no build-ahead activation work from this stack has
                             no activation.
 ```
 
-**Read `docs/RELEASE_0_ACTIVATION_STACK.md` first** — it is the current state of
+**Read `docs/archive/RELEASE_0_ACTIVATION_STACK.md` first** — it is the current state of
 the release: what is proven, what each boundary costs, and §7 names the exact
 remaining proof debt. `RELEASE_0_ACTIVATION_RUNBOOK.md` is the production order.
 
@@ -4669,7 +4669,7 @@ not evidence any has run against production. `tools/` is the dangerous half: it
 holds `retire_hollow_leases`, `repair_invalid_task_owners`,
 `remove_duplicate_walkins`, `seed_*`.
 
-`tests/gate_harness_isolation.js` freezes the inventory as a **debt register**
+`tests/gates/gate_harness_isolation.js` freezes the inventory as a **debt register**
 (path · measured write-class · provisional use · reason · removal condition) and
 **fails on growth**. It does NOT make the existing inventory safe.
 
@@ -4691,7 +4691,7 @@ PostgreSQL 16.13 and real HTTP at SHA `95f13c7`.
 activation receipt; re-reconciliation with current `main`; repair of two unsafe
 harnesses in its own proof set (`work_order_authority_proof.js`,
 `work_order_canonical_path_proof.js`); and the five full-schema harnesses running
-at the merge-candidate SHA. Full sequence: `docs/SLICE_A_MERGE_CHECKLIST.md`.
+at the merge-candidate SHA. Full sequence: `docs/archive/SLICE_A_MERGE_CHECKLIST.md`.
 
 > **"Previously green before the resolver changed" is not evidence for the
 > changed resolver.** Slice A changed `resolveInboundSmsContext`, which is the
@@ -4702,9 +4702,9 @@ at the merge-candidate SHA. Full sequence: `docs/SLICE_A_MERGE_CHECKLIST.md`.
 | Document | Why |
 |---|---|
 | `docs/PHILOSOPHY.md` | the specification, not preamble |
-| `docs/MONEY_THESIS.md` | operations-first, accounting-derived; **cash vs accrual is an OUTPUT choice** — never force a basis at capture |
-| `docs/AGENT_CAPABILITY_SEAMS.md` | the SMS path is the agent's first bounded capability; three of six seams are transport-co-located, with an exact extraction trigger |
-| `docs/COMMUNICATION_LINE_MODEL_DESIGN.md` | approved design; org context is NOT property context |
+| `docs/archive/MONEY_THESIS.md` | operations-first, accounting-derived; **cash vs accrual is an OUTPUT choice** — never force a basis at capture |
+| `docs/archive/AGENT_CAPABILITY_SEAMS.md` | the SMS path is the agent's first bounded capability; three of six seams are transport-co-located, with an exact extraction trigger |
+| `docs/archive/COMMUNICATION_LINE_MODEL_DESIGN.md` | approved design; org context is NOT property context |
 | `docs/DB_HARNESS_ISOLATION.md` | the finding above, in full |
 
 ### The order
@@ -4815,7 +4815,7 @@ been used when it had not.
 **129 is CLAIMED** (`129_property_line_uniqueness.sql`, merged in `a08c1da`) and
 **not yet released**. The next free number is **130**. Because 129 is in the
 build and not in the ledger, a deploy of current `main` will correctly REFUSE TO
-START until it is released — see `docs/PROPERTY_LINE_ACTIVATION.md`.
+START until it is released — see `docs/archive/PROPERTY_LINE_ACTIVATION.md`.
 
 | Capability | Proof | §33 rung |
 |---|---|---|
@@ -4859,7 +4859,7 @@ what they believe, and the system refuses if reality disagrees.
 **No harness may target production.** Every `.db.js` requires
 `HARNESS_DATABASE_URL`, with no fallback, and refuses when it resolves to the
 same host/port/database as `DATABASE_URL`. The sole exception is
-`tests/prod_smoke_missed_readonly.js`, which runs inside `BEGIN TRANSACTION READ
+`tests/scenarios/prod_smoke_missed_readonly.js`, which runs inside `BEGIN TRANSACTION READ
 ONLY` and **proves** it cannot write before reading anything.
 
 **`now()` inside a transaction is the transaction's start time.** This produced a
@@ -4888,7 +4888,7 @@ reports safety it is not providing.
 
 **ITEM 2 — `conversation_owner_user_id` conflates attribution with ownership.**
 Written from a host claim without eligibility resolution, read by operating logic
-at `leasingconversion.js:385`, and labelled **"owned by"** on two desk surfaces
+at `leasing_conversion.js:385`, and labelled **"owned by"** on two desk surfaces
 next to a separate "toured by" field. The column is `NOT NULL`, so §5's honest
 blank is *unrepresentable by construction*. Property Spine deliberately keeps
 attribution, eligible assignment, task ownership and authenticated authority
@@ -5064,7 +5064,7 @@ Anything less, name by its actual rung and say what is missing.
 | AI leasing strategy foundation (120) | #23 | dormant runtime — activation gated on a replay corpus that has never run |
 | AI leasing visible status | #24 | — |
 | Slice 8 governed economics lineage (122) | #25 | see the Slice 8 branch's own proof |
-| **Resident SMS → canonical work order** | **#27** | **real Postgres + real HTTP · `docs/SLICE_SMS_CLOSURE.md`** |
+| **Resident SMS → canonical work order** | **#27** | **real Postgres + real HTTP · `docs/archive/SLICE_SMS_CLOSURE.md`** |
 
 ### What the SMS slice changed (read this before touching inbound messaging)
 
@@ -5123,7 +5123,7 @@ node -e "const{Pool}=require('pg');const p=new Pool({connectionString:process.en
 
 - **`claude/getting-up-to-speed-nyf4ww`** — Governed Operating Context: migration
   121, `ai_leasing_operating_context.js`, operator ai-rules/ai-settings routes,
-  agent.js + leasingleads.js wiring. **Never applied to a database, never called
+  agent.js + leasing_leads.js wiring. **Never applied to a database, never called
   over HTTP.** Its companion UI is on the app repo's branch of the same name and
   is explicitly not approved design. Needs its own real-DB + HTTP proof.
 - **`claude/slice-9-demand-evidence`** — migrations 123/124 (+125 staged), the
@@ -5231,10 +5231,10 @@ week; assume every shared branch name is occupied until you have checked.
 
 ## Key documents
 
-`docs/SLICE_SMS_CLOSURE.md` · `docs/RESIDENT_SMS_WORK_ORDER_CONTRACT.md` ·
+`docs/archive/SLICE_SMS_CLOSURE.md` · `docs/archive/RESIDENT_SMS_WORK_ORDER_CONTRACT.md` ·
 `docs/slices-6-to-10/` (00_GOVERNING_HANDOFF, SLICE_6/7_CLOSURE,
-ACCEPTANCE_CHECKLIST) · `docs/PHILOSOPHY.md` · `docs/PRICING_GOVERNANCE.md` ·
-`docs/IDENTITY_AND_AUTHORITY.md`
+ACCEPTANCE_CHECKLIST) · `docs/PHILOSOPHY.md` · `docs/archive/PRICING_GOVERNANCE.md` ·
+`docs/archive/IDENTITY_AND_AUTHORITY.md`
 
 ---
 ---

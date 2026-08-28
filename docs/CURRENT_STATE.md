@@ -29,9 +29,17 @@ CURRENT SOURCE / RUNTIME  →  CURRENT_STATE.md  →  PHILOSOPHY  →  THREAD_HA
 ```
 
 > ### ⚠ ABSENCE FROM THIS MAP IS NOT ABSENCE FROM THE PRODUCT
-> Roughly 60% of the codebase is surveyed. If something is not listed, its state
-> has **not yet been established here** — that is not evidence it does not exist.
-> **Search the source before concluding anything is missing**, and add what you find.
+> **The survey is complete as of 2026-08-20** — three waves plus four completeness
+> critics covered every `src/` directory, all 176 migrations, all 292 test files, CI,
+> the app repo, `server.js`'s inline routes, and `tools/`. That means gaps here are now
+> *depth*, not *breadth*: ~350 capabilities are recorded, but only the decision-changing
+> ones are promoted into the index below. Full detail lives in
+> `docs/current-state-build/03_`, `05_` and `06_WAVE3_RESULTS.md`.
+>
+> **Still: if something is not listed, its state has not been established here — that is
+> not evidence it does not exist.** Search the source before concluding anything is
+> missing, and add what you find. Four waves each found things the previous ones missed,
+> including a full CI pipeline nobody had recorded.
 
 ---
 
@@ -68,6 +76,9 @@ Surveyed / verified     2026-08-19 (wave 1) · 2026-08-20 (Codex PR review, AM
                         Demo ORG to OneFive Management; old history preserved)
                         · 2026-08-22 (authenticated production Asset Management
                         + Ask Spine read audit; duplicate Solo identity found)
+                        · 2026-08-20 (wave 3 FINAL: migrations 001-119,
+                        src/shared + governance, all 292 tests, CI reality —
+                        58 findings; full record retained in 06_WAVE3_RESULTS.md)
 
 SKYLINE PRICING         PUBLISHED IN PRODUCTION  2026-08-20
                         2BR $850 · 3BR-1BA $750 · 3BR-1.5BA $775, per bed,
@@ -121,10 +132,60 @@ git diff --name-only 77f93f5..HEAD -- src/ migrations/ server.js
 Never write *done*, *built*, *working*, *live*, *mostly done*. Those blend intent
 with evidence — which is the failure this file exists to end.
 
-**Two traps this repo has actually hit:**
-- A file named `*.db.js` proves nothing. **Open it.** Several pass a hand-built fake
-  pool to a real router (`utility_http.test.js`, `contracted_service_http.test.js`).
+**Three traps this repo has actually hit:**
+- A file named `*.db.js` proves nothing. **Open it.** **Ten** files pass a hand-built
+  fake pool to a real router — not the three previously named. See defect #19.
 - A browser proof can run against a simulated database. **Check for `fakePool()`.**
+- **A rung earned once is not a rung held.** Most `HTTP_PROVEN` and `BROWSER_VERIFIED`
+  rungs in this file rest on the 68 `.db.js` proofs and 94 `*_proof.js` files — **none
+  of which any automation runs** (defect #17). They passed when a human ran them. Nothing
+  re-runs them, so nothing would notice if they broke. Read every rung below as *"was
+  demonstrated at least once,"* not *"is continuously verified."*
+
+---
+
+## STRUCTURE THREAD — 2026-08-27 (file renames, server.js decomposition, tests reorg)
+
+A structure-only thread. **No route path changed, no mount order changed, no
+behavior changed by intent.** Proof: route-registration inventory extracted from
+`git show HEAD:server.js` vs the new structure is set-identical (36 moved
+registrations, 1:1, only `app.*` → `router.*` prefixes differ), and
+`./tests/e2e/verify_all.sh` ran **ALL PROOFS PASSED** against a real local
+Postgres 16 (schema built from the real migration chain via
+`tests/e2e/apply_migrations.sh`) — twice, before and after the test reorg.
+Browser rung SKIPPED locally (no Chromium) — same honest skip CI reports.
+
+What moved:
+
+| Change | Detail |
+|---|---|
+| 20 `src/` files renamed | fused/camelCase → snake_case: `leasingleads.js` → `leasing_leads.js`, `teamaccess.js` → `team_access.js`, `leasingShadowImport.js` → `leasing_shadow_import.js`, etc. Full list in git history. Two **pinned git-history references** inside tests (`git show <sha>:src/comms/tenantlink.js` in the conversation gates) initially corrupted by the sweep — restored; pinned SHAs keep the pre-rename path on purpose |
+| `server.js` 3,648 → 836 lines | Inline blocks extracted **verbatim** per the organ pattern (docs/architecture.md): Release-0 baseline routes → `src/baseline/baseline_routes.js` (NOT `src/release0/` — that dir is the dormant activation boundary, enforced by `gate_activation_dormant.js`); lease lifecycle → `src/tenancy/lease_lifecycle_routes.js`; AI ingest pipeline + routes → `src/agent/document_ingest.js` + `document_ingest_routes.js`; space-position read → `src/tenancy/space_position_routes.js`; sms-proof → `src/comms/sms_proof_route.js`. Each mount sits at the exact line position its inline block occupied |
+| `tests/` reorganized | 290 flat files moved by their existing naming conventions: `gates/` (14) · `proofs/` (68 `*.db.js` + 89 `*_proof.js`) · `unit/` (90 `*.test.js`) · `arcs/` (4) · `scenarios/` (25) · `e2e/`, `fixtures/`, `support/`, `_engine.js`, `_run_receipt.js`, `verify_source_governance.js` unchanged. Runner resolves bare names from `gates/` and slash entries from `tests/` root. CI and `verify_all.sh` needed no changes (they reference only `e2e/` + the runner) |
+
+Rung reality check, stated honestly: the 12 e2e proofs exercise the server and a
+slice of the moved routes end-to-end; the other moved routes are proven by the
+inventory-identity argument plus the 38 gates, not by individual HTTP proofs.
+`gate_property_creation_paths.js` caught a real extraction miss (the baseline
+block's `propertyCreation` dependency) — the gate discipline is load-bearing.
+
+**Docs-cleanup follow-on (2026-08-27, on top of the structure work):** 128
+dated receipts/close-outs/candidates moved to `docs/archive/` via `git mv`;
+13 living docs + all subdirectories stay at `docs/` root; `docs/README.md`
+added as the index (living vs historical, with the search-first rule).
+Every citation to archived files was rewritten to `docs/archive/…` — cross-repo
+citations (`property-spine-app/docs/…`) were checked and left intact. Defect
+#2 closed: `migrations/README.md` no longer instructs hand-run production
+migrations. No doc content was rewritten or deleted; receipts are kept.
+
+**Wave-3 audit findings retained as historical inputs, not silently discarded:**
+the final survey measured the then-current CI coverage and branch-protection posture,
+ten fake-pool HTTP harnesses, 47 demo-UUID-pinned tests, two dead historical proofs,
+the from-scratch migration failure at 083, the app CI gap, four orphaned baseline
+tables, environment-variable documentation gaps, and the DEMO_MODE boot writer.
+The exact evidence and counts remain in
+`docs/current-state-build/06_WAVE3_RESULTS.md`; later RC1 proof rows below supersede
+only the findings they explicitly re-prove.
 
 ---
 
@@ -143,7 +204,7 @@ with evidence — which is the failure this file exists to end.
 | 9 | **RESOLVED AND DEPLOYED, 2026-08-21.** ~~The team roster read has no property-scope check.~~ Team roster, invite, current-access and assignment-edit URLs now share the operator CORS boundary but derive identity and property from `x-staff-session`. No session is 401; a session for another property is 403; the browser operator key is not an alternate authority path. | API `7bbb23e`; `tests/team_access_session_boundary.test.js`; real HTTP/Postgres authority proof 50/50; production no-session roster read 401 |
 | 10 | **Two inbound Twilio SMS webhooks, two different security postures.** `/communications/inbound-sms` documents itself as fail-closed on signature verification. `/intake/twilio` (a second, separate webhook) is gated only by a phone-number allowlist (`INTAKE_ALLOWED_NUMBERS`) — no signature check found. | `src/onboarding/intake.js:220` vs `src/comms/communications_boundary.js` |
 | 11 | **`CLAUDE.md`'s own deploy description doesn't match reality.** States *"Deploys to Render on merge to main,"* which reads as automatic push-to-deploy. The actual mechanism is `deploy.sh` — a manual script calling Render's API directly, run by a human. If it's meant to be automatic, it currently isn't. | `deploy.sh` vs `CLAUDE.md`'s "Repo orientation" section |
-| 12 | **A real hole in published-pricing immutability.** `pricing_terms` correctly refuses direct deletion once published (*"the terms of a published pricing version are immutable"*) — but `delete from properties` **cascades straight through the freeze** with no refusal. Found while fixing defect #1; deliberately not fixed — it's a schema-level ruling, not a pricing-adapter change, and is the owner's call. | Documented, not exploited, in `tests/e2e/agent_pricing_wall.e2e.js`'s own teardown comments, branch `claude/property-spine-orientation-cso2ao` |
+| 12 | **RULED 2026-08-20 — ACCEPTED AS INTENDED, WITH A REVISIT TRIGGER.** ~~A real hole in published-pricing immutability~~ — `delete from properties` cascades through the freeze that direct term deletion correctly refuses. Owner's ruling: **allow it for now.** Deleting a property should delete its pricing. **Revisit trigger, stated by the owner: "when we start dealing with more real properties."** Recorded rather than closed, because the day that trigger fires, this becomes a schema change nobody will remember was a deliberate choice. | `tests/e2e/agent_pricing_wall.e2e.js` teardown comments |
 | 13 | **CLAIMED, NOT STARTED — open for either party.** Four falsification tests are pinned to a hardcoded demo UUID and nothing runs them. Verified red before AND after the pricing fix, identically, by stashing. `claude/property-spine-orientation-cso2ao` claimed this then spent the time on deploy support instead. Say who's taking it before starting, to avoid duplicate work. | `tests/` — unnamed in the report, flagged for follow-up rather than fixed |
 | 14 | **RESOLVED AND DEPLOYED, 2026-08-21.** ~~`terms[0]` picks the shortest — and dearest — published term when a prospect names none~~. The adapter now agrees with `effective_pricing.js:399`: one published term is quoted and stated; two or more return the published menu and ask the prospect to choose. Clear linked-unit rent questions consume that adapter response directly, so the model cannot replace either the quote or the menu. **Proof:** real-DB `tests/e2e/agent_pricing_wall.e2e.js` 22/22; controlled live Skyline one-term quote recorded under defect #1. | `src/agent/pricing_adapter.js`; `src/agent/agent.js`; deployed commit `4f555c1` |
 | 14b | **RESOLVED WITH #14 — this row identified the option that was built.** Found by the closeout thread while verifying the deploy: `effective_pricing.js:399` does not merely refuse when no term is supplied, it returns `published_terms`, the sorted list of every term on the sheet, *"specifically so a caller can present the choice instead of guessing."* That was the third option — present the menu, reuse data that already exists, no schema change — and it is what shipped. Kept rather than folded into #14 because the finding was not mine and the record should say where it came from. | `src/money/effective_pricing.js:399` · implemented in `src/agent/pricing_adapter.js` |
@@ -181,6 +242,7 @@ this correction was written; defect #9 now records its later resolution.
 | 35 | **LIVE CORRECTION TO ROWS 32-34, 2026-08-22.** A later read supersedes their deployment identity and ledger counts: production `/health` identifies API `abcb28e`, and a transaction proven read-only before its first read found 179 ledger rows at ceiling **191**, with no orphan, name-conflict, or duplicate-number defect. Migrations 190-191 have therefore already been released and must not be run again. Against the guarantor branch, the only pending file is `192_lease_packet_signers.sql`; row 34's release scope is 192 alone. This correction records the newer observation and does not claim migration 192 or the guarantor code is deployed. | production `/health`; `tools/ledger_reconcile.js` against Render's current `DATABASE_URL`; observed 2026-08-22 |
 | 36 | **DEPLOYED AND SCHEMA-PROVEN; REAL SIGNING JOURNEY NOT YET EXERCISED, 2026-08-22.** The reconciled Q5 lineage and row 34's guarantor signer rail are live at API `a5c0f66`; the separate resident/guarantor progress UI is live at app `83e2b67`. Migration 192 ran inside a SHA-pinned Render pre-deploy gate from an exact 191/179 start, and the temporary release command was removed immediately afterward. A fresh transaction proven read-only before its first read found ceiling 192 with 180 rows, no pending or orphan migration, all signer tables/indexes/triggers/guards present, and all four legacy tenant links backfilled with zero token or submission drift. The live app bundle contains the separate-link issue/progress controls and has no page overflow at 1280px or 390px. **Still unclaimed:** no real resident or guarantor link was issued, no SMS was sent, no lease was executed, and the authenticated Application Records presentation has not been observed with live signer data. | API deploy `dep-da4sp5740ujc739ubabg`; app deploy `dep-da4sq7rm8hqs73am3ei0`; `tools/ledger_reconcile.js`; production schema re-read 2026-08-22 |
 | 37 | **CI-CONNECTED, `HTTP_PROVEN`, AND `BROWSER_VERIFIED`; PRODUCTION ACTIVATION UNCHANGED, 2026-08-22.** The full Skyline-shaped journey now begins at the canonical staff invite instead of hand-assembling an accepted identity. A real server and fresh migrated Postgres completed manager-confirmed Person -> fake invite SMS -> fake OTP -> atomic Mike identity/access/work assignment -> native tour -> operations webhook -> post-tour capture -> the exact same personal Ask Spine answer through dashboard and staff SMS -> exact-bed application -> V3 guarantor capture -> separate resident/guarantor links and submissions -> manager/company authority handoff -> company execution -> exact-bed tenancy, 50/50. Real Chromium separately completed the resident's official governing-package UI, including explicit full-name signature intent and final submission, 7/7. `verify_all.sh` now runs both and finished `ALL PROOFS PASSED`; its E2E launcher always preloads the fake SMS transport, even if the caller's shell contains carrier credentials. Two older lease proofs were aligned to the already-required signature-consent contract, and one duplicated OTP resend predicate was deleted with no behavior change. **Not claimed:** no real carrier was contacted, no live Mike/resident/guarantor action occurred, and this does not advance Skyline's production activation state. | `tests/e2e/tour_application_lease.e2e.js`; `tests/e2e/resident_signing.browser.js`; `tests/e2e/leasing_e2e_lib.js`; `tests/e2e/leasing_path.e2e.js`; `tests/e2e/boot.sh`; `tests/e2e/verify_all.sh`; `src/identity/teamaccess.js` |
+| 38 | **`migrations/migrate.js` hardcodes SSL, so `--apply` cannot build a schema on a local non-SSL Postgres.** Found while building a local harness DB for the structure thread's real-Postgres proof. Production and CI SSL targets are unaffected, but a local disaster-recovery rehearsal fails before application proofs can begin. | `migrations/migrate.js:173`; `docs/current-state-build/06_WAVE3_RESULTS.md` |
 
 ## PRODUCTION-PROVEN — the whole list
 
@@ -232,7 +294,7 @@ outside this tree, not treated as confirmed.**
 | Equity — canonical domain | `PRODUCTION_PROVEN` (empty read path only) | registered | Production 4125 page returned zero positions and ownership reconciliation not established. No populated equity position was observed |
 | Equity — Ask Spine reader | `PRODUCTION_PROVEN` (empty read path only) | registered | Production “Who holds the equity in this property?” returned an explicit coverage gap rather than “nobody owns it.” No populated equity answer was observed |
 | Equity — ownership reconciliation | `LOCALLY_EXERCISED`/`HTTP_PROVEN` split | registered | PR #114. Real Postgres proves a 77.57% schedule stays `INCOMPLETE` (`equity_position_falsification.db.js`); the real-HTTP test only proves the `NOT_ESTABLISHED` case, not populated reconciliation. *"`accrued_preferred_return` is always `NOT_ESTABLISHED` for every preferred position, unconditionally, for Build 1."* Governing source clause pending |
-| Funding boundary wall | enforced | — | `tests/gate_funding_boundary.js` — tax/insurance funding cannot cross into economics |
+| Funding boundary wall | enforced | — | `tests/gates/gate_funding_boundary.js` — tax/insurance funding cannot cross into economics |
 
 ## Leasing lifecycle — `src/{leasing,applications,tenancy,onboarding}/`
 
@@ -241,7 +303,7 @@ outside this tree, not treated as confirmed.**
 | Capability | Rung | Files / note |
 |---|---|---|
 | **Deal Setup / Opening Tenancy** | `HTTP_PROVEN` + `BROWSER_VERIFIED` | `deal_setup_http.db.js` **spawns real `server.js`**, real socket, restart persistence. **Best-proven capability in the repo** |
-| Lead intake | `LOCALLY_EXERCISED` | `leasingleads.js` |
+| Lead intake | `LOCALLY_EXERCISED` | `leasing_leads.js` |
 | Tours / appointment attribution | `LOCALLY_EXERCISED` | `appointment_attribution.js`, `appointment_journey.js`, `tour_outcome.js` |
 | `tour_chips` · `capture_chase` · `capture_receipt` | `BUILT_BUT_DORMANT` | **no caller in `src/` or `server.js`** |
 | Post-tour conversion rail | `HTTP_PROVEN` | Real server + PostgreSQL flow records the tour outcome and returns the conversion consumed by the one application-send command. The separate `conversation_owner_user_id` ruling remains outside this proof. |

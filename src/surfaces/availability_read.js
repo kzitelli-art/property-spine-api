@@ -153,7 +153,7 @@ function marketingState(p, liveOk) {
   //
   //  The underlying defect — absence of a turnover row reading as `ready` —
   //  is real, is NOT fixed here, and is tracked as a separate unresolved
-  //  architecture issue in docs/MAINTENANCE_UNIT_STATUS_SOURCE_COMPARISON.md.
+  //  architecture issue in docs/archive/MAINTENANCE_UNIT_STATUS_SOURCE_COMPARISON.md.
   //  BUILD 1 does not own the portfolio-wide repair.
   //
   //  `triage` is overlaid by availabilityRead the same way operating_use is —

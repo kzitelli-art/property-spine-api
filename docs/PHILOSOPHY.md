@@ -1134,7 +1134,7 @@ cannot participate.
 **This cost is part of building the domain.** It is not free polish afterward, and
 it stays visible in estimates. A rule of this shape is exactly what gets quietly
 dropped under schedule pressure, so it belongs here rather than in a build doc —
-and `tests/gate_ask_spine_readers.js` enforces it so that it does not depend on
+and `tests/gates/gate_ask_spine_readers.js` enforces it so that it does not depend on
 this paragraph being remembered (§40.11).
 
 ## 34. Codex Operating Instructions
@@ -2158,7 +2158,7 @@ is claimed explicitly or not at all.
 Every domain that reaches a governed standing state must be **registered** as an
 Ask Spine reader, or carry an explicit, dated waiver saying why not.
 
-`tests/gate_ask_spine_readers.js` discovers domains from their canonical standing
+`tests/gates/gate_ask_spine_readers.js` discovers domains from their canonical standing
 reads rather than from a hand-maintained list, so a new domain that lands without
 registering goes red on its own. A registry that only knows what someone
 remembered to add to it cannot detect the omission it exists to prevent.

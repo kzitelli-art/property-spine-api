@@ -6,11 +6,14 @@ export E="${E2E_DATABASE_URL:-postgres://postgres:spineproof@127.0.0.1:5432/spin
 PORT="${PORT:-3000}"
 SMS_LOG="${E2E_SMS_LOG:-/tmp/property_spine_e2e_sms.log}"
 PRELOAD="$(cd "$(dirname "$0")" && pwd)/fake_sms_preload.js"
+ANTHROPIC_LOG="${E2E_ANTHROPIC_LOG:-/tmp/property_spine_e2e_anthropic.log}"
+ANTHROPIC_PRELOAD="$(cd "$(dirname "$0")" && pwd)/fake_anthropic_preload.js"
 
 #  This launcher is proof infrastructure, never an operating server. Force
 #  every outbound SMS through the local append-only fake transport even if
 #  the caller's shell happens to contain real carrier credentials.
 : > "$SMS_LOG"
+: > "$ANTHROPIC_LOG"
 
 #  ── REFUSE TO SHARE THE PORT ────────────────────────────────────────
 #  See tests/e2e/port_guard.sh for why this exists and why callers must
@@ -29,4 +32,5 @@ DATABASE_URL="$E" OPERATOR_KEY="e2e-key" OPERATOR_APP_ORIGIN="http://localhost:5
   COMMITMENT_LEDGER_MODE=enabled ACTIVATION_PROPERTY_IDS="$PROP" \
   APPLICATION_INTENT_PREPARE_ENABLED=true APPLICATION_INTENT_PROPERTY_IDS="$PROP" \
   LEASING_INTAKE_SECRET="e2e-intake" LEASING_INTAKE_PROPERTY_IDS="$PROP" \
-  E2E_SMS_LOG="$SMS_LOG" PORT="$PORT" exec node --require "$PRELOAD" server.js
+  E2E_SMS_LOG="$SMS_LOG" E2E_ANTHROPIC_LOG="$ANTHROPIC_LOG" PORT="$PORT" \
+  exec node --require "$PRELOAD" --require "$ANTHROPIC_PRELOAD" server.js

@@ -15,7 +15,7 @@
 
    So the handler written to make a redelivery harmless was itself the
    thing that threw. The technician's turn rolled back and — because
-   25P02 is not 23505 — `tenantlink`'s duplicate-suppression branch could
+   25P02 is not 23505 — `tenant_link`'s duplicate-suppression branch could
    not recognise it either. The technician got silence: no completion, no
    refusal, no sentence.
 
@@ -48,7 +48,7 @@ const { Client } = require("pg");
 
 const ROOT = path.join(__dirname, "..", "..");
 const LIFECYCLE = path.join(ROOT, "src/technician/lifecycle_service.js");
-const TENANTLINK = path.join(ROOT, "src/comms/tenantlink.js");
+const TENANTLINK = path.join(ROOT, "src/comms/tenant_link.js");
 const URL = process.env.SAVEPOINT_DATABASE_URL;
 
 const DIGEST_BEFORE = crypto.createHash("sha256").update(fs.readFileSync(LIFECYCLE)).digest("hex");
@@ -104,7 +104,7 @@ async function census(c, wo) {
 
 /*  Run a verb the way production does: inside an explicit transaction the
  *  caller owns, committing on success and rolling back on failure —
- *  exactly what tenantlink's inbound-SMS wrapper does. */
+ *  exactly what tenant_link's inbound-SMS wrapper does. */
 async function inTx(c, fn) {
   await c.query("begin");
   try { const out = await fn(); await c.query("commit"); return { out }; }
@@ -283,7 +283,7 @@ async function inTx(c, fn) {
     //  Q3 shows the transaction survives a rethrow. That is only safe
     //  because the caller rolls back rather than committing what landed.
     const wrapper = tl.slice(tl.indexOf("technicianConversation.runOperationsTurn"));
-    ok("T1  tenantlink's operations turn rolls back on ANY throw",
+    ok("T1  tenant_link's operations turn rolls back on ANY throw",
        /catch \(e\) \{\s*await t\.query\("rollback"\)/.test(wrapper),
        "if the caller ever swallows the error, a partial turn could commit");
     ok("T2  …and it only treats 23505 as an already-answered duplicate",
@@ -315,7 +315,7 @@ async function inTx(c, fn) {
        !!boom.err && /current transaction is aborted/i.test(boom.err.message),
        boom.err ? boom.err.code + " " + boom.err.message
                 : "it survived — then the savepoint is not what makes the retry work");
-    ok("R2  …and the error is 25P02, which tenantlink's 23505 branch cannot recognise",
+    ok("R2  …and the error is 25P02, which tenant_link's 23505 branch cannot recognise",
        !!boom.err && boom.err.code === "25P02",
        "code was " + (boom.err && boom.err.code) +
        " — the claim about WHY the technician got silence depends on this");

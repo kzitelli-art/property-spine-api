@@ -126,9 +126,9 @@ known, previously documented defect). If a disposable branch of production can b
 provisioned:
 
 ```bash
-HARNESS_DATABASE_URL="<disposable branch>" node tests/property_creation_canonical.db.js
-HARNESS_DATABASE_URL="<disposable branch>" node tests/property_creation_http.db.js
-HARNESS_DATABASE_URL="<disposable branch>" node tests/authority_mutation_containment.db.js
+HARNESS_DATABASE_URL="<disposable branch>" node tests/proofs/property_creation_canonical.db.js
+HARNESS_DATABASE_URL="<disposable branch>" node tests/proofs/property_creation_http.db.js
+HARNESS_DATABASE_URL="<disposable branch>" node tests/proofs/authority_mutation_containment.db.js
 ```
 
 Expect 25 / 17 / 38. If no branch is available, the residual risk is that migrations 150

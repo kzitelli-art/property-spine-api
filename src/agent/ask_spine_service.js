@@ -12,6 +12,8 @@
 //  owns only the conversational projection: plain ranking reasons and verified
 //  navigation metadata. Property/module authority, open-state filtering,
 //  overdue meaning, ordering and the cap all live in that canonical service.
+//  The source audit and the retired duplicated-query design are retained at
+//  docs/archive/ASK_SPINE_SOURCE_AUDIT.md.
 //
 //  RANKING — recorded facts only, no score (audit §4):
 //    1  overdue AND unassigned    due_at < now() AND assigned_user_id IS NULL

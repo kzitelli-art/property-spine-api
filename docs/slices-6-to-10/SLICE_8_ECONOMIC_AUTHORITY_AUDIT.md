@@ -112,8 +112,8 @@ real modelling gap, not a display gap — flagged for ruling below.
 
 Two tests actively **pin it dark**:
 
-- `tests/pricing_governance_proof.js:432` — *"no live agent path reads the governed adapter yet"*
-- `tests/demo_authority_ruling_proof.js:184` — *"no live AI path reads the governed adapter"*
+- `tests/proofs/pricing_governance_proof.js:432` — *"no live agent path reads the governed adapter yet"*
+- `tests/proofs/demo_authority_ruling_proof.js:184` — *"no live AI path reads the governed adapter"*
 
 **This is important.** Flipping the AI onto governed pricing requires
 deliberately inverting two guard assertions. That is a governance decision with

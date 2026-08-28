@@ -1,0 +1,1299 @@
+// ════════════════════════════════════════════════════════════════════
+//  LEASING CONVERSION RAIL — leasing_conversion.js
+//
+//  The canonical system-of-record for a prospect's POST-TOUR relationship.
+//  After a completed tour, the human who ACTUALLY gave it owns the
+//  conversation until they explicitly hand it off. AI prepares; the human
+//  sends. This module owns the durable truth: who toured them, who owns the
+//  conversation now, every handoff, and each rung's immutable kept/missed
+//  outcome — the history the Leasing queues and the Grade later read.
+//
+//  WHAT THIS MODULE DOES NOT DO (by contract): no UI, no Grade math, no
+//  Twilio. It does not invent people. Child follow-up COMMITMENTS are created
+//  through the SHARED obligation engine (spawnObligationFromEvent / complete-
+//  Obligation), injected — never reimplemented here.
+//
+//  Deps: { pool, spawnObligationFromEvent, completeObligation }.
+//  Operator routes gated by shared OPERATOR_KEY (x-operator-key), fail-closed.
+//
+//  THE RUNGS:
+//    Core human-conversation rungs (owned by the conversation owner):
+//      tour_followup → applicant_followup → lease_signature_followup
+//    Separate decision / operating gates (can run ALONGSIDE; owned by a role):
+//      application_approval, lease_terms_approval, lease_countersign,
+//      move_in_readiness
+// ════════════════════════════════════════════════════════════════════
+
+const express = require("express");
+// Slice 9: canonical application READ authority (TERMINAL group, status vocabulary).
+const lifecycleRead = require("../applications/application_lifecycle_read");
+const staffIdentity = require("../identity/staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
+
+module.exports = function leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation, closureAuthority }) {
+  // THE CLOSURE CAPABILITY (structural, not conventional): server.js creates
+  // the conversion closure authority and hands it ONLY to this module. The
+  // generic engine never receives it and carries no bypass parameter. If the
+  // capability is absent, the rail fails CLOSED — no fallback to the engine.
+  if (!closureAuthority || typeof closureAuthority.closeLinkedConversionObligation !== "function") {
+    throw new Error("leasingConversionModule requires the conversion closure authority (see conversion_obligation_closure.js).");
+  }
+  const router = express.Router();
+
+  // ── AUTH ────────────────────────────────────────────────────────────
+  function requireOperator(req, res, next) {
+    const expected = process.env.OPERATOR_KEY;
+    if (!expected) return res.status(503).json({ receipt: "Operator routes are locked: set OPERATOR_KEY in Render's environment, then send it as the x-operator-key header." });
+    if (req.headers["x-operator-key"] !== expected) return res.status(401).json({ receipt: "Operator key missing or wrong." });
+    next();
+  }
+
+  // ── RUNG CONFIG ─────────────────────────────────────────────────────
+  // Default windows (ms). Conservative starting values; configurable later.
+  const HOUR = 3600 * 1000;
+  const RUNG = {
+    tour_followup:            { window: 24 * HOUR,  next: "applicant_followup",      kind: "conversation", label: (n) => `Tour follow-up — ${n}` },
+    // 051 DOCTRINE, LOCKED AT THE DOMAIN LAYER (not a route flag): resolving an
+    // application follow-up NEVER auto-creates signature-chasing work. next=null.
+    // The ONLY authorized cause of lease_signature_followup is the manager-approval
+    // domain event, via the idempotent ensureLeaseSignatureFollowup below. A route
+    // that forgets suppress_next can no longer recreate the pre-approval chase.
+    applicant_followup:       { window: 72 * HOUR,  next: null,                      kind: "conversation", label: (n) => `Application follow-up — ${n}` },
+    lease_signature_followup: { window: 48 * HOUR,  next: null,                      kind: "conversation", label: (n) => `Lease-signature follow-up — ${n}` },
+    // gates — owned by a role, not the conversation owner. No auto-next.
+    application_approval:     { window: 48 * HOUR,  next: null, kind: "gate", gate_role: "leasing_manager",          label: (n) => `Application approval — ${n}` },
+    lease_terms_approval:     { window: 48 * HOUR,  next: null, kind: "gate", gate_role: "property_manager",         label: (n) => `Lease-terms approval — ${n}` },
+    lease_countersign:        { window: 48 * HOUR,  next: null, kind: "gate", gate_role: "property_manager",         label: (n) => `Lease countersign — ${n}` },
+    move_in_readiness:        { window: 72 * HOUR,  next: null, kind: "gate", gate_role: "property_manager",         label: (n) => `Move-in readiness — ${n}` },
+  };
+  const CONVERSATION_RUNGS = Object.keys(RUNG).filter(k => RUNG[k].kind === "conversation");
+
+  function dueFromNow(ms) { return new Date(Date.now() + ms).toISOString(); }
+
+  // ── personname helper for labels (best-effort; never blocks) ──
+  async function personName(client, person_id) {
+    try {
+      const r = await client.query("select name from persons where id=$1", [person_id]);
+      return (r.rows[0] && r.rows[0].name) || "prospect";
+    } catch { return "prospect"; }
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  //  CORE SERVICE — these functions ARE the canonical rules. The HTTP routes
+  //  below are thin wrappers. Each takes an open transaction `client`.
+  // ════════════════════════════════════════════════════════════════════
+
+  // Spawn ONE rung: create the commitment in the shared obligations table via
+  // the injected engine, then write the conversion-link row that carries the
+  // immutable outcome. Returns { obligation, link }.
+  async function spawnRung(client, { conversion, rung, owner_user_id, owner_role, labelSuffix = null, next_move_code = null, ownership_origin = null, owner_eligibility_state = null }) {
+    const cfg = RUNG[rung];
+    if (!cfg) throw httpErr(400, `unknown rung "${rung}"`);
+    const name = await personName(client, conversion.person_id);
+
+    // The follow-up commitment is a real obligation (one accountable-human spine).
+    const ob = await spawnObligationFromEvent(client, {
+      property_id: conversion.property_id,
+      person_id:   conversion.person_id,
+      module:      "leasing",
+      type:        rung,
+      label:       cfg.label(name) + (labelSuffix || ""),
+      owner_type:  "human",
+      assigned_role: owner_role || null,
+      status:      "open",
+      due_at:      dueFromNow(cfg.window),
+      related_id:  conversion.id,
+      related_type:"leasing_conversion",
+      assigned_user_id: owner_user_id || null,
+      ownership_origin: owner_user_id ? (ownership_origin || null) : null,
+      owner_eligibility_state: owner_user_id
+        ? (owner_eligibility_state || "eligible_assignment") : "unassigned",
+    });
+
+    const link = (await client.query(
+      `insert into leasing_conversion_obligations
+         (conversion_id, obligation_id, rung, owner_user_id, owner_role, due_by, next_move_code)
+       values ($1,$2,$3,$4,$5,$6,$7) returning *`,
+      [conversion.id, ob.id, rung, owner_user_id || null, owner_role || null, ob.due_at, next_move_code || null]
+    )).rows[0];
+
+    // R3 (069): birth is a ledger fact. Origin (how ownership was decided) and
+    // eligibility (whether the owner is currently eligible) stay TWO fields.
+    await closureAuthority.appendEvent(client, {
+      conversion_obligation_id: link.id, event_type: "created",
+      actor_user_id: null, identity_resolution_basis: null,
+      prior_status: null, next_status: "open",
+      prior_owner_user_id: null, next_owner_user_id: owner_user_id || null,
+      ownership_origin: owner_user_id ? ownership_origin : null,
+      owner_eligibility_state: owner_user_id ? (owner_eligibility_state || "eligible_assignment") : "unassigned",
+    });
+
+    // Cache latest stage for fast queue reads (conversation rungs only).
+    //
+    //  THE STAGE ONLY EVER ADVANCES. This wrote the new rung unconditionally,
+    //  which meant a SECOND tour for someone already in applicant_followup
+    //  dragged the whole relationship back to tour_followup — the person had
+    //  applied, and the board would have started asking for the tour
+    //  follow-up again. Caught live on Kameron Zitelli's walk-in.
+    //
+    //  A later tour is a real event and deserves its own obligation; it is
+    //  not evidence that the relationship went backwards. Opening a
+    //  tour_followup rung is correct. Re-labelling the RELATIONSHIP as
+    //  tour_followup is not.
+    //
+    //  The ladder is the existing one (see the rung list this module already
+    //  uses for owner reassignment) — no second lifecycle invented. An
+    //  unranked rung is left alone rather than guessed at.
+    //  Guarded IN SQL rather than in JS: the caller hands us a `conversion`
+    //  object that may already be stale by the time several rungs spawn in one
+    //  transaction, and a stale read here would let the regression back in.
+    //  One statement, atomic, no read-then-write window. An unranked rung
+    //  (array_position -> null) advances nothing rather than being guessed at.
+    if (cfg.kind === "conversation") {
+      const LADDER = ["tour_followup", "applicant_followup", "lease_signature_followup"];
+      const advanced = await client.query(
+        `update leasing_conversions
+            set current_stage=$1, updated_at=now()
+          where id=$2
+            and array_position($3::text[], $1) is not null
+            and coalesce(array_position($3::text[], current_stage), 0)
+                < array_position($3::text[], $1)
+          returning id`,
+        [rung, conversion.id, LADDER]
+      );
+      if (!advanced.rows.length) {
+        // Not an advance — still a real touch on the relationship, so the
+        // timestamp moves while the position does not.
+        await client.query(
+          `update leasing_conversions set updated_at=now() where id=$1`, [conversion.id]);
+      }
+    }
+    return { obligation: ob, link };
+  }
+
+  // RULE: a conversion record cannot be created without a confirmed actual host.
+  // Creates the parent, the synthetic 'origin' handoff (so history starts with
+  // the tour), and the first tour_followup rung owned by the actual host.
+  // ── OWNERSHIP ≠ ATTRIBUTION (module-level, one rule for every spawn site) ──
+  // A user may OWN a follow-up obligation only if it resolves to an active
+  // assignment at this property. assignments(004) keys on person_id; no
+  // users↔persons bridge exists yet, so an asserted host id is not provably
+  // eligible and must never silently become an owner. Resolves an owner from
+  // a preference-ordered list of candidate user ids, returning the first
+  // eligible one, else null (UNASSIGNED — honest).
+  async function eligibleOwner(client, propertyId, candidates) {
+    // 067: delegated to the CANONICAL staff identity resolver. Same contract
+    // ({owner, basis}), stricter truth: eligibility now also requires an
+    // active-eligible account (is_active AND status='active' — anything
+    // else, including unknown future statuses, fails closed), a deliberate
+    // audited bridge, human_staff classification, and no bridge conflict.
+    // No raw users.person_id join lives in this module anymore.
+    return staffIdentity.resolveEligibleOwner(client, propertyId, candidates);
+  }
+
+  async function createConversionFromTour(client, {
+    person_id, property_id, origin_tour_id = null, lead_id = null,
+    scheduled_tour_host_user_id = null, actual_tour_host_user_id,
+    feedback_recorded_by_user_id = null, tour_outcome = null, tour_notes = null,
+    // v2: the recommendation from the tour outcome (next_move). A recommendation
+    // is never a soft word that can rot unowned — it IS the content of the
+    // follow-up obligation, carried in the rung's label and owned by the host.
+    recommendation = null,
+    // multi-move: an ordered array of next-move codes. First = primary (anchors
+    // the conversation); the rest spawn sibling task obligations.
+    recommendations = null,
+    // #1: the operator may explicitly choose the follow-up owner. Honored ONLY
+    // when it resolves to an active eligible assignment (re-validated here).
+    explicit_owner_user_id = null,
+  }) {
+    if (!actual_tour_host_user_id) {
+      throw httpErr(422, "INCOMPLETE: actual_tour_host_user_id is required — a completed-tour outcome cannot spawn the conversion rail until the actual host is confirmed.");
+    }
+    if (!person_id || !property_id) throw httpErr(400, "person_id and property_id are required.");
+
+    // ══════════════════════════════════════════════════════════════════
+    //  ONE PERSON, ONE ACTIVE RELATIONSHIP, MANY TOURS INSIDE IT.
+    //
+    //  This used to INSERT unconditionally, which meant the second tour for
+    //  the same person hit `leasing_conversions_one_active` and 500'd. The
+    //  constraint was right and the insert was wrong: a tour is an EVENT in
+    //  the relationship; the conversion IS the relationship.
+    //
+    //  So: find the live one first, under a row lock, and reuse it. Never a
+    //  parallel thread, never closing the existing one to make room.
+    //  Owner ruling 2026-07-26.
+    // ══════════════════════════════════════════════════════════════════
+    const existing = (await client.query(
+      `select * from leasing_conversions
+        where person_id=$1 and property_id=$2 and status='active'
+        order by opened_at asc limit 1
+        for update`,
+      [person_id, property_id]
+    )).rows[0];
+
+    let conv, reusedExisting = false;
+    if (existing) {
+      reusedExisting = true;
+      //  THE STAGE IS NOT TOUCHED HERE. A later tour must never walk the
+      //  relationship backward — someone already in applicant_followup does
+      //  not return to tour_followup because they came back to see a second
+      //  unit. Advancement is the obligation machinery's job (it ranks
+      //  tour_followup < applicant_followup < lease_signature_followup and
+      //  owns the transitions); this write only records what the tour said.
+      //
+      //  tour_outcome/tour_notes are a projection of the LATEST read. The
+      //  per-tour truth is immutable on tour_events — the history lives
+      //  there, so refreshing the projection loses nothing.
+      conv = (await client.query(
+        `update leasing_conversions
+            set tour_outcome                 = coalesce($2, tour_outcome),
+                tour_notes                   = coalesce($3, tour_notes),
+                actual_tour_host_user_id     = coalesce($4, actual_tour_host_user_id),
+                feedback_recorded_by_user_id = coalesce($5, feedback_recorded_by_user_id),
+                updated_at                   = now()
+          where id=$1
+          returning *`,
+        [existing.id, tour_outcome, tour_notes,
+         actual_tour_host_user_id, feedback_recorded_by_user_id]
+      )).rows[0];
+
+      //  The additional tour is recorded in the handoff history so the
+      //  relationship can say "they toured again, and who gave it" without
+      //  a second conversion existing to say it.
+      await client.query(
+        `insert into leasing_conversation_handoffs
+           (conversion_id, from_user_id, to_user_id, by_user_id, kind, reason)
+         values ($1, null, $2, $3, 'origin', 'gave an additional tour in this relationship')`,
+        [conv.id, actual_tour_host_user_id, feedback_recorded_by_user_id || actual_tour_host_user_id]
+      );
+    } else {
+      // First tour in this relationship — open the rail. actual host becomes
+      // the initial conversation owner.
+      conv = (await client.query(
+        `insert into leasing_conversions
+           (person_id, property_id, origin_tour_id, lead_id,
+            scheduled_tour_host_user_id, actual_tour_host_user_id, feedback_recorded_by_user_id,
+            conversation_owner_user_id, current_stage, status, tour_outcome, tour_notes)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,'tour_followup','active',$9,$10)
+         returning *`,
+        [person_id, property_id, origin_tour_id, lead_id,
+         scheduled_tour_host_user_id, actual_tour_host_user_id, feedback_recorded_by_user_id,
+         actual_tour_host_user_id, tour_outcome, tour_notes]
+      )).rows[0];
+    }
+
+    // origin row in the handoff history: "toured by X" (from = null).
+    // ONLY on the first tour. The reuse branch above already wrote its own
+    // handoff naming the additional tour; writing both would claim the
+    // relationship originated twice.
+    if (!reusedExisting) {
+      await client.query(
+        `insert into leasing_conversation_handoffs
+           (conversion_id, from_user_id, to_user_id, by_user_id, kind, reason)
+         values ($1, null, $2, $3, 'origin', 'gave the completed tour')`,
+        [conv.id, actual_tour_host_user_id, feedback_recorded_by_user_id || actual_tour_host_user_id]
+      );
+    }
+
+    const REC_LABEL = {
+      send_application: "send the application", send_terms: "send terms",
+      send_options: "send best options", send_follow_up: "send a follow-up",
+      set_follow_up_time: "set a follow-up time", different_home: "offer a different home",
+      different_price: "revisit price", different_timing: "revisit timing",
+      follow_up_later: "follow up later", watch_future: "watch for a future fit",
+      close_out: "close out", send_floor_plans: "send floor plans of available units",
+    };
+
+    // ── OWNERSHIP ≠ ATTRIBUTION (see eligibleOwner) — the operator's EXPLICIT
+    // choice wins if eligible; else the actual host if eligible; else the
+    // scheduled host if eligible; else UNASSIGNED. The claim is preserved on the
+    // conversion row regardless of who ends up owning.
+    const owned = await eligibleOwner(client, property_id,
+      [explicit_owner_user_id, actual_tour_host_user_id, scheduled_tour_host_user_id]);
+    const ownerUserId = owned.owner;
+    const ownerBasis = !ownerUserId ? "unassigned"
+                     : ownerUserId === explicit_owner_user_id ? "chosen"
+                     : ownerUserId === actual_tour_host_user_id ? "actual_host"
+                     : ownerUserId === scheduled_tour_host_user_id ? "scheduled_host"
+                     : "unassigned";
+
+    // ── MULTI-MOVE: the operator may pick several next moves. Each is a REAL,
+    // separately-owned task — never collapsed into one vague follow-up. The
+    // PRIMARY move anchors the conversation (the tour_followup rung that drives
+    // the queue + current_stage); every ADDITIONAL move spawns its own sibling
+    // task obligation (same owner, own recommendation, own due). recommendations
+    // is an ordered array of move codes; `recommendation` (singular) stays
+    // supported for back-compat and becomes the sole/primary move.
+    const moves = Array.isArray(recommendations) && recommendations.length
+      ? recommendations.filter((m) => REC_LABEL[m])
+      : (recommendation && REC_LABEL[recommendation] ? [recommendation] : []);
+    const primaryMove = moves[0] || null;
+    const extraMoves = moves.slice(1);
+
+    const first = await spawnRung(client, {
+      conversion: conv, rung: "tour_followup", owner_user_id: ownerUserId,
+      labelSuffix: primaryMove ? ` — recommended: ${REC_LABEL[primaryMove]}` : null,
+      next_move_code: primaryMove || null,
+      ownership_origin: ownerBasis === "chosen" ? "explicit_choice"
+                      : ownerBasis === "actual_host" ? "auto_actual_host"
+                      : ownerBasis === "scheduled_host" ? "auto_scheduled_host" : null,
+    });
+
+    // ── LOOP-B SIBLING TASKS: SUPPRESSED (identity-bridge release, locked) ──
+    // Sibling `leasing_task` obligations have NO visible queue/board home
+    // yet. An obligation nobody can see is an open loop disguised as
+    // automation — the bridge must not activate invisible owned work. Until
+    // every sibling has a visible, completeable surface (queue presence,
+    // owner, due state, source tour, completion path, visible reassignment),
+    // generation stays OFF. The extra moves are NOT lost: they are recorded
+    // durably as a real event below and returned in next_move_codes.
+    // Re-enable by restoring the spawn loop ONLY after the visibility bar
+    // in the 067 handoff is proven.
+    const LOOPB_SIBLING_TASKS_SUPPRESSED = true;
+    const siblingTasks = [];
+    if (extraMoves.length && LOOPB_SIBLING_TASKS_SUPPRESSED) {
+      // durable record of the operator's full intent — a fact, not a task.
+      await client.query(
+        `insert into events (property_id, person_id, type, note)
+         values ($1, $2, 'leasing_next_moves_recorded', $3)`,
+        [conv.property_id, conv.person_id,
+         `Additional next moves noted: ${extraMoves.map((m) => REC_LABEL[m]).join("; ")} [${extraMoves.join(",")}]`]);
+    }
+
+    return {
+      conversion: conv, first_rung: first, sibling_tasks: siblingTasks,
+      sibling_tasks_suppressed: extraMoves.length > 0,   // 067: honest receipt — extra moves recorded as an event, no invisible obligations spawned
+      suppressed_move_codes: extraMoves,
+      // next_move stays a machine-readable CODE — routing/reporting/AI read this,
+      // never the rendered label. The label is presentation only.
+      next_move_code: primaryMove,
+      next_move_label: primaryMove ? REC_LABEL[primaryMove] : null,
+      next_move_codes: moves,                       // the full ordered set
+      // attribution facts stay distinct + inspectable
+      ownership: {
+        actual_host_claim_user_id: actual_tour_host_user_id,
+        scheduled_host_user_id: scheduled_tour_host_user_id,
+        recorded_by_user_id: feedback_recorded_by_user_id,
+        obligation_owner_user_id: ownerUserId,
+        owner_basis: ownerBasis,
+      },
+    };
+  }
+
+  // RULE: explicit handoff is the ONLY way the conversation owner changes.
+  // Preserves the original tour host, writes a durable transfer, re-points the
+  // currently-OPEN conversation rung to the new owner (closed rungs keep their
+  // owner forever). Clears handoff_required.
+  async function handoffConversation(client, { conversion_id, from_user_id = null, to_user_id, by_user_id = null, kind = "handoff", reason = null, note = null }) {
+    if (!to_user_id) throw httpErr(400, "handoff requires a named successor (to_user_id).");
+    const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    if (conv.status !== "active") throw httpErr(409, `conversion is ${conv.status}; cannot hand off.`);
+    if (from_user_id && from_user_id !== conv.conversation_owner_user_id) {
+      throw httpErr(409, "handoff 'from' does not match the current conversation owner.");
+    }
+
+    const prev = conv.conversation_owner_user_id;
+    await client.query(
+      `update leasing_conversions
+         set conversation_owner_user_id=$1, handoff_required=false, updated_at=now()
+       where id=$2`,
+      [to_user_id, conversion_id]
+    );
+    await client.query(
+      `insert into leasing_conversation_handoffs
+         (conversion_id, from_user_id, to_user_id, by_user_id, kind, reason, note)
+       values ($1,$2,$3,$4,$5,$6,$7)`,
+      [conversion_id, prev, to_user_id, by_user_id || prev, kind, reason, note]
+    );
+
+    // Move only OPEN conversation rungs to the new owner. (Gate rungs and any
+    // closed rung are untouched — gates belong to roles; closed = history.)
+    await client.query(
+      `with moved as (
+         update leasing_conversion_obligations
+            set owner_user_id=$1
+          where conversion_id=$2 and outcome is null
+            and rung in ('tour_followup','applicant_followup','lease_signature_followup')
+          returning obligation_id
+       )
+       update obligations o
+          set assigned_user_id=$1,
+              owner_eligibility_state='eligible_assignment',
+              ownership_origin='manual_reassignment',
+              updated_at=now()
+         from moved
+        where o.id=moved.obligation_id`,
+      [to_user_id, conversion_id]
+    );
+
+    return { conversion_id, previous_owner: prev, new_owner: to_user_id };
+  }
+
+  // RULE: absence sets a VISIBLE handoff_required risk — never an auto-reroute.
+  async function flagHandoffRequired(client, { conversion_id }) {
+    const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    await client.query(`update leasing_conversions set handoff_required=true, updated_at=now() where id=$1`, [conversion_id]);
+    return { conversion_id, handoff_required: true, conversation_owner_user_id: conv.conversation_owner_user_id };
+  }
+
+  // RULE: completing/releasing a rung writes a WRITE-ONCE outcome + proof, then
+  // (only if kept and not released) spawns the next rung. NEVER mutates the
+  // closed rung. result ∈ completed | released | missed.
+    // ════════════════════════════════════════════════════════════════════
+  //  RELEASE 3 — RECOVERY + REASSIGNMENT (reviewer ruling, Jul 4)
+  //  A task may be completed, handed off, or recovered — it cannot silently
+  //  change the truth of the relationship around it.
+  // ════════════════════════════════════════════════════════════════════
+
+  const REOPEN_WINDOW_HOURS = 72;
+  // `owner_not_eligible` (2026-07-26): the named owner can no longer hold the
+  // task — typically their team authority at the property lapsed. A named
+  // reason rather than `other` + prose, because this is a recurring machine-
+  // meaningful condition and the audit trail should be able to count it.
+  const REASSIGN_REASONS = ["coverage_change","vacation_or_absence","actual_host_correction","workload_balance","unassigned_pickup","owner_not_eligible","other"];
+  const RECOVERY_REASONS = ["closed_by_mistake","couldnt_complete","new_information","other"];
+
+  // Dependency-aware reopenability — one rail-level rule (Amendment 2).
+  // V1: reopenable ONLY when no material downstream work exists.
+  async function assessReopenability(client, { obligation_id }) {
+    const link = (await client.query(
+      `select lco.*, c.property_id, c.status as conversion_status
+         from leasing_conversion_obligations lco
+         join leasing_conversions c on c.id = lco.conversion_id
+        where lco.obligation_id = $1`, [obligation_id])).rows[0];
+    if (!link) return { reopenable: false, reason_code: "NOT_A_CONVERSION_TASK" };
+    if (link.outcome == null) return { reopenable: false, reason_code: "NOT_TERMINAL", link };
+
+    const cfg = RUNG[link.rung];
+    // gates are DECISIONS — reopening a decision is lifecycle correction, not
+    // task recovery. Future lane; not Release 3.
+    if (cfg && cfg.kind === "gate") return { reopenable: false, reason_code: "DECISION_NOT_RECOVERABLE", link };
+
+    // a close that released the relationship is not undone from a task row
+    if (link.resolution === "released" || link.conversion_status !== "active")
+      return { reopenable: false, reason_code: "RELATIONSHIP_CLOSED", link };
+
+    // the 72h recovery window — SERVER arithmetic on the absolute UTC fact
+    const win = (await client.query(
+      `select (now() - $1::timestamptz) <= interval '${REOPEN_WINDOW_HOURS} hours' as ok`,
+      [link.closed_at])).rows[0];
+    if (!win.ok) return { reopenable: false, reason_code: "REOPEN_WINDOW_EXPIRED", link };
+
+    // material downstream work — the ladder's successor rung
+    if (cfg && cfg.next) {
+      const succ = (await client.query(
+        `select 1 from leasing_conversion_obligations where conversion_id=$1 and rung=$2 limit 1`,
+        [link.conversion_id, cfg.next])).rows[0];
+      if (succ) return { reopenable: false, reason_code: "DOWNSTREAM_WORK_EXISTS", link };
+    }
+    // rung-specific lifecycle facts
+    if (link.rung === "applicant_followup") {
+      const app = (await client.query(
+        // CURRENT SUBMISSION-REACHED STATE — "has an application on this
+        // conversation reached submission?" Matches the canonical group
+        // exactly; the literal list omitted accepted_term_required, so an
+        // application awaiting term confirmation read as no downstream work.
+        `select 1 from lease_applications where conversion_id=$1
+          and status = any($2::text[]) limit 1`,
+        [link.conversion_id, lifecycleRead.STATUS_GROUP_PARAMS.submissionReached])).rows[0];
+      if (app) return { reopenable: false, reason_code: "DOWNSTREAM_WORK_EXISTS", link };
+    }
+    if (link.rung === "lease_signature_followup") {
+      // DOMAIN-SPECIFIC (not a lifecycle group). This asks "has a signature
+      // already been taken on this deal", which is a signature-history
+      // question, not submission-reached or approval-reached. It RESEMBLES a
+      // canonical group and is deliberately NOT replaced by one: mapping it to
+      // APPROVAL_REACHED would treat a merely-approved application as signed.
+      // Whether accepted_term_required belongs here is a Pass 2 question.
+      const sig = (await client.query(
+        `select 1 from lease_applications where conversion_id=$1
+          and status in ('tenant_signed','countersigned','active') limit 1`,
+        [link.conversion_id])).rows[0];
+      if (sig) return { reopenable: false, reason_code: "DOWNSTREAM_WORK_EXISTS", link };
+    }
+    // a later recovery already attached to this exact closure cycle.
+    // to_regclass guard: a missing-table error inside the caller's transaction
+    // would poison it — never risk that for an optional pre-069 read.
+    const hasLedger = (await client.query("select to_regclass('leasing_conversion_obligation_events') as t")).rows[0];
+    if (hasLedger && hasLedger.t) {
+      const later = (await client.query(
+        `select 1 from leasing_conversion_obligation_events
+          where conversion_obligation_id=$1 and event_type='reopened' and occurred_at >= $2 limit 1`,
+        [link.id, link.closed_at])).rows[0];
+      if (later) return { reopenable: false, reason_code: "ALREADY_RECOVERED", link };
+    }
+
+    return { reopenable: true, link };
+  }
+
+  // REOPEN — deliberate recovery (Amendment 3). Requires reason + new_due_at.
+  // Ownership: prior owner kept ONLY if still eligible now; else UNASSIGNED.
+  async function reopenRung(client, { obligation_id, by_user_id = null, reason, reason_detail = null, new_due_at, idempotency_key = null }) {
+    if (!reason || !RECOVERY_REASONS.includes(reason))
+      throw httpErr(400, "reason required: " + RECOVERY_REASONS.join(" | ") + ".");
+    if (reason === "other" && !(reason_detail && String(reason_detail).trim()))
+      throw httpErr(400, "a short detail is required for reason 'other'.");
+    let due = new_due_at ? new Date(new_due_at) : null;
+    if (!due || isNaN(due)) throw httpErr(400, "new_due_at required — a reopened task must not be born instantly overdue by accident.");
+    // a past timestamp means "due immediately" — deliberately clamped to
+    // server-now (never browser arithmetic, never accidental instant-overdue)
+    if (due.getTime() < Date.now()) due = new Date();
+
+    // §3 SERIALIZATION: every task mutation begins by locking the ONE link row.
+    // The assessment and every decision below run UNDER this lock — no
+    // concurrent resolve/reassign/due-change can interleave a contradiction.
+    await client.query(
+      `select id from leasing_conversion_obligations where obligation_id=$1 for update`, [obligation_id]);
+    const assess = await assessReopenability(client, { obligation_id });
+    if (!assess.reopenable) {
+      const codes = { NOT_A_CONVERSION_TASK: 404, NOT_TERMINAL: 409, REOPEN_WINDOW_EXPIRED: 409,
+                      DOWNSTREAM_WORK_EXISTS: 409, RELATIONSHIP_CLOSED: 409, DECISION_NOT_RECOVERABLE: 409, ALREADY_RECOVERED: 409 };
+      const err = httpErr(codes[assess.reason_code] || 409, assess.reason_code);
+      err.code = assess.reason_code;
+      throw err;
+    }
+    const link = assess.link;
+    // ownership rule — never revive under a stale or false owner
+    let nextOwner = null, elig = "unassigned";
+    if (link.owner_user_id) {
+      const conv = (await client.query(`select property_id from leasing_conversions where id=$1`, [link.conversion_id])).rows[0];
+      const owned = await eligibleOwner(client, conv.property_id, [link.owner_user_id]);
+      if (owned.owner === link.owner_user_id) { nextOwner = link.owner_user_id; elig = "eligible_assignment"; }
+    }
+    const conv0 = (await client.query(`select property_id from leasing_conversions where id=$1`, [link.conversion_id])).rows[0];
+    const out = await closureAuthority.reopenLinkedConversionObligation(client, {
+      link, property_id: conv0.property_id, by_user_id,
+      reason: reason === "other" ? `other: ${String(reason_detail).trim()}` : reason,
+      new_due_at: due, next_owner_user_id: nextOwner, owner_eligibility_state: elig,
+      idempotency_key,
+    });
+    return { ...out, obligation_id, rung: link.rung };
+  }
+
+  // CHANGE FOLLOW-UP TIME (reviewer §1): the follow-up's DUE TIME changed —
+  // deliberately NOT "rescheduled" (that word means a tour/appointment moved,
+  // a different fact). Allowed on ANY active task: a prospect may ask at 10am
+  // to be contacted next week; staff never wait for overdue to record a real
+  // timing change. Owner unchanged · no conversation change · no terminal change.
+  async function changeDueTime(client, { obligation_id, by_user_id = null, reason, reason_detail = null, new_due_at, idempotency_key = null }) {
+    if (!reason || !RECOVERY_REASONS.includes(reason))
+      throw httpErr(400, "reason required: " + RECOVERY_REASONS.join(" | ") + ".");
+    if (reason === "other" && !(reason_detail && String(reason_detail).trim()))
+      throw httpErr(400, "a short detail is required for reason 'other'.");
+    let due = new_due_at ? new Date(new_due_at) : null;
+    if (!due || isNaN(due)) throw httpErr(400, "new_due_at required.");
+    if (due.getTime() < Date.now()) due = new Date(); // "due immediately" — clamped to server-now
+
+    const link = (await client.query(
+      `select lco.*, c.property_id from leasing_conversion_obligations lco
+         join leasing_conversions c on c.id = lco.conversion_id
+        where lco.obligation_id=$1 for update of lco`, [obligation_id])).rows[0];
+    if (!link) throw httpErr(404, "no conversion task for that obligation.");
+    if (link.outcome != null) throw httpErr(409, "task is closed — use reopen, not change-due.");
+
+    let snapPerson = null, snapAssignment = null, snapBasis = "unbridged";
+    if (by_user_id) {
+      try {
+        const idn = await staffIdentity.resolveStaffIdentity(client, { user_id: by_user_id, property_id: link.property_id });
+        snapPerson = idn.person_id || null; snapAssignment = idn.assignment_id || null; snapBasis = idn.state || "unbridged";
+      } catch (_) {}
+    }
+    await closureAuthority.appendEvent(client, {
+      conversion_obligation_id: link.id, event_type: "due_changed",
+      actor_user_id: by_user_id || null, actor_person: snapPerson, actor_assignment: snapAssignment,
+      identity_resolution_basis: snapBasis,
+      prior_status: "open", next_status: "open",
+      prior_owner_user_id: link.owner_user_id, next_owner_user_id: link.owner_user_id,
+      reason: reason === "other" ? `other: ${String(reason_detail).trim()}` : reason,
+      prior_due_at: link.due_by, next_due_at: due, idempotency_key,
+    });
+    await client.query(`update leasing_conversion_obligations set due_by=$2 where id=$1`, [link.id, due]);
+    await client.query(`update obligations set due_at=$2, updated_at=now() where id=$1`, [link.obligation_id, due]);
+    return { due_changed: true, obligation_id, rung: link.rung, next_due_at: due, owner_user_id: link.owner_user_id };
+  }
+  const rescheduleTask = changeDueTime; // PRIVATE, DEPRECATED alias only — never exported, never routed.
+  void rescheduleTask; // the public contract is POST …/change-due + event_type due_changed
+
+  // REASSIGN — a task event, never a quiet owner overwrite (Amendment 5).
+  // Task-only (Q1): conversation ownership is untouched. Eligible targets
+  // only (Q3), re-resolved INSIDE this transaction — picker state is never
+  // trusted at write time.
+  //  UNASSIGNING IS A REASSIGNMENT (2026-07-26).
+  //  to_user_id === null means "return this to UNASSIGNED". It is not a
+  //  missing argument — callers must pass it explicitly, so a bug that drops
+  //  the field still throws rather than silently orphaning a task.
+  //
+  //  It exists because ownership can become invalid without anyone touching
+  //  the task: a person loses their team authority and every obligation
+  //  naming them turns into a false owner. There was no way to say "nobody
+  //  eligible holds this" through the governed path, so the only options were
+  //  to leave the lie or to edit the row behind the mechanism's back. Both
+  //  are worse than an honest blank.
+  //
+  //  History is preserved either way — appendEvent records
+  //  prior_owner_user_id, so the former owner is never erased.
+  async function reassignTask(client, { obligation_id, by_user_id = null, to_user_id, reason, reason_detail = null, idempotency_key = null }) {
+    const unassigning = to_user_id === null;
+    if (to_user_id === undefined) throw httpErr(400, "to_user_id required — pass null to return the task to UNASSIGNED.");
+    if (!reason || !REASSIGN_REASONS.includes(reason))
+      throw httpErr(400, "reason required: " + REASSIGN_REASONS.join(" | ") + ".");
+    if (reason === "other" && !(reason_detail && String(reason_detail).trim()))
+      throw httpErr(400, "a short detail is required for reason 'other'.");
+
+    const link = (await client.query(
+      `select lco.*, c.property_id from leasing_conversion_obligations lco
+         join leasing_conversions c on c.id = lco.conversion_id
+        where lco.obligation_id=$1 for update of lco`, [obligation_id])).rows[0];
+    if (!link) throw httpErr(404, "no conversion task for that obligation.");
+    if (link.outcome != null) throw httpErr(409, "task is closed — a terminal task cannot be reassigned.");
+    if (link.owner_user_id && link.owner_user_id === to_user_id)
+      throw httpErr(409, "already owned by that person — nothing to change.");
+    if (unassigning && !link.owner_user_id)
+      throw httpErr(409, "already UNASSIGNED — nothing to change.");
+
+    // eligibility, decided NOW, through the one canonical resolver.
+    // Skipped when unassigning: UNASSIGNED is the ABSENCE of an owner, and
+    // asking whether nobody is eligible is not a question.
+    if (!unassigning) {
+      const owned = await eligibleOwner(client, link.property_id, [to_user_id]);
+      if (owned.owner !== to_user_id)
+        throw httpErr(400, "that person is not an eligible owner at this property (bridged + active assignment + active team authority required). Team access alone does not make an owner, and an assignment alone no longer does either.");
+    }
+
+    // Unassigning IS a manual reassignment — to nobody. No new origin value is
+    // minted: the enum is constrained in the database and the existing word is
+    // accurate. WHY it happened is carried by owner_eligibility_state below.
+    const origin = (!unassigning && !link.owner_user_id && by_user_id && to_user_id === by_user_id)
+      ? "unassigned_pickup" : "manual_reassignment";
+
+    let snapPerson = null, snapAssignment = null, snapBasis = "unbridged";
+    if (by_user_id) {
+      try {
+        const idn = await staffIdentity.resolveStaffIdentity(client, { user_id: by_user_id, property_id: link.property_id });
+        snapPerson = idn.person_id || null; snapAssignment = idn.assignment_id || null; snapBasis = idn.state || "unbridged";
+      } catch (_) {}
+    }
+    await closureAuthority.appendEvent(client, {
+      conversion_obligation_id: link.id, event_type: "reassigned",
+      actor_user_id: by_user_id || null, actor_person: snapPerson, actor_assignment: snapAssignment,
+      identity_resolution_basis: snapBasis,
+      prior_status: "open", next_status: "open",
+      prior_owner_user_id: link.owner_user_id, next_owner_user_id: to_user_id,
+      ownership_origin: origin,
+      // The EVENT records why: 'eligibility_lapsed' already exists in the
+      // schema for precisely this — an owner who was valid and no longer is.
+      // The OBLIGATION records the resulting state ('unassigned'), which its
+      // own CHECK ties to a null assigned_user_id.
+      owner_eligibility_state: unassigning ? "eligibility_lapsed" : "eligible_assignment",
+      reason: reason === "other" ? `other: ${String(reason_detail).trim()}` : reason,
+      idempotency_key,
+    });
+    // due_at unchanged; conversation ownership untouched — TASK ONLY.
+    await client.query(`update leasing_conversion_obligations set owner_user_id=$2 where id=$1`, [link.id, to_user_id]);
+    // The same fact lives in two columns. obligations.assigned_user_id is what
+    // the obligation engine and the reachability check read; lco.owner_user_id
+    // is what the desk renders. Leaving one stale would replace one false
+    // owner with a quieter one.
+    await client.query(
+      `update obligations set assigned_user_id=$2,
+              owner_eligibility_state=$3, ownership_origin=$4, updated_at=now()
+        where id=$1`,
+      [obligation_id, to_user_id, unassigning ? "unassigned" : "eligible_assignment", origin]);
+    return { reassigned: true, obligation_id, rung: link.rung,
+             prior_owner_user_id: link.owner_user_id, owner_user_id: to_user_id, ownership_origin: origin };
+  }
+
+  const RESOLUTION_BASES = ["coverage", "manager_intervention", "completed_together", "no_longer_needed", "unassigned_pickup"];
+  async function resolveRung(client, { obligation_id, result, proof = null, by_user_id = null, suppress_next = false, resolution_basis = null }) {
+    const link = (await client.query(
+      "select * from leasing_conversion_obligations where obligation_id=$1 for update", [obligation_id]
+    )).rows[0];
+    if (!link) throw httpErr(404, "no conversion rung for that obligation.");
+    if (link.outcome != null) throw httpErr(409, `rung already closed as ${link.outcome}/${link.resolution}.`); // write-once
+
+    // SHARED TO SEE, NAMED TO DO, COVERAGE IS VISIBLE: the owner may resolve
+    // directly; anyone else must state WHY they are closing another person's
+    // work. No silent cross-closure.
+    const isOwner = link.owner_user_id != null && by_user_id != null && link.owner_user_id === by_user_id;
+    // BASIS SCOPE (execute vs decide, + honest blank):
+    //  · GATES (kind:'gate') are DECIDED by role authority — the decision in
+    //    `proof` is the record; a coverage story would be fiction. Exempt.
+    //  · NULL-ACTOR service closes (by_user_id null, e.g. the operator-key
+    //    approve flow) have no human to attribute coverage to — demanding a
+    //    basis would force a lie. Honest blank: basis stays null.
+    //  · Every IDENTIFIED HUMAN closing WORK they do not own states the basis.
+    const isGate = RUNG[link.rung] && RUNG[link.rung].kind === "gate";
+    let basis = null;
+    if (isOwner) {
+      basis = "owner";
+    } else if (isGate || by_user_id == null) {
+      basis = resolution_basis && RESOLUTION_BASES.includes(resolution_basis) ? resolution_basis : null;
+    } else {
+      if (!resolution_basis || !RESOLUTION_BASES.includes(resolution_basis)) {
+        const err = httpErr(400, link.owner_user_id == null
+          ? "resolution_basis required for an UNASSIGNED task: unassigned_pickup | coverage | manager_intervention | completed_together | no_longer_needed."
+          : "resolution_basis required when closing work you do not own: coverage | manager_intervention | completed_together | no_longer_needed.");
+        err.code = "BASIS_REQUIRED";
+        throw err;
+      }
+      if (resolution_basis === "unassigned_pickup" && link.owner_user_id != null) {
+        throw httpErr(400, "unassigned_pickup applies only to tasks with no owner — this task is owned.");
+      }
+      basis = resolution_basis;
+    }
+
+    const outcome = (result === "missed") ? "missed" : "kept"; // released = honored = kept
+    const resolution = (result === "released") ? "released" : (result === "missed" ? "missed" : "completed");
+
+    // THE TERMINAL PART runs through the ONE closure capability: link stamp,
+    // identity snapshots, and the obligation mutation — atomic in this tx.
+    const conv0 = (await client.query("select property_id from leasing_conversions where id=$1", [link.conversion_id])).rows[0];
+    await closureAuthority.closeLinkedConversionObligation(client, {
+      link, property_id: conv0.property_id, outcome, resolution, proof,
+      by_user_id, resolution_basis: basis,
+    });
+
+
+    const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [link.conversion_id])).rows[0];
+
+    // Advance ONLY on kept + not released + a conversation rung with a next —
+    // AND only when the caller has not suppressed the auto-advance. suppress_next
+    // exists because some transitions are GATED, not automatic: an application
+    // submission closes applicant_followup but must NOT auto-start lease-signature
+    // follow-up — that begins only when the leasing_manager APPROVES. The caller
+    // (submission) suppresses here; approval explicitly spawns the next rung.
+    let spawned = null;
+    const cfg = RUNG[link.rung];
+    if (!suppress_next && outcome === "kept" && resolution !== "released" && cfg && cfg.kind === "conversation" && cfg.next) {
+      // the conversation owner is an attribution pointer, not proof of
+      // eligibility — gate it through the same ownership contract.
+      const nextOwned = await eligibleOwner(client, conv.property_id, [conv.conversation_owner_user_id]);
+      spawned = await spawnRung(client, {
+        conversion: conv, rung: cfg.next, owner_user_id: nextOwned.owner,
+      });
+    }
+    // Released closes the whole conversation.
+    if (resolution === "released") {
+      await client.query(`update leasing_conversions set status='released', closed_at=now(), updated_at=now() where id=$1`, [conv.id]);
+    }
+
+    return { obligation_id, rung: link.rung, outcome, resolution, spawned: spawned ? spawned.link.rung : null, suppressed_next: !!(suppress_next && cfg && cfg.next) };
+  }
+
+  // THE ONLY AUTHORIZED CAUSE of applicant_followup. Called by the
+  // application-INVITATION-SENT domain event (an invitation that reached
+  // manually_sent / provider_dispatched) — never by a merely PREPARED
+  // invitation, never by task completion, missed handling, bulk actions,
+  // generic resolves, or retries. Idempotent: at most one applicant_followup
+  // link EVER exists per conversion; retries return the existing one.
+  // Serialized on the conversion.
+  //
+  // AUTHORITY TRUTH — an actually-sent invitation — is verified HERE, not
+  // trusted from the caller. The attesting transaction writes the invitation's
+  // sent status BEFORE calling this, so this same-transaction read sees it. A
+  // caller with a conversion_id but no sent invitation gets nothing. This is
+  // the fact that moves a leasing opportunity from Post-Tour into Applicants.
+  //
+  // SCOPE: keyed entirely on conversion_id (the leasing opportunity), never on
+  // the person — a person may hold other conversions (re-lease, another
+  // property); those are untouched.
+  async function ensureApplicantFollowup(client, { conversion_id, owner_user_id = null }) {
+    const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    // An ACTUALLY-SENT invitation on this conversion is the authority. A
+    // 'prepared' invitation is NOT a send and must NOT advance the opportunity.
+    const sent = (await client.query(
+      `select 1 from application_invitations
+        where conversion_id=$1
+          and status in ('manually_sent','provider_dispatched')
+        limit 1`, [conversion_id])).rows[0];
+    if (!sent) throw httpErr(409, "No sent application invitation on this conversion — Applicants work is created only by an actual send (a prepared link does not count).");
+    // IDEMPOTENT on the OPEN rung only. A CLOSED applicant_followup (outcome
+    // set — e.g. resolved during earlier churn, or a revoke-and-resend cycle)
+    // does NOT block re-advancing: if there is a live sent invitation but no
+    // OPEN applicant rung, the opportunity belongs in Applicants and we spawn a
+    // fresh one. (Mirrors ensureLeaseSignatureFollowup, which already scopes to
+    // outcome is null.) Prevents a person getting stranded in Post-Tour after a
+    // resend when the prior applicant rung was closed.
+    const existing = (await client.query(
+      `select * from leasing_conversion_obligations where conversion_id=$1 and rung='applicant_followup' and outcome is null limit 1`,
+      [conversion_id])).rows[0];
+    if (existing) return { ensured: false, link: existing };
+    const owned = await eligibleOwner(client, conv.property_id, [owner_user_id, conv.conversation_owner_user_id]);
+    const spawned = await spawnRung(client, { conversion: conv, rung: "applicant_followup", owner_user_id: owned.owner });
+    return { ensured: true, link: spawned.link };
+  }
+
+  // THE ONLY AUTHORIZED CAUSE of lease_signature_followup. Called by the
+  // application-approval domain event — never by task completion, missed
+  // handling, bulk actions, generic resolves, or retries. Idempotent: at most
+  // one lease_signature_followup link EVER exists per conversion; retries and
+  // concurrent approvals return the existing one. Serialized on the conversion.
+  async function ensureLeaseSignatureFollowup(client, { conversion_id, owner_user_id = null }) {
+    const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    // APPROVAL IS AUTHORITY TRUTH — verified HERE, not trusted from the caller.
+    // The approving transaction writes the application's post-approval status
+    // BEFORE calling this, so this same-transaction read sees it. A caller with
+    // a conversion_id but no approved application gets nothing.
+    // CURRENT APPROVAL-REACHED STATE. Deliberately current, not historical:
+    // signature-chasing work must not be created for an application that was
+    // approved and has since been withdrawn or expired. The literal list
+    // omitted accepted_term_required.
+    const approved = (await client.query(
+      `select 1 from lease_applications
+        where conversion_id=$1
+          and status = any($2::text[])
+        limit 1`, [conversion_id, lifecycleRead.STATUS_GROUP_PARAMS.approvalReached])).rows[0];
+    if (!approved) throw httpErr(409, "No approved application on this conversion — signature-chasing work is created only by approval.");
+    const existing = (await client.query(
+      `select * from leasing_conversion_obligations where conversion_id=$1 and rung='lease_signature_followup' limit 1`,
+      [conversion_id])).rows[0];
+    if (existing) return { ensured: false, link: existing };
+    const owned = await eligibleOwner(client, conv.property_id, [owner_user_id, conv.conversation_owner_user_id]);
+    const spawned = await spawnRung(client, { conversion: conv, rung: "lease_signature_followup", owner_user_id: owned.owner });
+    return { ensured: true, link: spawned.link };
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  //  APPLICATION INTENT → PREPARE CHILD → SEND CHILD (v2.5-r1 frozen brief)
+  //
+  //  tour_followup is the DURABLE PARENT (rung-linked; closes only on actual
+  //  send, via the rail). prepare_application_link and send_application_link
+  //  are NON-RUNG child obligations carrying parent_obligation_id = the EXACT
+  //  parent. The send child is invitation-specific (related_type=
+  //  'application_invitation'). "Applicant" begins on send, never on intent.
+  // ════════════════════════════════════════════════════════════════════
+  const INTENT_SOURCES = ["post_tour_outcome", "operator_recorded"]; // prospect_request deferred
+  const CHILD_PREPARE = "prepare_application_link";
+  const CHILD_SEND    = "send_application_link";
+
+  // the EXACT open tour_followup parent for a conversation — by rung link,
+  // never "latest open by heuristic" at close time (close uses the child's
+  // stored parent_obligation_id; this lookup is only for CREATION time).
+  async function openTourFollowupParent(client, conversion_id) {
+    return (await client.query(
+      `select lco.obligation_id, lco.owner_user_id, o.status
+         from leasing_conversion_obligations lco
+         join obligations o on o.id = lco.obligation_id
+        where lco.conversion_id = $1 and lco.rung = 'tour_followup'
+          and lco.outcome is null and o.status = 'open'
+        order by lco.created_at desc limit 1`,
+      [conversion_id])).rows[0] || null;
+  }
+
+  // durable-ownership spawn wrapper: ownership + parent linkage stored AT
+  // INSERT through the extended canonical spawn helper (the 084 biconditional
+  // CHECK enforces this — a post-insert update would be rejected).
+  async function spawnChildWithOwnership(client, spec, owned, origin) {
+    const hasOwner = !!(owned && owned.owner);
+    return spawnObligationFromEvent(client, Object.assign({}, spec, {
+      assigned_user_id: hasOwner ? owned.owner : null,
+      ownership_origin: origin,
+      owner_eligibility_state: hasOwner ? (owned.basis || "eligible_assignment") : "unassigned",
+    }));
+  }
+
+  // THE ONLY AUTHORIZED CAUSE of the prepare child. Human-confirmed intent,
+  // recorder ≠ subject, idempotent on server-generated source_identity.
+  async function recordApplicationIntent(client, {
+    conversion_id, source, recorded_by_user_id,
+    source_person_id = null, evidence_type = null, evidence_ref = null,
+    idempotency_key = null, tour_outcome_event_id = null,
+  }) {
+    if (!conversion_id) throw httpErr(400, "conversion_id is required.");
+    if (!INTENT_SOURCES.includes(source)) {
+      throw httpErr(400, `source must be one of: ${INTENT_SOURCES.join(", ")}.`);
+    }
+    if (!recorded_by_user_id) {
+      throw httpErr(400, "recorded_by_user_id is required — an AI recommendation cannot spawn this obligation.");
+    }
+    const conv = (await client.query(
+      "select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+
+    // pre-application only: a nonterminal application refuses new intent
+    // CURRENT TERMINAL STATE — "does a live application already exist on this
+    // conversation right now?" Present tense, so a status read is correct; what
+    // was wrong is the list. It omitted 'expired', so an expired application
+    // read as LIVE and permanently blocked a new one, and it filtered 'denied',
+    // which the CHECK constraint does not permit and no row can hold.
+    // The canonical TERMINAL group is bound as a parameter — no literal ladder.
+    const nonterminal = (await client.query(
+      `select status from lease_applications where conversion_id=$1
+        and status <> all($2::text[]) limit 1`,
+      [conversion_id, lifecycleRead.STATUS_GROUP_PARAMS.terminal])).rows[0];
+    // An unrecognized status is not silently "live": it is surfaced as its own
+    // refusal, because we cannot say what it means.
+    if (nonterminal && !lifecycleRead.isKnownStatus(nonterminal.status)) {
+      throw httpErr(409, `This conversation has an application in an unrecognized state ('${nonterminal.status}'). Resolve it before continuing.`);
+    }
+    if (nonterminal) throw httpErr(409, "This conversation already has a live application — prepare-application intent does not apply.");
+
+    // server-generated source_identity (a browser key alone is never authoritative)
+    let source_identity;
+    if (source === "post_tour_outcome") {
+      if (!tour_outcome_event_id) throw httpErr(400, "post_tour_outcome intent requires tour_outcome_event_id.");
+      source_identity = `post_tour_outcome:${tour_outcome_event_id}`;
+    } else {
+      if (!idempotency_key) throw httpErr(400, "operator_recorded intent requires an idempotency_key.");
+      source_identity = `operator_recorded:${conv.property_id}:${conversion_id}:${recorded_by_user_id}:${idempotency_key}`;
+    }
+
+    // idempotent return of the existing intent + open child
+    const priorIntent = (await client.query(
+      `select * from application_intents where property_id=$1 and source=$2 and source_identity=$3`,
+      [conv.property_id, source, source_identity])).rows[0];
+    const openChild = (await client.query(
+      `select * from obligations where related_type='leasing_conversion' and related_id=$1
+        and type=$2 and status='open' limit 1`, [conversion_id, CHILD_PREPARE])).rows[0];
+    if (priorIntent && openChild) return { recorded: false, intent: priorIntent, obligation: openChild };
+    if (openChild) return { recorded: false, intent: priorIntent || null, obligation: openChild };
+
+    // the EXACT parent must exist and be open — intent is post-tour work
+    const parent = await openTourFollowupParent(client, conversion_id);
+    if (!parent) throw httpErr(409, "No open tour follow-up commitment on this conversation — application intent is post-tour work.");
+
+    const subject = source_person_id || conv.person_id;
+    const evId = (await client.query(
+      `insert into events (property_id, person_id, type, note)
+       values ($1,$2,'application_intent_confirmed',$3) returning id`,
+      [conv.property_id, subject,
+       `Application intent confirmed (${source}) — recorded by user ${recorded_by_user_id}`])).rows[0].id;
+
+    const intent = (await client.query(
+      `insert into application_intents
+         (property_id, conversion_id, person_id, parent_tour_followup_obligation_id,
+          source, source_identity, recorded_by_user_id, evidence_type, evidence_ref, event_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       on conflict (property_id, source, source_identity) do nothing
+       returning *`,
+      [conv.property_id, conversion_id, subject, parent.obligation_id,
+       source, source_identity, recorded_by_user_id, evidence_type, evidence_ref, evId])).rows[0]
+      || (await client.query(
+        `select * from application_intents where property_id=$1 and source=$2 and source_identity=$3`,
+        [conv.property_id, source, source_identity])).rows[0];
+
+    // ownership: inherit the exact parent owner IF still eligible; else current
+    // conversation-owner candidates; else honest UNASSIGNED.
+    const owned = await eligibleOwner(client, conv.property_id,
+      [parent.owner_user_id, conv.conversation_owner_user_id]);
+    const child = await spawnChildWithOwnership(client, {
+      property_id: conv.property_id, person_id: conv.person_id,
+      source_event_id: evId, module: "leasing", type: CHILD_PREPARE,
+      label: `Prepare application link — ${await personName(client, conv.person_id)}`,
+      owner_type: "human", status: "open",
+      required_inputs: ["application_invitation_prepared"],
+      related_id: conversion_id, related_type: "leasing_conversion",
+      parent_obligation_id: parent.obligation_id,
+    }, owned, "intent_spawn");
+    return { recorded: true, intent, obligation: child, owner_basis: owned.owner ? owned.basis : "unassigned" };
+  }
+
+  // open the invitation-specific send child at prepare time (owner resolved+stored NOW)
+  async function openSendObligationOnPrepare(client, { invitation_id, conversion_id, parent_obligation_id, candidate_owner_user_ids = [] }) {
+    const conv = (await client.query("select * from leasing_conversions where id=$1", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    const owned = await eligibleOwner(client, conv.property_id, candidate_owner_user_ids.concat([conv.conversation_owner_user_id]));
+    const child = await spawnChildWithOwnership(client, {
+      property_id: conv.property_id, person_id: conv.person_id,
+      module: "leasing", type: CHILD_SEND,
+      label: `Send application link — ${await personName(client, conv.person_id)}`,
+      owner_type: "human", status: "open",
+      required_inputs: ["application_invitation_sent"],
+      related_id: invitation_id, related_type: "application_invitation",
+      parent_obligation_id,
+    }, owned, "prepare_spawn");
+    return child;
+  }
+
+  // governed TERMINATION of a child (superseded/revoked/dispatch_refused/expired):
+  // terminal but NOT satisfied-as-fact — never satisfies the reserved input.
+  async function terminateChildObligation(client, { obligation_id, resolution_code, by_user_id = null }) {
+    if (!["superseded","revoked","dispatch_refused","expired"].includes(resolution_code)) {
+      throw httpErr(400, `invalid termination resolution_code "${resolution_code}".`);
+    }
+    const r = await client.query(
+      `update obligations set status='complete', resolution_code=$2, completed_at=now(), updated_at=now()
+        where id=$1 and status='open' returning *`, [obligation_id, resolution_code]);
+    return r.rows[0] || null; // null = already terminal (idempotent no-op)
+  }
+
+  // coverage authority (v2.4 Corr 3 — owner | role_coverage ONLY; server-derived)
+  //
+  //  AUTHORITY IS NOT A DISPLAY STRING (fixed 2026-07-26).
+  //  This used to match `property_team_assignments.role_title`, which is a
+  //  free-text label an operator types. Live values were "Admin",
+  //  "Demo Leasing Manager", "R3" and "property_manager" — exactly ONE of the
+  //  four ever matched, so the check passed almost by accident. The portfolio
+  //  super-admin, titled "Admin", was refused; a QA account whose label had
+  //  been typed "property_manager" was allowed. Meanwhile the BOARD offered
+  //  Send anyway, because capability.js never consults ownership — a button
+  //  that promises what the server refuses, which is precisely the
+  //  phantom-dispatch failure capability.js exists to prevent.
+  //
+  //  Authority now comes from `users.role`, the structural enum, plus the
+  //  same 'leasing' module entitlement the activation perimeter already
+  //  treats as canonical ("may THIS actor perform THIS action here?").
+  //  Verified against live data before changing: of 13 active leasing-module
+  //  assignments, this takes access from ZERO and restores it to 8.
+  //
+  //  Still required, unchanged: an ACTIVE assignment at THIS property, and
+  //  the leasing module on it. A `leasing_agent` is deliberately not covered.
+  const COVERING_ROLES = ["leasing_manager", "property_manager"];
+
+  async function resolveSendActionBasis(client, { actor_user_id, property_id, stored_owner_user_id }) {
+    if (!actor_user_id) return { allowed: false, reason: "no_actor" };
+    if (stored_owner_user_id && actor_user_id === stored_owner_user_id) {
+      return { allowed: true, basis: "owner" };
+    }
+    const pta = (await client.query(
+      `select u.role, a.allowed_modules
+         from property_team_assignments a
+         join users u on u.id = a.user_id
+        where a.user_id=$1 and a.property_id=$2 and a.active=true
+          and u.is_active = true and u.status = 'active'
+        limit 1`,
+      [actor_user_id, property_id])).rows[0];
+    if (pta && COVERING_ROLES.includes(pta.role)
+        && (pta.allowed_modules || []).includes("leasing")) {
+      return { allowed: true, basis: "role_coverage" };
+    }
+    return { allowed: false, reason: "not_owner_no_role_coverage" };
+  }
+
+  // close the EXACT parent via the RAIL authority (never generic complete)
+  async function closeParentViaRail(client, { parent_obligation_id, by_user_id, resolution_basis, proof }) {
+    return resolveRung(client, {
+      obligation_id: parent_obligation_id, result: "completed",
+      suppress_next: true, by_user_id, resolution_basis, proof,
+    });
+  }
+
+  // CORRECTION: restore real owed work after revoked/dispatch_refused/expired.
+  // Creates a NEW prepare child under the SAME parent + SAME current intent.
+  // No new intent, no invitation. (Dispatch-state gating happens in the
+  // invitation service BEFORE this is called.)
+  async function beginApplicationLinkRetry(client, { parent_obligation_id, prior_invitation_id, prior_send_obligation_id, by_user_id = null }) {
+    const parent = (await client.query(
+      `select o.*, lco.conversion_id from obligations o
+         join leasing_conversion_obligations lco on lco.obligation_id = o.id
+        where o.id=$1 for update of o`, [parent_obligation_id])).rows[0];
+    if (!parent || parent.status !== "open") throw httpErr(409, "The post-tour commitment is not open — retry is not available.");
+    const conversion_id = parent.conversion_id;
+
+    const priorInv = (await client.query(
+      "select * from application_invitations where id=$1", [prior_invitation_id])).rows[0];
+    if (!priorInv || ["prepared","manually_sent","provider_dispatched"].includes(priorInv.status)) {
+      throw httpErr(409, "The prior invitation is still active — retry applies only after it is inactive.");
+    }
+    const priorChild = (await client.query(
+      "select * from obligations where id=$1", [prior_send_obligation_id])).rows[0];
+    if (!priorChild || priorChild.status !== "complete"
+        || !["revoked","dispatch_refused","expired"].includes(priorChild.resolution_code)) {
+      throw httpErr(409, "The prior send obligation is not terminal with a retry-eligible resolution.");
+    }
+    const activeInv = (await client.query(
+      `select 1 from application_invitations where conversion_id=$1
+        and status in ('prepared','manually_sent','provider_dispatched') limit 1`, [conversion_id])).rows[0];
+    if (activeInv) throw httpErr(409, "An active invitation exists — retry is not available.");
+    const openChild = (await client.query(
+      `select 1 from obligations where status='open' and
+        ((related_type='leasing_conversion' and related_id=$1 and type=$2)
+         or (related_type='application_invitation' and type=$3
+             and related_id in (select id from application_invitations where conversion_id=$1)))
+        limit 1`, [conversion_id, CHILD_PREPARE, CHILD_SEND])).rows[0];
+    if (openChild) throw httpErr(409, "Open prepare/send work already exists — retry would duplicate it.");
+    // CURRENT TERMINAL STATE — "does a live application already exist on this
+    // conversation right now?" Present tense, so a status read is correct; what
+    // was wrong is the list. It omitted 'expired', so an expired application
+    // read as LIVE and permanently blocked a new one, and it filtered 'denied',
+    // which the CHECK constraint does not permit and no row can hold.
+    // The canonical TERMINAL group is bound as a parameter — no literal ladder.
+    const nonterminal = (await client.query(
+      `select status from lease_applications where conversion_id=$1
+        and status <> all($2::text[]) limit 1`,
+      [conversion_id, lifecycleRead.STATUS_GROUP_PARAMS.terminal])).rows[0];
+    // An unrecognized status is not silently "live": it is surfaced as its own
+    // refusal, because we cannot say what it means.
+    if (nonterminal && !lifecycleRead.isKnownStatus(nonterminal.status)) {
+      throw httpErr(409, `This conversation has an application in an unrecognized state ('${nonterminal.status}'). Resolve it before continuing.`);
+    }
+    if (nonterminal) throw httpErr(409, "A live application exists — retry does not apply.");
+
+    const currentIntent = (await client.query(
+      `select ai.* from application_intents ai
+        where ai.conversion_id=$1
+          and not exists (select 1 from application_intents s where s.supersedes_intent_id = ai.id)
+        order by ai.recorded_at desc limit 1`, [conversion_id])).rows[0];
+    if (!currentIntent) throw httpErr(409, "No current application intent — record intent first.");
+
+    const conv = (await client.query("select * from leasing_conversions where id=$1", [conversion_id])).rows[0];
+    const owned = await eligibleOwner(client, conv.property_id,
+      [parent.assigned_user_id, conv.conversation_owner_user_id]);
+    const child = await spawnChildWithOwnership(client, {
+      property_id: conv.property_id, person_id: conv.person_id,
+      module: "leasing", type: CHILD_PREPARE,
+      label: `Prepare application link (retry) — ${await personName(client, conv.person_id)}`,
+      owner_type: "human", status: "open",
+      required_inputs: ["application_invitation_prepared"],
+      related_id: conversion_id, related_type: "leasing_conversion",
+      parent_obligation_id,
+    }, owned, "retry_correction");
+    return { retry_child: child, intent_id: currentIntent.id };
+  }
+
+  // NEXT precedence (send > prepare > parent) — the rooted projection row
+  async function resolveApplicationNext(client, { conversion_id }) {
+    const send = (await client.query(
+      `select o.*, ai.id as invitation_id from obligations o
+         join application_invitations ai on ai.id = o.related_id and o.related_type='application_invitation'
+        where ai.conversion_id=$1 and o.type=$2 and o.status='open'
+        order by o.created_at desc limit 1`, [conversion_id, CHILD_SEND])).rows[0];
+    if (send) return {
+      action_code: CHILD_SEND, label: "Send the application link",
+      root_obligation_id: send.parent_obligation_id, active_child_obligation_id: send.id,
+      invitation_id: send.invitation_id, send_obligation_id: send.id,
+      parent_obligation_id: send.parent_obligation_id, token_recoverable: false,
+    };
+    const prep = (await client.query(
+      `select * from obligations where related_type='leasing_conversion' and related_id=$1
+        and type=$2 and status='open' order by created_at desc limit 1`, [conversion_id, CHILD_PREPARE])).rows[0];
+    if (prep) return {
+      action_code: CHILD_PREPARE, label: "Prepare application link",
+      root_obligation_id: prep.parent_obligation_id, active_child_obligation_id: prep.id,
+      prepare_obligation_id: prep.id, conversion_id,
+      parent_obligation_id: prep.parent_obligation_id,
+    };
+    const parent = await openTourFollowupParent(client, conversion_id);
+    if (parent) return {
+      action_code: "tour_followup", label: "Post-tour follow-up",
+      root_obligation_id: parent.obligation_id, active_child_obligation_id: null,
+    };
+    return null;
+  }
+
+  // Add a separate decision/operating GATE that coexists with the conversation.
+  async function addGate(client, { conversion_id, rung, owner_user_id = null }) {
+    const cfg = RUNG[rung];
+    if (!cfg || cfg.kind !== "gate") throw httpErr(400, `"${rung}" is not a gate rung.`);
+    const conv = (await client.query("select * from leasing_conversions where id=$1", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    return spawnRung(client, { conversion: conv, rung, owner_user_id, owner_role: cfg.gate_role });
+  }
+
+  // Explicitly advance the conversation to a named CONVERSATION rung. Used when
+  // a transition is GATED rather than automatic: e.g. an approved application
+  // STARTS lease_signature_followup (submission suppressed the auto-advance, so
+  // approval is what begins signature work). Idempotent-guarded: refuses if an
+  // open rung of that type already exists on the conversion.
+  async function advanceToRung(client, { conversion_id, rung, owner_user_id = null }) {
+    const cfg = RUNG[rung];
+    if (!cfg || cfg.kind !== "conversation") throw httpErr(400, `"${rung}" is not a conversation rung.`);
+    const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    const existing = await client.query(
+      `select 1 from leasing_conversion_obligations
+        where conversion_id=$1 and rung=$2 and outcome is null limit 1`,
+      [conversion_id, rung]
+    );
+    if (existing.rows.length) throw httpErr(409, `an open ${rung} rung already exists on this conversion.`);
+    // an explicit owner passed by the caller is honored; the conversation-owner
+    // FALLBACK is gated — an attribution pointer is not proof of eligibility.
+    let owner = owner_user_id;
+    if (!owner) owner = (await eligibleOwner(client, conv.property_id, [conv.conversation_owner_user_id])).owner;
+    return spawnRung(client, { conversion: conv, rung, owner_user_id: owner });
+  }
+
+  // ── read: the full conversion view (record + history + open/closed rungs) ──
+  async function readConversion(client, conversion_id) {
+    const conv = (await client.query("select * from leasing_conversions where id=$1", [conversion_id])).rows[0];
+    if (!conv) return null;
+    const handoffs = (await client.query(
+      "select * from leasing_conversation_handoffs where conversion_id=$1 order by created_at", [conversion_id]
+    )).rows;
+    const rungs = (await client.query(
+      `select lco.*, o.status as obligation_status, o.due_at
+         from leasing_conversion_obligations lco
+         join obligations o on o.id = lco.obligation_id
+        where lco.conversion_id=$1 order by lco.created_at`, [conversion_id]
+    )).rows;
+    return { conversion: conv, ownership_history: handoffs, rungs };
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  //  HTTP — thin wrappers over the service, each in its own transaction.
+  // ════════════════════════════════════════════════════════════════════
+  function httpErr(status, message) { const e = new Error(message); e.http = status; return e; }
+  async function tx(fn, res) {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await fn(client);
+      await client.query("commit");
+      return res.json(out);
+    } catch (e) {
+      await client.query("rollback");
+      const status = e.http || 500;
+      return res.status(status).json({ receipt: e.message });
+    } finally {
+      client.release();
+    }
+  }
+
+  // POST /leasing/conversions  — create from a confirmed completed tour
+  router.post("/leasing/conversions", requireOperator, (req, res) => tx(async (client) => {
+    const out = await createConversionFromTour(client, req.body || {});
+    return { receipt: `Conversion opened for the prospect; tour_followup is owned by the actual host.`, ...out };
+  }, res));
+
+  // GET /leasing/conversions/:id — full canonical view
+  router.get("/leasing/conversions/:id", requireOperator, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const out = await readConversion(client, req.params.id);
+      if (!out) return res.status(404).json({ receipt: "conversion not found." });
+      return res.json(out);
+    } catch (e) { return res.status(500).json({ receipt: e.message }); }
+    finally { client.release(); }
+  });
+
+  // POST /leasing/conversions/:id/handoff — explicit owner transfer
+  router.post("/leasing/conversions/:id/handoff", requireOperator, (req, res) => tx(async (client) => {
+    const out = await handoffConversation(client, { conversion_id: req.params.id, ...(req.body || {}) });
+    return { receipt: `Conversation handed to the named successor; original tour host preserved in history.`, ...out };
+  }, res));
+
+  // POST /leasing/conversions/:id/handoff-required — flag absence risk (no reroute)
+  router.post("/leasing/conversions/:id/handoff-required", requireOperator, (req, res) => tx(async (client) => {
+    const out = await flagHandoffRequired(client, { conversion_id: req.params.id });
+    return { receipt: `handoff_required flagged — the conversation was NOT rerouted; a named handoff is needed.`, ...out };
+  }, res));
+
+  // POST /leasing/conversions/:id/gates — add a decision/operating gate
+  router.post("/leasing/conversions/:id/gates", requireOperator, (req, res) => tx(async (client) => {
+    const out = await addGate(client, { conversion_id: req.params.id, ...(req.body || {}) });
+    return { receipt: `Gate "${req.body && req.body.rung}" added alongside the conversation.`, obligation_id: out.obligation.id, rung: out.link.rung };
+  }, res));
+
+  // POST /leasing/rungs/:obligationId/resolve — complete | release | missed
+  router.post("/leasing/rungs/:obligationId/resolve", requireOperator, (req, res) => tx(async (client) => {
+    const out = await resolveRung(client, { obligation_id: req.params.obligationId, ...(req.body || {}) });
+    return { receipt: `Rung ${out.rung} closed as ${out.outcome}/${out.resolution}${out.spawned ? `; spawned ${out.spawned}` : ""}.`, ...out };
+  }, res));
+
+  // Expose the service layer for in-process tests + future server-side callers.
+  router._service = {
+    createConversionFromTour, handoffConversation, flagHandoffRequired,
+    resolveRung, addGate, advanceToRung, readConversion, spawnRung, ensureApplicantFollowup, ensureLeaseSignatureFollowup, RUNG, CONVERSATION_RUNGS,
+    assessReopenability, reopenRung, changeDueTime, reassignTask,
+    recordApplicationIntent, openSendObligationOnPrepare, terminateChildObligation,
+    resolveSendActionBasis, closeParentViaRail, beginApplicationLinkRetry,
+    resolveApplicationNext, openTourFollowupParent,
+  };
+  // Expose the single-door service alongside the router so the tour-outcome
+  // seam (leasing_leads /complete) opens the conversion rail through THIS
+  // instance — no module reimplements conversion opening.
+  return Object.assign(router, { services: { createConversionFromTour } });
+};

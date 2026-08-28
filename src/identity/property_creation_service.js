@@ -6,11 +6,11 @@
 //  on identity, hierarchy or authority: three attached no organization,
 //  two set no address-anchored identity, three authenticated with a shared
 //  static bearer key, and none of the four was exercised by any harness.
-//  Full account: docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md.
+//  Full account: docs/archive/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md.
 //
 //  This module is the collapse. After it, `insert into properties` appears
 //  in exactly one place in the product, and the four doors are callers.
-//  Enforced by tests/gate_property_creation_paths.js.
+//  Enforced by tests/gates/gate_property_creation_paths.js.
 //
 //  ── A BEARER KEY IS NOT AN ACTOR (§21) ───────────────────────────────
 //  OPERATOR_KEY identifies no human, belongs to no organization, and
@@ -40,11 +40,11 @@
 //    · owner.js's ALIAS-HIJACK REFUSAL — never re-point a string already
 //      resolved to a different property. Checked inside the transaction;
 //      the whole create rolls back.
-//    · bankintake's CANONICAL-KEY IDEMPOTENCY — the same key twice is the
+//    · bank_intake's CANONICAL-KEY IDEMPOTENCY — the same key twice is the
 //      same property, not a duplicate. Now with a cross-organization
 //      refusal it did not have: returning another client's property row
 //      because the address matched would be an escape sideways.
-//    · dealintake's TEACH-ON-CREATION — every identity label observed is
+//    · deal_intake's TEACH-ON-CREATION — every identity label observed is
 //      registered as a resolved alias, so the next upload resolves.
 //
 //  ── AN ABSENT IDENTITY IS EXPLAINED, NOT SILENT ──────────────────────
@@ -215,7 +215,7 @@ async function createProperty(pool, spec = {}) {
   } = spec;
 
   //  Which system a string was OBSERVED in is provenance, and owner.js's
-  //  door carried it ('rent_roll') where dealintake's did not. Keeping the
+  //  door carried it ('rent_roll') where deal_intake's did not. Keeping the
   //  caller's value preserves the better of the two behaviours; the list
   //  mirrors property_aliases' own CHECK, so an unknown value degrades to
   //  'other' rather than throwing at the database.
@@ -362,7 +362,7 @@ async function createProperty(pool, spec = {}) {
       throw e;
     }
 
-    // ── teach every observed identity string (dealintake's rule) ──────
+    // ── teach every observed identity string (deal_intake's rule) ──────
     const taught = [];
     for (const value of aliasValues) {
       const row = (await client.query(
