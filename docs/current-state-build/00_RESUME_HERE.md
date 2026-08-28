@@ -1,119 +1,117 @@
-# RESUME HERE — `docs/CURRENT_STATE.md` is LIVE and current through 2026-08-20.
+# CLOSED OUT 2026-08-24. `docs/CURRENT_STATE.md` is live on `main`.
 
-> ## ▶ TO RESTART, PASTE THIS
+> ## ▶ FOR ANY THREAD PICKING THIS UP
 > ```
-> Read docs/CURRENT_STATE.md and docs/current-state-build/00_RESUME_HERE.md
-> on main, then continue that work.
+> Read docs/CURRENT_STATE.md on main.
 > ```
-> The deliverable shipped, survived a full audit cycle, and just closed out a
-> real production incident end to end. This is not a "pick up where we left
-> off" file anymore — it's a living document with a working close ritual.
-> Read `CURRENT_STATE.md` itself first; this file is only about what's left.
+> That is the deliverable and it is finished. This folder is its build history
+> and the re-runnable audit machinery. **This thread is closed** — not because
+> the work was wrong, but to reduce coordination cost while three agents work
+> the same repo.
 
 ---
 
-## WHAT'S ACTUALLY LEFT — three things, none urgent
+## ⛔ READ THIS BEFORE YOU TOUCH ANYTHING — `main` CANNOT BOOT
 
-1. **`docs/CURRENT_STATE.md` defects #12, #13, #14 are still open.** All three
-   need an owner decision, not more code from a thread:
-   - #12 — a real hole in published-pricing immutability (schema-level)
-   - #13 — four dead falsification tests, claimed then dropped, open for anyone
-   - #14 — which lease term to quote when a prospect doesn't name one. A cheap
-     third option now exists (present the published menu, zero schema change)
-     but it's still the owner's call
-2. **The gate doesn't exist yet.** Nothing mechanically fails if a thread ships
-   a domain and skips its `CURRENT_STATE.md` row. The close ritual is a
-   convention, proven to work today by two independent threads following it
-   correctly under real pressure — but still not enforced.
-3. **~40% of the codebase remains at headline-only survey depth.** Wave 2 found
-   148 capabilities across teams/access, management, onboarding, money/pricing,
-   the app repo, `server.js`, and `tools/` — full detail is in
-   `05_WAVE2_RESULTS.md`, not yet promoted row-by-row into the main index.
+As of 2026-08-24:
 
-None of these block anything. They're the next things to pick up, not gaps
-blocking today's close.
+```text
+origin/main    41dea52    migration ceiling 187   clean, fully audited
+production     61f99bf    ledger 189              NOT an ancestor of main
+```
 
-## WHAT SHIPPED TODAY (2026-08-19 → 2026-08-20), in order
+**`main` has 187 migration files against a 189 database. It will refuse to
+start.** Two further branches carry 190 and 191. Recorded as **defect #28** in
+`CURRENT_STATE.md` — a *recurrence* of #7, which was marked resolved on 20 Aug
+and was false again within 48 hours.
 
-- `docs/CURRENT_STATE.md` built, merged to `main`, `CLAUDE.md` and
-  `THREAD_HANDOFF.md` updated to route every new thread to it (PR #123).
-- The open/close ritual: a `SessionStart` hook that fires automatically, and a
-  paste-able closing prompt written into the file itself.
-- Wave 1 (44 capabilities, adversarially verified) and a second independent
-  PR-level review by Codex, both folded in.
-- Wave 2 completed on the third attempt (started/stopped twice before) — 148
-  capabilities across the areas listed above, plus three completeness critics
-  that found 8 things nobody had mapped, including a real security gap in a
-  team-roster route with no property-scope check (defect #9) and a UI button
-  that silently fakes success instead of sending a real invite (defect #8).
-- **A real production incident, closed end to end, coordinated across two
-  Claude threads with zero silent overwrites**: the `market_rent` pricing bug
-  (defect #1) was fixed, proven with a real CI test, merged to `main` — which
-  also resolved defect #7 (production had drifted 39+ commits ahead of `main`)
-  — then deployed and confirmed live by the owner. A privilege-escalation path
-  in `orgchart.js` (defect #15) got closed in the same deploy, found by the
-  fixing thread as a byproduct, not gone looking for.
-- **A live Neon credential, pasted into a chat during this work, rotated and
-  confirmed** (defect #16).
-- **I corrected two of my own mistakes on the record, in place**, rather than
-  letting them stand: I initially under-rated defect #14's severity (called it
-  "disclosed, not the same as #1" before checking the actual sort order and
-  real numbers — it's actually the highest price on the sheet, not an
-  arbitrary one), and I introduced a real self-contradiction in this file's
-  own snapshot section (said "resolved" in one line, "not resolved" two lines
-  below) which a disk-change diff caught before it could confuse anyone.
+**Reconciliation is deliberately held.** The owner is away from the machine and
+cannot safely release 190/191 against a 189 ledger remotely. **Do not attempt
+it. Do not merge to `main`.**
 
-## THE COORDINATION PATTERN THAT WORKED
+## THREE AGENTS, ONE REPO — coordination state at close
 
-Two separate Claude threads touched this same file today without either one
-silently overwriting the other. What made that work, concretely:
-- Every claim from the other thread got independently re-verified against
-  actual source before being recorded — never taken on trust, including once
-  finding a claim was right but incomplete (the #14 severity correction).
-- The other thread did the same back — re-ran my checks rather than trusting
-  my report, and caught nothing wrong, which is itself informative.
-- A hard boundary was stated and held: neither thread would trigger a deploy
-  without the owner saying so explicitly. Merging to `main` and deploying to
-  production stayed two separate, distinct actions the whole time.
-- When a message arrived cut off mid-sentence (the #14 finding, first pass),
-  the instinct was to go read the actual code rather than guess or wait
-  around — and to say plainly "your message cut off here" rather than
-  silently fill the gap with something invented.
+| Branch / SHA | Owner | Carries |
+|---|---|---|
+| `61f99bf` | — | **what is actually deployed** |
+| `3173913` | another CC thread | Q5, Build 2, Build 3 — +62 vs main |
+| `9746f12` | Codex | Skyline lease — **migrations 190, 191** |
+| `7e67f50` | Codex | guarantor agent |
 
-This is worth preserving as the model for the next time two threads need to
-coordinate on the same file, not just as a one-off story.
+**This thread merged 17 PRs to `main` and is now stopped.** Every further
+change from here goes to a branch and waits.
 
-## KNOWN COVERAGE GAPS — still true, unchanged from before
+**Do not touch** (owned by other threads): `index.html`, `migrations/`,
+`operator.js`, `leasingleads.js`, `leasepackets.js`, `applicationSubmission.js`.
 
-- Roughly 40% of the codebase is at headline survey depth or unsurveyed.
-- The close ritual is not mechanically enforced.
-- App-repo doors, `server.js`'s legacy inline surfaces, and `tools/` have
-  real detail sitting in `05_WAVE2_RESULTS.md` that hasn't been promoted.
+## WHAT THIS THREAD TOUCHED — for collision checks
 
----
+**Authored — 21 files, all docs, tests or tooling. Zero `src/`, zero SQL, zero
+`server.js`:**
 
-## STANDING CONSTRAINTS (unchanged)
+```
+.claude/hooks/session_start.sh    docs/current-state-build/ (11 files)
+.claude/settings.json             migrations/README.md      ← doc only
+.env.example                      tests/full_lifecycle_arc.js
+CLAUDE.md                         tests/gate_current_state.js
+docs/CURRENT_STATE.md             tests/verify_source_governance.js
+docs/THREAD_HANDOFF.md
+```
 
-- **No product code changes from work on this file.** Everything here is
-  documentation and one hook. Code fixes belong to whatever thread owns that
-  fix, coordinated through `CURRENT_STATE.md`, not made here.
-- **No taxonomy improvement without the owner.** Evidence grain first, always.
-- **Never upgrade a row because code looks finished, or because a deploy
-  happened.** Only an actual observation moves a rung — see defect #1's own
-  entry for the live example: deployed and not yet `PRODUCTION_PROVEN`,
-  stated plainly, on purpose.
+**PR #128 is the exception and it was NOT authored here** — it was the
+orientation thread's branch, merged by this one: 97 files, 25 in `src/`, 7
+migrations, plus `server.js`. Confirmed by the owner to sit *below* the fork and
+already inside `7e67f50`, so it poses no collision.
+
+## WHAT SHIPPED
+
+- **`docs/CURRENT_STATE.md`** — ~350 capabilities surveyed, 28 defects tracked
+  with file-and-line evidence, 9 resolved or ruled. `CLAUDE.md` routes every new
+  thread to it automatically.
+- **`tests/gate_current_state.js`** — registered as gate 38 of 38. Fails the
+  build if a `src/` directory is unlisted, a banned word is used as a rung, or
+  defect numbering collides. **Falsified three ways**, not merely run green.
+- **The audit is re-runnable** — three workflow scripts, all run to completion,
+  with method recorded in `AUDIT_SCRIPTS.md`.
+- **Real fixes**: the `market_rent` pricing bug (deployed), a
+  privilege-escalation path in `orgchart.js`, two docs that instructed
+  incorrectly, 62 undocumented environment variables, and a test that defaulted
+  to driving a full lease lifecycle against live production.
+
+## THE FINDING THAT MATTERS MOST — corroborated by two independent threads
+
+**The register's rungs are weaker than they read.**
+
+```text
+.db.js proofs      68     referenced by CI: 0
+*_proof.js files   89     referenced by CI: 0
+in the 38-gate array      0
+```
+
+Spot-checked the exact proofs cited for Compliance, Debt, Equity and Deal
+Setup — all four are in the unrun set. **`HTTP_PROVEN` means "a human ran this
+once and it passed," not "this is verified."** Another CC thread measured the
+same problem independently and got 68 and 94 against these 68 and 89. Two
+methods, one finding.
+
+## OPEN, AND WAITING FOR THE OWNER
+
+| # | What | Status |
+|---|---|---|
+| 28 / 7 | `main` cannot boot — 187 vs 189 | **Held.** Needs the owner at the machine. |
+| 17 | Wire the 265 unrun proofs into CI | **Ruled yes, deliberately not started.** Wiring is safe; the first run goes red and the fixes land in `operator.js`, `leasingleads.js`, `leasepackets.js` — owned by other threads. |
+| 14 | Quote the 12-month base term, not `terms[0]` | **Ruled, ready to build.** Needs no schema change. |
+| 27 | What if a property publishes no 12-month term? | **Open sub-decision.** Must not fall back to `terms[0]`. |
+| 13 / 20 | 47 tests pinned to a demo UUID nothing creates | Unclaimed |
+| 12 | Property delete cascades past the pricing freeze | **Ruled: allowed for now.** Revisit "with more real properties." |
+| 18 | `main` unprotected — red CI cannot block a merge | **Ruled: not yet.** Deliberate, not an oversight. |
+
+## STANDING CONSTRAINTS
+
+- **Do not merge to `main`.** Branch and PR only, until the owner reconciles.
+- **Never upgrade a rung because code looks finished, or because a deploy
+  happened.** Only an observation moves it.
 - **`NOT_FOUND` over a plausible guess**, always.
 - **Verify before recording, in both directions.** Every cross-thread report
-  today was checked against real source before being written down, and at
-  least one of those checks corrected the checker, not just the report.
-
-## FILES IN THIS FOLDER
-
-| File | What it is |
-|---|---|
-| `01_DESIGN_SPEC.md` | The three rules locked with the owner, before any row was written |
-| `02_INVENTORY_DRAFT.md` | The raw evidence-grain draft that became `CURRENT_STATE.md` |
-| `03_WAVE1_RESULTS.md` | Full wave 1 detail — 44 capabilities, claimed vs. verified rung |
-| `04_FINDINGS_REPORT.md` | The shareable version, written for an outside audience |
-| `05_WAVE2_RESULTS.md` | Full wave 2 detail — 148 capabilities, not yet promoted row-by-row |
-| `wave1_new_domains.js` / `wave2_coverage_gaps.js` | Both re-runnable; both already run to completion once |
+  here was checked against source first, and at least once that check corrected
+  the checker rather than the report.
