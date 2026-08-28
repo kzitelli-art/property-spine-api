@@ -24,6 +24,7 @@ if (process.env.E2E_DISPOSABLE_DATABASE !== "true") {
 const CONN = process.env.E2E_DATABASE_URL;
 const BASE = process.env.E2E_BASE_URL || "http://127.0.0.1:3000";
 const SMS_LOG = process.env.E2E_SMS_LOG;
+const ANTHROPIC_LOG = process.env.E2E_ANTHROPIC_LOG || "/tmp/property_spine_e2e_anthropic.log";
 if (!CONN || !SMS_LOG) {
   console.error("FATAL: E2E_DATABASE_URL and E2E_SMS_LOG are required.");
   process.exit(1);
@@ -90,6 +91,10 @@ function smsMessages() {
   if (!fs.existsSync(SMS_LOG)) return [];
   return fs.readFileSync(SMS_LOG, "utf8").trim().split(/\r?\n/).filter(Boolean)
     .map((line) => JSON.parse(line));
+}
+function anthropicAttempts() {
+  if (!fs.existsSync(ANTHROPIC_LOG)) return 0;
+  return fs.readFileSync(ANTHROPIC_LOG, "utf8").split(/\r?\n/).filter(Boolean).length;
 }
 async function waitForSms(predicate, label) {
   for (let attempt = 0; attempt < 40; attempt++) {
@@ -400,6 +405,66 @@ async function waitForStaffReply(providerMessageId) {
       `phone-derived Mike receives an honest ${subject} governed-read receipt`,
       JSON.stringify({ question, status: readAck.status, readReply }));
   }
+
+  const retiredIntakeBefore = (await q(
+    `select
+       (select count(*)::int from intake_media) as media_count,
+       (select count(*)::int from intake_events) as intake_event_count,
+       (select count(*)::int from comm_events) as comm_event_count`
+  )).rows[0];
+  const modelAttemptsBefore = anthropicAttempts();
+  const forgedSender = `+1555000${suffix.slice(-4)}`;
+  const forgedPayload = new URLSearchParams({
+    MessageSid: `SM_FORGED_INTAKE_${suffix}`,
+    From: forgedSender,
+    To: operationsLine,
+    Body: "Infer Skyline and record a completed repair.",
+    NumMedia: "1",
+    MediaUrl0: "https://api.twilio.invalid/forged-media",
+    MediaContentType0: "image/jpeg",
+  });
+  const retiredIntakeResponse = await fetch(BASE + "/intake/twilio", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: forgedPayload.toString(),
+  });
+  const retiredIntakeBody = await retiredIntakeResponse.text();
+  const retiredIntakeAfter = (await q(
+    `select
+       (select count(*)::int from intake_media) as media_count,
+       (select count(*)::int from intake_events) as intake_event_count,
+       (select count(*)::int from comm_events) as comm_event_count,
+       (select count(*)::int from intake_events where sender=$1) as sender_event_count`,
+    [forgedSender]
+  )).rows[0];
+  const retiredEvidence = {
+    status: retiredIntakeResponse.status,
+    route_state: retiredIntakeResponse.headers.get("x-property-spine-route-state"),
+    media_delta: retiredIntakeAfter.media_count - retiredIntakeBefore.media_count,
+    intake_event_delta: retiredIntakeAfter.intake_event_count - retiredIntakeBefore.intake_event_count,
+    comm_event_delta: retiredIntakeAfter.comm_event_count - retiredIntakeBefore.comm_event_count,
+    sender_event_count: retiredIntakeAfter.sender_event_count,
+    model_call_delta: anthropicAttempts() - modelAttemptsBefore,
+  };
+  expect(retiredEvidence.status === 410 && retiredEvidence.route_state === "retired"
+      && retiredEvidence.media_delta === 0 && retiredEvidence.intake_event_delta === 0
+      && retiredEvidence.comm_event_delta === 0 && retiredEvidence.sender_event_count === 0
+      && retiredEvidence.model_call_delta === 0,
+    "retired intake Twilio door refuses before model, sender/property inference, or database writes",
+    JSON.stringify(retiredEvidence));
+  expect(retiredIntakeBody === "<Response></Response>"
+      && /text\/xml/.test(retiredIntakeResponse.headers.get("content-type") || "")
+      && retiredIntakeResponse.headers.get("cache-control") === "no-store",
+    "retired intake Twilio door returns the deterministic no-store TwiML wall");
+  const intakeSource = fs.readFileSync(
+    require("path").join(__dirname, "..", "..", "src", "onboarding", "intake.js"), "utf8"
+  );
+  const retiredRouteSource = intakeSource.match(
+    /router\.post\("\/intake\/twilio"[\s\S]*?\n  \}\);/
+  );
+  expect(!!retiredRouteSource
+      && !/express\.urlencoded|req\.body|captureCore|pool\.query|anthropic/.test(retiredRouteSource[0]),
+    "retired intake Twilio mount contains no parser, model, resolver, or database path");
 
   const name = `Skyline Journey ${suffix}`;
   const phone = "+1215" + suffix;
