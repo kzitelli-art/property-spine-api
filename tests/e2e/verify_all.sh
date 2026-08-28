@@ -90,6 +90,7 @@ if [ "$UP" != "1" ]; then
   FAILED=1
 else
   echo "── server                             UP  ($(curl -s http://localhost:3000/health | head -c 120))"
+  step "plaid webhook verification" node tests/e2e/plaid_webhook.e2e.js
   step "authority chain"             node tests/e2e/authority_chain.e2e.js
   step "skyline unit-type mapping"   node tests/e2e/skyline_unit_type_mapping.e2e.js
   step "governed pricing publication" node tests/e2e/skyline_pricing_publication.e2e.js

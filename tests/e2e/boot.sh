@@ -8,7 +8,6 @@ SMS_LOG="${E2E_SMS_LOG:-/tmp/property_spine_e2e_sms.log}"
 PRELOAD="$(cd "$(dirname "$0")" && pwd)/fake_sms_preload.js"
 ANTHROPIC_LOG="${E2E_ANTHROPIC_LOG:-/tmp/property_spine_e2e_anthropic.log}"
 ANTHROPIC_PRELOAD="$(cd "$(dirname "$0")" && pwd)/fake_anthropic_preload.js"
-PLAID_PRELOAD="$(cd "$(dirname "$0")" && pwd)/fake_plaid_preload.js"
 
 #  This launcher is proof infrastructure, never an operating server. Force
 #  every outbound SMS through the local append-only fake transport even if
@@ -34,6 +33,5 @@ DATABASE_URL="$E" OPERATOR_KEY="e2e-key" OPERATOR_APP_ORIGIN="http://localhost:5
   APPLICATION_INTENT_PREPARE_ENABLED=true APPLICATION_INTENT_PROPERTY_IDS="$PROP" \
   CONVERSATIONAL_ACTION_TTL_SECONDS=5 \
   LEASING_INTAKE_SECRET="e2e-intake" LEASING_INTAKE_PROPERTY_IDS="$PROP" \
-  PLAID_CLIENT_ID="e2e-client-id" PLAID_SECRET="e2e-secret" PLAID_ENV="sandbox" \
   E2E_SMS_LOG="$SMS_LOG" E2E_ANTHROPIC_LOG="$ANTHROPIC_LOG" PORT="$PORT" \
-  exec node --require "$PRELOAD" --require "$ANTHROPIC_PRELOAD" --require "$PLAID_PRELOAD" server.js
+  exec node --require "$PRELOAD" --require "$ANTHROPIC_PRELOAD" server.js
