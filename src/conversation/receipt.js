@@ -2,7 +2,7 @@
    conversation/receipt.js — RECEIPT COMPOSITION.
 
    The third shared conversational seam, extracted from the resident SMS
-   path in src/comms/tenant_link.js. See docs/AGENT_CAPABILITY_SEAMS.md.
+   path in src/comms/tenant_link.js. See docs/archive/AGENT_CAPABILITY_SEAMS.md.
 
    ── THE LOAD-BEARING DISTINCTION ───────────────────────────────────
    A successful operating action does not prove that a text was

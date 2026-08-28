@@ -457,11 +457,11 @@ section("8  no migration and no domain table change is introduced");
     "src/agent/staff_agent_intent.js", "src/agent/staff_agent_service.js", "src/agent/staff_agent.js",
     "src/surfaces/unit_turn_read.js", "src/maintenance/turn_sequence.js",
     "tests/proofs/operator_language_proof.js", "tests/proofs/staff_agent_proof.js", "tests/proofs/unit_turn_page_proof.js",
-    "docs/BUILD_6B_DEFERRED_DISPLAY_LANGUAGE.md",
+    "docs/archive/BUILD_6B_DEFERRED_DISPLAY_LANGUAGE.md",
     // release-candidate additions, documentation and proof only
-    "docs/BUILD_1_6B_INTEGRATION_READINESS.md",
-    "docs/UNIT_TURN_RELEASE_CANDIDATE.md",
-    "docs/UNIT_TURN_THIN_LIVE_PROOF.md",
+    "docs/archive/BUILD_1_6B_INTEGRATION_READINESS.md",
+    "docs/archive/UNIT_TURN_RELEASE_CANDIDATE.md",
+    "docs/archive/UNIT_TURN_THIN_LIVE_PROOF.md",
     "tests/proofs/release_candidate_proof.js",
     // release-candidate FIXES — photo proof, capabilities, condition classifier
     "src/maintenance/work_proof.js", "src/maintenance/work_acceptance_service.js",

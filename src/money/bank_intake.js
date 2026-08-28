@@ -92,7 +92,7 @@ module.exports = function bankIntakeModule({ pool }) {
   // It used to sit behind the shared OPERATOR_KEY alone, which meant a
   // property — durable Spine truth every board and report reads — could
   // be created with no attributable human and no organization. Build 0
-  // measured that (docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md §2B) and
+  // measured that (docs/archive/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md §2B) and
   // Build 1A-1 closes it: the write is now the canonical service's, and
   // the service refuses without a session-resolved actor.
   //

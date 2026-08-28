@@ -84,7 +84,7 @@ const GATES = [
   //  is the highest-authority write in the product and was the least governed:
   //  four routes do it, they disagree on identity/hierarchy/authority, and none
   //  is exercised anywhere. This pins that measured state so Build 1 has to
-  //  change it deliberately. See docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md.
+  //  change it deliberately. See docs/archive/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md.
   { file: "gate_property_creation_paths.js",
     what: "exactly the known client/property creation paths; no fifth door" },
   //  The wall between insurance economics and premium financing. The June

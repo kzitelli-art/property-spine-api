@@ -3,7 +3,7 @@
 
    The second shared conversational seam, extracted from the resident SMS
    path in src/comms/tenant_link.js where the ladder lived inline inside
-   processInboundClaim. See docs/AGENT_CAPABILITY_SEAMS.md.
+   processInboundClaim. See docs/archive/AGENT_CAPABILITY_SEAMS.md.
 
    ── WHAT IT DECIDES (the whole of it) ──────────────────────────────
      1. what material fact is missing;

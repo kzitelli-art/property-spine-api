@@ -691,7 +691,7 @@ module.exports = function owner(deps) {
   //
   //  ── WHY THIS ROUTE NOW NEEDS A SESSION ──────────────────────────
   //  It sat behind the shared OPERATOR_KEY alone. See the note on
-  //  /bank/onboard-property and docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md
+  //  /bank/onboard-property and docs/archive/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md
   //  §2C. Nothing in the deployed app calls it, so no live surface loses
   //  a capability. Its alias-hijack refusal — the best identity behaviour
   //  of the four doors — moved into the service unchanged and now protects

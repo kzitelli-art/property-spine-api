@@ -8,7 +8,7 @@
 //   node tools/prove_voice_v8.js
 //
 // Class 3 (test-only). Removal condition: delete when the voice corpus in
-// AI_VOICE_TUNING.md is superseded by api/docs/AI_VOICE.md + its own suite.
+// AI_VOICE_TUNING.md is superseded by api/docs/archive/AI_VOICE.md + its own suite.
 
 const path = require("path");
 const mod = require(path.join(__dirname, "..", "src", "agent", "agent.js"));

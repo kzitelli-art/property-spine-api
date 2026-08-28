@@ -2,7 +2,7 @@
 /* ════════════════════════════════════════════════════════════════════
    release0_audit_forbidden_fields.test.js
 
-   Proves that docs/RELEASE_0_AUDIT_PLAN.md §5 — the columns the Release 0
+   Proves that docs/archive/RELEASE_0_AUDIT_PLAN.md §5 — the columns the Release 0
    audit may never select — is enforced by something other than the author
    remembering it.
 

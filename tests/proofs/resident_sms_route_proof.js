@@ -1,6 +1,6 @@
 // ════════════════════════════════════════════════════════════════════
 //  resident_sms_route_proof.js — THE ROUTE-LEVEL PROOF
-//  Contract: docs/RESIDENT_SMS_WORK_ORDER_CONTRACT.md (v3)
+//  Contract: docs/archive/RESIDENT_SMS_WORK_ORDER_CONTRACT.md (v3)
 //
 //  Proves contract cases 5, 9, 10, 11 and 14 — the ones the service-level
 //  harness (resident_sms_work_order_proof.js) explicitly could NOT cover,

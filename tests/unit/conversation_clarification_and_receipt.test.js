@@ -18,7 +18,7 @@
 //  IT DOES NOT REPLACE THE RESIDENT SMS PROOFS. resident_sms_work_order_proof.js
 //  and resident_sms_route_proof.js build no schema of their own, need a
 //  provisioned full-schema database this session does not have, and remain
-//  REQUIRED before this merges — docs/UNBLOCK_2_FULL_SCHEMA_HARNESS_DATABASE.md.
+//  REQUIRED before this merges — docs/archive/UNBLOCK_2_FULL_SCHEMA_HARNESS_DATABASE.md.
 //  Wording identity plus exhaustive branch coverage is strong evidence about
 //  the composed text; it is not evidence that the route still runs.
 //
@@ -213,7 +213,7 @@ section("2. ONE IMPLEMENTATION — NO DUPLICATED LOGIC IN TENANTLINK");
   //  the inbound-SMS route. Other surfaces in this file (the structured
   //  maintenance form, operator reply routes) have their own wording and their
   //  own send handling; they are not this seam and claiming them would be a
-  //  false positive. See docs/CONVERSATIONAL_SEAMS_RECEIPT.md §5.
+  //  false positive. See docs/archive/CONVERSATIONAL_SEAMS_RECEIPT.md §5.
   const CONV = TL_CODE.slice(TL_CODE.indexOf("async function processInboundClaim"),
                              TL_CODE.indexOf('router.get("/tenant/thread"'));
   ok("the conversational region was located for inspection", CONV.length > 4000, String(CONV.length));

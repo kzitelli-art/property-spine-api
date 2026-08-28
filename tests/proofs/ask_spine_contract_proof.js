@@ -16,7 +16,7 @@
 //
 //  ASSERTION FLOOR: set explicitly below, NOT left at the default of 1.
 //  The default would let one setup assertion satisfy the whole file —
-//  the exact gap recorded in docs/ASSERTION_BOUNDARY_AUDIT.md. Every
+//  the exact gap recorded in docs/archive/ASSERTION_BOUNDARY_AUDIT.md. Every
 //  required semantic case is exercised by name, and the data-driven
 //  cases assert on a NON-EMPTY fixture so an empty stub cannot pass.
 // ════════════════════════════════════════════════════════════════════

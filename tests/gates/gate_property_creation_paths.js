@@ -386,8 +386,8 @@ if (UNGOVERNED.length) {
   console.log("  ═══════════════════════════════════════════════════════════");
 }
 
-console.log("\n  Audit:   docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md");
-console.log("  Receipt: docs/BUILD_1A1_PROPERTY_CREATION_COLLAPSE.md");
+console.log("\n  Audit:   docs/archive/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md");
+console.log("  Receipt: docs/archive/BUILD_1A1_PROPERTY_CREATION_COLLAPSE.md");
 
 console.log("\n════════════════════════════════════════════════════════════════");
 console.log(`  ASSERTIONS COMPLETE · ${pass + fail} run · ${pass} passed · ${fail} failed`);

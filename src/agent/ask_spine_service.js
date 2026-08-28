@@ -11,7 +11,7 @@
 //  string, so omitting it returns obligations across every property. Its
 //  QUERY LOGIC is sound and is re-expressed here — the read-time overdue
 //  clock, the unassigned predicate, the due-date ordering. Its ROUTE is
-//  not used and is not modified. See docs/ASK_SPINE_SOURCE_AUDIT.md;
+//  not used and is not modified. See docs/archive/ASK_SPINE_SOURCE_AUDIT.md;
 //  remediating that route is a separate security lane.
 //
 //  RANKING — recorded facts only, no score (audit §4):

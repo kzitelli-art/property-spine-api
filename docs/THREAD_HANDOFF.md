@@ -220,7 +220,7 @@ comments here are load-bearing contracts, and at least one was stale — a guard
 was built on 034's stated meaning of `is_placeholder` and the live writer
 meant something else.
 
-Corollary, recorded as backlog G1 in `docs/ENGINEERING_GATE_BACKLOG.md`:
+Corollary, recorded as backlog G1 in `docs/archive/ENGINEERING_GATE_BACKLOG.md`:
 *a test that is never invoked is functionally not a test.*
 
 ### Open rulings — legal/product, not engineering
@@ -958,7 +958,7 @@ RECONCILED WITH MAIN, PUSHED, NOT RELEASED AND NOT DEPLOYED
   APP   5964848   property-spine-app  claude/code-philosophy-review-xoiz8f
 ```
 
-Read `docs/SLICE_2_PRODUCTION_READY.md` before releasing it. Two things in it
+Read `docs/archive/SLICE_2_PRODUCTION_READY.md` before releasing it. Two things in it
 are corrections to its own first draft, and both would have cost time: the
 pre-release safety query selected the column 179 *creates*, and the numbers in
 the document were stale before the ink dried. **Read the ceiling from the
@@ -1215,7 +1215,7 @@ ends (`blocking_fact: "no_governed_turnover_duration"`). ANDing them would
 reject a unit that legitimately turns before a future start — replacing an
 over-offering bug with an under-offering one. Owner correction, and it stands.
 
-See `docs/FUTURE_OPERATING_READINESS_TRACE.md`: **future operating readiness
+See `docs/archive/FUTURE_OPERATING_READINESS_TRACE.md`: **future operating readiness
 is a genuinely missing primitive**, and `turnovers.ready_date` currently holds
 a TARGET (written at turn open from `expected_ready_date`) and an ACHIEVEMENT
 (written at completion) in one column — `turn_priority.js:219` already sorts
@@ -1241,7 +1241,7 @@ always             → may_promise: false. A survivor is contractually open
 `agent.js` no longer hardcodes "No units match" for every empty result — it
 carries the door's own sentence, so a refusal is never spoken as an inventory
 answer. Removal condition for the date-blind predicate is written in the
-source and in `docs/PROSPECT_INVENTORY_CUTOVER.md`.
+source and in `docs/archive/PROSPECT_INVENTORY_CUTOVER.md`.
 
 ### Proof
 
@@ -1261,8 +1261,8 @@ app suite (32 harnesses)                    1333 passed
 ## ══════════════════════════════════════════════════════════════════
 
 **Branch (API):** `claude/code-philosophy-review-xoiz8f`. **Migrations: NONE.**
-Design: `docs/SLICE_2_FORWARD_LEASING_TRACE.md`. Cutover for the
-prospect-facing path: `docs/PROSPECT_INVENTORY_CUTOVER.md`.
+Design: `docs/archive/SLICE_2_FORWARD_LEASING_TRACE.md`. Cutover for the
+prospect-facing path: `docs/archive/PROSPECT_INVENTORY_CUTOVER.md`.
 
 ### What landed
 
@@ -2028,8 +2028,8 @@ HISTORY — stamped, do not build against
 ### ▶ NEXT — TWO DESIGNS, AND THE ORDER IS LOAD-BEARING
 
 ```text
-1  docs/ASK_SPINE_CANONICAL_READ_LAYER.md      Taxes + Insurance. LANDS FIRST.
-2  docs/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md   transcript evidence.
+1  docs/archive/ASK_SPINE_CANONICAL_READ_LAYER.md      Taxes + Insurance. LANDS FIRST.
+2  docs/archive/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md   transcript evidence.
 ```
 
 Both converge on the same composer. **Canonical reads first** — governed truth,
@@ -2058,7 +2058,7 @@ Owner is a RESERVED name — a different audience, possibly a different login.
 
 ### ▶ AND — meeting intelligence. FOUR RULINGS ARE FROZEN.
 
-Read **`docs/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md`** before designing any of
+Read **`docs/archive/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md`** before designing any of
 it. Nothing is built. It carries the owner's framing verbatim, four rulings the
 owner froze on 2026-08-12, the assertion ladder as an actual data contract, and
 one correction that a real transcript forced on the premise:
@@ -2300,7 +2300,7 @@ Those are different claims and only the second finishes the release.
 
 ### If you are about to touch work-order completion
 
-Read `docs/RELEASE_0_ACTIVATION_RUNBOOK.md` and
+Read `docs/archive/RELEASE_0_ACTIVATION_RUNBOOK.md` and
 `tools/step7/activate.js` first. The activation is the one irreversible act in
 the release: it draws a permanent line, and everything terminal after it must be
 provable.
@@ -3254,7 +3254,7 @@ normal governed expectation + unexpected operating consequence
 ```
 
 The `$1,840` maintenance-consequence work is **PARKED, not discarded** (see the
-Deal Setup section below and `docs/STANDING_ECONOMIC_OBLIGATIONS_SOURCE_READ.md`).
+Deal Setup section below and `docs/archive/STANDING_ECONOMIC_OBLIGATIONS_SOURCE_READ.md`).
 Do not let it define the current build.
 
 ### What is stale scaffolding, and must not dictate the new surface
@@ -3910,7 +3910,7 @@ condition on each step. It reorders nothing; the sequence is still the runbook's
 
 **The long pole is not engineering.** Step 4 is blocked on transport, and
 transport is **two** independent blockers recorded read-only on 2026-08-06
-(`docs/RELEASE_0_SMS_PREREQUISITE.md`): there is no `operations` line row at
+(`docs/archive/RELEASE_0_SMS_PREREQUISITE.md`): there is no `operations` line row at
 all, and `provider_config` is null on the only line that exists. Add A2P 10DLC
 carrier review on top. **Start that first — §1 of the run card can run in
 parallel with it; §3 cannot finish without it.**
@@ -3946,7 +3946,7 @@ Twilio credentials live + SMS_SEND_MODE disabled
 ```
 
 Source-proved by `tests/gate_outbound_senders.js` (S9: `sendOperationsReply`
-does not consult the mode) and `docs/OUTBOUND_TRIGGER_AUDIT.md`. **Verify the
+does not consult the mode) and `docs/archive/OUTBOUND_TRIGGER_AUDIT.md`. **Verify the
 deployed mode BEFORE adding credentials, not after** — the §1 preflight scores
 it and the acceptance receipt records it. Do not treat
 `property_facing.outbound_policy = 'reply_only'` as protection: the policy
@@ -4046,7 +4046,7 @@ production                  no build-ahead activation work from this stack has
                             no activation.
 ```
 
-**Read `docs/RELEASE_0_ACTIVATION_STACK.md` first** — it is the current state of
+**Read `docs/archive/RELEASE_0_ACTIVATION_STACK.md` first** — it is the current state of
 the release: what is proven, what each boundary costs, and §7 names the exact
 remaining proof debt. `RELEASE_0_ACTIVATION_RUNBOOK.md` is the production order.
 
@@ -4691,7 +4691,7 @@ PostgreSQL 16.13 and real HTTP at SHA `95f13c7`.
 activation receipt; re-reconciliation with current `main`; repair of two unsafe
 harnesses in its own proof set (`work_order_authority_proof.js`,
 `work_order_canonical_path_proof.js`); and the five full-schema harnesses running
-at the merge-candidate SHA. Full sequence: `docs/SLICE_A_MERGE_CHECKLIST.md`.
+at the merge-candidate SHA. Full sequence: `docs/archive/SLICE_A_MERGE_CHECKLIST.md`.
 
 > **"Previously green before the resolver changed" is not evidence for the
 > changed resolver.** Slice A changed `resolveInboundSmsContext`, which is the
@@ -4702,9 +4702,9 @@ at the merge-candidate SHA. Full sequence: `docs/SLICE_A_MERGE_CHECKLIST.md`.
 | Document | Why |
 |---|---|
 | `docs/PHILOSOPHY.md` | the specification, not preamble |
-| `docs/MONEY_THESIS.md` | operations-first, accounting-derived; **cash vs accrual is an OUTPUT choice** — never force a basis at capture |
-| `docs/AGENT_CAPABILITY_SEAMS.md` | the SMS path is the agent's first bounded capability; three of six seams are transport-co-located, with an exact extraction trigger |
-| `docs/COMMUNICATION_LINE_MODEL_DESIGN.md` | approved design; org context is NOT property context |
+| `docs/archive/MONEY_THESIS.md` | operations-first, accounting-derived; **cash vs accrual is an OUTPUT choice** — never force a basis at capture |
+| `docs/archive/AGENT_CAPABILITY_SEAMS.md` | the SMS path is the agent's first bounded capability; three of six seams are transport-co-located, with an exact extraction trigger |
+| `docs/archive/COMMUNICATION_LINE_MODEL_DESIGN.md` | approved design; org context is NOT property context |
 | `docs/DB_HARNESS_ISOLATION.md` | the finding above, in full |
 
 ### The order
@@ -4815,7 +4815,7 @@ been used when it had not.
 **129 is CLAIMED** (`129_property_line_uniqueness.sql`, merged in `a08c1da`) and
 **not yet released**. The next free number is **130**. Because 129 is in the
 build and not in the ledger, a deploy of current `main` will correctly REFUSE TO
-START until it is released — see `docs/PROPERTY_LINE_ACTIVATION.md`.
+START until it is released — see `docs/archive/PROPERTY_LINE_ACTIVATION.md`.
 
 | Capability | Proof | §33 rung |
 |---|---|---|
@@ -5064,7 +5064,7 @@ Anything less, name by its actual rung and say what is missing.
 | AI leasing strategy foundation (120) | #23 | dormant runtime — activation gated on a replay corpus that has never run |
 | AI leasing visible status | #24 | — |
 | Slice 8 governed economics lineage (122) | #25 | see the Slice 8 branch's own proof |
-| **Resident SMS → canonical work order** | **#27** | **real Postgres + real HTTP · `docs/SLICE_SMS_CLOSURE.md`** |
+| **Resident SMS → canonical work order** | **#27** | **real Postgres + real HTTP · `docs/archive/SLICE_SMS_CLOSURE.md`** |
 
 ### What the SMS slice changed (read this before touching inbound messaging)
 
@@ -5231,10 +5231,10 @@ week; assume every shared branch name is occupied until you have checked.
 
 ## Key documents
 
-`docs/SLICE_SMS_CLOSURE.md` · `docs/RESIDENT_SMS_WORK_ORDER_CONTRACT.md` ·
+`docs/archive/SLICE_SMS_CLOSURE.md` · `docs/archive/RESIDENT_SMS_WORK_ORDER_CONTRACT.md` ·
 `docs/slices-6-to-10/` (00_GOVERNING_HANDOFF, SLICE_6/7_CLOSURE,
-ACCEPTANCE_CHECKLIST) · `docs/PHILOSOPHY.md` · `docs/PRICING_GOVERNANCE.md` ·
-`docs/IDENTITY_AND_AUTHORITY.md`
+ACCEPTANCE_CHECKLIST) · `docs/PHILOSOPHY.md` · `docs/archive/PRICING_GOVERNANCE.md` ·
+`docs/archive/IDENTITY_AND_AUTHORITY.md`
 
 ---
 ---

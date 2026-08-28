@@ -6,7 +6,7 @@
 //  on identity, hierarchy or authority: three attached no organization,
 //  two set no address-anchored identity, three authenticated with a shared
 //  static bearer key, and none of the four was exercised by any harness.
-//  Full account: docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md.
+//  Full account: docs/archive/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md.
 //
 //  This module is the collapse. After it, `insert into properties` appears
 //  in exactly one place in the product, and the four doors are callers.

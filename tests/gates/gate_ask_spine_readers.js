@@ -207,7 +207,7 @@ const REGISTRY = {
   //  every other registered domain.
   debt: {
     state: "registered",
-    //  Matches docs/DEBT_READ_CONTRACT_AND_SCHEMA.md and the header of
+    //  Matches docs/archive/DEBT_READ_CONTRACT_AND_SCHEMA.md and the header of
     //  debt_routes.js exactly: retrieval claimed, comparison and causal
     //  explanation explicitly not — a portfolio comparison needs a basis
     //  (per unit, per SF, per dollar of value) that is a model nobody

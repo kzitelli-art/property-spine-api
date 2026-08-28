@@ -801,7 +801,7 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
   //  closures, reachable only through the SMS route. They are now
   //  src/conversation/intent.js, transport-independent, so a second
   //  conversational caller uses the SAME implementation rather than a copy.
-  //  See docs/AGENT_CAPABILITY_SEAMS.md for the extraction trigger.
+  //  See docs/archive/AGENT_CAPABILITY_SEAMS.md for the extraction trigger.
   //
   //  ONE IMPLEMENTATION. Do not reintroduce a local copy here; the
   //  tests/_engine.js drift is the standing counter-example.

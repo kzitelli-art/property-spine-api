@@ -2,7 +2,7 @@
 /* ════════════════════════════════════════════════════════════════════
    RELEASE 0 — WHICH BOUNDARY IS PRODUCTION AT?
 
-   The runbook (docs/RELEASE_0_ACTIVATION_RUNBOOK.md) is the plan. This
+   The runbook (docs/archive/RELEASE_0_ACTIVATION_RUNBOOK.md) is the plan. This
    is the instrument: it READS production and says which boundaries have
    actually landed, which one is next, and what that one requires.
 
@@ -271,7 +271,7 @@ const srcHas = (file, needle) => {
     ["§4.2 sweep", "dry run first; --raise only after reading what it would do"];
   console.log(`  ${next[0]} — ${next[1]}`);
   console.log("\n  The runbook has this boundary's preconditions, verification, stop");
-  console.log("  conditions and what is reversible: docs/RELEASE_0_ACTIVATION_RUNBOOK.md\n");
+  console.log("  conditions and what is reversible: docs/archive/RELEASE_0_ACTIVATION_RUNBOOK.md\n");
 
   await c.end();
   //  Stop conditions are a FINDING, not a crash. Non-zero so a script

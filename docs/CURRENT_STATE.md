@@ -133,6 +133,15 @@ inventory-identity argument plus the 38 gates, not by individual HTTP proofs.
 `gate_property_creation_paths.js` caught a real extraction miss (the baseline
 block's `propertyCreation` dependency) — the gate discipline is load-bearing.
 
+**Docs-cleanup follow-on (2026-08-27, on top of the structure work):** 128
+dated receipts/close-outs/candidates moved to `docs/archive/` via `git mv`;
+13 living docs + all subdirectories stay at `docs/` root; `docs/README.md`
+added as the index (living vs historical, with the search-first rule).
+Every citation to archived files was rewritten to `docs/archive/…` — cross-repo
+citations (`property-spine-app/docs/…`) were checked and left intact. Defect
+#2 closed: `migrations/README.md` no longer instructs hand-run production
+migrations. No doc content was rewritten or deleted; receipts are kept.
+
 ---
 
 ## ⛔ KNOWN LIVE DEFECTS
@@ -141,7 +150,7 @@ block's `propertyCreation` dependency) — the gate discipline is load-bearing.
 |---|---|---|
 | 28 | **`migrations/migrate.js` hardcodes SSL, so `--apply` cannot build a schema on a local non-SSL Postgres.** Found while building a local harness DB for the structure thread's real-Postgres proof. Same defect class the `src/shared/database_ssl.js` header documents (the rule lives where only one file can reach it) — but this one is the migration runner itself. Production (Neon, SSL) and CI are unaffected; the documented disaster-recovery path (defect #22) is the story this compounds. Fix: use `databaseSsl()` in migrate.js, not a hardcoded `ssl` object. | `migrations/migrate.js:173` — `new Client({ connectionString: url, ssl: { rejectUnauthorized: false } })` |
 | 1 | **DEPLOYED, 2026-08-20 — NOT YET `PRODUCTION_PROVEN`.** ~~The leasing agent quotes `units.market_rent` directly to prospects~~ — fixed (PR #128), and now live in production at commit `bcd3089` (main's head at deploy time), deployed manually from the Render dashboard, confirmed live by the owner directly. **Deploying is not proving** — nobody has yet asked the live agent a price question and observed a governed answer or an honest handoff. That single observation is what moves this row to `PRODUCTION_PROVEN`; until then it stays at the rung the e2e proof earned. | `git show origin/main:src/agent/agent.js`; deploy confirmed by owner |
-| 2 | **PARTLY FIXED — and this row was itself stale, corrected 2026-08-20.** `docs/deployment.md:51` **now reads correctly**: *"prestart: node migrations/migrate.js (VERIFIES the schema — applies nothing)"*, with line 58 explicitly recording the correction. Somebody fixed it and this file didn't notice — exactly the decay this file exists to prevent, caught by wave 3's critic. **The falsehood survives elsewhere**: `migrations/README.md:36` still says migrate.js *"runs whatever hasn't run yet. Safe to run as many times as you want"* — a migration-001-era document still instructing hand-run production migrations. Fix that file, not `deployment.md`. | `migrations/README.md:36` (still wrong); `docs/deployment.md:51,58` (fixed) |
+| 2 | **RESOLVED, 2026-08-27 — docs-cleanup thread.** The named falsehood (*"Safe to run as many times as you want"*) had already been fixed by an earlier thread at `migrations/README.md:39-44`. The second half — the **"How to run a migration"** section still instructing hand-run production migrations (`node migrate.js` against production) with a false *"it undoes that migration and stops"* rollback claim — is now rewritten to the real ceremony: verify-only on boot, and the release-gated `--apply` act. The migration-001-era planning prose below it is marked as history and explicitly not to be followed. `docs/deployment.md` remains correct (fixed earlier). | `migrations/README.md` — "How migrations actually run" section now matches the release gate; historical sections labeled |
 | 3 | **An operator screen calls routes that 404.** A whole activation flow written, never mounted. | `src/identity/activation.js`; `grep -c "identity/activation" server.js` = **0** |
 | 4 | **A test defaults to hitting PRODUCTION**, with no run receipt anywhere. | `tests/arcs/full_lifecycle_arc.js:47` |
 | 5 | **Ask Spine has two obligation readers** (§7 violation). Its own header: *"Its QUERY LOGIC is sound and is re-expressed here."* | `src/agent/ask_spine_service.js` |

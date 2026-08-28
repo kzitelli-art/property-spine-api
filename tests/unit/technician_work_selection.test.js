@@ -21,7 +21,7 @@
 //  constraints, the FOR UPDATE lock, the unique acceptance key, or the
 //  events row. tests/proofs/technician_acceptance.db.js is that proof and it has
 //  NEVER RUN — it needs the full-schema database of
-//  docs/UNBLOCK_2_FULL_SCHEMA_HARNESS_DATABASE.md.
+//  docs/archive/UNBLOCK_2_FULL_SCHEMA_HARNESS_DATABASE.md.
 // ════════════════════════════════════════════════════════════════════
 "use strict";
 const fs = require("fs");
