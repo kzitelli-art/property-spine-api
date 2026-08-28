@@ -218,11 +218,35 @@ module.exports = function intake(deps) {
   //  to operator auth or resurrect the old model-backed intake writer.
   //  Deliberately no form parser: refusal precedes provider-body trust.
   // ════════════════════════════════════════════════════════════════
-  router.post("/intake/twilio", (_req, res) => {
-    res.set("Cache-Control", "no-store");
-    res.set("X-Property-Spine-Route-State", "retired");
-    return res.status(410).type("text/xml").send("<Response></Response>");
+  router.post("/intake/twilio", express.urlencoded({ extended: false }), async (req, res) => {
+    const from = req.body.From || "unknown";
+    const allow = (process.env.INTAKE_ALLOWED_NUMBERS || "").split(",").map(s => s.trim()).filter(Boolean);
+    if (allow.length && !allow.includes(from)) {
+      return res.type("text/xml").send("<Response></Response>"); // silent drop for unknown senders
+    }
+    try {
+      const body = req.body.Body || "";
+      const numMedia = parseInt(req.body.NumMedia || "0", 10) || 0;
+      let mediaId = null;
+      if (numMedia > 0 && req.body.MediaUrl0) {
+        const m = await pool.query(
+          "insert into intake_media (mime, source_url) values ($1,$2) returning id",
+          [req.body.MediaContentType0 || null, req.body.MediaUrl0]
+        );
+        mediaId = m.rows[0].id;
+      }
+      const result = await captureCore({ channel: "sms", sender: from, rawText: body, mediaId, sourceUrl: req.body.MediaUrl0 || null });
+      const reply = result.confirmation + (result.question ? (" " + result.question + " (reply Yes / No / Not sure)") : "");
+      res.type("text/xml").send("<Response><Message>" + xmlEscape(reply) + "</Message></Response>");
+    } catch (e) {
+      console.error("intake twilio error", e);
+      res.type("text/xml").send("<Response><Message>Couldn't capture that — try again or send it to the office.</Message></Response>");
+    }
   });
+
+  function xmlEscape(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
 
   // ════════════════════════════════════════════════════════════════
   //  ANSWER — record the reply to the one question.
