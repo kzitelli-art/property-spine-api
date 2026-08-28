@@ -372,30 +372,39 @@ module.exports = function plaidModule({ pool }) {
     }
   });
 
-  // ──────────────────────────────────────────────────────────────────
-  // POST /plaid/webhook
-  // Plaid POSTs here when new transactions are available
-  // (SYNC_UPDATES_AVAILABLE) or a login breaks (ITEM_LOGIN_REQUIRED). We do
-  // NOT auto-sync money on a webhook — we record that an update is waiting
-  // and let the operator pull deliberately. (Same human-in-the-loop posture
-  // as the rest of the money layer: the machine flags, the human acts.)
-  // This route is intentionally unauthenticated at the app layer because
-  // Plaid calls it; it performs no money mutation, only a status note.
-  // ──────────────────────────────────────────────────────────────────
-  router.post("/plaid/webhook", async (req, res) => {
-    const { webhook_type, webhook_code, item_id } = req.body || {};
-    try {
-      if (item_id && webhook_code === "ITEM_LOGIN_REQUIRED") {
-        await pool.query("update plaid_item set status='login_required', last_error='ITEM_LOGIN_REQUIRED', updated_at=now() where item_id=$1", [item_id]);
-      } else if (item_id && (webhook_code === "SYNC_UPDATES_AVAILABLE" || webhook_type === "TRANSACTIONS")) {
-        await pool.query("update plaid_item set last_error=null, updated_at=now() where item_id=$1", [item_id]);
-      }
-    } catch (_) { /* never fail a webhook ack */ }
-    return res.json({ ok: true });
-  });
-
   return router;
 };
+
+// The verified raw-body route in plaid_webhook.js is the sole caller. This
+// handler remains deliberately narrow: note Item health only; never sync,
+// create a claim, or decide money. Conditional writes make verified provider
+// replay idempotent without inventing a second webhook-event table.
+async function handlePlaidWebhook(pool, payload) {
+  const { webhook_type, webhook_code, item_id } = payload || {};
+  try {
+    if (item_id && webhook_code === "ITEM_LOGIN_REQUIRED") {
+      return await pool.query(
+        `update plaid_item
+            set status='login_required',last_error='ITEM_LOGIN_REQUIRED',updated_at=now()
+          where item_id=$1
+            and (status is distinct from 'login_required'
+              or last_error is distinct from 'ITEM_LOGIN_REQUIRED')
+          returning id`, [item_id]
+      );
+    }
+    if (item_id && (webhook_code === "SYNC_UPDATES_AVAILABLE" || webhook_type === "TRANSACTIONS")) {
+      return await pool.query(
+        `update plaid_item set last_error=null,updated_at=now()
+          where item_id=$1 and last_error is not null
+          returning id`, [item_id]
+      );
+    }
+  } catch (_) { /* preserve the established always-ack provider posture */ }
+  return { rowCount: 0, rows: [] };
+}
+
+module.exports._plaidClient = plaidClient;
+module.exports._handlePlaidWebhook = handlePlaidWebhook;
 
 // ── shared staging helper ─────────────────────────────────────────────
 // One source of truth for "a bank line becomes a claim." This is the SAME

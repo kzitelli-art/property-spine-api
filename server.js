@@ -49,6 +49,7 @@ const seedEndpointModule = require('./src/shared/seed_endpoint');
 const managementReadModule = require('./src/surfaces/management_read');
 const propertySurfaceModule = require('./src/surfaces/property_surface');
 const plaidModule = require('./src/money/plaid'); // Plaid: second feed into bank_transactions (031); fail-soft when unconfigured
+const plaidWebhookModule = require('./src/money/plaid_webhook'); // Plaid provider JWT + exact raw-body boundary
 const compareModule = require("./src/money/compare");   // report comparison layer (the hook)
 const explainModule = require("./src/money/explain");
 const tenantLinkModule = require("./src/comms/tenant_link"); // tenant text line Phase 1: connection (invite link → verify → session)
@@ -156,6 +157,12 @@ const tourAvailabilityService = makeTourAvailabilityService({ pool }); // the ON
 //  the configured connection and HMAC before parsing JSON.
 app.use("/integrations/read-ai/webhook", meetingEvidenceModule.readAiWebhook({ pool }));
 app.use("/integrations/read-ai/webhook", meetingEvidenceModule.readAiWebhookErrorHandler({ pool }));
+
+// ── PLAID WEBHOOK — provider JWT over exact raw bytes ───────────────
+//  This is the one externally callable Plaid ingress. It verifies the
+//  Plaid-Verification ES256 JWT, fetched key, age, and raw-body hash before
+//  parsing JSON or reaching the narrow plaid_item status-note handler.
+app.use("/plaid/webhook", plaidWebhookModule({ pool }));
 
 app.use(express.json({ limit: "1mb" }));  // body-size cap — stops oversized payloads
 
