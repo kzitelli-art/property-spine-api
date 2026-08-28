@@ -658,7 +658,7 @@ function makeStaffLeasingAction({
     let capture = null;
     let conversion = null;
 
-    if (parsed.intent === "confirm_application") {
+    if (false && parsed.intent === "confirm_application") { // DELIBERATE RED: confirmation boundary disabled
       try {
         const confirmed = await confirmApplication(pool, {
           userId, propertyContext, confirmation: parsed.confirmation,
