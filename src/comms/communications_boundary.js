@@ -89,6 +89,14 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     "application_link",
   ]);
 
+  // ── PROPERTY LINE (server-derived `from`) ──────────────────────────
+  //  The ONLY place a property's SMS line is resolved for sending.
+  //  Internal detail of the boundary; business modules never call it.
+  async function propertyLine(q, propertyId) {
+    const r = await q.query(`select sms_number from properties where id = $1`, [propertyId]);
+    return r.rows.length ? r.rows[0].sms_number : null;
+  }
+
   // ── PROPERTY OPERATING AUTHORITY (094) ─────────────────────────────
   //  propertyHasCapability — the ONE reader of property_channel_capabilities.
   //
