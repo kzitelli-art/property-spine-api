@@ -140,6 +140,8 @@ const GATES = [
   //  confident lie, so the honesty properties are on the standard path.
   { file: "unit/ask_spine_answer.test.js",
     what: "Ask Spine: answers only from reads, names them, and an outage never reads as good news" },
+  { file: "unit/skyline_ask_spine_sms_matrix.test.js",
+    what: "Skyline Ask Spine: dashboard and SMS share routing, entitlement, signer, and identifier-firewall behavior" },
   { file: "proofs/ask_spine_contract_proof.js",
     what: "Ask Spine attention: one canonical obligations reader, scoped ranking, no conversational SQL copy" },
   { file: "unit/staff_sms_router.test.js",

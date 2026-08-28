@@ -24,6 +24,8 @@ const { pool, q, ctx, toPacket, residentSigns, api } = require("./leasing_e2e_li
   let heldApplicationsTable = false;
   let proofObligationId = null;
   let unauthorizedUserId = null;
+  let applicationOnlyPersonId = null;
+  let applicationOnlyApplicationId = null;
   const must = (name, cond, detail = "") => {
     if (cond) console.log("  \u2713 " + name);
     else {
@@ -193,6 +195,13 @@ const { pool, q, ctx, toPacket, residentSigns, api } = require("./leasing_e2e_li
       messagesAfter === messagesBefore, `${messagesBefore} -> ${messagesAfter}`);
 
     console.log("\n── READER FAILURE IS NOT SUCCESS ──");
+    const schemaBeforeFailure = (await q(
+      `select to_regclass('public.lease_applications')::text as table_name,
+              exists(select 1 from schema_migrations where version='033') as migration_033`,
+    )).rows[0];
+    must("the real migration chain established lease_applications before falsification",
+      schemaBeforeFailure.table_name === "lease_applications" && schemaBeforeFailure.migration_033,
+      JSON.stringify(schemaBeforeFailure));
     await q("alter table lease_applications rename to lease_applications_http_contract_hold");
     heldApplicationsTable = true;
     const failed = await askHttp(C.token, signerQuestion);
@@ -204,6 +213,11 @@ const { pool, q, ctx, toPacket, residentSigns, api } = require("./leasing_e2e_li
       JSON.stringify(failed));
     await q("alter table lease_applications_http_contract_hold rename to lease_applications");
     heldApplicationsTable = false;
+    const schemaAfterFailure = (await q(
+      "select to_regclass('public.lease_applications')::text as table_name",
+    )).rows[0];
+    must("the deliberate reader failure restored the canonical table name",
+      schemaAfterFailure.table_name === "lease_applications", JSON.stringify(schemaAfterFailure));
     const restored = await askHttp(C.token, signerQuestion);
     must("the same canonical read returns to the exact answered state after restoration",
       restored.status === 200 && restored.body.outcome === signer.body.outcome &&
@@ -212,6 +226,42 @@ const { pool, q, ctx, toPacket, residentSigns, api } = require("./leasing_e2e_li
       JSON.stringify(restored));
 
     console.log("\n── DIRECT READER CONTROL ──");
+    const applicationOnlyName = `ApplicationOnly${Date.now().toString(36)} Quillon`;
+    applicationOnlyPersonId = (await q(
+      `insert into persons (name,lifecycle_status,source)
+       values ($1,'prospect','ask_spine_application_only_proof') returning id`,
+      [applicationOnlyName],
+    )).rows[0].id;
+    applicationOnlyApplicationId = (await q(
+      `insert into lease_applications (property_id,person_id,applicant_name,status)
+       values ($1,$2,$3,'submitted') returning id`,
+      [C.prop, applicationOnlyPersonId, applicationOnlyName],
+    )).rows[0].id;
+    const applicationOnlyQuestion = `Where does ${applicationOnlyName}'s application stand?`;
+    const applicationOnlyFacts = await askSpineAnswer.gatherFacts(pool, {
+      property_id: C.prop,
+      allowed_modules: ["leasing"],
+      subject: askSpineAnswer.questionSubject(applicationOnlyQuestion),
+      question: applicationOnlyQuestion,
+    });
+    must("a named person scoped only by lease_applications resolves from the real table",
+      applicationOnlyFacts.leasing_person &&
+      applicationOnlyFacts.leasing_person.read_state === "OK" &&
+      applicationOnlyFacts.leasing_person.subject_name === applicationOnlyName &&
+      applicationOnlyFacts.leasing_person.application &&
+      applicationOnlyFacts.leasing_person.application.status === "submitted",
+      JSON.stringify(applicationOnlyFacts.leasing_person));
+    const wrongPropertyFacts = await askSpineAnswer.gatherFacts(pool, {
+      property_id: randomUUID(),
+      allowed_modules: ["leasing"],
+      subject: "leasing_person",
+      question: applicationOnlyQuestion,
+    });
+    must("the application-only subject cannot resolve outside its server-derived property",
+      wrongPropertyFacts.leasing_person &&
+      wrongPropertyFacts.leasing_person.read_state === "NO_SUBJECT",
+      JSON.stringify(wrongPropertyFacts.leasing_person));
+
     const subject = askSpineAnswer.questionSubject(`Has ${NAME} signed?`);
     const facts = await askSpineAnswer.gatherFacts(pool, {
       property_id: C.prop,
@@ -242,6 +292,14 @@ const { pool, q, ctx, toPacket, residentSigns, api } = require("./leasing_e2e_li
         await q("delete from property_team_assignments where user_id=$1", [unauthorizedUserId]);
         await q("delete from users where id=$1", [unauthorizedUserId]);
       } catch (e) { console.error("proof user cleanup failed:", e.message); bad++; }
+    }
+    if (applicationOnlyApplicationId) {
+      try { await q("delete from lease_applications where id=$1", [applicationOnlyApplicationId]); }
+      catch (e) { console.error("application-only application cleanup failed:", e.message); bad++; }
+    }
+    if (applicationOnlyPersonId) {
+      try { await q("delete from persons where id=$1", [applicationOnlyPersonId]); }
+      catch (e) { console.error("application-only person cleanup failed:", e.message); bad++; }
     }
     await pool.end();
   }

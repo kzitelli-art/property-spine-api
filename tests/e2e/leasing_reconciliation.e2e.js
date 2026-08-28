@@ -106,6 +106,9 @@ async function beliefsFor(C, appId, personId, question) {
   const f    = await gatherFacts(pool, { property_id: C.prop, allowed_modules: ["leasing"],
                                          subject: "leasing_person", question,
                                          applicationsService: APPLICATIONS_SERVICE });
+  if (!f.leasing_person || f.leasing_person.read_state !== "OK") {
+    throw new Error(`Ask Spine named-person read did not participate for "${question}": ${JSON.stringify(f.leasing_person || null)}`);
+  }
   return {
     review:   fromReview(rev.body),
     standing: fromStanding(st.body && st.body.leasing_standing),
