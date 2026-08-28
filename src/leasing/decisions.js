@@ -33,6 +33,40 @@
 //  All consequential logic lives on _service (transaction-aware,
 //  client-first) — routes are the thin HTTP skin, same shape as
 //  leasing_conversion/agent.
+//
+//  ⛔ MONEY BUILD 0.5 — THE LEGACY WRITER IS CLOSED (CLASS 2) ─────────
+//
+//  createDecision and resolveDecision REFUSE. Reads and history are
+//  untouched: pendingDecisions, readAuthority, GET /decisions/pending
+//  and GET /decisions/:id all behave exactly as before.
+//
+//  WHY, in one sentence: the canonical money sequence is
+//
+//      occurrence → obligation → economic decision → cash →
+//      recognition → certification → issuance
+//
+//  and while canonical-domain ownership of each migration-059 decision
+//  type is unresolved, this writer is a SECOND authority over economic
+//  decisions. A second authority that still writes is not dormant — it
+//  is competing, quietly, with whatever is ruled next.
+//
+//  This is containment, not retirement. The functions, the routes, the
+//  service shape and the commitmentledger injection all stay exactly
+//  where they are, so the eventual ruling reassigns a live boundary
+//  rather than archaeology.
+//
+//  CLASS 2 — temporary containment adapter.
+//  REMOVAL CONDITION — delete the legacy mutation functions, their
+//  routes and the injection only when ALL of these are true:
+//    1. every migration-059 decision type has a ruled canonical-domain
+//       owner;
+//    2. replacement commands exist where a replacement is needed;
+//    3. legacy mutation compatibility is no longer required by any
+//       caller;
+//    4. the owner authorises retirement.
+//  NOTICED BY — tests/e2e/legacy_decision_writes_disabled.e2e.js, which
+//  fails the moment either writer stops refusing. Convenience is not a
+//  replacement condition; neither is "nobody calls it anyway."
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");
@@ -62,6 +96,25 @@ function railError(code, message, extra = {}) {
   e.code = code;
   Object.assign(e, extra);
   return e;
+}
+
+//  ── THE CONTAINMENT WALL (Money Build 0.5, Class 2) ────────────────
+//  One refusal, one vocabulary, two callers. The code and the reason are
+//  EXACT and are asserted verbatim by the e2e proof — an approximate
+//  refusal is a refusal nobody can build a gate on.
+const LEGACY_DECISION_WRITES_DISABLED_CODE = "LEGACY_DECISION_WRITES_DISABLED";
+const LEGACY_DECISION_WRITES_DISABLED_REASON =
+  "Migration 059 decision writes are closed pending canonical-domain reassignment.";
+
+//  `reason` rides on the error rather than being reconstructed at the HTTP
+//  skin, so a DIRECT _service caller — which has no HTTP skin — gets the
+//  same sentence the route returns. One boundary, one explanation.
+function legacyDecisionWritesDisabled() {
+  return railError(
+    LEGACY_DECISION_WRITES_DISABLED_CODE,
+    LEGACY_DECISION_WRITES_DISABLED_REASON,
+    { reason: LEGACY_DECISION_WRITES_DISABLED_REASON }
+  );
 }
 
 const TYPE_LABEL = {
@@ -118,6 +171,13 @@ module.exports = function decisionsModule({ pool, spawnObligationFromEvent, comp
   // (client-first) so a future caller can fold it into its own atomic
   // unit — the HTTP route below owns its own transaction.
   async function createDecision(client, spec) {
+    //  ⛔ FIRST STATEMENT, DELIBERATELY. The refusal must land before
+    //  `spec` is destructured, before any lookup, before a transaction is
+    //  opened and before any durable write. Everything below this line is
+    //  the retained migration-059 writer, kept verbatim and unreachable so
+    //  the eventual ruling reassigns real code instead of reconstructing it.
+    throw legacyDecisionWritesDisabled();
+
     const {
       property_id, decided_by_person_id,
       type, amount, reason_code,
@@ -214,7 +274,19 @@ module.exports = function decisionsModule({ pool, spawnObligationFromEvent, comp
   // ── SERVICE: resolveDecision (grant | deny) ────────────────────────
   // One resolver, two verbs — the loop closes either way. Row-locked
   // (FOR UPDATE) so concurrent resolvers serialize; exactly one wins.
-  async function resolveDecision(client, { decision_id, verb, resolved_by_person_id, note = null }) {
+  async function resolveDecision(client, spec) {
+    //  ⛔ FIRST STATEMENT, DELIBERATELY — same contract as createDecision.
+    throw legacyDecisionWritesDisabled();
+
+    //  ⚠ THE SIGNATURE MOVED FROM A DESTRUCTURING PARAMETER TO `spec`, AND
+    //  THAT IS LOAD-BEARING. A destructuring parameter list is evaluated AT
+    //  CALL TIME, before the function's first statement runs — so
+    //  `resolveDecision(client)` or `resolveDecision(client, undefined)`
+    //  would have thrown a bare TypeError instead of the governed refusal,
+    //  and a caller would learn that something broke rather than that the
+    //  writer is closed. "Refuse before payload destructuring" is not
+    //  satisfiable while the payload is destructured in the signature.
+    const { decision_id, verb, resolved_by_person_id, note = null } = spec || {};
     if (!["grant", "deny"].includes(verb)) throw railError("BAD_INPUT", "verb must be grant or deny");
     if (!resolved_by_person_id) throw railError("BAD_INPUT", `${verb === "grant" ? "granted" : "denied"}_by_person_id required — a human must resolve`);
     if (verb === "deny" && (!note || !String(note).trim())) {
@@ -306,10 +378,17 @@ module.exports = function decisionsModule({ pool, spawnObligationFromEvent, comp
   const httpStatus = {
     BAD_INPUT: 400, NOT_FOUND: 404, NOT_PENDING: 409,
     NO_AUTHORITY: 403, ALREADY_COMPLETE: 409, INPUTS_OUTSTANDING: 409,
+    //  410 GONE, not 403 and not 404. The route is not forbidden to this
+    //  caller and it is not missing — it existed, it was authoritative, and
+    //  it has been deliberately closed. 410 is the only status that says so.
+    LEGACY_DECISION_WRITES_DISABLED: 410,
   };
   function sendErr(res, e) {
     const s = httpStatus[e.code] || 500;
     const body = { error: e.message, code: e.code || "INTERNAL" };
+    //  `error` is retained for existing callers; `code` and `reason` are the
+    //  contract. A caller that reads only `error` keeps working.
+    if (e.reason) body.reason = e.reason;
     if (e.state) body.state = e.state;
     if (e.cap != null) body.cap = e.cap;
     return res.status(s).json(body);
@@ -332,7 +411,13 @@ module.exports = function decisionsModule({ pool, spawnObligationFromEvent, comp
   // Create — both bands. Receipt says plainly which band it took.
   app.post("/decisions", async (req, res) => {
     try {
-      const out = await inTx((c) => createDecision(c, req.body || {}));
+      //  ⛔ NOT inTx. Wrapping a closed writer in a transaction would
+      //  acquire a pool connection and issue BEGIN before the refusal —
+      //  starting a transaction the containment contract says must never
+      //  start, then rolling it back to hide that it did. The service is
+      //  the authority boundary; this route only carries its refusal to
+      //  HTTP. Restoring inTx here is exactly what re-opens the writer.
+      const out = await createDecision(null, req.body || {});
       const d = out.decision;
       const receipt = out.band === "act_then_review"
         ? `Recorded and closed: ${TYPE_LABEL[d.type]} of ${money(d.amount)} (${d.reason_code}). Within your authority — no further action.`
@@ -372,22 +457,22 @@ module.exports = function decisionsModule({ pool, spawnObligationFromEvent, comp
 
   app.post("/decisions/:id/grant", async (req, res) => {
     try {
-      const d = await inTx((c) => resolveDecision(c, {
+      const d = await resolveDecision(null, {   // ⛔ not inTx — see POST /decisions
         decision_id: req.params.id, verb: "grant",
         resolved_by_person_id: (req.body || {}).granted_by_person_id,
         note: (req.body || {}).note || null,
-      }));
+      });
       res.json({ decision: d, receipt: `Granted: ${TYPE_LABEL[d.type]} of ${money(d.amount)}. The loop is closed.` });
     } catch (e) { sendErr(res, e); }
   });
 
   app.post("/decisions/:id/deny", async (req, res) => {
     try {
-      const d = await inTx((c) => resolveDecision(c, {
+      const d = await resolveDecision(null, {   // ⛔ not inTx — see POST /decisions
         decision_id: req.params.id, verb: "deny",
         resolved_by_person_id: (req.body || {}).denied_by_person_id,
         note: (req.body || {}).note || null,
-      }));
+      });
       res.json({ decision: d, receipt: `Denied: ${TYPE_LABEL[d.type]} of ${money(d.amount)}. The loop is closed — the decider can see why.` });
     } catch (e) { sendErr(res, e); }
   });

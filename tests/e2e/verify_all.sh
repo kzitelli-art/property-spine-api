@@ -108,6 +108,7 @@ else
     SKIPPED="browser rung"
   fi
   step "invite-to-guarantor lease"  env E2E_DISPOSABLE_DATABASE=true node tests/e2e/tour_application_lease.e2e.js
+  step "legacy decision writes closed" node tests/e2e/legacy_decision_writes_disabled.e2e.js
   kill "$SERVER_PID" 2>/dev/null
 fi
 fi
