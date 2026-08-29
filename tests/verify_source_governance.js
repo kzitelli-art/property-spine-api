@@ -45,6 +45,8 @@ const fs = require("fs");
 const GATES = [
   { file: "gate_harness_isolation.js",
     what: "no new unguarded DATABASE_URL consumer; debt register accurate" },
+  { file: "unit/release0_audit_forbidden_fields.test.js",
+    what: "Release 0 audit queries keep forbidden message, identity and work contents out of receipts" },
   //  Twice now a file has decided SSL for itself: server.js, which never
   //  became healthy in CI, and tools/apply_unit_type_mapping.js, which took
   //  CI red for four runs while the suite passed on every developer machine.
@@ -73,6 +75,8 @@ const GATES = [
   //  belong on the standard path rather than in a harness nobody runs.
   { file: "gate_migration_137_promotion.js",
     what: "migration 137 DDL is the proven scale payload, unchanged" },
+  { file: "unit/migration_ledger_verdict.test.js",
+    what: "migration ledger agreement is checked in both directions, including duplicate and naming conflicts" },
   //  The release guard stops production migrations, and until now the only
   //  thing that ran its proof was somebody remembering to. It is DB-free
   //  (it stubs `pg`) and builds its own scratch git repository, so it
@@ -162,6 +166,8 @@ const GATES = [
   //  does not and cannot verify that any row is TRUE.
   { file: "gate_current_state.js",
     what: "CURRENT_STATE.md: every src/ domain is named, rungs use the controlled vocabulary, defect numbering has not collided" },
+  { file: "gate_person_ingress.js",
+    what: "person creation authority stays in the ingress boundary and every remaining writer is declared truthfully" },
   //  The gate above is the §40.2 enforcement, so it is the one gate whose
   //  own failure modes must be demonstrated rather than trusted. It ran
   //  green for months while scanning one directory and missing Tenancy
@@ -181,6 +187,8 @@ const GATES = [
     what: "Application space grain (182): the bed is durable from the aim, whole-unit behaviour is unchanged, a bed is never guessed, and the refusal prose stays out of the deployed app's false branch" },
   { file: "unit/application_future_target.test.js",
     what: "Future applications: the governed turn-ready date survives invitation, tenant submission, and application birth" },
+  { file: "unit/application_send_command.test.js",
+    what: "application send delegates exact unit and bed targets through the canonical prepare and dispatch command" },
   { file: "unit/interval_position_hostile.test.js",
     what: "Interval tenancy: closed-interval arithmetic, which rights count, honest refusals, and the line it does not cross" },
   { file: "unit/meeting_evidence_ingress.test.js",

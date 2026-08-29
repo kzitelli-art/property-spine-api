@@ -64,8 +64,8 @@ const DECLARED = Object.freeze([
     reason: "Staff identity, not a counterparty. Guarded by its own partial unique index " +
             "(migration 104) which no other channel has.",
     removal: "Convert when the staff_bridge profile is exercised by a proof." },
-  { path: "server.js", channel: "leasing_intake",
-    reason: "The public intake door's inline resolver, predating the module split.",
+  { path: "src/baseline/baseline_routes.js", channel: "leasing_intake",
+    reason: "The public intake door's resolver, extracted from server.js into the live mounted baseline router.",
     removal: "Fold into the leasing_intake profile with leasing_leads.js." },
   { path: "src/shared/no076_failclosed_check.js", channel: "harness",
     reason: "A fail-closed self-check that creates and deletes one tagged row.",
@@ -140,7 +140,7 @@ const WRITE = /insert\s+into\s+persons\b/i;
 
 const writers = [];
 for (const f of files) {
-  const rel = path.relative(ROOT, f);
+  const rel = path.relative(ROOT, f).replace(/\\/g, "/");
   //  Migrations legitimately create and backfill the table itself.
   if (rel.startsWith("migrations/")) continue;
   const hits = writeLines(fs.readFileSync(f, "utf8"));
