@@ -136,7 +136,7 @@ async function main() {
       });
       assert.strictEqual(facts.equity.read_state, "READ_FAILED");
       assert.deepStrictEqual(facts.reads_that_failed, ["equity"]);
-      assert.strictEqual(facts.equity.standing, undefined);
+      assert.strictEqual(facts.equity.standing, null);
     });
 
   await ok("a real position is gathered with database ids stripped before the model ever sees it",

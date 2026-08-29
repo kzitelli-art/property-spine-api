@@ -13,7 +13,8 @@ let pass = 0, fail = 0;
 const ok = (n, c, d) => { if (c) { pass++; console.log("  PASS  " + n); } else { fail++; console.log("  FAIL  " + n + (d ? "  → " + d : "")); } };
 
 const APP = "app-1", PROP = "prop-1", SPACE = "sp-1", UNIT = "u-1", USER = "user-1";
-const store = { records: [], appPointer: null, appStatus: "approved", obligations: [], evaluations: [] };
+const store = { records: [], appPointer: null, appStatus: "approved", obligations: [], evaluations: [],
+  lifecycleChecks: { application: 0, executedRecord: 0, obligation: 0 } };
 // what the tenant acknowledged; tests mutate this to create conflicts
 const ACK = { id: "conf-1", rent: "1850.00", security_deposit: "1850.00",
   lease_start_date: "2026-08-01", lease_end_date: "2027-07-31",
@@ -25,16 +26,22 @@ function stubClient(overrides = {}) {
   const o = { appUnit: UNIT, spaceUnit: UNIT, spaceProp: PROP, ...overrides };
   return { query: async (sql, params) => {
     const s = String(sql);
-    if (/from lease_applications where id=\$1/.test(s))
-      return { rows: [{ id: APP, property_id: PROP, unit_id: o.appUnit, person_id: "per-1", applicant_name: "Marlow Reyes" }] };
+    if (/from lease_applications where id=\$1/.test(s)) {
+      if (/for update/.test(s)) store.lifecycleChecks.application++;
+      return { rows: [{ id: APP, property_id: PROP, unit_id: o.appUnit,
+        person_id: "per-1", applicant_name: "Marlow Reyes",
+        status: store.appStatus, executed_lease_record_id: store.appPointer }] };
+    }
     if (/from spaces s join units u/.test(s))
       return { rows: params[0] === SPACE ? [{ id: SPACE, unit_id: o.spaceUnit, property_id: o.spaceProp }] : [] };
     if (/from executed_lease_records[\s\S]*idempotency_key=\$2/.test(s))
       return { rows: store.records.filter(r => r.idempotency_key && r.idempotency_key === params[1]) };
     if (/from executed_lease_records[\s\S]*record_state = 'verified'/.test(s))
       return { rows: store.records.filter(r => r.record_state === "verified") };
-    if (/from executed_lease_records where id=\$1 for update/.test(s))
+    if (/from executed_lease_records where id=\$1 for update/.test(s)) {
+      store.lifecycleChecks.executedRecord++;
       return { rows: store.records.filter(r => r.id === params[0]) };
+    }
     if (/update executed_lease_records set record_state='superseded'/.test(s)) {
       const r = store.records.find(x => x.id === params[0]); if (r) r.record_state = "superseded"; return { rows: [] };
     }
@@ -55,7 +62,15 @@ function stubClient(overrides = {}) {
       if (r) { r.admission_status = params[0]; r.admission_blockers = params[1]; }
       return { rows: [] };
     }
-    if (/update lease_applications[\s\S]*accepted_term_required/.test(s)) { store.appStatus = "accepted_term_required"; return { rows: [] }; }
+    if (/from obligations where id=\$1 for update/.test(s)) {
+      store.lifecycleChecks.obligation++;
+      return { rows: store.obligations.filter(o => o.id === params[0]) };
+    }
+    if (/update lease_applications[\s\S]*accepted_term_required/.test(s)) {
+      store.appStatus = "accepted_term_required";
+      return { rows: [{ id: APP, status: store.appStatus,
+        executed_lease_record_id: store.appPointer }] };
+    }
     if (/insert into executed_lease_admission_evaluations/.test(s)) {
       store.evaluations.push({ record_id: params[0], application_id: params[1], result: params[2],
         blockers: JSON.parse(params[3]), sources_compared: JSON.parse(params[4]),
@@ -190,6 +205,7 @@ ACK.payload_hash = normalizeAndHash({ rent: 1850, security_deposit: 1850,
 
   console.log("\n10. Phase 2 — operational admission (ruling)");
   store.records = []; store.appPointer = null; store.appStatus = "approved"; store.obligations = [];
+  store.lifecycleChecks = { application: 0, executedRecord: 0, obligation: 0 };
   LOCKED_OFFER_RENT = null;
 
   // clean: executed terms match what the tenant acknowledged
@@ -200,6 +216,10 @@ ACK.payload_hash = normalizeAndHash({ rent: 1850, security_deposit: 1850,
   ok("…application moved to accepted_term_required", store.appStatus === "accepted_term_required");
   ok("…obligation requires lease_term_confirmation",
     store.obligations[0].required_inputs.includes("lease_term_confirmation"));
+  ok("…canonical lifecycle verifies application, executed record, and obligation",
+    store.lifecycleChecks.application === 2 &&
+    store.lifecycleChecks.executedRecord === 1 &&
+    store.lifecycleChecks.obligation === 1, JSON.stringify(store.lifecycleChecks));
 
   // terms conflict: the executed lease disagrees with the acknowledged packet
   store.records = []; store.appStatus = "approved"; store.obligations = [];

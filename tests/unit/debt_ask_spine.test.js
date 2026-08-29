@@ -125,7 +125,7 @@ async function main() {
     });
     assert.strictEqual(facts.debt.read_state, "READ_FAILED");
     assert.deepStrictEqual(facts.reads_that_failed, ["debt"]);
-    assert.strictEqual(facts.debt.standing, undefined);
+    assert.strictEqual(facts.debt.standing, null);
   });
 
   await ok("the compact projection preserves Debt walls without database ids", async () => {
