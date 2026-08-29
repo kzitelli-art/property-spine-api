@@ -1036,7 +1036,7 @@ async function gatherFacts(db, {
         });
       }
     } catch (e) {
-      facts.debt = failedRead(e);
+      facts.debt = { ...failedRead(e), standing: { truth_state: debtRead.NOT_ESTABLISHED } };
       failures.push(silenceFor(e) === "READ_TIMED_OUT" ? "debt_timed_out" : "debt");
     }
   }
