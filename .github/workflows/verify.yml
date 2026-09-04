@@ -108,6 +108,16 @@ jobs:
       - name: Run every proof
         run: ./tests/e2e/verify_all.sh
 
+      #  THE DATABASE PROOFS (CURRENT_STATE #17). Same shape as above: one
+      #  script, run identically here and on a developer machine. It builds
+      #  its own disposable database from the migration chain and runs
+      #  tests/proofs/db_proofs.manifest — `run` proofs fail the job,
+      #  `backlog` proofs are reported. Runs even when the step above is
+      #  red, so a broken e2e proof cannot hide a broken database proof.
+      - name: Run the database proofs
+        if: ${{ !cancelled() }}
+        run: ./tests/e2e/db_proofs.sh
+
       #  Retained whether the run passed or failed — a failed run's logs are
       #  the ones worth reading.
       - name: Upload server log

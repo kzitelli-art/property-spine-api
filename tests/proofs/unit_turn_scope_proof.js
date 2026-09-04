@@ -433,7 +433,7 @@ section("B16  scope-owner ladder is a temporary adapter, not an authority model"
     ok("but a sole eligible person is still the owner, not a false UNASSIGNED", f && f.user_id === "apm");
 
     // 3. no named employee hardcoded
-    const src = require("fs").readFileSync(require.resolve("../src/maintenance/unit_turn_scope_service"), "utf8");
+    const src = require("fs").readFileSync(require.resolve("../../src/maintenance/unit_turn_scope_service"), "utf8");
     ok("no email address appears in the module", !/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(src));
     ok("ladder is patterns, not identifiers", svc.SCOPE_OWNER_LADDER.every((r) => r.re instanceof RegExp));
     ok("replacement condition is documented",

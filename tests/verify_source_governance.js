@@ -45,6 +45,11 @@ const fs = require("fs");
 const GATES = [
   { file: "gate_harness_isolation.js",
     what: "no new unguarded DATABASE_URL consumer; debt register accurate" },
+  //  69 real-Postgres proofs backed most HTTP_PROVEN rungs and nothing ran
+  //  them (CURRENT_STATE #17). tests/e2e/db_proofs.sh runs the manifest in
+  //  CI; this gate keeps every *.db.js classified as run or backlog.
+  { file: "gate_db_proof_manifest.js",
+    what: "every *.db.js proof is in the CI manifest as run or backlog-with-reason" },
   //  Twice now a file has decided SSL for itself: server.js, which never
   //  became healthy in CI, and tools/apply_unit_type_mapping.js, which took
   //  CI red for four runs while the suite passed on every developer machine.

@@ -103,7 +103,10 @@ function validOutput() {
   try {
     await client.query("begin");
     await client.query(
-      `insert into schema_migrations (version, name) values ('181','meeting_evidence_binding_finality_lineage')`
+      //  The harness used to assume a chain stopped just below 181, and died on
+      //  a schema already carrying it. The row is the same either way.
+      `insert into schema_migrations (version, name) values ('181','meeting_evidence_binding_finality_lineage')
+       on conflict (version) do nothing`
     );
     const relations = (await client.query(
       `select to_regclass('public.meeting_property_current_bindings') as binding_view,

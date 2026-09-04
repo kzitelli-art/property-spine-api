@@ -123,7 +123,7 @@ async function main() {
       unentitled: { id: uid, property_id: prop, allowed_modules: ["leasing"] },
       elsewhere:  { id: uid, property_id: other, allowed_modules: ["asset_management"] },
     };
-    const resolverPath = require.resolve("../src/identity/staff_session_service.js");
+    const resolverPath = require.resolve("../../src/identity/staff_session_service.js");
     require.cache[resolverPath] = { id: resolverPath, filename: resolverPath, loaded: true,
       exports: { resolveStaffSession: async (_p, t) => SESSIONS[t] || null } };
 

@@ -206,8 +206,10 @@ try {
    *  THE ACTUAL HISTORICAL DEFECT. This is the state the gate shipped
    *  in: tenancy invisible, gate green. It must never be quiet again.  */
   falsify("src/tenancy is dropped from the scanned directories",
-    () => mutate(GATE, [`const STANDING_READ_DIRS = ["src/asset", "src/tenancy"];`,
-                        `const STANDING_READ_DIRS = ["src/asset"];`]),
+    //  The scan is computed from disk now (CURRENT_STATE #6); "dropping a
+    //  directory" is adding it to the exclusion filter.
+    () => mutate(GATE, [`  .filter((d) => !["src/surfaces"].includes(d))`,
+                        `  .filter((d) => !["src/surfaces", "src/tenancy"].includes(d))`]),
     "registry entry tenancy corresponds to a real standing read");
 
   /*  ── 5. THE EXCLUSION TURNED OFF ────────────────────────────────
@@ -216,8 +218,8 @@ try {
    *  entries they can never honestly earn. The exclusion is a real
    *  boundary, and this proves removing it is loud rather than free.   */
   falsify("src/surfaces is scanned as though it held domains",
-    () => mutate(GATE, [`const STANDING_READ_DIRS = ["src/asset", "src/tenancy"];`,
-                        `const STANDING_READ_DIRS = ["src/asset", "src/tenancy", "src/surfaces"];`]),
+    () => mutate(GATE, [`  .filter((d) => !["src/surfaces"].includes(d))`,
+                        `  .filter(() => true)`]),
     "is declared in the Ask Spine registry");
 
   /*  ── 6. THE TREE IS EXACTLY AS IT WAS FOUND ─────────────────────

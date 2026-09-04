@@ -278,7 +278,7 @@ section("C8  service construction and vocabulary guards");
      wire({ attachmentService: { storeForWork: async () => ({}), resolveForWork: async () => [] } }) === null);
   ok("three outcomes, exactly", P.OUTCOME_VALUES.length === 3);
   ok("'accepted' is NOT a work status", !P.OUTCOME_VALUES.includes("accepted"));
-  const src = require("fs").readFileSync(require.resolve("../src/maintenance/work_proof"), "utf8");
+  const src = require("fs").readFileSync(require.resolve("../../src/maintenance/work_proof"), "utf8");
   // Check for CV *code*, not the word — the module's own comment disclaims
   // computer vision, so a naive word match flags the disclaimer itself.
   const code = src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");

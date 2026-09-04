@@ -97,7 +97,18 @@ function readIf(rel) {
  *
  *  Any directory that OWNS canonical domain truth belongs here. When the
  *  next one lands, add it in the same breath as the read.                */
-const STANDING_READ_DIRS = ["src/asset", "src/tenancy"];
+//  EVERY src/ DIRECTORY, MINUS THE DECLARED NON-DOMAINS BELOW. The list
+//  was ["src/asset", "src/tenancy"] — a second time the gate scanned less
+//  than it asserted (CURRENT_STATE #6): leasing, applications, maintenance
+//  and money each carried a canonical standing read that could never go
+//  red here. Discovery is now computed from disk, so a new directory is
+//  in scope the day it appears, and the only way out is a declared,
+//  reasoned exclusion in NOT_DOMAINS.
+const STANDING_READ_DIRS = fs.readdirSync(path.join(ROOT, "src"), { withFileTypes: true })
+  .filter((e) => e.isDirectory())
+  .map((e) => "src/" + e.name)
+  .filter((d) => !["src/surfaces"].includes(d))
+  .sort();
 const STANDING_READ_SUFFIXES = ["_position_read.js", "_establishment.js", "_read.js"];
 const NON_STANDING_READ_SUFFIXES = ["_document_read.js", "_funding_read.js"];
 
@@ -249,6 +260,75 @@ const REGISTRY = {
   //  — the SAME canonical service the Rent Roll screen reads. No second
   //  occupancy reader was built for Ask Spine, which is what "one
   //  conversational architecture" means in practice.
+  //  ── DISCOVERED THE DAY THE SCAN WIDENED (CURRENT_STATE #6) ─────────
+  //  Seven canonical standing reads outside src/asset and src/tenancy that
+  //  the old two-directory list could not see. Each is declared PENDING
+  //  with its owner and the condition that clears it. Declaring is not
+  //  wiring: none of these is conversationally readable today.
+  application_lifecycle: {
+    state: "pending",
+    owner: "leasing (applications)",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "canonical application lifecycle standing — status and the milestones that moved it"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers application_lifecycle_read for the session property " +
+            "with entitlement checked before the read, and the gather is proven in " +
+            "ask_spine_answer against a real database.",
+  },
+  concessions: {
+    state: "pending",
+    owner: "money (pricing)",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "governed concessions — effective state as recorded, never an implied effective rent"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers concessions_read with the stated-not-implied effective " +
+            "state preserved, entitlement checked, proven against a real database.",
+  },
+  forward_leasing: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "the forward leasing ledger — committed, signed, pending, remaining, from dated lease truth"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers forward_leasing_read's summary line (committed / signed / " +
+            "pending / remaining) for the session property, proven against a real database.",
+  },
+  leasing_standing: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "Leasing's compact standing projection (§40.6) — position, unknowns, next milestone"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers leasing_standing_read as the leasing subject, with the " +
+            "§40.7 silences preserved, proven against a real database.",
+  },
+  opportunity_lifecycle: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "whether an opportunity is alive, over, reopened or unresolved, and what proves it"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine answers a per-opportunity question from opportunity_lifecycle_read " +
+            "with a server-minted reference and no conversion id in model context.",
+  },
+  renewals: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "the live renewal-work cohort — leases needing renewal attention in the next 90 days"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers renewals_read's cohort for the session property, " +
+            "entitlement checked, proven against a real database.",
+  },
+  unit_move_in: {
+    state: "pending",
+    owner: "maintenance",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "a proven future move-in for a unit, from dated positions"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine answers 'when is the next move-in for this unit' from " +
+            "unit_move_in_read, proven against a real database.",
+  },
   tenancy: {
     state: "registered",
     //  Matches src/tenancy/tenancy_position_read.js exactly. Retrieval only:

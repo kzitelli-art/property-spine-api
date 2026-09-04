@@ -48,7 +48,7 @@
 module.exports = function intake(deps) {
   const express = require("express");
   const router = express.Router();
-  const { pool, anthropic, INGEST_MODEL, registryInstance, upload } = deps;
+  const { pool, anthropic, INGEST_MODEL, registryInstance, upload, sms } = deps;
 
   if (!pool) throw new Error("intake requires a pool");
   if (!anthropic) throw new Error("intake requires the anthropic client");
@@ -218,6 +218,17 @@ module.exports = function intake(deps) {
   //  (fetching them requires Twilio credentials — a later wiring step).
   // ════════════════════════════════════════════════════════════════
   router.post("/intake/twilio", express.urlencoded({ extended: false }), async (req, res) => {
+    //  WHO IS CALLING, BEFORE WHAT THEY SAID. `From` is a form field the
+    //  sender writes, so a number allowlist alone is spoofable by anyone
+    //  who knows the URL and one allowed number. The sibling webhook
+    //  (/communications/inbound-sms) has always verified X-Twilio-Signature
+    //  fail-closed; this door now takes the same posture through the same
+    //  transport. No transport, no token, no APP_BASE_URL → refused, never
+    //  open. Recorded as defect #10 in docs/CURRENT_STATE.md.
+    if (!sms || typeof sms.validateWebhook !== "function" || !sms.validateWebhook(req)) {
+      console.warn("intake/twilio: refused — Twilio signature not verified");
+      return res.status(403).type("text/xml").send("<Response></Response>");
+    }
     const from = req.body.From || "unknown";
     const allow = (process.env.INTAKE_ALLOWED_NUMBERS || "").split(",").map(s => s.trim()).filter(Boolean);
     if (allow.length && !allow.includes(from)) {

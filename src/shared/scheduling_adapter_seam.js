@@ -17,7 +17,7 @@
 //  Mount wrapper calls:  ingestSchedulingSourceEvent({ pool, envelope, context, logger })
 // ════════════════════════════════════════════════════════════════════
 
-const buildSchedulingModule = require('../leasing_scheduling');
+const buildSchedulingModule = require('../leasing/leasing_scheduling');
 
 // Map the adapter's source_event_type → the canonical service's event_type.
 const EVENT_TYPE_MAP = {

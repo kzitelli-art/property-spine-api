@@ -18,9 +18,9 @@ const fails = [];
 const ok = (n, c, d) => { if (c) passed++; else { failed++; fails.push(n + (d ? "  — " + d : "")); } };
 const section = (t) => console.log("\n── " + t + " " + "─".repeat(Math.max(0, 58 - t.length)));
 
-const SVC_SRC = fs.readFileSync(require.resolve("../src/agent/staff_agent_service"), "utf8");
+const SVC_SRC = fs.readFileSync(require.resolve("../../src/agent/staff_agent_service"), "utf8");
 const MIG = fs.readFileSync(__dirname + "/../migrations/117_staff_agent_capture.sql", "utf8");
-const INTENT_SRC = fs.readFileSync(require.resolve("../src/agent/staff_agent_intent"), "utf8");
+const INTENT_SRC = fs.readFileSync(require.resolve("../../src/agent/staff_agent_intent"), "utf8");
 const stub = () => ({
   unitTriageService: { confirmTriage: async () => ({}), proposeTriage: () => ({}), readUnitTriageState: async () => ({}) },
   unitTurnScopeService: { confirmScope: async () => ({}), propose: () => ({}) },
@@ -104,7 +104,7 @@ section("E4  an unconfirmed interpretation cannot write truth");
 {
   ok("the intent module is pure — no SQL at all",
      !/insert into|update .* set|select .* from/i.test(
-       fs.readFileSync(require.resolve("../src/agent/staff_agent_intent"), "utf8")));
+       fs.readFileSync(require.resolve("../../src/agent/staff_agent_intent"), "utf8")));
   ok("every classification is labelled a proposal",
      I.classifyIntent("304 is empty").is_proposal === true);
   ok("capture says nothing was recorded", /nothing_recorded/.test(SVC_SRC));
@@ -291,7 +291,7 @@ section("E13  photos are evidence, never a verdict");
   ok("a photo with enough text does not force a question",
      I.photoNeedsClarification("Paint is done in the whole unit", ["p1"]) === null);
   ok("no photo → no question", I.photoNeedsClarification("anything", []) === null);
-  const intentSrc = fs.readFileSync(require.resolve("../src/agent/staff_agent_intent"), "utf8");
+  const intentSrc = fs.readFileSync(require.resolve("../../src/agent/staff_agent_intent"), "utf8");
   ok("no computer vision in the intent module",
      !/require\(['"][^'"]*(vision|tensorflow|opencv|rekognition)/i.test(intentSrc));
   ok("no image classification anywhere",

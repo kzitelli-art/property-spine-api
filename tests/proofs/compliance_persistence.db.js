@@ -83,7 +83,7 @@ async function main() {
     const property = (await c.query("insert into properties(name) values ('Solo') returning id")).rows[0];
     const other = (await c.query("insert into properties(name) values ('Other') returning id")).rows[0];
     const source2027 = fs.readFileSync(
-      path.join(__dirname, "fixtures/compliance/solo_4233_rental_license.txt"));
+      path.join(__dirname, "..", "fixtures/compliance/solo_4233_rental_license.txt"));
     const source2026 = Buffer.from(source2027.toString()
       .replace("5/1/2027 4/30/2026", "5/1/2026 5/2/2025"));
     async function retain(bytes, filename, propertyId = property.id) {

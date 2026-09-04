@@ -41,7 +41,7 @@ let SESSION_MODULES = ["leasing", "maintenance"];
 
 //  ── Stub the session resolver BEFORE the router requires it. The router
 //     is otherwise the real module, unmodified.
-const resolverPath = require.resolve("../src/identity/staff_session_service.js");
+const resolverPath = require.resolve("../../src/identity/staff_session_service.js");
 require.cache[resolverPath] = {
   id: resolverPath, filename: resolverPath, loaded: true, exports: {
     async resolveStaffSession(_pool, token) {

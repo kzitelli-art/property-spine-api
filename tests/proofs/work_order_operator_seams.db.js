@@ -97,14 +97,18 @@ async function seed() {
   const tok = {};
   for (const [name, u] of [["kz", kz], ["mgr", mgr]]) {
     const t = "harness-" + name + "-" + crypto.randomBytes(8).toString("hex");
-    await q(`insert into staff_sessions (user_id, property_id, token, token_digest, expires_at)
-             values ($1,$2,$3,$4, now() + interval '1 hour')`, [u, prop, t, sha256(t)]);
+    //  Migration 070's shape check: a canonical row is digest + purpose with
+    //  NO raw token. The old seed wrote both and violated it.
+    await q(`insert into staff_sessions (user_id, property_id, token, token_digest, issuance_purpose, expires_at)
+             values ($1,$2,null,$3,'sms_otp', now() + interval '1 hour')`, [u, prop, sha256(t)]);
     tok[name] = t;
   }
 
   //  A — assigned to KZ, NOT accepted. The viewer-dependent case.
+  //  Other proofs seed literal refs; start past whatever is already there.
+  await q(`select setval('work_order_ref_seq', greatest((select coalesce(max(work_order_ref),1000) from work_orders), 1000))`);
   const woA = (await q(`insert into work_orders (property_id, unit_id, title, work_order_ref, status)
-                        values ($1,$2,'Broken toilet','1007','open') returning id`, [prop, unit])).rows[0].id;
+                        values ($1,$2,'Broken toilet',nextval('work_order_ref_seq'),'open') returning id`, [prop, unit])).rows[0].id;
   await q(`insert into obligations (property_id, unit_id, related_id, related_type, module, type,
                                     label, assigned_role, assigned_user_id, status)
            values ($1,$2,$3,'work_order','maintenance','wo_closeout','Fix toilet','maintenance',$4,'open')`,
@@ -112,7 +116,7 @@ async function seed() {
 
   //  B — nobody assigned at all. The manager's case: Assign, never Take job.
   const woB = (await q(`insert into work_orders (property_id, unit_id, title, work_order_ref, status)
-                        values ($1,$2,'Bedroom outlet not working','1012','open') returning id`, [prop, unit])).rows[0].id;
+                        values ($1,$2,'Bedroom outlet not working',nextval('work_order_ref_seq'),'open') returning id`, [prop, unit])).rows[0].id;
   await q(`insert into obligations (property_id, unit_id, related_id, related_type, module, type,
                                     label, assigned_role, status)
            values ($1,$2,$3,'work_order','maintenance','wo_closeout','Fix outlet','maintenance','open')`,
@@ -120,11 +124,15 @@ async function seed() {
 
   //  C — at the OTHER property. Must be invisible and untouchable here.
   const woC = (await q(`insert into work_orders (property_id, title, work_order_ref, status)
-                        values ($1,'Roof leak','2001','open') returning id`, [other])).rows[0].id;
+                        values ($1,'Roof leak',nextval('work_order_ref_seq'),'open') returning id`, [other])).rows[0].id;
 
   //  D — no accountability obligation at all. Nothing to take.
   const woD = (await q(`insert into work_orders (property_id, unit_id, title, work_order_ref, status)
-                        values ($1,$2,'Hallway light out','1099','open') returning id`, [prop, unit])).rows[0].id;
+                        values ($1,$2,'Hallway light out',nextval('work_order_ref_seq'),'open') returning id`, [prop, unit])).rows[0].id;
+  //  REFS COME FROM THE SEQUENCE. Migration 133 defaults work_order_ref to a
+  //  global sequence starting at 1000; literal refs (1007, 1012) sat in its
+  //  path, so the next proof to insert a work order in the same database —
+  //  or this one, run twice — died on uq_work_orders_ref.
 
   return { org, prop, other, unit, kz, mgr, tok, woA, woB, woC, woD };
 }
@@ -141,7 +149,7 @@ const findWo = (rows, id) => (rows || []).find((r) => r.work_order.id === id) ||
   const s = await seed();
 
   const srv = spawn(process.execPath, ["server.js"], {
-    cwd: __dirname + "/..",
+    cwd: __dirname + "/../..",
     env: Object.assign({}, process.env, {
       DATABASE_URL: URL, PORT: String(PORT), OPERATOR_KEY: "harness-key",
     }),

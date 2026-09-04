@@ -16,8 +16,8 @@ const fails = [];
 const ok = (n, c, d) => { if (c) passed++; else { failed++; fails.push(n + (d ? "  — " + d : "")); } };
 const section = (t) => console.log("\n── " + t + " " + "─".repeat(Math.max(0, 58 - t.length)));
 
-const READ = fs.readFileSync(require.resolve("../src/surfaces/unit_turn_read"), "utf8");
-const DOOR = fs.readFileSync(require.resolve("../src/surfaces/unit_turn"), "utf8");
+const READ = fs.readFileSync(require.resolve("../../src/surfaces/unit_turn_read"), "utf8");
+const DOOR = fs.readFileSync(require.resolve("../../src/surfaces/unit_turn"), "utf8");
 const APP = fs.readFileSync("/workspace/property-spine-app/unit-turn-page.js", "utf8");
 const BOTH = READ + DOOR;
 
@@ -157,8 +157,8 @@ section("F7  management is a FILTER over the same truth, not a workflow");
 section("F8  the truth model is unchanged underneath");
 {
   // The six distinctions, still enforced by the layers that own them.
-  const svc = fs.readFileSync(require.resolve("../src/maintenance/work_acceptance_service"), "utf8");
-  const rdy = fs.readFileSync(require.resolve("../src/maintenance/readiness_service"), "utf8");
+  const svc = fs.readFileSync(require.resolve("../../src/maintenance/work_acceptance_service"), "utf8");
+  const rdy = fs.readFileSync(require.resolve("../../src/maintenance/readiness_service"), "utf8");
   ok("acceptance is still not completion", /ACCEPTANCE IS NOT COMPLETION/.test(svc));
   ok("a proof-short claim still does not close", /A COMPLETION CLAIM WITHOUT PROOF DOES NOT CLOSE/.test(svc));
   ok("closed work still is not readiness", /ABSENCE OF OPEN WORK IS NOT READINESS/.test(rdy));

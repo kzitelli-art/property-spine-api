@@ -133,7 +133,7 @@ let server = null, scoped = null, admin = null;
       elsewhere:  { id: uid, property_id: other, allowed_modules: ["asset_management"] },
       nodebt:     { id: uid, property_id: bare,  allowed_modules: ["asset_management"] },
     };
-    const resolverPath = require.resolve("../src/identity/staff_session_service.js");
+    const resolverPath = require.resolve("../../src/identity/staff_session_service.js");
     require.cache[resolverPath] = { id: resolverPath, filename: resolverPath, loaded: true,
       exports: { resolveStaffSession: async (_p, t) => SESSIONS[t] || null } };
 

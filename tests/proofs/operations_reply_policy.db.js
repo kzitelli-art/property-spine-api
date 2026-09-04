@@ -55,7 +55,7 @@ const errOf = async (db, sql, params) => {
   try { await db.query(sql, params); return null; } catch (e) { return String(e.message || ""); }
 };
 
-const SCOPED_SCHEMA = fs.readFileSync(path.join(__dirname, "_ops_scoped_schema.sql"), "utf8");
+const SCOPED_SCHEMA = fs.readFileSync(path.join(__dirname, "..", "_ops_scoped_schema.sql"), "utf8");
 
 receipt.begin(HARNESS, { url: ADMIN_URL, expected: EXPECTED });
 

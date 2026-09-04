@@ -48,13 +48,13 @@ const printable = (s) =>
   (stripComments(s).match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g) || [])
     .join("\n").replace(/\$\{[^}]*\}/g, "");
 
-const INTENT_SRC = read(require.resolve("../src/agent/staff_agent_intent"));
-const SVC_SRC = read(require.resolve("../src/agent/staff_agent_service"));
-const DOOR_SRC = read(require.resolve("../src/agent/staff_agent"));
-const READ_SRC = read(require.resolve("../src/surfaces/unit_turn_read"));
-const TURN_DOOR_SRC = read(require.resolve("../src/surfaces/unit_turn"));
-const SEQ_SRC = read(require.resolve("../src/maintenance/turn_sequence"));
-const ACCEPT_SVC_SRC = read(require.resolve("../src/maintenance/work_acceptance_service"));
+const INTENT_SRC = read(require.resolve("../../src/agent/staff_agent_intent"));
+const SVC_SRC = read(require.resolve("../../src/agent/staff_agent_service"));
+const DOOR_SRC = read(require.resolve("../../src/agent/staff_agent"));
+const READ_SRC = read(require.resolve("../../src/surfaces/unit_turn_read"));
+const TURN_DOOR_SRC = read(require.resolve("../../src/surfaces/unit_turn"));
+const SEQ_SRC = read(require.resolve("../../src/maintenance/turn_sequence"));
+const ACCEPT_SVC_SRC = read(require.resolve("../../src/maintenance/work_acceptance_service"));
 const APP_PAGE = read(path.join(APP_DIR, "unit-turn-page.js"));
 const APP_AGENT = read(path.join(APP_DIR, "staff-agent-door.js"));
 const APP_INDEX = read(path.join(APP_DIR, "index.html"));
@@ -425,7 +425,7 @@ section("8  no migration and no domain table change is introduced");
   ok("BUILD 6B changed no migration file", addedBy6B === "", addedBy6B);
 
   const { execSync } = require("child_process");
-  const changed = execSync("git diff --name-only 62b25e8", { cwd: __dirname + "/.." })
+  const changed = execSync("git diff --name-only 62b25e8 e239ecb", { cwd: __dirname + "/../.." })
     .toString().trim().split("\n").filter(Boolean);
   //  BOOKKEEPING CORRECTION (closure slice). This assertion used to read "no
   //  migration file was touched" — true through the release candidate, and
@@ -436,12 +436,15 @@ section("8  no migration and no domain table change is introduced");
   //
   //  What still matters is unchanged: exactly ONE migration is added, it is
   //  118, and no historical migration is edited or repaired.
+  //  PINNED AT BOTH ENDS (CURRENT_STATE #21): e239ecb is the closure slice's
+  //  own commit. Left open-ended, "since 62b25e8" grew to 61 migrations and
+  //  the assertion was dead. A claim about a build is bounded by the build.
   const migrationsTouched = changed.filter((f) => f.startsWith("migrations/"));
   ok("exactly one migration file is added since Build 6B's base",
      migrationsTouched.length === 1, migrationsTouched.join(","));
   ok("and it is the closure slice's 118",
      migrationsTouched[0] === "migrations/118_work_proof_attachments.sql", migrationsTouched[0]);
-  const historical = execSync("git diff --name-only 62b25e8 -- migrations/", { cwd: __dirname + "/.." })
+  const historical = execSync("git diff --name-only 62b25e8 e239ecb -- migrations/", { cwd: __dirname + "/../.." })
     .toString().trim().split("\n").filter(Boolean)
     .filter((f) => Number(f.replace("migrations/", "").slice(0, 3)) < 118);
   ok("no historical migration is edited or repaired", historical.length === 0, historical.join(","));
@@ -664,7 +667,7 @@ section("11  a failed final walk is the walk, not a message");
 
   //  Build 4 is untouched.
   const { execSync } = require("child_process");
-  const b4 = execSync("git diff --name-only 62b25e8 -- src/maintenance/readiness_service.js src/maintenance/readiness.js src/maintenance/readiness_gate.js migrations/116_readiness_certification.sql",
+  const b4 = execSync("git diff --name-only 62b25e8 e239ecb -- src/maintenance/readiness_service.js src/maintenance/readiness.js src/maintenance/readiness_gate.js migrations/116_readiness_certification.sql",
     { cwd: __dirname + "/.." }).toString().trim();
   ok("the Build 4 walk, gate, door and migration are byte-unchanged", b4 === "", b4);
 }

@@ -122,7 +122,7 @@ async function main() {
       entitled:   { id: uid, property_id: skyline, allowed_modules: ["asset_management", "leasing"] },
       unentitled: { id: uid, property_id: skyline, allowed_modules: ["leasing"] },
     };
-    const resolverPath = require.resolve("../src/identity/staff_session_service.js");
+    const resolverPath = require.resolve("../../src/identity/staff_session_service.js");
     require.cache[resolverPath] = { id: resolverPath, filename: resolverPath, loaded: true,
       exports: { resolveStaffSession: async (_p, t) => SESSIONS[t] || null } };
 
@@ -131,7 +131,9 @@ async function main() {
     app.use(express.json());
     scoped = new Pool({ connectionString: URL_ });
     scoped.on("connect", (cl) => cl.query(`set search_path to ${schema}`));
-    app.use("/", require("../../src/surfaces/asset_management.js")({ pool: scoped }));
+    app.use("/", require("../../src/surfaces/asset_management.js")({ pool: scoped, //  The shell now REQUIRES fileToText at construction (compliance_http). Nothing
+      //  here uploads a compliance document, so a stand-in that refuses is honest.
+      fileToText: async () => { throw new Error("fileToText is not exercised by this harness"); } }));
     server = http.createServer(app);
     await new Promise((r) => server.listen(0, "127.0.0.1", r));
     port = server.address().port;
@@ -239,7 +241,10 @@ async function main() {
     ok("an artifact id comes back", !!artifactId);
     ok("Spine says plainly it has NOT read the document",
        r.body.proposal && r.body.proposal.available === false &&
-       /has not read/i.test(r.body.proposal.reason || ""), JSON.stringify(r.body.proposal));
+       //  The shell now requires a fileToText at construction (compliance_http),
+       //  so "no reader at all" is no longer a mountable state; the reachable
+       //  honest degradation is "kept the document but could not read it".
+       /has not read|could not read/i.test(r.body.proposal.reason || ""), JSON.stringify(r.body.proposal));
 
     const stored = (await c.query(
       `select scope_type, scope_id, artifact_kind from source_artifacts where id = $1`,

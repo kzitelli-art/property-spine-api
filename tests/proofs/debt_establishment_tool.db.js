@@ -238,7 +238,7 @@ function runTool(args, extraEnv) {
     console.log("\n  ── what it wrote reads back through the HTTP seam ──");
     const http = require("http");
     const SESSIONS = { entitled: { id: uid, property_id: prop, allowed_modules: ["asset_management"] } };
-    const rp = require.resolve("../src/identity/staff_session_service.js");
+    const rp = require.resolve("../../src/identity/staff_session_service.js");
     require.cache[rp] = { id: rp, filename: rp, loaded: true,
       exports: { resolveStaffSession: async (_p, t) => SESSIONS[t] || null } };
     const express = require("express");

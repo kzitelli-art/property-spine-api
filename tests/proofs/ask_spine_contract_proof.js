@@ -114,7 +114,11 @@ const OTHER = "9e2bb96e-08e2-41db-81c2-91055ceb50a3";
     const db = stubDb(nine);
     const out = await svc.attention(db, { property_id: PROP, allowed_modules: ["leasing"] });
     T("3a  MAX_ITEMS is 5", () => eq(svc.MAX_ITEMS, 5));
-    T("3b  the SQL carries a LIMIT 5", () => ok(/limit\s+5/i.test(db.calls[0].sql)));
+    //  Was: "the SQL carries a LIMIT 5". The service no longer owns SQL — it
+    //  ranks the ONE canonical obligations read (§7, CURRENT_STATE #5).
+    T("3b  the service issues no obligations SQL of its own — it ranks the canonical read", () =>
+      ok(!/from\s+obligations/i.test(svcSrc.replace(/\/\/.*$/gm, "")) &&
+         /operator_obligations_service/.test(svcSrc)));
     T("3c  a 9-row result is capped to 5 items", () => eq(out.items.length, 5));
     T("3d  total_open still reports the true total, not the capped count", () => eq(out.total_open, 9));
   }
@@ -173,9 +177,15 @@ const OTHER = "9e2bb96e-08e2-41db-81c2-91055ceb50a3";
   }
 
   // ── CASE 6 — no write, no staff-agent proposal ─────────────────────
-  T("6a  the route registers GET only — no POST/PUT/PATCH/DELETE", () => {
+  //  Was "GET only". The Ask Spine door since grew POST /operator/ask-spine/ask —
+  //  a question travels in a body, and that POST still writes nothing (6c).
+  //  The rule that matters is unchanged: no mutating verb, and no POST but
+  //  the question door.
+  T("6a  the route registers reads only — no PUT/PATCH/DELETE, and the only POST is /ask", () => {
     ok(/router\.get\(/.test(routeSrc));
-    ok(!/router\.(post|put|patch|delete)\(/.test(routeSrc), "a non-GET verb appeared");
+    ok(!/router\.(put|patch|delete)\(/.test(routeSrc), "a mutating verb appeared");
+    const posts = [...routeSrc.matchAll(/router\.post\(\s*["']([^"']+)["']/g)].map((m) => m[1]);
+    ok(posts.every((p) => p === "/operator/ask-spine/ask"), "an unexpected POST route: " + posts.join(","));
   });
   T("6b  neither module requires staff_agent", () => {
     ok(!/require\(["'].*staff_agent["']\)/.test(routeSrc));

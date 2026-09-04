@@ -62,7 +62,7 @@ console.error = (...a) => {
   if (process.env.HARNESS_VERBOSE) realError(...a);
 };
 
-const SCOPED_SCHEMA = fs.readFileSync(path.join(__dirname, "_ops_scoped_schema.sql"), "utf8");
+const SCOPED_SCHEMA = fs.readFileSync(path.join(__dirname, "..", "_ops_scoped_schema.sql"), "utf8");
 
 receipt.begin(HARNESS, { url: ADMIN_URL, expected: EXPECTED });
 

@@ -1,0 +1,92 @@
+# ════════════════════════════════════════════════════════════════════
+#  THE DATABASE PROOFS CI RUNS — and the ones it cannot, with the reason.
+#
+#  Every tests/proofs/*.db.js file appears here exactly once
+#  (tests/gates/gate_db_proof_manifest.js refuses an unlisted proof).
+#
+#    run      <file>            CI runs it against a schema built from the
+#                               migration chain and FAILS the job if it fails.
+#    backlog  <file>  <reason>  CI still runs it and REPORTS it, but a failure
+#                               does not fail the job. The reason is the
+#                               condition that moves it to `run`. A backlog
+#                               proof that passes is flagged: promote it.
+#
+#  A green job means "every `run` proof passed", nothing more. The backlog
+#  is visible debt, not hidden debt. First classification 2026-09-04 from
+#  a full sweep against a fresh chain-built database (CURRENT_STATE #17).
+# ════════════════════════════════════════════════════════════════════
+run	ask_spine_db_proof.db.js
+run	asset_management_shell.db.js
+run	audit_fixes_source_level.db.js
+run	audit_fixes_real_server.db.js
+run	audit_fixes_real_server_2.db.js
+run	authority_mutation_containment.db.js
+run	communication_lines_slice_a.db.js
+run	compliance_extended_persistence.db.js
+run	compliance_http.db.js
+run	compliance_persistence.db.js
+run	confirm_proposal_operative_overlap.db.js
+run	contracted_service_persistence.db.js
+run	deal_setup_http.db.js
+run	deal_setup_opening_tenancy.db.js
+run	debt_establishment_tool.db.js
+run	debt_institutional_acceptance.db.js
+run	debt_position_falsification.db.js
+run	debt_schema_falsification.db.js
+run	equity_position_falsification.db.js
+run	equity_routes_http.db.js
+run	governing_lease_execution.db.js
+run	import_retirement_resolution.db.js
+run	insurance_establishment.db.js
+run	insurance_truth.db.js
+run	inventory_retirement.db.js
+run	legal_entity.db.js
+run	meeting_evidence_hardening.db.js
+run	migration_ledger_inverse_gate.db.js
+run	obligation_completion_canonical_proof.db.js
+run	occupancy_surfaces_reconcile.db.js
+run	operations_reply_policy.db.js
+run	operator_obligations_security_proof.db.js
+run	person_spine_import_audit.db.js
+run	phase_zero_property_boundary.db.js
+run	philadelphia_tax.db.js
+run	philadelphia_tax_funding.db.js
+run	philadelphia_tax_http.db.js
+run	philadelphia_tax_standing.db.js
+run	property_creation_canonical.db.js
+run	property_creation_http.db.js
+run	property_line_hardening.db.js
+run	prospect_inventory_containment.db.js
+run	rent_roll_occupancy_correction.db.js
+run	skyline_rent_roll_model.db.js
+run	space_economics.db.js
+run	surplus_placeholder_repair.db.js
+run	technician_acceptance.db.js
+run	technician_route_proof.db.js
+run	test_adapter_seam.db.js
+run	test_conversion_rail.db.js
+run	test_release3.db.js
+run	tracker_intake.db.js
+run	utility_persistence.db.js
+run	work_order_operator_seams.db.js
+run	work_order_resident_projection.db.js
+#   LAST ON PURPOSE: forward_leasing_ledger reads a property with inventory that an earlier proof leaves behind (as test_adapter_seam above reads a mapping row); it passes in manifest order only
+run	forward_leasing_ledger.db.js
+# ── needs the real Skyline July rent-roll workbook, which is private and outside the repo ──
+backlog	forward_leasing_http.db.js	requires interval_positions.db.js to have run first, which needs the private Skyline July rent roll (SKYLINE_XLSX)
+backlog	forward_rent.db.js	needs a property with the Skyline inventory — established only by the private July rent roll
+backlog	interval_positions.db.js	refuses without the private Skyline July rent-roll workbook at the recorded upload path (SKYLINE_XLSX)
+backlog	inventory_materialization.db.js	refuses without the private Skyline July rent-roll workbook (SKYLINE_XLSX)
+backlog	ledger_grain_reconciliation.db.js	reads the private Skyline July rent-roll workbook by absolute upload path
+backlog	skyline_bed_grain_activation.db.js	refuses without the private Skyline July rent-roll workbook (SKYLINE_XLSX)
+backlog	skyline_rent_roll_read.db.js	refuses without the private Skyline July rent-roll workbook (SKYLINE_XLSX)
+backlog	tenancy_ask_spine_http.db.js	refuses without the private Skyline July rent-roll workbook — will not substitute a fixture for real Skyline truth
+backlog	tenancy_standing_read.db.js	refuses without the private Skyline July rent-roll workbook — will not substitute a fixture for real Skyline truth
+# ── failing on a fresh chain-built schema, identically before and after the 2026-09-04 audit (CURRENT_STATE #59) ──
+backlog	debt_routes_http.db.js	W8 fails: principal_position observed/projected value_cents differ from the pinned specimen figures — a fixture or read drift to root-cause
+backlog	governed_lease_terms.db.js	2 of 24 fail: rent is not established at the published figure (no_published_pricing_version) — the harness's pricing publication precondition no longer holds
+backlog	person_ingress_hostile.db.js	H12 fails (a matching phone with a disagreeing candidate): 2 of 34 — pre-existing, to root-cause
+backlog	spine_lease_execution.db.js	dies: the executed instrument's snapshot does not carry monthly_rent — the harness's instrument fixture predates the snapshot contract
+backlog	technician_lifecycle_proof.db.js	8 of 62 fail around technician completion replies ("(no reply)") — pre-existing, to root-cause
+backlog	test_identity_bridge.db.js	J2 fails: the static gate does not catch a planted raw bridge join — the gate's scan, not the bridge, is what to fix
+backlog	test_scheduling_interactions.db.js	5 of 9 scenarios pass; the rest call sendPropertySms / upsertProviderEvent that the interactions module no longer exports

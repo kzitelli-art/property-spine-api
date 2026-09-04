@@ -374,7 +374,7 @@ async function main() {
 
     console.log("\n── 10. THE DASHBOARD READ, OVER REAL HTTP ────────────");
 
-    const resolverPath = require.resolve("../src/identity/staff_session_service.js");
+    const resolverPath = require.resolve("../../src/identity/staff_session_service.js");
     require.cache[resolverPath] = { id: resolverPath, filename: resolverPath, loaded: true,
       exports: { resolveStaffSession: async (_p, t) => (t === "tok"
         ? { id: uid, property_id: skyline, allowed_modules: ["asset_management"] } : null) } };
@@ -383,7 +383,9 @@ async function main() {
     const app = express();
     const scoped = new Pool({ connectionString: URL_ });
     scoped.on("connect", (cl) => cl.query(`set search_path to ${schema}`));
-    app.use("/", require("../../src/surfaces/asset_management.js")({ pool: scoped }));
+    app.use("/", require("../../src/surfaces/asset_management.js")({ pool: scoped, //  The shell now REQUIRES fileToText at construction (compliance_http). Nothing
+      //  here uploads a compliance document, so a stand-in that refuses is honest.
+      fileToText: async () => { throw new Error("fileToText is not exercised by this harness"); } }));
     server = http.createServer(app);
     await new Promise((r) => server.listen(0, "127.0.0.1", r));
     port = server.address().port;

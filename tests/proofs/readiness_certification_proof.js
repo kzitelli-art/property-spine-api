@@ -66,7 +66,7 @@ section("D2  only an explicit authorized certification can emit ready");
   const uncertified = marketingState({ ...base, triage: { readiness: "unknown", pending_walk: false } }, true);
   ok("without the certification the same unit is not marketable", uncertified.state !== "marketable_now");
 
-  const src = require("fs").readFileSync(require.resolve("../src/maintenance/readiness_gate"), "utf8");
+  const src = require("fs").readFileSync(require.resolve("../../src/maintenance/readiness_gate"), "utf8");
   ok("the gate module cannot produce a certification", !/insert into unit_readiness_certifications/i.test(src));
   ok("the gate states the rule", /ABSENCE OF OPEN WORK IS NOT READINESS/i.test(src));
 }
@@ -196,7 +196,7 @@ section("D5  worker/certifier — performing work neither grants nor removes aut
          .authorized === false);
 
     // NO blanket worker ban: authority is asked of everyone identically
-    const svcSrc = require("fs").readFileSync(require.resolve("../src/maintenance/readiness_service"), "utf8");
+    const svcSrc = require("fs").readFileSync(require.resolve("../../src/maintenance/readiness_service"), "utf8");
     ok("there is no 'did this person do the work' check anywhere",
        !/performed_work|did_work|worker_cannot|is_worker/i.test(svcSrc));
     ok("and the reason is documented",
@@ -244,7 +244,7 @@ section("D6  ultimate accountability is preserved, or recorded unresolved");
 
     // Accountability is carried as FIELDS on the walk and certification, not
     // as a second obligation or a duplicate readiness owner (ruling 4).
-    const svcSrc = require("fs").readFileSync(require.resolve("../src/maintenance/readiness_service"), "utf8");
+    const svcSrc = require("fs").readFileSync(require.resolve("../../src/maintenance/readiness_service"), "utf8");
     const mig = require("fs").readFileSync(__dirname + "/../migrations/116_readiness_certification.sql", "utf8");
     ok("accountability is a field on the walk", /senior_accountable_user_id/.test(mig));
     ok("and carried onto the certification", /senior_accountable_basis/.test(mig));
@@ -301,7 +301,7 @@ section("D8  no unit outside the governed pathway changes behavior");
 
 section("D9  a failed walk reopens the flow through the canonical path");
 {
-  const svcSrc = require("fs").readFileSync(require.resolve("../src/maintenance/readiness_service"), "utf8");
+  const svcSrc = require("fs").readFileSync(require.resolve("../../src/maintenance/readiness_service"), "utf8");
   ok("new findings go to unit_triage_findings", /insert into unit_triage_findings/.test(svcSrc));
   ok("new work goes to unit_triage_required_work", /insert into unit_triage_required_work/.test(svcSrc));
   ok("prior completions reopen via workAcceptanceService, not a local copy",
@@ -328,7 +328,7 @@ section("D9  a failed walk reopens the flow through the canonical path");
 
 section("D10  correction and revocation preserve the original");
 {
-  const svcSrc = require("fs").readFileSync(require.resolve("../src/maintenance/readiness_service"), "utf8");
+  const svcSrc = require("fs").readFileSync(require.resolve("../../src/maintenance/readiness_service"), "utf8");
   ok("a correction INSERTS a new row", /insert into unit_readiness_certifications[\s\S]{0,400}supersedes_id/.test(svcSrc));
   ok("there is no UPDATE of a certification", !/update unit_readiness_certifications/i.test(svcSrc));
   ok("there is no DELETE of a certification", !/delete from unit_readiness_certifications/i.test(svcSrc));
@@ -347,7 +347,7 @@ section("D10  correction and revocation preserve the original");
 
 section("D11  a successful certification is quiet; photos are optional");
 {
-  const svcSrc = require("fs").readFileSync(require.resolve("../src/maintenance/readiness_service"), "utf8");
+  const svcSrc = require("fs").readFileSync(require.resolve("../../src/maintenance/readiness_service"), "utf8");
   const ready = svcSrc.slice(svcSrc.indexOf("async function finishReady"), svcSrc.indexOf("// ── NOT READY"));
   ok("the ready path spawns NO obligation", !/spawnObligationFromEvent/.test(ready));
   ok("it closes the final-walk obligation instead", /update obligations set status='complete'/.test(ready));
@@ -367,7 +367,7 @@ section("D11  a successful certification is quiet; photos are optional");
 
 section("D12  readiness is one axis and says so");
 {
-  const svcSrc = require("fs").readFileSync(require.resolve("../src/maintenance/readiness_service"), "utf8");
+  const svcSrc = require("fs").readFileSync(require.resolve("../../src/maintenance/readiness_service"), "utf8");
   ok("the meaning disclaims possession", /not possession/i.test(svcSrc));
   ok("disclaims keys handed over", /not keys handed over/i.test(svcSrc));
   ok("disclaims an active lease", /not an active lease/i.test(svcSrc));

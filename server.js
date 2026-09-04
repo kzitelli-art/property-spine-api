@@ -521,7 +521,7 @@ const publicReview = require("./src/onboarding/public_review");
 // ── INTAKE (Door 2: text/email/web field-event capture; claims only — routing
 //    to real records happens through the existing module endpoints) ──
 const intakeModule = require("./src/onboarding/intake");
-app.use("/", intakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, upload }));
+app.use("/", intakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, upload, sms }));
 const dealIntakeModule = require("./src/onboarding/deal_intake");
 // ── Shared lifecycle write service (Foundation 054) — ONE instance, injected into
 // every canonical inbound writer so a qualifying prospect inbound transactionally

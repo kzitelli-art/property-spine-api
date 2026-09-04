@@ -99,7 +99,7 @@ async function main() {
     //  test about the DOOR. The session shape is copied from what
     //  staff_session_service actually returns and is the contract under
     //  test here.
-    const resolverPath = require.resolve("../src/identity/staff_session_service.js");
+    const resolverPath = require.resolve("../../src/identity/staff_session_service.js");
     const sessions = new Map();
     require.cache[resolverPath] = {
       id: resolverPath, filename: resolverPath, loaded: true,

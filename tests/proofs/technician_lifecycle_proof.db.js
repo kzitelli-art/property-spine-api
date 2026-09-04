@@ -70,7 +70,7 @@ try {
   await db.connect();
   console.log(`  SCRATCH   ${SCRATCH_DB}`);
 
-  await db.query(fs.readFileSync(path.join(__dirname, "_ops_scoped_schema.sql"), "utf8"));
+  await db.query(fs.readFileSync(path.join(__dirname, "..", "_ops_scoped_schema.sql"), "utf8"));
   //  work_orders needs the columns the lifecycle touches.
   await db.query(`
     alter table work_orders add column if not exists unit_id uuid references units(id);

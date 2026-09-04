@@ -162,7 +162,7 @@ async function main() {
       userNoEntitlement.id, propertyA.id, ["management"]);
 
     const sourceBytes = Buffer.concat([Buffer.from("%PDF-1.4\n"), fs.readFileSync(
-      path.join(__dirname, "fixtures/compliance/solo_4233_rental_license.txt"))]);
+      path.join(__dirname, "..", "fixtures/compliance/solo_4233_rental_license.txt"))]);
     async function retain(propertyId, userId, filename) {
       return (await client.query(
         `insert into source_artifacts
@@ -313,8 +313,12 @@ async function main() {
     const askFactsPayload = JSON.parse(askFacts
       .replace(/^QUESTION SUBJECT:[^\n]+\nFACTS:\n/, "")
       .replace(/\n\nOPERATOR ASKED:[\s\S]*$/, ""));
+    //  §40.8: the model is never handed a record id — it sees the property's
+    //  NAME. This assertion used to require the UUID in the prompt, which
+    //  encoded the defect the composer since fixed.
     ok("the model receives only the session property's Compliance subject",
-      askFacts.includes(String(propertyA.id)) && /QUESTION SUBJECT: compliance/.test(askFacts) &&
+      askFacts.includes("Authority A") && !askFacts.includes(String(propertyA.id)) &&
+      /QUESTION SUBJECT: compliance/.test(askFacts) &&
       !("attention" in askFactsPayload) && !("work_orders" in askFactsPayload));
     ok("the model receives no canonical ids or opener tokens",
       !askFacts.includes(String(itemId)) && !askFacts.includes(String(artifactA.id)) &&

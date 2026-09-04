@@ -6,13 +6,13 @@
 //  record the operator's question as a message, and cannot propose,
 //  confirm, or write anything. There is no client here, only a query.
 //
-//  WHY IT DOES NOT REUSE `GET /obligations` (server.js):
-//  that route is unauthenticated and takes property_id from the query
-//  string, so omitting it returns obligations across every property. Its
-//  QUERY LOGIC is sound and is re-expressed here — the read-time overdue
-//  clock, the unassigned predicate, the due-date ordering. Its ROUTE is
-//  not used and is not modified. See docs/archive/ASK_SPINE_SOURCE_AUDIT.md;
-//  remediating that route is a separate security lane.
+//  ONE READER (§7). The scoped obligations read is
+//  operator_obligations_service.list — the same function behind
+//  GET /operator/obligations. This file used to re-express its query
+//  ("its QUERY LOGIC is sound and is re-expressed here"), which was a
+//  second reader of the same truth: two places to fix a predicate, and
+//  a cheap way for the desk and the answer to drift. It now calls the
+//  canonical read and only RANKS what comes back. CURRENT_STATE #5.
 //
 //  RANKING — recorded facts only, no score (audit §4):
 //    1  overdue AND unassigned    due_at < now() AND assigned_user_id IS NULL
@@ -30,6 +30,7 @@
 "use strict";
 
 const MAX_ITEMS = 5;
+const obligations = require("../obligations/operator_obligations_service");
 
 //  Desk keys the app can actually open (openDesk, verified in the audit).
 //  An obligation module only becomes a desk target when it maps EXACTLY.
@@ -77,48 +78,25 @@ async function attention(db, { property_id, allowed_modules }) {
     return { items: [], total_open: 0, scope_note: "no_module_entitlement" };
   }
 
-  //  ONE round trip. `total_open` is counted over the same predicate as
+  //  The canonical scoped read, status narrowed to open. It binds property
+  //  and modules as arguments and has no other source for either.
+  const scoped = await obligations.list(db, { property_id, allowed_modules: modules, status: "open" });
+  const all = (scoped.items || []).map((row) => ({
+    ...row,
+    is_overdue: !!row.is_overdue,
+    is_unassigned: row.assigned_user_id == null,
+  }));
+  const rank = (r) => (r.is_overdue && r.is_unassigned) ? 1 : r.is_overdue ? 2 : r.is_unassigned ? 3 : 4;
+  const time = (r) => (r.due_at == null ? Infinity : new Date(r.due_at).getTime());
+  all.sort((a, b) => rank(a) - rank(b) || time(a) - time(b) || String(a.id).localeCompare(String(b.id)));
+  const rows = all;
+
+  //  total_open is the whole open set, counted over the same predicate as
   //  the page so "5 of 23" is truthful rather than a guess.
-  const sql = `
-    with scoped as (
-      select
-        o.id, o.label, o.module, o.type, o.status,
-        o.due_at, o.person_id, o.unit_id,
-        o.related_type, o.related_id,
-        o.assigned_user_id,
-        (o.due_at is not null and o.due_at < now()) as is_overdue,
-        (o.assigned_user_id is null)                as is_unassigned
-      from obligations o
-      where o.property_id = $1
-        and o.status = 'open'
-        and o.module = any($2::text[])
-    )
-    select
-      (select count(*) from scoped) as total_open,
-      s.*
-    from scoped s
-    order by
-      case
-        when s.is_overdue and s.is_unassigned then 1
-        when s.is_overdue                      then 2
-        when s.is_unassigned                   then 3
-        else 4
-      end,
-      s.due_at asc nulls last,
-      s.id asc
-    limit ${MAX_ITEMS}`;
+  const total_open = rows.length;
 
-  const r = await db.query(sql, [property_id, modules]);
-  const rows = r.rows || [];
-
-  //  total_open is repeated on every row; with zero rows there is no row
-  //  to read it from, and zero is then the truthful answer.
-  const total_open = rows.length ? Number(rows[0].total_open) : 0;
-
-  //  The SQL already carries LIMIT 5. This slice is NOT redundant: the cap
-  //  is a contract of THIS function, so it must hold whatever the layer
-  //  below returns. Delegating the guarantee downward is how a cap quietly
-  //  stops holding when a query is later edited.
+  //  The cap is a contract of THIS function, so it holds whatever the
+  //  canonical read returns.
   const items = rows.slice(0, MAX_ITEMS).map((row) => ({
     obligation_id: row.id,
     label: row.label,
