@@ -3,7 +3,20 @@
 // router at "/" at the exact position these routes were registered inline.
 const express = require("express");
 
-module.exports = function documentIngestRoutes({ pool, upload, runIngestAuto, fileToText }) {
+module.exports = function documentIngestRoutes({ pool, upload, runIngestAuto, fileToText, staffSessions }) {
+  //  THE BINDING THIS FILE LOST WHEN IT WAS EXTRACTED. /ingest/:runId/promote
+  //  and /approve resolve their actor through `staffSessions`, a module-level
+  //  constant in server.js that the extraction did not carry. Here the name
+  //  was undefined, and because both routes resolved the session BEFORE their
+  //  `try`, the ReferenceError was an unhandled rejection — under Node 22 it
+  //  terminated the process on the first call. The resolver is injected and
+  //  asserted at construction; the two resolutions now run inside their
+  //  existing `try`, so a resolver failure is a handled 500 and nothing else
+  //  about either route changes: paths, status codes, response shapes, the
+  //  optional session, and the body-actor refusal are as they were.
+  if (!staffSessions || typeof staffSessions.resolveStaffSession !== "function") {
+    throw new Error("documentIngestRoutes requires staffSessions (the ONE session resolver): /ingest/:runId/promote and /approve record the actor from it");
+  }
   const router = express.Router();
 // ── ingest from pasted TEXT ──
 router.post("/properties/:propertyId/ingest", async (req, res) => {
@@ -316,9 +329,9 @@ router.post("/ingest/:runId/promote", async (req, res) => {
       receipt: "Who promoted these units comes from the signed-in session, not the request body.",
     });
   }
-  const promoter = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
-  const promoted_by = promoter ? promoter.id : null;
   try {
+    const promoter = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+    const promoted_by = promoter ? promoter.id : null;
     const run = await pool.query("select id, property_id, model_raw_output from ingest_runs where id=$1", [req.params.runId]);
     if (run.rows.length === 0) return res.status(404).json({ error: "run not found" });
     const propertyId = run.rows[0].property_id;
@@ -450,9 +463,9 @@ router.post("/ingest/:runId/approve", async (req, res) => {
     });
   }
   const { candidate_ids } = req.body || {};
-  const reviewer = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
-  const reviewed_by = reviewer ? reviewer.id : null;
   try {
+    const reviewer = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+    const reviewed_by = reviewer ? reviewer.id : null;
     const run = await pool.query("select id from ingest_runs where id=$1", [req.params.runId]);
     if (run.rows.length === 0) return res.status(404).json({ error: "run not found" });
 

@@ -4,7 +4,17 @@
 const express = require("express");
 const propertyCreation = require("../identity/property_creation_service"); // Build 1A-1: THE property write
 
-module.exports = function baselineRoutes({ pool, spawnObligationFromEvent }) {
+module.exports = function baselineRoutes({ pool, spawnObligationFromEvent, staffSessions }) {
+  //  THE BINDING THIS FILE LOST WHEN IT WAS EXTRACTED. `POST /properties`
+  //  below resolves its actor through `staffSessions`, which server.js held
+  //  as a module-level constant; the extraction moved the route and not the
+  //  binding, so the name was undefined here. Its `try` caught the
+  //  ReferenceError and answered 500 where the route intends 401. The
+  //  resolver is now injected, and its absence fails at construction —
+  //  at boot, loudly — never at the first request.
+  if (!staffSessions || typeof staffSessions.resolveStaffSession !== "function") {
+    throw new Error("baselineRoutes requires staffSessions (the ONE session resolver): POST /properties records who created the property from it");
+  }
   const router = express.Router();
 // ── health: confirms server is up AND can reach the database ──
 //  ── WHAT EXACT CODE IS RUNNING ──────────────────────────────────────

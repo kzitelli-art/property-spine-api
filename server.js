@@ -305,7 +305,7 @@ const {
 
 // ── RELEASE-0 BASELINE ROUTES (health, build, properties, units, persons, events, ──
 // ── legacy obligations, users) — extracted verbatim; mounted at the same position. ──
-app.use("/", require("./src/baseline/baseline_routes")({ pool, spawnObligationFromEvent }));
+app.use("/", require("./src/baseline/baseline_routes")({ pool, spawnObligationFromEvent, staffSessions }));
 // ── LEASE LIFECYCLE (leases, schedule, payments, delinquency, approval, tenants) — ──
 // ── extracted verbatim; mounted at the same position, routes unchanged. ──
 app.use("/", require("./src/tenancy/lease_lifecycle_routes")({ pool, spawnObligationFromEvent }));
@@ -323,7 +323,7 @@ const identifyInstance = identifyModule({
 app.use("/", identifyInstance);
 
 // ── AI DOCUMENT INGEST ROUTES — extracted verbatim, mounted at the same position. ──
-app.use("/", require("./src/agent/document_ingest_routes")({ pool, upload, runIngestAuto, fileToText }));
+app.use("/", require("./src/agent/document_ingest_routes")({ pool, upload, runIngestAuto, fileToText, staffSessions }));
 
 // ── THE ONE CANONICAL WORK-ORDER SERVICE ──
 //  Built once, here, and injected into EVERY consumer. Its own header carries
