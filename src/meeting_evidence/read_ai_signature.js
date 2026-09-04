@@ -23,7 +23,7 @@ function decodeSigningKey(base64Key) {
 }
 
 function readAiDigestHex(rawBody, base64Key) {
-  const body = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(rawBody || "");
+  const body = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(typeof rawBody === "string" ? rawBody : "");
   return crypto.createHmac("sha256", decodeSigningKey(base64Key)).update(body).digest("hex");
 }
 

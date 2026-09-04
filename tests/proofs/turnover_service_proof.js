@@ -2,7 +2,7 @@
 
 const path = require("path");
 const { Pool } = require("pg");
-const { seedInventory } = require("./fixtures/slice9_inventory_fixture");
+const { seedInventory } = require("../fixtures/slice9_inventory_fixture");
 const { makeTurnoverService } = require("../../src/maintenance/turnover_service");
 const { rankTurnPriority } = require("../../src/maintenance/turn_priority");
 const receipt = require("../_run_receipt");

@@ -15,7 +15,7 @@
 const path = require("path");
 const { Pool } = require("pg");
 const REPO = path.resolve(__dirname, "..", "..");
-const { seedInventory } = require("./fixtures/slice9_inventory_fixture");
+const { seedInventory } = require("../fixtures/slice9_inventory_fixture");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { fail++; console.log("   FAIL  " + m); } };

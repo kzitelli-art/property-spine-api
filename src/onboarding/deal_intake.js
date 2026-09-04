@@ -221,15 +221,24 @@ module.exports = function dealIntake(deps) {
 
   // start an intake
   router.post("/deal-intakes", async (req, res) => {
-    const { onboarding_type, deal_name } = req.body || {};
+    const { onboarding_type, deal_name, organization_id = null } = req.body || {};
     if (!["new_acquisition","existing_asset","management_takeover"].includes(onboarding_type))
       return res.status(400).json({ error: "onboarding_type must be new_acquisition | existing_asset | management_takeover" });
     try {
+      //  A deal born with no owning organization cannot later be opened from
+      //  an organization account (deal_service: deal_has_no_owner). This
+      //  shared-key route has no session to derive the owner from, so it
+      //  accepts one — verified to exist — and says plainly when it has none.
+      if (organization_id) {
+        const org = await pool.query("select id from organizations where id=$1", [organization_id]);
+        if (!org.rows.length) return res.status(404).json({ error: "organization not found" });
+      }
       const r = await pool.query(
-        "insert into deal_intakes (onboarding_type, deal_name) values ($1,$2) returning id, deal_name, onboarding_type, status, created_at",
-        [onboarding_type, deal_name && String(deal_name).trim() || null]
+        "insert into deal_intakes (onboarding_type, deal_name, organization_id) values ($1,$2,$3) returning id, deal_name, onboarding_type, status, organization_id, created_at",
+        [onboarding_type, deal_name && String(deal_name).trim() || null, organization_id]
       );
-      res.json({ intake_id: r.rows[0].id, ...r.rows[0] });
+      res.json({ intake_id: r.rows[0].id, ...r.rows[0],
+        ...(organization_id ? {} : { warning: "This deal has no owning organization yet. It cannot be opened from an organization account until one is placed on it." }) });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -433,10 +442,21 @@ module.exports = function dealIntake(deps) {
       if (i.rows.length === 0) return res.status(404).json({ error: "intake not found" });
       const p = await pool.query("select id, name, address from properties where id=$1", [property_id]);
       if (p.rows.length === 0) return res.status(404).json({ error: "property not found" });
-      await pool.query(
+      //  A RELEASED MEMBERSHIP IS RE-ADDED, NOT IGNORED. `do nothing` answered
+      //  201 "is now part of deal" while the row stayed released. Re-adding
+      //  reactivates it (the release is history in released_reason); a
+      //  property current on ANOTHER deal is refused in a sentence rather
+      //  than a raw 500 from uq_dip_one_current_deal_per_property.
+      const membership = await pool.query(
         `insert into deal_intake_properties (intake_id, property_id, note)
-         values ($1,$2,$3) on conflict (intake_id, property_id) do nothing`,
+         values ($1,$2,$3)
+         on conflict (intake_id, property_id) do update
+           set status = 'current', released_at = null,
+               released_reason = null,
+               note = coalesce(excluded.note, deal_intake_properties.note)
+         returning status`,
         [req.params.id, property_id, note || null]);
+      if (!membership.rows.length) throw Object.assign(new Error("membership not recorded"), { httpStatus: 500 });
       // optional: the wizard asks "by unit or by bed?" before the building is
       // confirmed — carry the human's answer onto the property here.
       if (["unit","bed"].includes(req.body?.leasing_basis)) {
@@ -446,16 +466,30 @@ module.exports = function dealIntake(deps) {
       res.status(201).json({
         receipt: `${p.rows[0].name || p.rows[0].address} is now part of deal "${i.rows[0].deal_name || req.params.id}"`,
       });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) {
+      if (e && e.code === "23505") {
+        return res.status(409).json({
+          error: "property_current_on_another_deal",
+          receipt: "That property is already current on another deal. Release it there first; a property belongs to one current deal.",
+        });
+      }
+      res.status(500).json({ error: e.message });
+    }
   });
 
+  //  SUPERSESSION, NOT DELETION (§6). A hard delete erased the membership's
+  //  history — when it was added, by whom, why it left. The row is released.
   router.delete("/deal-intakes/:id/properties/:propertyId", async (req, res) => {
     try {
       const r = await pool.query(
-        "delete from deal_intake_properties where intake_id=$1 and property_id=$2 returning id",
-        [req.params.id, req.params.propertyId]);
-      if (r.rowCount === 0) return res.status(404).json({ error: "that property is not on this deal" });
-      res.json({ receipt: "removed from the deal (the property itself is untouched)" });
+        `update deal_intake_properties
+            set status = 'released', released_at = now(),
+                released_reason = coalesce($3, 'removed via deal-intake route')
+          where intake_id=$1 and property_id=$2 and status = 'current'
+          returning id`,
+        [req.params.id, req.params.propertyId, (req.body && req.body.reason) || null]);
+      if (r.rowCount === 0) return res.status(404).json({ error: "that property is not current on this deal" });
+      res.json({ receipt: "released from the deal (the property itself is untouched; the membership is kept as history)" });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

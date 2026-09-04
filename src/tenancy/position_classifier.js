@@ -61,6 +61,17 @@ function leaseIsValid(lease) {
 function datesSpan(lease, asOf) {
   return !!(lease && lease.start_date && lease.start_date <= asOf && (!lease.end_date || lease.end_date >= asOf));
 }
+/*  THE SAME RULE, AS SQL. Five operator surfaces counted `lease_status =
+ *  'active'` with no date at all, so an imported lease whose term ended
+ *  last year — confirmProposal writes 'active' regardless of end_date —
+ *  read as occupied on the desk, the board and the management header while
+ *  this classifier said the position was open. One rule, stated once, used
+ *  by the surfaces as a fragment; a surface that restates it is a second
+ *  interpreter (§7). `asOfSql` is a SQL expression, default today.  */
+function spanningLeaseSql(alias = "l", asOfSql = "current_date") {
+  return `(${alias}.start_date is not null and ${alias}.start_date <= ${asOfSql}`
+       + ` and (${alias}.end_date is null or ${alias}.end_date >= ${asOfSql}))`;
+}
 function isFuture(lease, asOf) {
   return !!(lease && lease.start_date && lease.start_date > asOf);
 }
@@ -546,3 +557,5 @@ module.exports = {
   proofBasis,
   tenantList,
 };
+module.exports.spanningLeaseSql = spanningLeaseSql;
+module.exports.datesSpan = module.exports.datesSpan || datesSpan;

@@ -310,7 +310,13 @@ async function approveAndPublish(pool, { property_id, user_id, charge_code, appr
       approved_by: { session_user_id: actor.session_user_id, acting_person_id: actor.acting_person_id,
                      display_name: actor.display_name },
       authority_basis: actor.authority_basis,
-      approved_terms_digest: digest,
+      //  HONEST BINDING. When the caller supplied no approved_digest, the
+      //  receipt used to record the CURRENT digest as if the approval had
+      //  been bound to it. It records what actually happened: which digest
+      //  was approved (or none), and whether publication was bound to it.
+      approved_terms_digest: approved_digest || null,
+      published_terms_digest: digest,
+      approval_bound_to_terms: !!approved_digest,
       publication_contract_rechecked: true,
       terms: {
         charge_code, amount: draft.amount == null ? null : Number(draft.amount),

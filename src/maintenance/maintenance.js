@@ -525,6 +525,15 @@ module.exports = function maintenance(deps) {
       //  RIGHT follow-up obligation through the SAME shared engine every other
       //  obligation is born from. The chain cannot break.
       if (done === false) {
+        //  ALREADY CLOSED WORK CANNOT STALL — the same refusal the operator
+        //  door gives. Without it this shared-key route set a completed work
+        //  order back to needs_followup with no reopen event and spawned a
+        //  follow-up for finished work.
+        if (wo.status === "complete") {
+          await client.query("rollback");
+          return res.status(409).json({ error: "already_complete",
+            receipt: "This work order is already complete. A finished job cannot be reported as not done; reopening is its own governed act." });
+        }
         //  ── THE BEHAVIOR MOVED; THE CONTRACT DID NOT ──────────────────
         //  Every step this used to perform inline now lives in
         //  not_done_service.recordNotDone, because the signed-in operator

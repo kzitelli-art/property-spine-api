@@ -1,3 +1,6 @@
+//  The routed follow-up vocabulary, so a clarification or a dedupe never lands on a
+//  follow-up that merely shares the work order link.
+const { FOLLOW_UP_TYPES } = require("./not_done_reasons");
 // ════════════════════════════════════════════════════════════════════
 //  work_order_service.js — THE ONE CANONICAL WORK-ORDER CREATION PATH
 //
@@ -287,9 +290,15 @@ function makeWorkOrderService(deps) {
             and reported_by_person_id is not distinct from $3`,
         [idempotency_key, property_id, reported_by_person_id])).rows[0];
       if (dup) {
+        //  The work order's OWN obligation — not the billback decision or a
+        //  routed follow-up, which share the link and, born in the same
+        //  transaction, share created_at with it. Same exclusion the status
+        //  read applies.
         const obl = (await client.query(
-          "select * from obligations where related_type='work_order' and related_id=$1 order by created_at asc limit 1",
-          [dup.id])).rows[0] || null;
+          `select * from obligations where related_type='work_order' and related_id=$1
+            and type <> 'billback_decision' and not (type = any($2::text[]))
+            order by created_at asc limit 1`,
+          [dup.id, FOLLOW_UP_TYPES])).rows[0] || null;
         return { workOrder: dup, event: null, obligation: obl, deduped: true };
       }
     }
@@ -540,7 +549,8 @@ function makeWorkOrderService(deps) {
     const obligation = (await client.query(
       `select * from obligations
         where related_type='work_order' and related_id=$1 and status='open'
-        order by created_at asc limit 1`, [work_order_id])).rows[0] || null;
+          and type <> 'billback_decision' and not (type = any($2::text[]))
+        order by created_at asc limit 1`, [work_order_id, FOLLOW_UP_TYPES])).rows[0] || null;
 
     const finish = async (outcome, escalated) => {
       const updated = (await client.query("select * from work_orders where id=$1", [work_order_id])).rows[0];

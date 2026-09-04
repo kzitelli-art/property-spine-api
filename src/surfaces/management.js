@@ -1,3 +1,5 @@
+const { spanningLeaseSql } = require("../tenancy/position_classifier");
+const SPAN = spanningLeaseSql("l");
 // ════════════════════════════════════════════════════════════════════
 //  MANAGEMENT SURFACE MODULE  —  management.js
 //
@@ -80,13 +82,13 @@ module.exports = function management(deps) {
          (select count(*)::int from units where property_id = $1) as total_units,
          (select count(distinct s.unit_id)::int
             from leases l join spaces s on s.id = l.space_id
-           where l.property_id = $1 and l.lease_status = 'active') as occupied_units,
+           where l.property_id = $1 and l.lease_status = 'active' and ${SPAN}) as occupied_units,
          (select count(*)::int from spaces s
             join units u on u.id = s.unit_id
            where u.property_id = $1) as total_spaces,
          (select count(distinct l.space_id)::int
             from leases l
-           where l.property_id = $1 and l.lease_status = 'active') as occupied_spaces`,
+           where l.property_id = $1 and l.lease_status = 'active' and ${SPAN}) as occupied_spaces`,
       [propertyId])).rows[0];
 
     // Future / preleasing: leases that are signed/active but whose term
@@ -135,14 +137,14 @@ module.exports = function management(deps) {
            (select count(*)::int from units where property_id = $1) as units,
            (select count(distinct p)::int
               from leases l, unnest(l.tenant_ids) as p
-             where l.property_id = $1 and l.lease_status = 'active') as residents,
-           (select count(*)::int from leases
-              where property_id = $1 and lease_status = 'active') as leases,
+             where l.property_id = $1 and l.lease_status = 'active' and ${SPAN}) as residents,
+           (select count(*)::int from leases l
+              where l.property_id = $1 and l.lease_status = 'active' and ${SPAN}) as leases,
            (select count(*)::int from scheduled_charges
               where property_id = $1
                 and status in ('claimed','partially_paid')) as open_charges,
            (select coalesce(sum(l.rent),0)::numeric from leases l
-              where l.property_id = $1 and l.lease_status = 'active') as scheduled_rent`,
+              where l.property_id = $1 and l.lease_status = 'active' and ${SPAN}) as scheduled_rent`,
         [propertyId])).rows[0];
       return ok({
         is_reference: true,    // no badge — exploration, not work

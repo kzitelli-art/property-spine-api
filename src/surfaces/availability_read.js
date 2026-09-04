@@ -34,7 +34,7 @@
 
 "use strict";
 
-const { datedPropertyPositions } = require("../tenancy/dated_positions");
+const { datedPropertyPositions, rentRollBucketOf } = require("../tenancy/dated_positions");
 // ONE readiness definition, shared with the triage service. A second copy here
 // is exactly how a read and a write come to disagree.
 const { deriveReadiness } = require("../maintenance/unit_triage_service");
@@ -78,6 +78,23 @@ function marketingState(p, liveOk) {
 
   if (p.evidence_state === "disagrees")
     return { state: "evidence_disagrees", reason: "opening_source_claims_occupied_without_lease" };
+
+  //  THE RENT ROLL'S OWN DECISION, NOT A SECOND ONE. Only a flat contradiction
+  //  was blocked here; an accepted occupied claim with no lease
+  //  (uncorroborated), an unreconciled claim, a basis-less bed and a lease
+  //  outside the vocabulary all fell through to marketable_now — while the
+  //  Rent Roll bucketed the same bed as Occupied or Needs Review. Two
+  //  screens, one bed, opposite answers (§7). The bucket was decided
+  //  upstream; a bed the Rent Roll does not call open is not inventory.
+  //  A basis-less bed is deliberately NOT gated here: the interval reader
+  //  gates only contradiction and unreconciled claims, and a bed with no
+  //  lease and no opening claim has always been marketable inventory on
+  //  this surface. Changing that is a product ruling, not a cleanup.
+  const bucket = rentRollBucketOf(p);
+  if (bucket === "needs_review")
+    return { state: "needs_review", reason: "rent_roll_needs_review_" + (p.evidence_state || p.basis_type || "unspecified") };
+  if (bucket === "occupied" && !p.lease)
+    return { state: "occupied_by_opening_claim", reason: "opening_source_claims_occupied" };
 
   // ACTIVATION PENDING — a lease has COMMENCED on this position but economic
   // tenancy is not active (required move-in funds outstanding). The position

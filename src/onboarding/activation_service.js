@@ -319,6 +319,8 @@ async function ingestRentRoll(db, {
     };
 
     const counts = { staged: 0, needs_review: 0, blocked: 0, vacant: 0 };
+
+    const duplicates = [];
     for (const m of mapped) {
       const c = classify(m);
       if (c.vacant) counts.vacant++;
@@ -348,7 +350,7 @@ async function ingestRentRoll(db, {
         is_vacant: Boolean(c.vacant),
       };
 
-      await client.query(
+      const inserted = await client.query(
         `insert into proposed_records
            (activation_id, property_id, module, target_type, natural_key,
             payload_json, normalized_json, evidence_refs, confidence,
@@ -373,6 +375,15 @@ async function ingestRentRoll(db, {
          JSON.stringify(m._raw), JSON.stringify(normalized),
          JSON.stringify(evidenceRefs), c.confidence,
          c.status, c.reason, ev ? ev.id : null]);
+      //  A SECOND ROW FOR ONE POSITION IS NOT SILENTLY DROPPED. `do nothing`
+      //  swallowed it and the count still rose, so the receipt overstated
+      //  what was staged. It is counted as what it is — a duplicate the
+      //  source produced for one rentable position — and said out loud.
+      if (inserted.rowCount === 0) {
+        counts.duplicate_position = (counts.duplicate_position || 0) + 1;
+        duplicates.push(naturalKeyFor(m));
+        continue;
+      }
       counts[c.status] = (counts[c.status] || 0) + 1;
     }
 
@@ -389,10 +400,13 @@ async function ingestRentRoll(db, {
       rows_read: mapped.length,
       counts,
       mapping: describePlan(plan),
+      duplicate_positions: duplicates,
       receipt:
         `Read ${mapped.length} rows from ${artifact.original_filename}, dated ${asOf}. ` +
         `${counts.staged} ready, ${counts.needs_review || 0} need a look, ` +
-        `${counts.blocked || 0} can't be used. Nothing is live yet.`,
+        `${counts.blocked || 0} can't be used` +
+        (duplicates.length ? `, ${duplicates.length} duplicate row(s) for a position already staged (${duplicates.slice(0, 5).join(", ")}${duplicates.length > 5 ? ", …" : ""}) were not staged twice` : "") +
+        `. Nothing is live yet.`,
     };
   } catch (e) {
     try { await client.query("rollback"); } catch { /* already rolled back */ }

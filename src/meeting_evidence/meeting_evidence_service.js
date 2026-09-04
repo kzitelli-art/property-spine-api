@@ -223,7 +223,10 @@ async function receiveReadWebhook(db, {
   env = process.env,
   requestIp = null,
 } = {}) {
-  const raw = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(rawBody || "");
+  //  body-parser leaves `{}` when it skipped a request (no body, or no
+  //  content-type); Buffer.from({}) throws before any security receipt is
+  //  written. A non-buffer, non-string body is an empty body.
+  const raw = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(typeof rawBody === "string" ? rawBody : "");
   const bodyHash = sha256Hex(raw);
   const byteLength = raw.length;
   const connectionId = asUuidish(env.READ_AI_CONNECTION_ID);

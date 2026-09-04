@@ -798,7 +798,7 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     const fromNorm = normalizeE164(From);
     const fromTail = String(From).replace(/\D/g, "").slice(-10);
     const residents = (await q.query(
-      `select distinct per.id, per.name, per.phone
+      `select distinct per.id, per.name, per.phone, per.primary_phone_e164
          from persons per
          join leases l on l.lease_status = 'active' and l.property_id = $1
                       and per.id = any(l.tenant_ids)
@@ -822,7 +822,7 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     // by resident precedence. A person may hold leads across properties; here
     // we count only this-property, non-terminal leads for this phone.
     const leads = (await q.query(
-      `select distinct per.id, per.name, per.phone
+      `select distinct per.id, per.name, per.phone, per.primary_phone_e164
          from persons per
          join leasing_leads ll on ll.person_id = per.id and ll.property_id = $1
         where ll.status not in ('leased','lost')
@@ -852,7 +852,10 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       const only = distinct[0];
       // Same durable person may be both; resident is the stronger relationship.
       relationship = only.isResident ? "resident" : "lead";
-      senders = [{ id: only.id, name: only.name, phone: only.phone }];
+      //  The match above accepts primary_phone_e164; the reply must reach the
+      //  same number. A person with primary_phone_e164 set and phone null
+      //  resolved fine and then every reply failed with no_recipient.
+      senders = [{ id: only.id, name: only.name, phone: only.phone || only.primary_phone_e164 || null }];
     }
 
     if (!relationship || senders.length !== 1) {

@@ -30,6 +30,8 @@
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");
+const { spanningLeaseSql } = require("../tenancy/position_classifier");
+const SPAN = spanningLeaseSql("l");
 const { computeExposure } = require("../money/exposure");
 const { computeOnboardingState } = require("../onboarding/onboarding_funnel"); // onboarding bridge: shared compute, never re-derived
 
@@ -144,7 +146,7 @@ module.exports = function desksModule({ pool }) {
               count(distinct t.pid) filter (where per.phone is null)::int as missing_phone
          from leases l cross join lateral unnest(l.tenant_ids) as t(pid)
          join persons per on per.id = t.pid
-        where l.property_id = $1 and l.lease_status = 'active'`, [propertyId])).rows[0];
+        where l.property_id = $1 and l.lease_status = 'active' and ${SPAN}`, [propertyId])).rows[0];
     const conn = (await pool.query(
       `select count(distinct person_id)::int as n from tenant_invites
         where property_id = $1 and status = 'used'`, [propertyId])).rows[0];
@@ -192,7 +194,7 @@ module.exports = function desksModule({ pool }) {
       const r = (await pool.query(
         `select coalesce(sum(balance) filter (where balance > 0),0)::numeric(14,2) as arrears,
                 count(*) filter (where balance > 0)::int as tenants_behind
-           from leases where property_id = $1 and lease_status = 'active'`,
+           from leases l where l.property_id = $1 and l.lease_status = 'active' and ${SPAN}`,
         [propertyId])).rows[0];
       collection = { status: "ok", amount: Number(r.arrears),
         label: usd(r.arrears) + " collection loss",
@@ -255,7 +257,7 @@ module.exports = function desksModule({ pool }) {
           where u.property_id = $1
             and not exists (
               select 1 from leases l join spaces s on s.id = l.space_id
-               where s.unit_id = u.id and l.lease_status = 'active')
+               where s.unit_id = u.id and l.lease_status = 'active' and ${SPAN})
           order by u.unit_number limit 100`, [propertyId])).rows;
       availability = { status: "ok", available_units: avail.length,
         label: `${avail.length} unit${avail.length === 1 ? "" : "s"} available`,

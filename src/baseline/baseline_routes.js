@@ -40,8 +40,17 @@ router.get("/health", async (_req, res) => {
 
 //  The full record — including the untruncated commit — behind the
 //  operator gate, for anyone reconciling a deployment against a branch.
-router.get("/operator/build", (_req, res) => {
+router.get("/operator/build", async (req, res) => {
   res.set("Cache-Control", "no-store");
+  //  "/operator/*" skips the shared key gate on the promise that each route
+  //  resolves a staff session itself. This one did not, so the full commit
+  //  sha and start time were public. Same resolver, same 401.
+  try {
+    const session = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+    if (!session) return res.status(401).json({ error: "No valid operator session. Sign in." });
+  } catch (e) {
+    return res.status(500).json({ error: "session resolution failed" });
+  }
   res.json({ build: buildIdentity() });
 });
 

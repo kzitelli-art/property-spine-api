@@ -335,9 +335,19 @@ async function createSubmittedApplication(client, rawPayload = {}) {
   const values = present.map((f) => (f === "captured" ? normalizeCaptured(payload[f]) : payload[f]));
   const placeholders = present.map((_, i) => `$${i + 1}`);
 
+  //  WHO SAID THE NUMBERS. rent and deposit arrive at birth from whoever
+  //  submitted — the public applicant included — and were stored with
+  //  term_source null, so the review surface presented them as terms with
+  //  no origin. The schema already names this origin: 'application_capture'.
+  //  Governed terms overwrite it with 'operator_proposed_terms' later
+  //  (proposed_terms_service). A lifecycle column, authored here.
+  const statesTerms = payload.rent != null || payload.deposit != null;
+  const extraCols = statesTerms ? ", term_source" : "";
+  const extraVals = statesTerms ? ", 'application_capture'" : "";
+
   const after = (await client.query(
-    `insert into lease_applications (${present.join(", ")}, status, submitted_at)
-     values (${placeholders.join(", ")}, 'submitted', transaction_timestamp())
+    `insert into lease_applications (${present.join(", ")}, status, submitted_at${extraCols})
+     values (${placeholders.join(", ")}, 'submitted', transaction_timestamp()${extraVals})
      returning *`, values)).rows[0];
 
   return receipt(null, after, STATUS.SUBMITTED, "applied");

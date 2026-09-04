@@ -26,6 +26,7 @@
    because a row was written.
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
+const { FOLLOW_UP_TYPES } = require("../maintenance/not_done_reasons");
 
 function actionError(code, message) { const e = new Error(message); e.code = code; return e; }
 
@@ -68,9 +69,14 @@ async function assignWork(client, { workOrderId, propertyId, technicianUserId, o
     [technicianUserId, propertyId])).rows.length;
   if (!ok) return { outcome: "refused", refusal: "technician_not_eligible_at_property", receipt: null };
 
+  //  The work's OWN obligation. When a work order is tenant-caused, the
+  //  billback decision is born in the same transaction with the same
+  //  created_at, and `limit 1` was a coin flip between them — an assign
+  //  could land on the money decision.
   const ob = (await client.query(
     `select * from obligations where related_type='work_order' and related_id=$1 and property_id=$2
-      order by created_at asc limit 1 for update`, [workOrderId, propertyId])).rows[0];
+      and type <> 'billback_decision' and not (type = any($3::text[]))
+      order by created_at asc limit 1 for update`, [workOrderId, propertyId, FOLLOW_UP_TYPES])).rows[0];
   if (!ob) return { outcome: "refused", refusal: "no_obligation_for_work_order", receipt: null };
   //  STALE-STATE PROTECTION. Accepted work is not reassignable here.
   if (ob.accepted_by_user_id) return { outcome: "refused", refusal: "already_accepted", receipt: null };
@@ -107,7 +113,8 @@ async function askForPhoto(client, { workOrderId, propertyId, operatorUserId, id
   const wo = await lockScoped(client, { workOrderId, propertyId });
   const ob = (await client.query(
     `select * from obligations where related_type='work_order' and related_id=$1 and property_id=$2
-      order by created_at asc limit 1`, [workOrderId, propertyId])).rows[0];
+      and type <> 'billback_decision' and not (type = any($3::text[]))
+      order by created_at asc limit 1`, [workOrderId, propertyId, FOLLOW_UP_TYPES])).rows[0];
   const techId = ob && (ob.accepted_by_user_id || ob.assigned_user_id);
   if (!techId) return { outcome: "refused", refusal: "no_technician_to_ask", receipt: null };
 

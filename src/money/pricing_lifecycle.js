@@ -123,7 +123,11 @@ async function saveDraft(pool, { property_id, person_id, user_id = null, proposa
             base_rent, renewal_rent, offer_state)
          values ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [versionId, property_id, t.unit_type_id, t.legacy_label || null,
-         t.lease_term_months || 12,
+         //  A TERM IS CHOSEN, NEVER DEFAULTED (effective_pricing.js's own rule).
+         //  `|| 12` published a 12-month price nobody proposed.
+         (() => { if (!t.lease_term_months) { throw e("term_length_required",
+                    "Every pricing term needs lease_term_months; a term with no length cannot be priced.", 400); }
+                  return t.lease_term_months; })(),
          t.offer_state === "offered" ? t.base_rent : (t.base_rent ?? null),
          t.renewal_rent ?? null, t.offer_state || "offered"]);
     }

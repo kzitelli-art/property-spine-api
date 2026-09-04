@@ -410,12 +410,19 @@ module.exports = function paymentsModule({ pool }) {
 
       // paid-but-unmatched = payments APPLIED to charges but with NO cash proof
       // (applied/partially_applied, not cash_proven, not processor_settled).
+      //  THE APPLIED PORTION ONLY, of payments with NO cash proof. This used
+      //  to sum the whole payment for partially_applied rows — so the
+      //  unapplied remainder was counted here AND in unapplied_payment below,
+      //  the same dollar in two exposure buckets — and it ignored a bank link
+      //  on a partially-applied payment, reporting proven cash as unproven.
       const unmatched = (await pool.query(
-        `select coalesce(sum(amount),0)::numeric(14,2) as paid_but_unmatched
-           from payments
-          where property_id=$1
-            and status in ('applied','partially_applied')
-            and processor_settled = false`, [propertyId])).rows[0];
+        `select coalesce(sum(a.amount_applied),0)::numeric(14,2) as paid_but_unmatched
+           from payment_applications a
+           join payments p on p.id = a.payment_id
+          where p.property_id=$1
+            and p.status in ('applied','partially_applied')
+            and p.processor_settled = false
+            and not exists (select 1 from payment_bank_links l where l.payment_id = p.id)`, [propertyId])).rows[0];
 
       // unapplied-payment = payments received but not (fully) applied to any
       // charge — money sitting on account.

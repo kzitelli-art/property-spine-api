@@ -1757,9 +1757,13 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     res.set("Cache-Control", "no-store");
     try {
       const { economicShadowReport } = require("../money/economic_shadow");
+      //  SESSION PROPERTY ONLY. A hardcoded second property id here read
+      //  another property's economic picture into every operator's shadow
+      //  report regardless of scope. The comparison is null until a governed
+      //  way to choose a comparison property exists.
       return res.json(await economicShadowReport(pool, {
         property_id: req.operator.property_id,
-        other_property_id: "9e2bb96e-08e2-41db-81c2-91055ceb50a3",
+        other_property_id: null,
       }));
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });

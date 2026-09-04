@@ -203,6 +203,11 @@ module.exports = function leasingSchedulingModule({ pool }) {
       tour = (await client.query(`select * from scheduled_tours where source_system=$1 and external_appt_id=$2`, [source_system, occ.external_appt_id])).rows[0] || null;
     }
     if (!tour) {
+      //  THE SAME APPOINTMENT, NOT THE SAME PERSON. This fallback matched any
+      //  prior tour for the prospect, so their second booking was "affirmed"
+      //  onto the first: the new appointment id was dropped and the second
+      //  date never appeared. When both sides know a start time it must
+      //  agree; a row with no start (a digest backfill) may still be claimed.
       const cand = await client.query(
         `select st.* from scheduled_tours st
           where st.source_system=$1
@@ -210,8 +215,9 @@ module.exports = function leasingSchedulingModule({ pool }) {
             and ( (st.prospect_email is not null and lower(st.prospect_email)=lower($3))
                or (st.prospect_phone is not null and st.prospect_phone=$4)
                or (st.prospect_name is not null and lower(st.prospect_name)=lower($5)) )
+            and (st.scheduled_start is null or $6::timestamptz is null or st.scheduled_start = $6::timestamptz)
           order by st.created_at limit 1`,
-        [source_system, property_id, normalizeEmail(occ.prospect_email), normalizePhone(occ.prospect_phone), occ.prospect_name]
+        [source_system, property_id, normalizeEmail(occ.prospect_email), normalizePhone(occ.prospect_phone), occ.prospect_name, occ.scheduled_start || null]
       );
       tour = cand.rows[0] || null;
     }

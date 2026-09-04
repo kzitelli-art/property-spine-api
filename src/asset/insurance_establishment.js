@@ -332,6 +332,30 @@ module.exports = function insuranceEstablishment(deps) {
           }
         }
 
+        //  ── THE SAME PROGRAM TWICE IS REFUSED, WITH OR WITHOUT A FILE ──
+        //  The artifact check above only fires when artifact_id is supplied;
+        //  a double submit without one wrote a second program, a second set
+        //  of coverages and doubled the annual cost. The natural key is the
+        //  program itself — name and term — already participating here.
+        if (program.program_name && program.term_start && program.term_end) {
+          const same = (await client.query(
+            `select p.id from insurance_programs p
+              where p.program_name = $1 and p.term_start = $2::date and p.term_end = $3::date
+                and exists (select 1 from insurance_coverages c
+                              join insurance_coverage_properties cp on cp.coverage_id = c.id
+                             where c.program_id = p.id and cp.property_id = $4)
+              limit 1`,
+            [String(program.program_name).trim(), program.term_start, program.term_end, propertyId])).rows[0];
+          if (same) {
+            return res.status(409).json({
+              error: "already_established",
+              program_id: same.id,
+              receipt: `${program.program_name} for ${program.term_start} to ${program.term_end} is already established for this property. ` +
+                       "To change what it says, correct the existing coverage rather than establishing it a second time.",
+            });
+          }
+        }
+
         await client.query("begin");
 
         const prog = await programs.establishProgram(client, {

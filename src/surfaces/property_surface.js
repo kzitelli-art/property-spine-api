@@ -20,6 +20,8 @@
 // ============================================================
 
 const { DEALS, byPropertyId, byCanonical } = require("../onboarding/deal_registry");
+const { spanningLeaseSql } = require("../tenancy/position_classifier");
+const SPAN = spanningLeaseSql("l");
 
 module.exports = function propertySurface(deps) {
   const express = require("express");
@@ -102,11 +104,12 @@ module.exports = function propertySurface(deps) {
            from units u
            join spaces s on s.unit_id=u.id
            left join lateral (select l.* from leases l
-              where l.space_id=s.id and l.lease_status in ('active','commercial')
+              where l.space_id=s.id and l.lease_status in ('active','commercial') and ${SPAN}
               order by l.start_date desc nulls last limit 1) cur on true
            left join lateral (select pe.name from persons pe where pe.id = any(cur.tenant_ids) limit 1) curp on true
            left join lateral (select l.id from leases l
-              where l.space_id=s.id and l.lease_status='pending' limit 1) fut on true
+              where l.space_id=s.id and l.lease_status='pending'
+                and (l.end_date is null or l.end_date >= current_date) limit 1) fut on true
           where u.property_id=$1`, [propertyId])).rows;
 
       const NONREV = /model|down|offline/i;

@@ -125,8 +125,13 @@ module.exports = function orgAdminModule({ pool }) {
                   'active', a.active
                 ) order by p.name) filter (where a.id is not null) as assignments
            from users u
-           left join property_team_assignments a on a.user_id = u.id
-           left join properties p on p.id = a.property_id and p.organization_id = $1
+           --  Only assignments on THIS organization's properties. Filtering the
+           --  property join alone left other orgs' assignment rows in the
+           --  aggregate with property_name null and everything else intact.
+           left join property_team_assignments a
+                  on a.user_id = u.id
+                 and a.property_id in (select id from properties where organization_id = $1)
+           left join properties p on p.id = a.property_id
           where u.organization_id = $1
           group by u.id
           order by u.created_at`,

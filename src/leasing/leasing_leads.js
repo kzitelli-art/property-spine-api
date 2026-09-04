@@ -1652,7 +1652,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // Property operating timezone — resolved through the ONE shared resolver
   // (property_timezone.js), the SAME truth operator.js uses. Honest null for an
   // unconfigured property; booking/offers refuse rather than invent local times.
-  const { loadPropertyOperatingTimeZone } = require("../shared/property_timezone");
+  const { loadPropertyOperatingTimeZone, TZ_UNAVAILABLE } = require("../shared/property_timezone");
   // Slice 9 ruling 1A: the name says ASYNC. A sync-looking name returning a
   // Promise already cost one regression in a proof fixture; the next caller
   // does not get to make that mistake.
@@ -1840,16 +1840,35 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
 
       const lead = (await client.query(`select * from leasing_leads where id=$1`, [b.lead_id])).rows[0];
       if (!lead) { await client.query("rollback"); return res.status(404).json({ receipt: "No opportunity with that id." }); }
+      //  THE PROPERTY WALL. bookTourIntoSlot has it; this door did not, so a
+      //  tour was written with property A's lead and property B's unit,
+      //  agent and slot.
+      if (String(slot.property_id) !== String(lead.property_id)) {
+        await client.query("rollback");
+        return res.status(409).json({ receipt: "That slot belongs to a different property than this opportunity." });
+      }
 
       // create or promote the tour onto this slot
       let tour;
       if (b.tour_id) {
+        //  PROMOTING AN EXISTING TOUR: it must be this lead's, it must not be
+        //  settled, and if it already held a slot that slot is released —
+        //  none of which was checked, so a completed tour could be dragged
+        //  back to scheduled and its old slot left booked to it forever.
+        const prior = (await client.query(`select * from leasing_tours where id=$1 for update`, [b.tour_id])).rows[0];
+        if (!prior) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id to promote." }); }
+        if (String(prior.lead_id) !== String(b.lead_id)) { await client.query("rollback"); return res.status(409).json({ receipt: "That tour belongs to a different opportunity." }); }
+        if (TERMINAL_TOUR_STATUSES.has(prior.status)) { await client.query("rollback"); return settledTourRefusal(res, prior); }
+        if (prior.slot_id && String(prior.slot_id) !== String(slotId)) {
+          await client.query(
+            `update tour_availability set status='open', booked_tour_id=null, updated_at=now()
+              where id=$1 and booked_tour_id=$2`, [prior.slot_id, prior.id]);
+        }
         tour = (await client.query(
           `update leasing_tours set slot_id=$1, scheduled_for=$2, unit_id=coalesce(unit_id,$3),
                   leasing_agent_id=coalesce(leasing_agent_id,$4), updated_at=now()
             where id=$5 returning *`,
           [slotId, slot.starts_at, slot.unit_id, slot.leasing_agent_id, b.tour_id])).rows[0];
-        if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id to promote." }); }
       } else {
         tour = (await client.query(
           `insert into leasing_tours (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status)
@@ -2687,6 +2706,11 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
 
   router.get("/properties/:propertyId/leasing/tours/today", requireOperator, async (req, res) => {
     try {
+      //  "Today" is the PROPERTY'S day, as /operator/leasing/tours/today
+      //  already resolves it. UTC put an 8pm Eastern tour on tomorrow's
+      //  board. An unconfigured zone is refused, never guessed (§5).
+      const tz = await loadPropertyOperatingTimeZone(pool, req.params.propertyId);
+      if (!tz) return res.status(409).json({ ...TZ_UNAVAILABLE, receipt: "This property has no operating timezone on record, so 'today' cannot be resolved." });
       const r = await pool.query(
         `select t.*, p.name as prospect_name, p.phone as prospect_phone,
                 l.person_id, c.id as conversation_id
@@ -2696,9 +2720,9 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
            left join conversations c
                   on c.property_id = l.property_id and c.person_id = l.person_id
           where t.property_id=$1
-            and t.scheduled_for::date = (now() at time zone 'utc')::date
+            and (t.scheduled_for at time zone $2)::date = (now() at time zone $2)::date
             and t.status not in ('cancelled','rescheduled')
-          order by t.scheduled_for`, [req.params.propertyId]);
+          order by t.scheduled_for`, [req.params.propertyId, tz]);
       return res.json({ receipt: `${r.rows.length} tour(s) on the board today.`, tours: r.rows });
     } catch (e) { console.error("leasing tours today:", e); return res.status(500).json({ receipt: "Could not load today's tours.", error: e.message }); }
   });

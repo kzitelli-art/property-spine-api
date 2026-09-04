@@ -30,6 +30,8 @@
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");
+const { spanningLeaseSql } = require("../tenancy/position_classifier");
+const SPAN = spanningLeaseSql("l");
 
 module.exports = function boardModule({ pool }) {
   const router = express.Router();
@@ -125,7 +127,7 @@ module.exports = function boardModule({ pool }) {
         const occ = (await pool.query(
           `select count(distinct t.pid)::int as total
              from leases l cross join lateral unnest(l.tenant_ids) as t(pid)
-            where l.property_id = $1 and l.lease_status = 'active'`, [propertyId])).rows[0];
+            where l.property_id = $1 and l.lease_status = 'active' and ${SPAN}`, [propertyId])).rows[0];
         const conn = (await pool.query(
           `select count(distinct person_id)::int as n from tenant_invites
             where property_id = $1 and status = 'used'`, [propertyId])).rows[0];

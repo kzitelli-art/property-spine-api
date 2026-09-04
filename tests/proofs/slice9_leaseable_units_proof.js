@@ -18,7 +18,7 @@
 const path = require("path");
 const { Pool } = require("pg");
 const REPO = path.resolve(__dirname, "..", "..");
-const { seedInventory } = require("./fixtures/slice9_inventory_fixture");
+const { seedInventory } = require("../fixtures/slice9_inventory_fixture");
 const { availabilityRead } = require(path.join(REPO, "src/surfaces/availability_read"));
 const authority = require(path.join(REPO, "src/applications/application_target_authority"));
 

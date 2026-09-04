@@ -1,3 +1,5 @@
+const { spanningLeaseSql } = require("../tenancy/position_classifier");
+const SPAN = spanningLeaseSql("l");
 // ============================================================
 // management_read.js — the Management profitability read
 //
@@ -53,7 +55,7 @@ module.exports = function managementRead(deps) {
           join spaces s on s.unit_id = u.id
           left join lateral (
             select l.* from leases l
-             where l.space_id = s.id and l.lease_status in ('active','commercial')
+             where l.space_id = s.id and l.lease_status in ('active','commercial') and ${SPAN}
              order by l.start_date desc nulls last limit 1
           ) cur on true
           left join lateral (

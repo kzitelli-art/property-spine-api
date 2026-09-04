@@ -1294,7 +1294,13 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
               console.error(`inbound-sms: operations turn already answered (${MessageSid}) — duplicate suppressed.`);
               return;
             }
-            console.error("inbound-sms: operations turn failed — inbound preserved, no reply sent:", e.message);
+            //  HONEST: the inbound row was written INSIDE the transaction that
+            //  just rolled back, so it is NOT preserved. The provider was already
+            //  acked, so it will not redeliver. The full inbound is logged here so
+            //  a person can recover it. Making this durable-before-ack is a ruling
+            //  recorded in docs/CURRENT_STATE.md, not a comment.
+            console.error("inbound-sms: operations turn failed — NOT preserved (rolled back), provider already acked, no reply sent:",
+              e.message, JSON.stringify({ sid: MessageSid, from: From, line: ctx.lineId, user: ctx.staffUserId, body: body || "" }));
             return;
           } finally { t.release(); }
 
@@ -1385,7 +1391,10 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
           try {
             const agentSvc = typeof getAgentService === "function" ? getAgentService() : null;
             if (!agentSvc || typeof agentSvc.processInbound !== "function") {
-              console.error("inbound-sms: lead route — agent service unavailable; prospect inbound not processed (will retry on Twilio redelivery).");
+              //  HONEST: the provider was acked above, so there is no redelivery;
+              //  nothing durable holds this message. Logged in full for recovery.
+              console.error("inbound-sms: lead route — agent service unavailable; prospect inbound NOT recorded and will NOT be redelivered:",
+                JSON.stringify({ sid: MessageSid, from: From, property_id: prop.id, person_id: person.id, body: body || "" }));
             } else {
               await agentSvc.processInbound({
                 property_id: prop.id,
@@ -1662,6 +1671,12 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
         return res.status(409).json({ receipt: "That tenant isn't connected to the tenant line yet — send them a setup link first." });
       }
 
+      //  A notification is not a lifecycle writer. Only 'open' and 'scheduled'
+      //  are accepted above, but writing 'open' onto a COMPLETE work order
+      //  reopened it through a comms route with no reopen event and no actor.
+      if (status && wo.status === "complete") {
+        return res.status(409).json({ receipt: "This work order is already complete. Send the note without a status; reopening is a maintenance act, not a notification." });
+      }
       if (status && status !== wo.status) {
         await pool.query(`update work_orders set status=$1, updated_at=now() where id=$2`, [status, workOrderId]);
       }

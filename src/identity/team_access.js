@@ -276,6 +276,9 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
           `select * from team_invites where token=$1`, [b.token])).rows[0];
         if (!inviteRow) return res.status(404).json({ receipt: "That invite link isn't valid." });
         if (inviteRow.status === "revoked") return res.status(410).json({ receipt: "That invite was revoked." });
+        //  A superseded invite was refused at /verify but still SENT a code
+        //  here — a real text for a link that could never succeed.
+        if (inviteRow.status === "superseded") return res.status(410).json({ receipt: "That invite was replaced by a newer one. Use the latest link you were sent." });
         if (inviteRow.status === "accepted") return res.status(409).json({ receipt: "That invite was already used." });
         if (new Date(inviteRow.expires_at) < new Date()) return res.status(410).json({ receipt: "That invite link expired. Ask for a new one." });
         if (inviteRow.failed_attempts >= MAX_FAILED) return res.status(423).json({ receipt: "Too many wrong codes. Ask for a new invite." });
@@ -588,6 +591,10 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
       });
     } catch (e) {
       try { await client.query("rollback"); } catch (_) {}
+      //  The session service refuses with a STATUS (403 inactive account, 403
+      //  no access). Answering every refusal as 500 told an inactive user the
+      //  server was broken. Its status and public message are the answer.
+      if (e && e.httpStatus) return res.status(e.httpStatus).json({ receipt: e.publicMessage || e.message });
       console.error("sms/verify error", e);
       return res.status(500).json({ error: e.message });
     } finally {

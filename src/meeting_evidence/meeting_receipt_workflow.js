@@ -56,6 +56,16 @@ async function generateOwnerReceiptFromProviderMeeting({
 
   const readiness = await assertMeetingReceiptReady(db);
   const source = await evidence.readBoundProviderTranscript(db, { providerMeetingId, propertyId });
+  //  THE REFUSAL BEFORE THE WRITES. The recipient-scope check used to run
+  //  after the canonical meeting and a transcript version were committed,
+  //  so a 403 left durable rows behind it. Nothing below needs those rows
+  //  to answer this question.
+  const speakerPeople = await receipts.loadPropertyPeople(db, { propertyId });
+  if (intendedRecipientPersonId && !speakerPeople.some((person) =>
+    String(person.person_id) === String(intendedRecipientPersonId))) {
+    throw workflowError(403, "receipt_recipient_out_of_scope",
+      "The intended receipt recipient is not an active person for this property");
+  }
   const meeting = await receipts.ensureCanonicalMeeting(db, {
     providerMeetingId,
     propertyId,
@@ -82,12 +92,6 @@ async function generateOwnerReceiptFromProviderMeeting({
     `select coalesce(display_name, name) as property_name from properties where id = $1`,
     [propertyId]
   )).rows[0];
-  const speakerPeople = await receipts.loadPropertyPeople(db, { propertyId });
-  if (intendedRecipientPersonId && !speakerPeople.some((person) =>
-    String(person.person_id) === String(intendedRecipientPersonId))) {
-    throw workflowError(403, "receipt_recipient_out_of_scope",
-      "The intended receipt recipient is not an active person for this property");
-  }
   const recordMeeting = {
     ...meeting,
     property_name: property ? property.property_name : "Property",

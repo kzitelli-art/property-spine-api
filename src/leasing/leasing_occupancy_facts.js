@@ -1,3 +1,5 @@
+const { spanningLeaseSql } = require("../tenancy/position_classifier");
+const SPAN = spanningLeaseSql("l");
 // ── leasing_occupancy_facts.js ───────────────────────────────────────────────
 // THE ONE neutral, lower-level occupancy calculation. It is deliberately NOT an
 // endpoint aggregate — it is a primitive that higher-level readers depend on:
@@ -79,7 +81,7 @@ async function occupancyByBasis(pool, propertyId) {
     const rows = (await pool.query(
       `select s.id as space_id, s.space_label,
               exists (select 1 from leases l
-                        where l.space_id = s.id and l.lease_status = 'active') as occupied
+                        where l.space_id = s.id and l.lease_status = 'active' and ${SPAN}) as occupied
          from spaces s
          join units u on u.id = s.unit_id
         where u.property_id = $1`, [propertyId])).rows;
@@ -110,7 +112,7 @@ async function occupancyByBasis(pool, propertyId) {
        (select count(*)::int from units where property_id = $1) as rentable_units,
        (select count(distinct s.unit_id)::int
           from leases l join spaces s on s.id = l.space_id
-         where l.property_id = $1 and l.lease_status = 'active') as occupied_units`,
+         where l.property_id = $1 and l.lease_status = 'active' and ${SPAN}) as occupied_units`,
     [propertyId])).rows[0];
   const rentable = Number(r && r.rentable_units) || 0;
   const occupied = Number(r && r.occupied_units) || 0;

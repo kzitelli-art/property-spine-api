@@ -1168,10 +1168,20 @@ module.exports = function leasePacketsModule(deps) {
                 field_value=$3, session_id=$4, ip_address=$5, user_agent=$6,
                 signed_by_person_id = case when field_type='signature'
                                            then $7::uuid else signed_by_person_id end
-          where id=$1 and lease_packet_id=$2 and required=true
+          where id=$1 and lease_packet_id=$2 and required=true and completed = false
           returning *`,
         [req.params.field_id, pk.id, value, req.body?.session_id || null, clientIp(req), req.headers["user-agent"] || null, signerPersonId])).rows[0];
-      if (!field) { await client.query("rollback"); return res.status(404).json({ receipt: "No such field on this packet." }); }
+      if (!field) {
+        //  Completed once. A second completion overwrote completed_at, the
+        //  value, the IP and — for a signature — the signer. Company-sign
+        //  refuses this; the resident side did not.
+        const done = (await client.query(
+          `select id from lease_packet_fields where id=$1 and lease_packet_id=$2 and completed = true`,
+          [req.params.field_id, pk.id])).rows[0];
+        await client.query("rollback");
+        if (done) return res.status(409).json({ receipt: "That step is already completed and its record stands. If something is wrong with it, the leasing office corrects it." });
+        return res.status(404).json({ receipt: "No such field on this packet." });
+      }
 
       //  A signature with no identifiable signer is evidence of nothing. Fail
       //  here rather than let it reach canonical truth anonymous.

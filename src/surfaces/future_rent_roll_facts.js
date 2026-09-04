@@ -72,6 +72,14 @@ function futureState(p) {
   if (lease) {
     return LOCKING_PROOFS.has(p.proof_basis) ? "contractually_locked" : "covered_unproven";
   }
+  //  A lease that has COMMENCED but whose economic tenancy is not yet active
+  //  has no `current` lease on the position, so it read as open. It is the
+  //  opposite of open: signed, started, awaiting move-in funds. Same case
+  //  availability_read treats as activation_pending.
+  const pend = p.activation_pending_lease_position;
+  if (pend) {
+    return LOCKING_PROOFS.has(pend.proof_basis || p.proof_basis) ? "contractually_locked" : "covered_unproven";
+  }
   if (p.successor && p.successor.state === "locked") return "contractually_locked";
   if (p.successor && p.successor.state === "pending") return "successor_pending_not_locked";
   return "open_or_uncovered";
