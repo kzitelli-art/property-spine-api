@@ -38,7 +38,7 @@ const receipt = require("../_run_receipt");
 const ROOT = path.resolve(__dirname, "..", "..");
 const R = (p) => require(path.join(ROOT, p));
 const URL_ = receipt.harnessConnectionString();
-const EXPECTED = 14;
+const EXPECTED = 19;
 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail) => {
@@ -205,6 +205,39 @@ const parseCsv = (text) => {
     ok("(c) the first completion is accepted (200) and recorded", r1.status === 200 && f1.completed === true && f1.field_value === "I agree", `${r1.status} ${JSON.stringify(f1)}`);
     ok("(c) a second completion is refused 409 and the record STANDS — value, time untouched (was: silently overwritten, signer included)",
        r2.status === 409 && f2.field_value === "I agree" && String(f2.completed_at) === String(f1.completed_at), `${r2.status} ${JSON.stringify(r2.body)} ${JSON.stringify(f2)}`);
+  }
+
+  // ── (i) Plaid amends and retracts BY ID — modified/removed applied (CURRENT_STATE #57, migration 188) ──
+  {
+    const plaid = R("src/money/plaid");
+    const acct = (await one(`insert into bank_accounts (property_id, account_label, bank_name, account_last4) values ($1,'proof_op','Proof Bank',$2) returning id`, [prop, SUF.slice(0, 4)])).id;
+    const line = (id, amount, name, date = "2026-08-01") => ({ transaction_id: id, account_id: "plaid-acct", amount, name, date, payment_channel: "online" });
+    //  stage two Plaid lines; the same line twice is ONE row
+    const staged = await plaid.stageIntoBankTransactions(pool, acct, [line("ptx-a-" + SUF, 42.5, "COFFEE SHOP"), line("ptx-b-" + SUF, 300, "HARDWARE STORE"), line("ptx-a-" + SUF, 42.5, "COFFEE SHOP")].map(plaid.normalizePlaidTxn), "plaid:proof");
+    const rows = (await q(`select plaid_transaction_id, amount, description, status from bank_transactions where bank_account_id=$1 order by description`, [acct])).rows;
+    ok("(i) Plaid lines are staged with plaid_transaction_id and deduplicated BY IT (2 rows from 3 lines, 1 duplicate)",
+       staged.inserted === 2 && staged.skipped_duplicates === 1 && rows.length === 2 && rows.every((r) => r.plaid_transaction_id), JSON.stringify({ staged, rows }).slice(0, 300));
+    //  a statement upload of the SAME line (no id) adopts the Plaid id instead of becoming a second row
+    const stmt = await plaid.stageIntoBankTransactions(pool, acct, [{ txn_date: "2026-08-01", amount: -300, description: "HARDWARE STORE", txn_type: "other" }], "statement.csv");
+    const stmtRow = await one(`select count(*)::int n from bank_transactions where bank_account_id=$1 and description='HARDWARE STORE'`, [acct]);
+    ok("(i) …and a statement row for the same line is the same row (natural key), not a second one", stmt.skipped_duplicates === 1 && stmtRow.n === 1, JSON.stringify({ stmt, n: stmtRow.n }));
+    //  one line is identified by a human before the bank amends it
+    await q(`update bank_transactions set status='identified', identification_source='human' where plaid_transaction_id=$1`, ["ptx-b-" + SUF]);
+    const amended = await plaid.applyPlaidAmendments(pool, {
+      modified: [line("ptx-a-" + SUF, 45.0, "COFFEE SHOP #2", "2026-08-02"), line("ptx-b-" + SUF, 310, "HARDWARE STORE", "2026-08-01")],
+      removed: [] });
+    const a = await one(`select amount, description, txn_date::text as d, amended_from, exception_reason from bank_transactions where plaid_transaction_id=$1`, ["ptx-a-" + SUF]);
+    const b = await one(`select amount, exception_reason from bank_transactions where plaid_transaction_id=$1`, ["ptx-b-" + SUF]);
+    ok("(i) a MODIFIED claimed line is updated by id and keeps what it said before in amended_from (was: stayed as first seen)",
+       amended.amended === 1 && Number(a.amount) === -45 && a.description === "COFFEE SHOP #2" && a.d === "2026-08-02" && a.amended_from && Number(a.amended_from.amount) === -42.5 && a.exception_reason === null,
+       JSON.stringify({ amended, a }));
+    ok("(i) a MODIFIED line a human already identified is updated AND flagged source_amended for a second look",
+       amended.amended_flagged === 1 && Number(b.amount) === -310 && b.exception_reason === "source_amended", JSON.stringify({ amended, b }));
+    const removed = await plaid.applyPlaidAmendments(pool, { modified: [], removed: [{ transaction_id: "ptx-a-" + SUF }, { transaction_id: "ptx-b-" + SUF }, { transaction_id: "ptx-never-" + SUF }] });
+    const gone = await one(`select count(*)::int n from bank_transactions where plaid_transaction_id=$1`, ["ptx-a-" + SUF]);
+    const kept = await one(`select exception_reason from bank_transactions where plaid_transaction_id=$1`, ["ptx-b-" + SUF]);
+    ok("(i) a REMOVED line nobody touched is deleted (a retracted claim); one already worked is kept and flagged source_removed; an unknown id is counted, not invented",
+       removed.removed === 1 && gone.n === 0 && removed.removed_flagged === 1 && kept.exception_reason === "source_removed" && removed.removed_unknown === 1, JSON.stringify({ removed, gone: gone.n, kept }));
   }
 
   await pool.end();

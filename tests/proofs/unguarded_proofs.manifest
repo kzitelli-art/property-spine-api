@@ -1,0 +1,130 @@
+# ════════════════════════════════════════════════════════════════════
+#  THE UNGUARDED PROOF POPULATION — tests/proofs/*_proof.js and tests/scenarios/*.js
+#
+#  These are the files gate_harness_isolation freezes: they read DATABASE_URL
+#  directly (or need no database). CI runs them in tests/e2e/db_proofs.sh's
+#  SECOND section, with DATABASE_URL pointing at a second disposable database
+#  built from the chain and HARNESS_DATABASE_URL at the first — different
+#  targets, so the same-target guard passes for the right reason. Never run
+#  this section with DATABASE_URL pointed anywhere real.
+#
+#  Same vocabulary as db_proofs.manifest: `run` fails the job, `backlog` is
+#  reported with the condition that promotes it. Paths are relative to tests/.
+#  First classification 2026-09-04 from a full sweep (CURRENT_STATE #17).
+# ════════════════════════════════════════════════════════════════════
+run	proofs/ai_leasing_operating_context_proof.js
+run	proofs/ai_leasing_strategy_proof.js
+run	proofs/ai_leasing_strategy_runtime_proof.js
+run	proofs/ask_spine_contract_proof.js
+run	proofs/audit_fixes_no_db_proof.js
+run	proofs/by_bed_classification_proof.js
+run	proofs/capture_chase_proof.js
+run	proofs/capture_receipt_proof.js
+run	proofs/draft_stale_source_proof.js
+run	proofs/fact_write_resilience_proof.js
+run	proofs/governed_charge_cutover_proof.js
+run	proofs/governed_charge_language_proof.js
+run	proofs/intake_source_fallback_proof.js
+run	proofs/legacy_agent_routes_removed_proof.js
+run	proofs/property_capability_proof.js
+run	proofs/s4_leasing_work_reconciliation_proof.js
+run	proofs/slice9_appointment_journey_proof.js
+run	proofs/slice9_attribution_backfill_proof.js
+run	proofs/slice9_attribution_writer_proof.js
+run	proofs/slice9_future_commitment_proof.js
+run	proofs/slice9_inbound_decision_proof.js
+run	proofs/slice9_lease_packet_proof.js
+run	proofs/slice9_leaseable_units_proof.js
+run	proofs/slice9_lifecycle_concurrency_proof.js
+run	proofs/slice9_lifecycle_read_authority_proof.js
+run	proofs/slice9_metric_contract_proof.js
+run	proofs/slice9_operating_timezone_proof.js
+run	proofs/slice9_opportunity_funnel_proof.js
+run	proofs/slice9_opportunity_lifecycle_proof.js
+run	proofs/slice9_public_submission_revalidation_proof.js
+run	proofs/slice9_status_group_drift_proof.js
+run	proofs/slice9_status_read_correction_proof.js
+run	proofs/slice9_timezone_command_proof.js
+run	proofs/unit_triage_proof.js
+run	proofs/unit_turn_scope_proof.js
+run	proofs/work_acceptance_proof.js
+run	proofs/work_order_authority_proof.js
+run	scenarios/ask_spine_reader_gate_falsification.js
+run	scenarios/establish_qa_staff_session.js
+run	scenarios/http_negative_smoke.js
+run	scenarios/leasing_action_deadend_audit.js
+run	scenarios/position_classifier_characterization.js
+run	scenarios/proof_proposed_terms.js
+run	scenarios/slice9_commitment_proof_guard.js
+# ── backlog ──
+backlog	proofs/agent_booking_xturn_proof.js	stale harness: seeds properties.sms_number, which migration 130 made a read-only projection of communication_lines
+backlog	proofs/ask_spine_http_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ✗ FAIL — ask_spine_http_proof.js
+backlog	proofs/authority_resolution_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): HARNESS ERROR: TypeError: Cannot read properties of undefined (reading 'swept_tables')
+backlog	proofs/availability_canonical_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ==== 55 passed, 2 failed ====
+backlog	proofs/billback_decision_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): 0/1 passed — 1 failure(s)
+backlog	proofs/comms_boundary_phase_a_proof.js	stale harness: seeds properties.sms_number, which migration 130 made a read-only projection of communication_lines
+backlog	proofs/consent_and_scope_proof.js	stale harness: seeds properties.sms_number, which migration 130 made a read-only projection of communication_lines
+backlog	proofs/demo_authority_ruling_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): HARNESS ERROR: TypeError: Cannot read properties of undefined (reading 'account_kind')
+backlog	proofs/demo_book_route_proof.js	stale harness: seeds properties.sms_number, which migration 130 made a read-only projection of communication_lines
+backlog	proofs/governed_economics_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): HARNESS ERROR: TypeError: Cannot read properties of undefined (reading 'proposed_governed_destination')
+backlog	proofs/hotfix_future_rent_roll_guards_proof.js	fails with no summary line on a fresh chain-built database; open the log before promoting
+backlog	proofs/identity_authority_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): HARNESS ERROR: TypeError: Cannot read properties of null (reading 'user_id')
+backlog	proofs/inbound_prospect_resolution_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): HARNESS ERROR: Error: tenant_link module requires workOrderService (build it with makeWorkOrderService({ spawn
+backlog	proofs/lead_source_attribution_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ═ RESULT: 11 passed, 3 failed ═
+backlog	proofs/never_delete_guard_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ═══ 8 passed · 2 failed ═══
+backlog	proofs/operator_language_proof.js	reads the app repo (property-spine-app), which is not in this checkout
+backlog	proofs/person_facts_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ═ RESULT: 30 passed, 1 failed ═
+backlog	proofs/presence_wall_lease_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): 1 CHECK(S) FAILED
+backlog	proofs/pricing_decision_packet_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): HARNESS ERROR: TypeError: Cannot read properties of undefined (reading 'offer_state')
+backlog	proofs/pricing_foundation_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): PASS a version without a reviewed receipt is refused
+backlog	proofs/pricing_governance_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): PASS the DEACTIVATED owner assignment confers nothing — an inactive row is not authority
+backlog	proofs/pricing_guards_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ════ 27 passed, 8 failed ════
+backlog	proofs/readiness_certification_proof.js	stale harness: reads a migration file by a path one level short after the 2026-08-27 reorg
+backlog	proofs/relationship_stage_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ═ RESULT: 5 passed, 5 failed ═
+backlog	proofs/release_candidate_proof.js	reads the app repo (property-spine-app), which is not in this checkout
+backlog	proofs/renewals_r1_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ════ 38 passed, 5 failed ════
+backlog	proofs/renewals_slice6_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): FAILURES:
+backlog	proofs/rent_roll_canonical_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ==== 33 passed, 5 failed ====
+backlog	proofs/rent_roll_institutional_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): PASS the CSV header IS the shared column definition, in order
+backlog	proofs/resident_sms_route_proof.js	refuses to start under CI's environment — ✗ REFUSED TO START — no assertions executed.
+backlog	proofs/resident_sms_work_order_proof.js	refuses to start under CI's environment — ✗ REFUSED TO START — no assertions executed.
+backlog	proofs/slice8_governed_economics_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): FAIL baseline claims no pricing version lineage
+backlog	proofs/slice9_application_target_authority_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): application-target authority: 76 passed, 6 failed
+backlog	proofs/slice9_evidence_http_proof.js	fails with no summary line on a fresh chain-built database; open the log before promoting
+backlog	proofs/slice9_evidence_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ════ 70 passed, 4 failed ════
+backlog	proofs/slice9_inbound_decision_http_proof.js	fails with no summary line on a fresh chain-built database; open the log before promoting
+backlog	proofs/slice9_lifecycle_authority_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): PASS closed obligation refused
+backlog	proofs/slice9_path_a_birth_cutover_proof.js	stale harness: reads a file at a path that no longer exists — PROOF CRASHED: Error: ENOENT: no such file or directory, open '/home/user/property-spine-a
+backlog	proofs/slice9_paths_bcde_cutover_proof.js	stale harness: reads a file at a path that no longer exists — PROOF CRASHED: Error: ENOENT: no such file or directory, open '/home/user/property-spine-a
+backlog	proofs/slice9_route_retirement_proof.js	reads the app repo (property-spine-app), which is not in this checkout
+backlog	proofs/slice9_scale_proof.js	fails with no summary line on a fresh chain-built database; open the log before promoting
+backlog	proofs/slice9_targeted_invitation_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): targeted invitation: 34 passed, 5 failed
+backlog	proofs/slice9_turn_priority_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): turn priority: 48 passed, 7 failed
+backlog	proofs/staff_agent_proof.js	stale harness: reads a migration file by a path one level short after the 2026-08-27 reorg
+backlog	proofs/standing_context_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): 1 CHECK(S) FAILED
+backlog	proofs/tour_booking_proof.js	stale harness: seeds properties.sms_number, which migration 130 made a read-only projection of communication_lines
+backlog	proofs/tour_chips_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): 2 CHECK(S) FAILED
+backlog	proofs/tour_outcome_capture_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): 2 CHECK(S) FAILED
+backlog	proofs/turnover_service_proof.js	refuses to start under CI's environment — ✗ REFUSED TO START — no assertions executed.
+backlog	proofs/unit_turn_page_proof.js	reads the app repo (property-spine-app), which is not in this checkout
+backlog	proofs/walk_in_tour_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): HARNESS ERROR: Cannot read properties of undefined (reading 'id') TypeError: Cannot read properties of undefin
+backlog	proofs/work_order_canonical_path_proof.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): 24/25 passed — 1 failure(s)
+backlog	proofs/work_proof_photo_proof.js	reads the app repo (property-spine-app), which is not in this checkout
+backlog	scenarios/cross_surface_invariants.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ════ 48 passed, 2 failed ════
+backlog	scenarios/db_preflight.js	refuses to start under CI's environment — ✗ REFUSED TO START — no assertions executed.
+backlog	scenarios/demo_enrollment_dry_run.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): 1 CHECK(S) FAILED
+backlog	scenarios/night_harness.js	stale harness: seeds properties.sms_number, which migration 130 made a read-only projection of communication_lines
+backlog	scenarios/ownership_reachability_check.js	fails with no summary line on a fresh chain-built database; open the log before promoting
+backlog	scenarios/prod_smoke_missed_readonly.js	fails with no summary line on a fresh chain-built database; open the log before promoting
+backlog	scenarios/proof_review_next_action_seam.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): PROOF CRASHED: Error: fakeClient: unmapped SQL → select a.*, u.unit_number as inventory_unit_label, s.space_
+backlog	scenarios/prove_confirm_term_concurrency.js	fails with no summary line on a fresh chain-built database; open the log before promoting
+backlog	scenarios/prove_escalate_move.js	stale harness: seeds properties.sms_number, which migration 130 made a read-only projection of communication_lines
+backlog	scenarios/prove_one_in_one_out.js	stale harness: seeds properties.sms_number, which migration 130 made a read-only projection of communication_lines
+backlog	scenarios/prove_persona_v6.js	stale harness: seeds properties.sms_number, which migration 130 made a read-only projection of communication_lines
+backlog	scenarios/resident_id_evidence_study.js	reads the private Skyline July rent-roll workbook by absolute upload path
+backlog	scenarios/slice9_cross_domain_matrix.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): cross-domain matrix: 34 passed, 6 failed · 20 scenarios × 9 domains
+backlog	scenarios/slice9_status_read_drift_guard.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ════ 63 passed, 2 failed ════
+backlog	scenarios/slice_a_full_schema_suite.js	refuses to start under CI's environment — ✗ SUITE REFUSED TO START — no harness executed.
+backlog	scenarios/smoke_proposed_terms_route.js	fails with no summary line on a fresh chain-built database; open the log before promoting
+backlog	scenarios/smoke_release2.deployed.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ═══ RESULT: 3 passed · 6 failed ═══
+backlog	scenarios/smoke_release3.deployed.js	fails on a fresh chain-built database, identically before this thread (2026-09-04 sweep): ═══ RESULT: 3 passed · 18 failed ═══

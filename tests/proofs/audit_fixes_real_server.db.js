@@ -152,7 +152,12 @@ const call = async (m, p, { key = true, session = null, tenant = null, body = un
     const after = await one(`select t.status, t.cancelled_at, a.status as slot_status from leasing_tours t join tour_availability a on a.id=$2 where t.id=$1`, [sched, slot]);
     T("T5c cancelling a SCHEDULED tour still works → 200, status cancelled, slot reopened", rc.status === 200 && after.status === "cancelled" && !!after.cancelled_at && after.slot_status === "open", `${rc.status} ${J(after)}`);
     const rx = await call("POST", `/leasing/tours/${done}/correct-outcome`, { session: tokA, body: { reason: "wrong disposition", revised: { disposition: "warm" } } });
-    T("T5d correct-outcome → honest 409 naming the missing vocabulary (was a raw 500)", rx.status === 409 && rx.body.error === "outcome_correction_not_enabled", `${rx.status} ${J(rx.body)}`);
+    //  Migration 188 widened tour_events.event_type; the correction lane now
+    //  lands an append-only outcome_corrected event and leaves status alone.
+    const corr = await one(`select count(*)::int n from tour_events where tour_id=$1 and event_type='outcome_corrected'`, [done]);
+    const stillDone = await one(`select status from leasing_tours where id=$1`, [done]);
+    T("T5d correct-outcome → accepted, ONE outcome_corrected event, status still completed (was: 409 outcome_correction_not_enabled before 188)",
+      rx.status === 200 && corr.n === 1 && stillDone.status === "completed", `${rx.status} ${J(rx.body).slice(0, 160)} events=${corr.n} status=${stillDone.status}`);
   }
 
   // ── T6 link-bank: a deposit proves cash only up to its own amount ──

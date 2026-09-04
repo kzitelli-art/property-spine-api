@@ -119,8 +119,82 @@ function normalizePlaidTxn(pt) {
     description: pt.merchant_name || pt.name || "(no description)",
     txn_type: finalType,
     check_number: plaidCheckNumber(pt),
+    plaid_transaction_id: pt.transaction_id || null,    // the id Plaid amends and retracts BY (188)
     _plaid_account_id: pt.account_id,                   // used to route to the right bank_account
   };
+}
+
+//  ── THE PLAID-VERIFICATION JWT (CURRENT_STATE #48) ─────────────────────
+//  Plaid signs every webhook: header `Plaid-Verification` carries an ES256
+//  JWT whose `kid` names a key fetched from /webhook_verification_key/get,
+//  whose claims carry `iat` and `request_body_sha256`. Verified here with
+//  Node's own crypto — no extra dependency — and FAIL-CLOSED: no header,
+//  no key, an expired key, a stale token, a bad signature or a body whose
+//  hash does not match all refuse. The raw bytes come from the JSON parser's
+//  verify hook in server.js (req.rawBody); a parsed-then-reserialised body
+//  would hash differently and refuse everything.
+const crypto = require("crypto");
+const WEBHOOK_MAX_AGE_SEC = 5 * 60;
+const b64url = (s) => Buffer.from(String(s), "base64url");
+async function verifyPlaidWebhook(client, req) {
+  const token = req.get("plaid-verification");
+  if (!token) return { ok: false, reason: "missing_plaid_verification_header" };
+  const parts = token.split(".");
+  if (parts.length !== 3) return { ok: false, reason: "malformed_token" };
+  let header, claims;
+  try { header = JSON.parse(b64url(parts[0]).toString("utf8")); claims = JSON.parse(b64url(parts[1]).toString("utf8")); }
+  catch (_) { return { ok: false, reason: "malformed_token" }; }
+  if (header.alg !== "ES256" || !header.kid) return { ok: false, reason: "unexpected_alg_or_kid" };
+  let jwk;
+  try { jwk = (await client.webhookVerificationKeyGet({ key_id: header.kid })).data.key; }
+  catch (e) { return { ok: false, reason: "verification_key_unavailable" }; }
+  if (!jwk || jwk.expired_at) return { ok: false, reason: "verification_key_expired" };
+  let ok = false;
+  try {
+    const pub = crypto.createPublicKey({ key: jwk, format: "jwk" });
+    ok = crypto.verify("sha256", Buffer.from(parts[0] + "." + parts[1]), { key: pub, dsaEncoding: "ieee-p1363" }, b64url(parts[2]));
+  } catch (_) { ok = false; }
+  if (!ok) return { ok: false, reason: "bad_signature" };
+  const now = Math.floor(Date.now() / 1000);
+  if (!Number.isFinite(claims.iat) || Math.abs(now - claims.iat) > WEBHOOK_MAX_AGE_SEC) return { ok: false, reason: "token_too_old" };
+  const raw = req.rawBody ? Buffer.from(req.rawBody) : null;
+  if (!raw) return { ok: false, reason: "raw_body_unavailable" };
+  const digest = crypto.createHash("sha256").update(raw).digest("hex");
+  const claimed = String(claims.request_body_sha256 || "");
+  if (claimed.length !== digest.length || !crypto.timingSafeEqual(Buffer.from(claimed), Buffer.from(digest))) return { ok: false, reason: "body_hash_mismatch" };
+  return { ok: true, reason: null };
+}
+
+
+//  What Plaid's `modified` and `removed` lists DO to bank_transactions.
+//  Exported so the effect is proven against real rows without a Plaid call.
+async function applyPlaidAmendments(pool, { modified = [], removed = [] } = {}) {
+  const amendments = { amended: 0, amended_flagged: 0, amended_unknown: 0, removed: 0, removed_flagged: 0, removed_unknown: 0 };
+  for (const pt of modified) {
+    const n = normalizePlaidTxn(pt);
+    if (!n.plaid_transaction_id) continue;
+    const r = await pool.query(
+      `update bank_transactions
+          set amended_from = coalesce(amended_from, jsonb_build_object('txn_date', txn_date, 'amount', amount, 'description', description)),
+              txn_date = $2, amount = $3, description = $4,
+              exception_reason = case when status <> 'claimed' then 'source_amended' else exception_reason end
+        where plaid_transaction_id = $1
+        returning status`, [n.plaid_transaction_id, n.txn_date, n.amount, String(n.description).trim()]);
+    if (!r.rowCount) amendments.amended_unknown++;
+    else if (r.rows[0].status === "claimed") amendments.amended++;
+    else amendments.amended_flagged++;
+  }
+  for (const rm of removed) {
+    const id = rm && rm.transaction_id;
+    if (!id) continue;
+    const del = await pool.query(
+      `delete from bank_transactions where plaid_transaction_id = $1 and status = 'claimed' and money_event_id is null returning id`, [id]);
+    if (del.rowCount) { amendments.removed++; continue; }
+    const flag = await pool.query(
+      `update bank_transactions set exception_reason = 'source_removed' where plaid_transaction_id = $1 returning id`, [id]);
+    if (flag.rowCount) amendments.removed_flagged++; else amendments.removed_unknown++;
+  }
+  return amendments;
 }
 
 module.exports = function plaidModule({ pool }) {
@@ -324,19 +398,36 @@ module.exports = function plaidModule({ pool }) {
 
       // page through /transactions/sync
       let cursor = itRow.sync_cursor || undefined;
-      let added = [], hasMore = true, pages = 0, nextCursor = cursor || null;
+      let added = [], modified = [], removed = [], hasMore = true, pages = 0, nextCursor = cursor || null;
       while (hasMore && pages < 20) {
         const resp = await c.client.transactionsSync({ access_token: itRow.access_token, ...(cursor ? { cursor } : {}) });
         const d = resp.data;
         added = added.concat(d.added || []);
+        modified = modified.concat(d.modified || []);
+        removed = removed.concat(d.removed || []);
         nextCursor = d.next_cursor;
         cursor = d.next_cursor;
         hasMore = d.has_more;
         pages++;
       }
 
+      //  ── AMENDED AND RETRACTED LINES (CURRENT_STATE #57) ──────────────
+      //  Plaid's sync is three lists, and only `added` used to be read: a
+      //  pending line later amended (amount, date, description) stayed as
+      //  first seen, and one retracted (a pending charge that never posted)
+      //  stayed on the board as a bank line that no longer exists.
+      //    modified → the row is updated by plaid_transaction_id; what it
+      //               said before is kept in amended_from. A line a human
+      //               already identified is flagged `source_amended` so
+      //               the identification is looked at again.
+      //    removed  → a line nobody touched (still `claimed`, no money
+      //               event) is deleted — a retracted claim, not a fact.
+      //               One already worked is kept and flagged
+      //               `source_removed`; deleting it would erase work.
+      const amendments = await applyPlaidAmendments(pool, { modified, removed });
+
       // normalize + route into bank_transactions through the 012 contract
-      const summary = { item: itRow.institution_name || itRow.id, fetched: added.length, staged: 0, skipped_unmapped: 0, by_account: {} };
+      const summary = { item: itRow.institution_name || itRow.id, fetched: added.length, modified: modified.length, removed: removed.length, ...amendments, staged: 0, skipped_unmapped: 0, by_account: {} };
       const groups = {}; // bank_account_id → [normalized rows]
       for (const pt of added) {
         const n = normalizePlaidTxn(pt);
@@ -358,8 +449,11 @@ module.exports = function plaidModule({ pool }) {
         [nextCursor, plaidItemPk]
       );
 
+      const amendedNote = (summary.modified || summary.removed)
+        ? ` ${summary.amended + summary.amended_flagged} amended by the bank${summary.amended_flagged ? ` (${summary.amended_flagged} already identified — flagged for a second look)` : ""}, ${summary.removed} retracted before anyone touched them${summary.removed_flagged ? `, ${summary.removed_flagged} retracted after work was done (kept, flagged)` : ""}.`
+        : "";
       return res.json({
-        receipt: `Synced ${summary.fetched} transaction(s) from ${summary.item}. ${summary.staged} staged as claims${summary.skipped_unmapped ? `, ${summary.skipped_unmapped} skipped (account not mapped)` : ""}. Identification + exposure already applied — open the bank board.`,
+        receipt: `Synced ${summary.fetched} transaction(s) from ${summary.item}. ${summary.staged} staged as claims${summary.skipped_unmapped ? `, ${summary.skipped_unmapped} skipped (account not mapped)` : ""}.${amendedNote} Identification + exposure already applied — open the bank board.`,
         ...summary,
       });
     } catch (e) {
@@ -379,15 +473,21 @@ module.exports = function plaidModule({ pool }) {
   // NOT auto-sync money on a webhook — we record that an update is waiting
   // and let the operator pull deliberately. (Same human-in-the-loop posture
   // as the rest of the money layer: the machine flags, the human acts.)
-  // ⚠ NOT REACHABLE BY PLAID TODAY. "/plaid/" is not on server.js's public
-  // allowlist, so this route sits behind the shared x-operator-key gate and
-  // Plaid's POST gets a 401; ITEM_LOGIN_REQUIRED is never recorded. It is
-  // deliberately LEFT gated: opening it needs Plaid webhook verification
-  // (the Plaid-Verification JWT against Plaid's JWKs) first, or it becomes
-  // an unauthenticated write to plaid_item status. Recorded in
-  // docs/CURRENT_STATE.md; the previous comment here said the opposite.
+  //
+  // REACHABLE, AND VERIFIED (CURRENT_STATE #48). The route is on server.js's
+  // public allowlist because Plaid cannot send an operator key; what admits
+  // it instead is the Plaid-Verification JWT, checked fail-closed above.
+  // An unverified POST is refused 403 and writes nothing. The one thing a
+  // verified webhook may do is mark a connection's health.
   // ──────────────────────────────────────────────────────────────────
   router.post("/plaid/webhook", async (req, res) => {
+    const c = plaidClient();
+    if (c.error) return res.status(503).json({ ok: false, reason: "plaid_not_configured" });
+    const v = await verifyPlaidWebhook(c.client, req);
+    if (!v.ok) {
+      console.warn(`plaid/webhook: refused — ${v.reason}`);
+      return res.status(403).json({ ok: false, reason: v.reason });
+    }
     const { webhook_type, webhook_code, item_id } = req.body || {};
     try {
       if (item_id && webhook_code === "ITEM_LOGIN_REQUIRED") {
@@ -395,7 +495,7 @@ module.exports = function plaidModule({ pool }) {
       } else if (item_id && (webhook_code === "SYNC_UPDATES_AVAILABLE" || webhook_type === "TRANSACTIONS")) {
         await pool.query("update plaid_item set last_error=null, updated_at=now() where item_id=$1", [item_id]);
       }
-    } catch (_) { /* never fail a webhook ack */ }
+    } catch (_) { /* never fail a verified webhook ack */ }
     return res.json({ ok: true });
   });
 
@@ -465,16 +565,33 @@ async function stageIntoBankTransactions(pool, accountId, transactions, source_d
     if (t.txn_type === "check_return" || d.includes("REJECTED")) exception = "rejected_check";
     if (plaidIsPaymentReturn(d, t.txn_type, t.amount)) exception = "payment_return";
 
-    const ins = await pool.query(
-      `insert into bank_transactions
-         (bank_account_id, txn_date, description, amount, txn_type, check_number,
-          status, vendor_id, identification_source, exception_reason, source_document)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       on conflict (bank_account_id, txn_date, description, amount) do nothing
-       returning id`,
-      [accountId, t.txn_date, String(t.description).trim(), t.amount, t.txn_type,
-       t.check_number ? String(t.check_number) : null,
-       status, vendor_id, identSource, exception, source_document || null]);
+    //  Two identities, one row. Plaid lines carry plaid_transaction_id (188)
+    //  and are deduplicated BY IT, so a bank line whose amount or description
+    //  the bank later amends is still the same line. Statement uploads carry
+    //  no id and keep the natural key. When both name the same line, the
+    //  statement's row adopts the id rather than a second row appearing.
+    let ins;
+    try {
+      ins = await pool.query(
+        `insert into bank_transactions
+           (bank_account_id, txn_date, description, amount, txn_type, check_number,
+            status, vendor_id, identification_source, exception_reason, source_document, plaid_transaction_id)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         on conflict (bank_account_id, txn_date, description, amount) do nothing
+         returning id`,
+        [accountId, t.txn_date, String(t.description).trim(), t.amount, t.txn_type,
+         t.check_number ? String(t.check_number) : null,
+         status, vendor_id, identSource, exception, source_document || null, t.plaid_transaction_id || null]);
+    } catch (e) {
+      if (e.code === "23505" && t.plaid_transaction_id) { summary.skipped_duplicates++; continue; } // same Plaid line, seen before
+      throw e;
+    }
+    if (ins.rows.length === 0 && t.plaid_transaction_id) {
+      await pool.query(
+        `update bank_transactions set plaid_transaction_id = $5
+          where bank_account_id=$1 and txn_date=$2 and description=$3 and amount=$4 and plaid_transaction_id is null`,
+        [accountId, t.txn_date, String(t.description).trim(), t.amount, t.plaid_transaction_id]).catch(() => {});
+    }
 
     if (ins.rows.length === 0) { summary.skipped_duplicates++; continue; }
     summary.inserted++;
@@ -483,3 +600,8 @@ async function stageIntoBankTransactions(pool, accountId, transactions, source_d
   }
   return summary;
 }
+
+module.exports.verifyPlaidWebhook = verifyPlaidWebhook;
+module.exports.applyPlaidAmendments = applyPlaidAmendments;
+module.exports.stageIntoBankTransactions = stageIntoBankTransactions;
+module.exports.normalizePlaidTxn = normalizePlaidTxn;

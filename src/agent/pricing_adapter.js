@@ -45,6 +45,8 @@ const HANDOFF = (reason, detail) => ({
  *  ctx: { property_id, space_id?, unit_type_id?, lease_term_months?, intent? }
  *       intent: 'new_lease' | 'renewal'   (default new_lease)
  */
+const BASE_TERM_MONTHS = 12;
+
 async function quotablePricing(pool, ctx = {}, opts = {}) {
   const { property_id, space_id = null, unit_type_id = null,
           lease_term_months = null, intent = "new_lease" } = ctx;
@@ -96,13 +98,18 @@ async function quotablePricing(pool, ctx = {}, opts = {}) {
     return HANDOFF("type_pricing_unavailable", `Pricing for ${type.label} is not available in the published version.`);
 
   const terms = type.terms || [];
+  //  THE BASE TERM IS 12 MONTHS. ALWAYS START THERE (owner's ruling,
+  //  CURRENT_STATE #14). `terms[0]` sorted shortest-first, so a prospect who
+  //  named no term was quoted the shortest term on the sheet. And when the
+  //  sheet carries no 12-month term (#27's open sub-decision) the answer is
+  //  the honest hand-off below — never the nearest term, never a guess.
   const chosen = lease_term_months
     ? terms.find((t) => Number(t.lease_term_months) === Number(lease_term_months))
-    : terms[0];
+    : terms.find((t) => Number(t.lease_term_months) === BASE_TERM_MONTHS);
   if (!chosen) {
-    return HANDOFF("term_not_published",
+    return HANDOFF(lease_term_months ? "term_not_published" : "base_term_not_published",
       lease_term_months ? `No published pricing for a ${lease_term_months}-month term on ${type.label}.`
-                        : `No published lease term for ${type.label}.`);
+                        : `The published sheet carries no ${BASE_TERM_MONTHS}-month term for ${type.label}, and the base term is where every quote starts.`);
   }
 
   // NEW LEASE vs RENEWAL are different prices and are never interchanged.
@@ -136,3 +143,5 @@ async function quotablePricing(pool, ctx = {}, opts = {}) {
 }
 
 module.exports = { quotablePricing, HANDOFF };
+
+module.exports.BASE_TERM_MONTHS = BASE_TERM_MONTHS;

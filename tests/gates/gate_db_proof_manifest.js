@@ -72,8 +72,28 @@ ok("the runner unsets DATABASE_URL before running proofs (same-target guard sati
 const ci = fs.readFileSync(path.join(ROOT, ".github", "workflows", "verify.yml"), "utf8");
 ok("CI invokes the runner", /tests\/e2e\/db_proofs\.sh/.test(ci));
 
-const runCount = entries.filter((e) => e.mode === "run").length;
-const backlogCount = entries.filter((e) => e.mode === "backlog").length;
+/*  ── THE SECOND MANIFEST: every unguarded proof and scenario is classified too ── */
+const MANIFEST2 = path.join(ROOT, "tests", "proofs", "unguarded_proofs.manifest");
+const onDisk2 = [
+  ...fs.readdirSync(path.join(ROOT, "tests", "proofs")).filter((f) => f.endsWith(".js") && !f.endsWith(".db.js")).map((f) => "proofs/" + f),
+  ...fs.readdirSync(path.join(ROOT, "tests", "scenarios")).filter((f) => f.endsWith(".js")).map((f) => "scenarios/" + f),
+].sort();
+const entries2 = fs.readFileSync(MANIFEST2, "utf8").split("\n").map((l, i) => ({ n: i + 1, raw: l }))
+  .filter(({ raw }) => raw.trim() && !raw.trim().startsWith("#"))
+  .map(({ n, raw }) => { const [mode, file, ...rest] = raw.split("\t"); return { n, mode, file, reason: rest.join("\t").trim(), raw }; });
+ok("unguarded manifest: every line is `run` or `backlog`", entries2.every((e) => e.mode === "run" || e.mode === "backlog"));
+const listed2 = entries2.map((e) => e.file);
+const unlisted2 = onDisk2.filter((f) => !listed2.includes(f));
+ok(`unguarded manifest: every proof and scenario on disk is classified (${onDisk2.length} on disk, ${listed2.length} listed)`,
+   unlisted2.length === 0, `unclassified: ${unlisted2.join(", ")}`);
+const ghosts2 = listed2.filter((f) => !onDisk2.includes(f));
+ok("unguarded manifest: every listed file exists", ghosts2.length === 0, `not on disk: ${ghosts2.join(", ")}`);
+ok("unguarded manifest: every backlog line names the condition that clears it",
+   entries2.filter((e) => e.mode === "backlog" && e.reason.length < 25).length === 0);
+ok("the runner runs the unguarded section against a SECOND database", /unguarded_proofs\.manifest/.test(runner) && /_unguarded/.test(runner));
+
+const runCount = entries.filter((e) => e.mode === "run").length + entries2.filter((e) => e.mode === "run").length;
+const backlogCount = entries.filter((e) => e.mode === "backlog").length + entries2.filter((e) => e.mode === "backlog").length;
 console.log(`\n  SCOPE — run: ${runCount}   backlog: ${backlogCount}   (a green job proves the \`run\` set, not the backlog)`);
 console.log("\n════════════════════════════════════════════════════════════════");
 console.log(`  ASSERTIONS COMPLETE · ${pass + fail} run · ${pass} passed · ${fail} failed`);

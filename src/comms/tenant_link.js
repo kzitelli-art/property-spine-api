@@ -1226,6 +1226,30 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
         const body = String(req.body && req.body.Body || "").trim().slice(0, 4000);
         if (!MessageSid || !From || !To) return emptyTwiml(res);
 
+        //  DURABLE BEFORE THE ACK (CURRENT_STATE #58). Every branch below
+        //  acknowledges the carrier before its own write commits, so a
+        //  failure after the ack used to lose the message. The message as
+        //  received is now written first, in its own transaction, keyed by
+        //  the carrier's MessageSid; a redelivery is a no-op. Only then is
+        //  anything acknowledged. What became of it is stamped as each
+        //  branch ends (recordInboundOutcome); a failed turn is replayed
+        //  from this row, not from a log line.
+        const rawInsert = await pool.query(
+          `insert into inbound_sms_raw (provider_message_id, from_e164, to_e164, body, media)
+           values ($1,$2,$3,$4,$5) on conflict (provider_message_id) do nothing returning provider_message_id`,
+          [MessageSid, String(From), String(To), body, JSON.stringify(twilioAttachments(req.body) || null)]);
+        if (rawInsert.rowCount === 0) {
+          //  Seen before: the carrier is retrying because it never got our
+          //  ack. The first delivery's outcome stands.
+          return emptyTwiml(res);
+        }
+        const recordInboundOutcome = async (outcome, failure = null, lineId = null) => {
+          await pool.query(
+            `update inbound_sms_raw set processed_at = now(), outcome = $2, failure = $3, line_id = coalesce($4, line_id)
+              where provider_message_id = $1`, [MessageSid, outcome, failure, lineId]).catch((e) =>
+            console.error("inbound-sms: could not stamp the raw row's outcome:", e.message));
+        };
+
         // COMMUNICATIONS BOUNDARY: the route owns transport authentication
         // (signature + payload shape, above); the boundary owns domain
         // resolution. To → property FIRST, sender resolved inside that
@@ -1233,11 +1257,11 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
         const ctx = await commBoundary.resolveInboundSmsContext({ To, From, MessageSid, body });
 
         // Retry / duplicate sid → already handled. Ack and stop.
-        if (ctx.idempotentReplay) return emptyTwiml(res);
+        if (ctx.idempotentReplay) { await recordInboundOutcome("dropped_replay"); return emptyTwiml(res); }
 
         // Unknown receiving line → zero rows written (no property ledger
         // exists). Boundary logged it; Twilio's logs keep the raw message.
-        if (ctx.unknownLine) return emptyTwiml(res);
+        if (ctx.unknownLine) { await recordInboundOutcome("dropped_unknown_line"); return emptyTwiml(res); }
 
         // AMBIGUOUS receiving line → more than one property holds this
         // number, so the property wall itself is unknown. Zero rows
@@ -1248,13 +1272,13 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
         // no property we could honestly attach to, and picking one of the
         // candidates would reintroduce the arbitrary bind — the boundary
         // already logged every candidate id for an operator to resolve.
-        if (ctx.ambiguousLine) return emptyTwiml(res);
+        if (ctx.ambiguousLine) { await recordInboundOutcome("dropped_ambiguous_line"); return emptyTwiml(res); }
 
         // A configured line that is suspended or retired. Fails closed
         // exactly like unknown; named separately so a real operator action
         // (or a reassigned number) is not reported as "we've never heard of
         // this number".
-        if (ctx.inactiveLine) return emptyTwiml(res);
+        if (ctx.inactiveLine) { await recordInboundOutcome("dropped_inactive_line"); return emptyTwiml(res); }
 
         // ══ OPERATIONS LINE — THE TECHNICIAN TURN (Phase 2) ═════════════
         //  The boundary resolved the organization, the authority ceiling and
@@ -1267,7 +1291,7 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
         //  unknown handset, which the reply_only policy exists to prevent.
         //  The boundary already logged it.
         if (ctx.operationsLine) {
-          if (ctx.staffOutcome !== "one" || !ctx.staffUserId) return emptyTwiml(res);
+          if (ctx.staffOutcome !== "one" || !ctx.staffUserId) { await recordInboundOutcome("dropped_staff_unresolved", null, ctx.lineId || null); return emptyTwiml(res); }
 
           //  Ack the provider first — the reply travels by REST, and a slow
           //  turn must not become a provider timeout and a redelivery.
@@ -1286,21 +1310,24 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
               attachments: twilioAttachments(req.body),
             }, { fetchMedia: sms && typeof sms.fetchMedia === "function" ? sms.fetchMedia : null });
             await t.query("commit");
+            await recordInboundOutcome("operations_turn", null, ctx.lineId || null);
           } catch (e) {
             await t.query("rollback").catch(() => {});
             //  A redelivery that lost the correlation-key race has already
             //  been answered. Nothing to do, and nothing wrong.
             if (e.code === "23505") {
               console.error(`inbound-sms: operations turn already answered (${MessageSid}) — duplicate suppressed.`);
+              await recordInboundOutcome("dropped_replay", null, ctx.lineId || null);
               return;
             }
             //  HONEST: the inbound row was written INSIDE the transaction that
-            //  just rolled back, so it is NOT preserved. The provider was already
-            //  acked, so it will not redeliver. The full inbound is logged here so
-            //  a person can recover it. Making this durable-before-ack is a ruling
-            //  recorded in docs/CURRENT_STATE.md, not a comment.
-            console.error("inbound-sms: operations turn failed — NOT preserved (rolled back), provider already acked, no reply sent:",
-              e.message, JSON.stringify({ sid: MessageSid, from: From, line: ctx.lineId, user: ctx.staffUserId, body: body || "" }));
+            //  just rolled back. The provider was already acked, so it will not
+            //  redeliver — but the message itself is durable in inbound_sms_raw
+            //  (written before the ack) and is stamped `failed` with the reason
+            //  here, so it can be replayed. CURRENT_STATE #58, resolved.
+            console.error("inbound-sms: operations turn failed — rolled back; preserved in inbound_sms_raw for replay; no reply sent:",
+              e.message, JSON.stringify({ sid: MessageSid, from: From, line: ctx.lineId, user: ctx.staffUserId }));
+            await recordInboundOutcome("failed", `operations_turn: ${e.message}`, ctx.lineId || null);
             return;
           } finally { t.release(); }
 
@@ -1358,14 +1385,14 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
         // the PROPERTY (person-less, needs_human). Phase A dispatches ZERO
         // outbound on ambiguity: a clarification reply is a real send and
         // ships only under a future explicit policy through the gate.
-        if (ctx.ambiguous) return emptyTwiml(res);
+        if (ctx.ambiguous) { await recordInboundOutcome("dropped_ambiguous_sender"); return emptyTwiml(res); }
 
         // Consent keyword (STOP/START): the boundary already recorded the
         // event once and updated contact_preferences — the one canonical
         // consent truth. Dispatch NOTHING: no AI turn, no reply text
         // (replying to a STOP is itself a carrier violation; Twilio's
         // compliance layer sends the required confirmation).
-        if (ctx.consentSignal) return emptyTwiml(res);
+        if (ctx.consentSignal) { await recordInboundOutcome("consent_signal"); return emptyTwiml(res); }
 
         const person = ctx.person;
         const prop = ctx.property;
@@ -1391,10 +1418,11 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
           try {
             const agentSvc = typeof getAgentService === "function" ? getAgentService() : null;
             if (!agentSvc || typeof agentSvc.processInbound !== "function") {
-              //  HONEST: the provider was acked above, so there is no redelivery;
-              //  nothing durable holds this message. Logged in full for recovery.
-              console.error("inbound-sms: lead route — agent service unavailable; prospect inbound NOT recorded and will NOT be redelivered:",
-                JSON.stringify({ sid: MessageSid, from: From, property_id: prop.id, person_id: person.id, body: body || "" }));
+              //  The provider was acked above, so there is no redelivery — the
+              //  message is durable in inbound_sms_raw and stamped failed here.
+              console.error("inbound-sms: lead route — agent service unavailable; preserved in inbound_sms_raw for replay:",
+                JSON.stringify({ sid: MessageSid, from: From, property_id: prop.id, person_id: person.id }));
+              await recordInboundOutcome("failed", "lead_agent: agent service unavailable");
             } else {
               await agentSvc.processInbound({
                 property_id: prop.id,
@@ -1403,13 +1431,14 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
                 idempotency_key: MessageSid,
                 sms_sid: MessageSid,
               });
+              await recordInboundOutcome("lead_agent");
             }
           } catch (e) {
             // Handoff failure is non-fatal to Twilio (already acked). The
-            // prospect's inbound is not lost: on Twilio's retry the whole
-            // resolve→handoff runs again, and the agent's idempotency makes the
-            // eventual success exactly-once. Loud log so it's visible.
-            console.error("inbound-sms: lead → agent processInbound failed:", e.message);
+            // message is durable in inbound_sms_raw, stamped failed with the
+            // reason, and replayable from there. Loud log so it's visible.
+            console.error("inbound-sms: lead → agent processInbound failed — preserved in inbound_sms_raw for replay:", e.message);
+            await recordInboundOutcome("failed", `lead_agent: ${e.message}`);
           }
           return;
         }
@@ -1425,6 +1454,7 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
         // Ack Twilio (empty TwiML — the reply travels by REST, not TwiML,
         // so it carries a sid + status receipt like every other text).
         emptyTwiml(res);
+        await recordInboundOutcome("resident_reply");
         // §15.2 — the work order is valid, but if the resident was never told,
         // that must be ACTIONABLE, not silent.
         //

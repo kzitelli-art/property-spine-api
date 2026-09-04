@@ -155,7 +155,10 @@ pool.on("error", (err) => {
 app.use("/integrations/read-ai/webhook", meetingEvidenceModule.readAiWebhook({ pool }));
 app.use("/integrations/read-ai/webhook", meetingEvidenceModule.readAiWebhookErrorHandler({ pool }));
 
-app.use(express.json({ limit: "1mb" }));  // body-size cap — stops oversized payloads
+app.use(express.json({ limit: "1mb",
+  //  The raw bytes, kept for signature verification (Plaid-Verification hashes
+  //  the body as sent; a re-serialised body would never match). 1 MB cap above.
+  verify: (req, _res, buf) => { req.rawBody = buf; } }));  // body-size cap — stops oversized payloads
 
 // ── operator gate (Phase 0 auth centralization) ──────────────────────
 // ONE shared gate for the whole operator data surface. Replaces the old
@@ -174,7 +177,7 @@ app.use(express.json({ limit: "1mb" }));  // body-size cap — stops oversized p
 // for removal in a later cleanup, not worth a 3-file deploy today.
 const OPERATOR_KEY = process.env.OPERATOR_KEY;
 const PUBLIC_EXACT = new Set([
-  "/health", "/leasing/intake", "/communications/inbound-sms",
+  "/health", "/leasing/intake", "/communications/inbound-sms", "/plaid/webhook",
   // The applicant's browser POSTs here from the public /t/application page.
   // It carries its OWN auth — the invitation token, digest-matched and
   // row-locked inside the route; invalid/expired/never-sent tokens fail

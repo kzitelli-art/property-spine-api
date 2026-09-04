@@ -225,20 +225,40 @@ module.exports = function dealIntake(deps) {
     if (!["new_acquisition","existing_asset","management_takeover"].includes(onboarding_type))
       return res.status(400).json({ error: "onboarding_type must be new_acquisition | existing_asset | management_takeover" });
     try {
-      //  A deal born with no owning organization cannot later be opened from
-      //  an organization account (deal_service: deal_has_no_owner). This
-      //  shared-key route has no session to derive the owner from, so it
-      //  accepts one — verified to exist — and says plainly when it has none.
-      if (organization_id) {
+      //  EVERY DEAL IS BORN WITH AN OWNER (CURRENT_STATE #56; the same rule
+      //  deal_service.createDeal enforces — A6 in its proof). The owner is
+      //  the signed-in account's organization when a staff session is
+      //  presented; a body organization_id may name it on the shared-key
+      //  door, and must agree with the session when both are present. A
+      //  deal with no owner used to be created with a warning; it could
+      //  never be opened from an organization account afterwards.
+      let owner = null, basis = null;
+      const token = req.get("x-staff-session");
+      const session = token ? await staffSessions.resolveStaffSession(pool, token).catch(() => null) : null;
+      if (session) {
+        const u = (await pool.query("select organization_id from users where id=$1", [session.id])).rows[0];
+        if (u && u.organization_id) {
+          if (organization_id && String(organization_id) !== String(u.organization_id)) {
+            return res.status(403).json({ error: "organization_mismatch",
+              receipt: "This deal would belong to a different organization than the one you are signed in to." });
+          }
+          owner = u.organization_id; basis = "session_organization";
+        }
+      }
+      if (!owner && organization_id) {
         const org = await pool.query("select id from organizations where id=$1", [organization_id]);
         if (!org.rows.length) return res.status(404).json({ error: "organization not found" });
+        owner = organization_id; basis = "named_organization";
+      }
+      if (!owner) {
+        return res.status(400).json({ error: "deal_owner_required",
+          receipt: "Say which organization owns this deal, or sign in to an organization account before creating it. A deal with no owner cannot be opened later." });
       }
       const r = await pool.query(
         "insert into deal_intakes (onboarding_type, deal_name, organization_id) values ($1,$2,$3) returning id, deal_name, onboarding_type, status, organization_id, created_at",
-        [onboarding_type, deal_name && String(deal_name).trim() || null, organization_id]
+        [onboarding_type, deal_name && String(deal_name).trim() || null, owner]
       );
-      res.json({ intake_id: r.rows[0].id, ...r.rows[0],
-        ...(organization_id ? {} : { warning: "This deal has no owning organization yet. It cannot be opened from an organization account until one is placed on it." }) });
+      res.json({ intake_id: r.rows[0].id, ...r.rows[0], owner_basis: basis });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

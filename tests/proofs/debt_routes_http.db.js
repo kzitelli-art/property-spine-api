@@ -223,7 +223,8 @@ let server = null, scoped = null, admin = null;
 
     ok("W8 · observed and projected are separate keys",
        p0.principal_position.observed.value_cents === 2774526577
-       && p0.principal_position.projected.value_cents === 2713187412);
+       && p0.principal_position.projected.value_cents === 2713187412,
+       JSON.stringify(p0.principal_position));
     ok("W8 · there is no generic `balance` key in the JSON",
        !/"balance"\s*:/.test(st.raw));
     ok("W7 · the observation keeps its as_of and is marked stale",

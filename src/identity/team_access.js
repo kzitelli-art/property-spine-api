@@ -606,6 +606,14 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
   router.get("/properties/:id/team", async (req, res) => {
     const propertyId = req.params.id;
     try {
+      //  BRICK ONE property wall, same as my-access two routes below. This
+      //  read used to answer any operator-key holder for ANY property id in
+      //  the URL — names, phones, emails (CURRENT_STATE #9). The key says who
+      //  may call; the session says which property they operate.
+      const me = await currentUser(req);
+      if (!me) return res.status(401).json({ receipt: "Not signed in. Verify by phone first." });
+      if (propertyId !== me.property_id)
+        return res.status(403).json({ receipt: "Not in your property scope." });
       const prop = (await pool.query("select id, name from properties where id=$1", [propertyId])).rows[0];
       if (!prop) return res.status(404).json({ error: "property not found" });
 

@@ -29,11 +29,16 @@ const call = async (m, p, { key = true, session = null, body = undefined, raw = 
 const iso = (days) => { const d = new Date(); d.setUTCDate(d.getUTCDate() + days); return d.toISOString().slice(0, 10); };
 
 (async () => {
-  receipt.begin(__filename, { url: URL_, expected: 16 });
+  receipt.begin(__filename, { url: URL_, expected: 25 });
   const pool = new Pool({ connectionString: URL_, ssl: false });
   const q = (sql, p) => pool.query(sql, p); const one = async (sql, p) => (await q(sql, p)).rows[0];
   const svc = R(REPO + "/src/identity/staff_session_service");
-  const env = { ...process.env, DATABASE_URL: URL_, OPERATOR_KEY: KEY, OPERATOR_APP_ORIGIN: "http://localhost:8080", PORT: String(PORT), ANTHROPIC_API_KEY: "sk-test", READ_AI_CONNECTION_ID: READ_AI };
+  //  A configured (never reached) Twilio transport, so /communications/inbound-sms
+  //  is open and signature-gated exactly as in production; T28 signs its own
+  //  requests with the same token. APP_BASE_URL is what the signature is over.
+  const TW_TOKEN = "proof-twilio-token", APP_BASE = "https://proof.spine.test";
+  const env = { ...process.env, DATABASE_URL: URL_, OPERATOR_KEY: KEY, OPERATOR_APP_ORIGIN: "http://localhost:8080", PORT: String(PORT), ANTHROPIC_API_KEY: "sk-test", READ_AI_CONNECTION_ID: READ_AI,
+                TWILIO_ACCOUNT_SID: "ACproof00000000000000000000000000", TWILIO_AUTH_TOKEN: TW_TOKEN, APP_BASE_URL: APP_BASE };
   delete env.DEMO_MODE; delete env.NODE_ENV; delete env.HARNESS_DATABASE_URL; delete env.READ_AI_WEBHOOK_SIGNING_KEY;
   //  ASK BEFORE LAUNCHING (tests/e2e/port_guard.sh's rule). A server left
   //  behind by an earlier run answers /health just as cheerfully — pointed
@@ -216,8 +221,58 @@ const iso = (days) => { const d = new Date(); d.setUTCDate(d.getUTCDate() + days
       `distinct created_at=${same.n} outcome=${out && out.outcome} ${out && out.refusal || ""} repair=${rep.assigned_user_id} billback=${bb.assigned_user_id}`);
   }
 
+  // ── T28 inbound SMS is durable BEFORE the carrier is acknowledged (#58) ──
+  {
+    const twilio = R("twilio");
+    const sid = "SMproof" + SUF + Date.now().toString(36);
+    const params = { MessageSid: sid, From: "+12675550" + SUF.slice(0, 3), To: "+12155550" + SUF.slice(3, 6), Body: "hello from a number nobody configured", NumMedia: "0" };
+    const url = APP_BASE + "/communications/inbound-sms";
+    const sig = twilio.getExpectedTwilioSignature(TW_TOKEN, url, params);
+    const post = async (extraHeaders = {}) => {
+      const r = await fetch(`http://127.0.0.1:${PORT}/communications/inbound-sms`, { method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", "x-twilio-signature": sig, ...extraHeaders },
+        body: new URLSearchParams(params).toString() });
+      return { status: r.status, text: await r.text() };
+    };
+    const a = await post();
+    const row = await one(`select provider_message_id, outcome, processed_at, body from inbound_sms_raw where provider_message_id=$1`, [sid]);
+    T("T28 an inbound text on an UNKNOWN line is acked with empty TwiML and is DURABLE in inbound_sms_raw with its outcome (was: acked, then nothing)",
+      a.status === 200 && /<Response><\/Response>/.test(a.text) && row && row.outcome === "dropped_unknown_line" && !!row.processed_at && row.body === params.Body,
+      `${a.status} ${a.text.slice(0, 60)} ${J(row)}`);
+    const b = await post();
+    const again = await one(`select processed_at, outcome from inbound_sms_raw where provider_message_id=$1`, [sid]);
+    T("T28b a carrier redelivery of the same MessageSid is a no-op: acked, first outcome stands",
+      b.status === 200 && String(again.processed_at) === String(row.processed_at) && again.outcome === row.outcome, `${b.status} ${J(again)}`);
+    const bad = await fetch(`http://127.0.0.1:${PORT}/communications/inbound-sms`, { method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", "x-twilio-signature": "bad" }, body: new URLSearchParams({ ...params, MessageSid: sid + "x" }).toString() });
+    const none = await one(`select 1 from inbound_sms_raw where provider_message_id=$1`, [sid + "x"]);
+    T("T28c an UNSIGNED post is refused 403 and writes NOTHING durable", bad.status === 403 && !none, `${bad.status} row=${!!none}`);
+  }
+
+  // ── T29 the roster read has the property wall (#9) ──
+  {
+    const keyOnly = await call("GET", `/properties/${propA}/team`);
+    //  The route sits behind the shared key gate AND the session wall (like team-invites).
+    const mine = await call("GET", `/properties/${propA}/team`, { session: tokA });
+    const other = await call("GET", `/properties/${propB}/team`, { session: tokA });
+    T("T29 GET /properties/:id/team: key-only → 401 (was: the whole roster for ANY property id)", keyOnly.status === 401, `${keyOnly.status} ${J(keyOnly.body).slice(0, 100)}`);
+    T("T29b …the session's own property → 200 with the roster", mine.status === 200 && Array.isArray(mine.body.team) && mine.body.team.length >= 1, `${mine.status} ${J(mine.body).slice(0, 120)}`);
+    T("T29c …another property, same session → 403 'Not in your property scope'", other.status === 403, `${other.status} ${J(other.body)}`);
+  }
+
+  // ── T25d a deal is born with an owner (#56) ──
+  {
+    const bare = await call("POST", "/deal-intakes", { body: { onboarding_type: "existing_asset", deal_name: TAG + " ownerless" } });
+    const bySession = await call("POST", "/deal-intakes", { session: tokA, body: { onboarding_type: "existing_asset", deal_name: TAG + " owned by session" } });
+    const mismatch = await call("POST", "/deal-intakes", { session: tokA, body: { onboarding_type: "existing_asset", deal_name: TAG + " mismatch", organization_id: orgB } });
+    T("T25d POST /deal-intakes with no owner and no session → 400 deal_owner_required in a sentence (was: created with a warning)",
+      bare.status === 400 && bare.body.error === "deal_owner_required" && /organization/.test(bare.body.receipt || ""), `${bare.status} ${J(bare.body)}`);
+    T("T25e …a staff session supplies the owner from the LOGIN", bySession.status === 200 && bySession.body.organization_id === orgA && bySession.body.owner_basis === "session_organization", `${bySession.status} ${J(bySession.body).slice(0, 160)}`);
+    T("T25f …a body organization that disagrees with the session is refused 403", mismatch.status === 403 && mismatch.body.error === "organization_mismatch", `${mismatch.status} ${J(mismatch.body)}`);
+  }
+
   srv.kill("SIGTERM"); await pool.end();
-  const code = receipt.complete({ harness: __filename, passed: passes, failed: fails, expectedAtLeast: 16 });
+  const code = receipt.complete({ harness: __filename, passed: passes, failed: fails, expectedAtLeast: 25 });
   if (fails) console.log("\n--- server log tail ---\n" + log.split("\n").slice(-15).join("\n"));
   process.exit(code);
 })().catch((e) => { process.exit(receipt.died(__filename, e, 0)); });

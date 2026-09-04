@@ -25,7 +25,7 @@ const stubPool = (rows = []) => ({ query: async () => ({ rows, rowCount: rows.le
   connect: async () => ({ query: async () => ({ rows, rowCount: rows.length }), release() {} }) });
 
 (async () => {
-  receipt.begin(__filename, { url: null, expected: 18 });
+  receipt.begin(__filename, { url: null, expected: 28 });
   // ── 1. ASYNC SAFETY NET: a rejected handler is a 500, and the process survives ──
   {
     const { installAsyncRouteSafety, terminalErrorHandler } = R(REPO + "/src/shared/async_route_safety");
@@ -132,12 +132,56 @@ const stubPool = (rows = []) => ({ query: async () => ({ rows, rowCount: rows.le
     T("/intake/twilio with a verified signature proceeds past the gate (answers TwiML, not 403)", c.status === 200 && /<Response>/.test(ct), `${c.status} ${ct.slice(0, 80)}`);
   }
 
+  // ── 8. the Plaid-Verification JWT is checked fail-closed (CURRENT_STATE #48) ──
+  {
+    const crypto = require("crypto");
+    const { verifyPlaidWebhook } = R(REPO + "/src/money/plaid");
+    const { privateKey, publicKey } = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
+    const jwk = { ...publicKey.export({ format: "jwk" }), kid: "kid-proof", alg: "ES256", use: "sig", expired_at: null };
+    const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    const body = JSON.stringify({ webhook_type: "TRANSACTIONS", webhook_code: "SYNC_UPDATES_AVAILABLE", item_id: "item-1" });
+    const sign = (claims, key = privateKey) => {
+      const head = b64({ alg: "ES256", kid: "kid-proof", typ: "JWT" }), pay = b64(claims);
+      const sig = crypto.sign("sha256", Buffer.from(head + "." + pay), { key, dsaEncoding: "ieee-p1363" }).toString("base64url");
+      return head + "." + pay + "." + sig;
+    };
+    const client = (k = jwk) => ({ webhookVerificationKeyGet: async () => ({ data: { key: k } }) });
+    const req = (token, raw = body) => ({ get: (h) => (h.toLowerCase() === "plaid-verification" ? token : undefined), rawBody: Buffer.from(raw) });
+    const good = { iat: Math.floor(Date.now() / 1000), request_body_sha256: crypto.createHash("sha256").update(body).digest("hex") };
+    T("a correctly signed, fresh, body-matching Plaid webhook verifies", (await verifyPlaidWebhook(client(), req(sign(good)))).ok === true);
+    T("no Plaid-Verification header → refused", (await verifyPlaidWebhook(client(), req(undefined))).reason === "missing_plaid_verification_header");
+    T("a body that does not hash to the claim → refused (body_hash_mismatch)", (await verifyPlaidWebhook(client(), req(sign(good), body + " "))).reason === "body_hash_mismatch");
+    T("a token older than five minutes → refused (token_too_old)", (await verifyPlaidWebhook(client(), req(sign({ ...good, iat: good.iat - 600 })))).reason === "token_too_old");
+    const other = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey;
+    T("a signature by another key → refused (bad_signature)", (await verifyPlaidWebhook(client(), req(sign(good, other)))).reason === "bad_signature");
+    T("an expired verification key → refused", (await verifyPlaidWebhook(client({ ...jwk, expired_at: 1 }), req(sign(good)))).reason === "verification_key_expired");
+  }
+
+  // ── 9. the base term is 12 months; no 12-month term is an honest hand-off (CURRENT_STATE #14/#27) ──
+  {
+    const { quotablePricing, BASE_TERM_MONTHS } = R(REPO + "/src/agent/pricing_adapter");
+    const picture = (terms) => ({
+      unit_types: [{ unit_type_id: "ut-1", label: "1BR", offer_state: "offered", terms }],
+      published_version: { version_id: "v1", effective_from: "2026-01-01", published_by: "proof" },
+      concessions: { advertised: [], concessions_unavailable: null }, fees: { facts: [], source: "none" },
+    });
+    const t = (m, rent) => ({ lease_term_months: m, new_lease_rent: rent, renewal_rent: rent });
+    const shortestFirst = [t(6, 1900), t(12, 1700), t(15, 1650)];
+    const q = await quotablePricing(null, { property_id: "p", unit_type_id: "ut-1" }, { picture: picture(shortestFirst) });
+    T("BASE_TERM_MONTHS is 12", BASE_TERM_MONTHS === 12);
+    T("a prospect who names no term is quoted the 12-MONTH term (was: terms[0], the shortest — $1900 for 6 months)", q.quotable === true && q.lease_term_months === 12 && q.rent === 1700, JSON.stringify(q).slice(0, 160));
+    const named = await quotablePricing(null, { property_id: "p", unit_type_id: "ut-1", lease_term_months: 6 }, { picture: picture(shortestFirst) });
+    T("a prospect who names 6 months still gets the 6-month term", named.quotable === true && named.lease_term_months === 6 && named.rent === 1900);
+    const none = await quotablePricing(null, { property_id: "p", unit_type_id: "ut-1" }, { picture: picture([t(6, 1900), t(9, 1800)]) });
+    T("a sheet with NO 12-month term hands off as base_term_not_published — never the nearest term (#27's sub-decision)", none.quotable === false && none.reason === "base_term_not_published", JSON.stringify(none).slice(0, 200));
+  }
+
   // ── 6. applications: expired is not pending (pure logic mirror) ──
   {
     const pending = (apps) => apps.filter((a) => !["active", "declined", "withdrawn", "expired"].includes(a.status)).length;
     T("expired applications are not counted as pending", pending([{ status: "expired" }, { status: "submitted" }]) === 1);
   }
 
-  const code = receipt.complete({ harness: __filename, passed: passes, failed: fails, expectedAtLeast: 18 });
+  const code = receipt.complete({ harness: __filename, passed: passes, failed: fails, expectedAtLeast: 28 });
   process.exit(code);
 })().catch((e) => { process.exit(receipt.died(__filename, e, 0)); });
