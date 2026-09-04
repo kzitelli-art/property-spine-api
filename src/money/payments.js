@@ -255,11 +255,14 @@ module.exports = function paymentsModule({ pool }) {
       // the bank txn must exist, be an INFLOW (positive amount), and belong to
       // this property (via its account). A negative/outflow row is money out —
       // it can't prove a rent payment.
+      //  LOCKED. Two links racing onto one deposit must serialize here, or
+      //  both read the same "remaining" and together over-attribute it.
       const txn = (await client.query(
         `select t.id, t.amount, t.txn_type, ba.property_id
            from bank_transactions t
            join bank_accounts ba on ba.id = t.bank_account_id
-          where t.id=$1`, [b.bank_transaction_id])).rows[0];
+          where t.id=$1
+          for update of t`, [b.bank_transaction_id])).rows[0];
       if (!txn) { await client.query("rollback"); return res.status(404).json({ receipt: "Bank transaction not found." }); }
       if (txn.property_id !== pay.property_id) {
         await client.query("rollback");
@@ -270,11 +273,45 @@ module.exports = function paymentsModule({ pool }) {
         return res.status(409).json({ receipt: "That bank transaction is not a deposit (its amount is not positive). Rent cash proof must be an inflow." });
       }
 
+      //  ── THE SAME DOLLAR IS NEVER COUNTED TWICE (migration 037's header) ──
+      //  A deposit may prove several payments — a batch ACH covering ten
+      //  residents is the normal case — but only up to its own amount.
+      //  Nothing checked that: amount_matched was stored as typed (any value,
+      //  negative, larger than the deposit) or left null, and one $500
+      //  deposit could cash-prove ten $500 payments. The sum of what every
+      //  link attributes from this deposit may not exceed the deposit, and
+      //  one link may not attribute more than its payment. An unqualified
+      //  link attributes the whole payment — that is what linking means.
+      const payAmount = money(pay.amount);
+      const matched = b.amount_matched != null ? money(b.amount_matched) : payAmount;
+      if (!(matched > 0)) {
+        await client.query("rollback");
+        return res.status(400).json({ receipt: "amount_matched must be a positive amount of this deposit." });
+      }
+      if (matched > payAmount) {
+        await client.query("rollback");
+        return res.status(409).json({ receipt: `This payment is ${payAmount.toFixed(2)}; a link cannot attribute more deposit than the payment it proves.` });
+      }
+      const attributed = money((await client.query(
+        `select coalesce(sum(coalesce(l.amount_matched, p.amount)), 0) as attributed
+           from payment_bank_links l
+           join payments p on p.id = l.payment_id
+          where l.bank_transaction_id = $1`, [txn.id])).rows[0].attributed);
+      const depositAmount = money(txn.amount);
+      if (attributed + matched > depositAmount + 0.005) {
+        await client.query("rollback");
+        return res.status(409).json({
+          receipt: `That deposit is ${depositAmount.toFixed(2)} and ${attributed.toFixed(2)} of it already proves other payments; ` +
+                   `${money(depositAmount - attributed).toFixed(2)} remains. A deposit cannot prove more cash than it carried.`,
+          deposit_amount: depositAmount, already_attributed: attributed, remaining: money(depositAmount - attributed),
+        });
+      }
+
       try {
         await client.query(
           `insert into payment_bank_links (payment_id, bank_transaction_id, amount_matched, confirmed_by)
            values ($1,$2,$3,$4)`,
-          [pay.id, txn.id, b.amount_matched != null ? money(b.amount_matched) : null, b.confirmed_by || null]);
+          [pay.id, txn.id, matched, b.confirmed_by || null]);
       } catch (e) {
         if (e && e.code === "23505") {
           await client.query("rollback");

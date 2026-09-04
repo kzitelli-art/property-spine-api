@@ -53,6 +53,9 @@ services:
       - .env
     environment:
       DATABASE_URL: postgres://spine:spine@db:5432/property_spine?sslmode=disable
+      # Local dev asks for the debug posture BY NAME. Unset means production:
+      # no OTP echoed in /auth/sms/start, no timezone override honoured.
+      NODE_ENV: development
       # The app is served locally on :8080. /operator/* CORS allows EXACTLY
       # this origin and nothing else — fail closed (see server.js).
       OPERATOR_APP_ORIGIN: http://localhost:8080

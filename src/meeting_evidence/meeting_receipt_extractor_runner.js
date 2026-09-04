@@ -137,6 +137,7 @@ function normalizeCandidate(raw, {
   segmentMap,
   candidateIdByKey,
   personIndex,
+  segments = [],
 }) {
   const key = String(raw.candidate_key || "").trim();
   if (!key) throw extractorError("extractor_candidate_key_required", "candidate_key is required");
@@ -197,6 +198,16 @@ function normalizeCandidate(raw, {
     });
   }
   const ownerResolutionStatus = raw.owner_resolution_status || null;
+  //  AN UNRESOLVED OWNER STILL HAS TO HAVE BEEN SAID. Speakers get this check
+  //  (extractor_speaker_label_missing); owners did not, so a named-but-
+  //  unresolved owner_label passed straight through to the candidate row and
+  //  the rendered receipt — a person nobody mentioned, owning a follow-up.
+  //  Invalid output is rejected by the server, not repaired (§40.4).
+  if (raw.owner_status === "named" && ownerResolutionStatus === "unresolved"
+      && raw.owner_label && !transcriptContainsLabel(segments, raw.owner_label)) {
+    throw extractorError("extractor_owner_label_missing",
+      "a named owner must be a label observed exactly in the transcript", raw.owner_label);
+  }
   const ownerPerson = ownerResolutionStatus &&
       ownerResolutionStatus !== "unresolved" &&
       raw.owner_status === "named"
@@ -282,7 +293,7 @@ function compileExtractorOutput(output, {
   const segmentMap = segmentByOrdinal(segments);
   const personIndex = peopleIndex(speakerPeople);
   const candidates = list(output.candidates).map((candidate) =>
-    normalizeCandidate(candidate, { meeting, run, segmentMap, candidateIdByKey, personIndex }));
+    normalizeCandidate(candidate, { meeting, run, segmentMap, candidateIdByKey, personIndex, segments }));
   const resolutionLabels = list(output.speaker_resolutions).map((resolution) => String(resolution.speaker_label || ""));
   if (new Set(resolutionLabels).size !== resolutionLabels.length) {
     throw extractorError("extractor_speaker_resolution_duplicate", "speaker labels may be resolved only once per extraction");

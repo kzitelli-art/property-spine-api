@@ -322,10 +322,34 @@ module.exports = function superAdminModule({ pool }) {
 
       const normalizedPhone = phone.replace(/\D/g, "").replace(/^1/, "");
       const e164 = "+1" + normalizedPhone;
+      const e164Digits = e164.replace(/\D/g, "");
+      const emailNorm = email && email.trim() ? email.trim() : null;
+
+      //  An invite provisions or re-invites; it does not MOVE an account.
+      //  The upsert below rewrites organization_id and the sign-in phone, so
+      //  aimed at an account in another organization it relocates them and
+      //  changes where their code is sent, silently. A platform admin who
+      //  means to move an account has PATCH /admin/users/:id, which records
+      //  that as the deliberate act it is.
+      const existing = (await pool.query(
+        `select id, organization_id
+           from users
+          where ($1::text is not null and email = $1)
+             or (phone is not null and regexp_replace(phone, '\\D', '', 'g') = $2)
+          order by ($1::text is not null and email = $1) desc
+          limit 1`,
+        [emailNorm, e164Digits]
+      )).rows[0];
+      if (existing && existing.organization_id && String(existing.organization_id) !== String(org.id)) {
+        return res.status(409).json({
+          error: "user_belongs_to_another_organization",
+          receipt: "That account already belongs to a different organization. Move it deliberately with PATCH /admin/users/:id; an invite does not relocate accounts.",
+        });
+      }
 
       // Upsert the user
       let user;
-      if (email && email.trim()) {
+      if (emailNorm) {
         user = (await pool.query(
           `insert into users (name, email, phone, role, auth_provider, platform_role, organization_id, is_active, status)
            values ($1, $2, $3, 'property_manager', 'phone_otp', $4, $5, true, 'active')
@@ -335,13 +359,18 @@ module.exports = function superAdminModule({ pool }) {
                  organization_id = excluded.organization_id,
                  is_active = true, status = 'active', updated_at = now()
            returning id, name, email, phone`,
-          [name.trim(), email.trim(), e164, platform_role, org.id]
+          [name.trim(), emailNorm, e164, platform_role, org.id]
         )).rows[0];
       } else {
+        //  users.phone is unique only through migration 035's PARTIAL
+        //  EXPRESSION index; the conflict target must say so or Postgres
+        //  refuses the statement (42P10) — which it did, on every call.
         user = (await pool.query(
           `insert into users (name, phone, role, auth_provider, platform_role, organization_id, is_active, status)
            values ($1, $2, 'property_manager', 'phone_otp', $3, $4, true, 'active')
-           on conflict (phone) do update
+           on conflict ((regexp_replace(phone, '\\D', '', 'g')))
+             where phone is not null and length(regexp_replace(phone, '\\D', '', 'g')) >= 10
+           do update
              set name = excluded.name, platform_role = excluded.platform_role,
                  organization_id = excluded.organization_id,
                  is_active = true, status = 'active', updated_at = now()

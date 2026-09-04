@@ -379,8 +379,13 @@ module.exports = function plaidModule({ pool }) {
   // NOT auto-sync money on a webhook — we record that an update is waiting
   // and let the operator pull deliberately. (Same human-in-the-loop posture
   // as the rest of the money layer: the machine flags, the human acts.)
-  // This route is intentionally unauthenticated at the app layer because
-  // Plaid calls it; it performs no money mutation, only a status note.
+  // ⚠ NOT REACHABLE BY PLAID TODAY. "/plaid/" is not on server.js's public
+  // allowlist, so this route sits behind the shared x-operator-key gate and
+  // Plaid's POST gets a 401; ITEM_LOGIN_REQUIRED is never recorded. It is
+  // deliberately LEFT gated: opening it needs Plaid webhook verification
+  // (the Plaid-Verification JWT against Plaid's JWKs) first, or it becomes
+  // an unauthenticated write to plaid_item status. Recorded in
+  // docs/CURRENT_STATE.md; the previous comment here said the opposite.
   // ──────────────────────────────────────────────────────────────────
   router.post("/plaid/webhook", async (req, res) => {
     const { webhook_type, webhook_code, item_id } = req.body || {};

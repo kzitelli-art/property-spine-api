@@ -442,8 +442,17 @@ module.exports = function commitmentLedgerModule({ pool, spawnObligationFromEven
   // ── SERVICE: getActivePricing (the one sheet) ────────────────────
   async function getActivePricing(client, property_id) {
     const v = await client.query(
+      //  EFFECTIVE, not merely published. publishVersion retires a sheet by
+      //  setting effective_until and leaves status='published' (migration
+      //  103 dropped the one-published-per-property index), so a property
+      //  with any pricing history has several published rows and `limit 1`
+      //  alone returned whichever the planner met first. Same window
+      //  effective_pricing.js applies.
       `select * from property_pricing_versions
-        where property_id = $1 and status = 'published' limit 1`,
+        where property_id = $1 and status = 'published'
+          and effective_from <= now()
+          and (effective_until is null or effective_until > now())
+        order by effective_from desc limit 1`,
       [property_id]
     );
     if (v.rowCount === 0) return { version: null, terms: [], policies: [] };
@@ -467,7 +476,10 @@ module.exports = function commitmentLedgerModule({ pool, spawnObligationFromEven
          from pricing_terms pt
          join property_pricing_versions v on v.id = pt.pricing_version_id
         where v.property_id = $1 and v.status = 'published'
+          and v.effective_from <= now()
+          and (v.effective_until is null or v.effective_until > now())
           and pt.unit_type = $2 and pt.lease_term_months = $3
+        order by v.effective_from desc
         limit 1`,
       [property_id, unit_type, lease_term_months]
     );

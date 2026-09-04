@@ -160,10 +160,37 @@ module.exports = function orgAdminModule({ pool }) {
       const preset = ROLE_MODULE_MAP[role_key];
       const normalizedPhone = phone.replace(/\D/g, "").replace(/^1/, "");
       const e164 = "+1" + normalizedPhone;
+      const e164Digits = e164.replace(/\D/g, "");
+      const emailNorm = email && email.trim() ? email.trim() : null;
+
+      //  ── AN EXISTING ACCOUNT MUST ALREADY BE THIS ORGANIZATION'S ──────
+      //  The upsert below overwrites organization_id and the sign-in phone.
+      //  Applied to another organization's user that is an account move and
+      //  a takeover in one statement: their login number becomes the
+      //  caller's, and /auth/sms/start then texts the code to the caller.
+      //  An org admin's authority ends at their organization; an account
+      //  outside it — another org's, or one with no org at all, which is
+      //  where the platform admins live — is refused, never adopted.
+      const existing = (await pool.query(
+        `select id, organization_id
+           from users
+          where ($1::text is not null and email = $1)
+             or (phone is not null and regexp_replace(phone, '\\D', '', 'g') = $2)
+          order by ($1::text is not null and email = $1) desc
+          limit 1`,
+        [emailNorm, e164Digits]
+      )).rows[0];
+      if (existing && String(existing.organization_id) !== String(req.orgId)) {
+        return res.status(409).json({
+          error: "user_belongs_to_another_organization",
+          receipt: "An account with that email or phone already exists outside your organization. " +
+                   "Invites cannot move an account between organizations; ask a platform admin.",
+        });
+      }
 
       // Upsert user — conflict on phone (unique) if no email, otherwise email
       let user;
-      if (email && email.trim()) {
+      if (emailNorm) {
         user = (await pool.query(
           `insert into users (name, email, phone, role, auth_provider, platform_role, organization_id, is_active, status)
            values ($1, $2, $3, 'property_manager', 'phone_otp', 'member', $4, true, 'active')
@@ -172,13 +199,19 @@ module.exports = function orgAdminModule({ pool }) {
                  organization_id = excluded.organization_id,
                  is_active = true, status = 'active', updated_at = now()
            returning id, name, email, phone`,
-          [name.trim(), email.trim(), e164, req.orgId]
+          [name.trim(), emailNorm, e164, req.orgId]
         )).rows[0];
       } else {
+        //  The only unique index on users.phone is the PARTIAL EXPRESSION
+        //  index from migration 035, so the conflict target must name that
+        //  expression and repeat its predicate. `on conflict (phone)` matched
+        //  no index and raised 42P10 on every phone-only invite.
         user = (await pool.query(
           `insert into users (name, phone, role, auth_provider, platform_role, organization_id, is_active, status)
            values ($1, $2, 'property_manager', 'phone_otp', 'member', $3, true, 'active')
-           on conflict (phone) do update
+           on conflict ((regexp_replace(phone, '\\D', '', 'g')))
+             where phone is not null and length(regexp_replace(phone, '\\D', '', 'g')) >= 10
+           do update
              set name = excluded.name, organization_id = excluded.organization_id,
                  is_active = true, status = 'active', updated_at = now()
            returning id, name, email, phone`,
@@ -213,6 +246,14 @@ module.exports = function orgAdminModule({ pool }) {
         note: "User provisioned. They can log in via phone OTP.",
       });
     } catch (e) {
+      //  The email matched one account and the phone another: the upsert
+      //  updated the first and the phone index refused. Say which, do not 500.
+      if (e && e.code === "23505") {
+        return res.status(409).json({
+          error: "phone_belongs_to_another_account",
+          receipt: "That phone number already signs in a different account. One line, one person.",
+        });
+      }
       console.error("org/users/invite error", e);
       res.status(500).json({ error: e.message });
     }

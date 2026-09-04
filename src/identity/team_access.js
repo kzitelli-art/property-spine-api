@@ -64,7 +64,12 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
     crypto.createHash("sha256").update(`${code}:${token}`).digest("hex");
   const newOtp = () => String(Math.floor(100000 + Math.random() * 900000)); // 6-digit
   const smsReady = () => !!(sms && typeof sms.sendSms === "function" && (typeof sms.enabled !== "function" || sms.enabled()));
-  const isProd = () => process.env.NODE_ENV === "production";
+  //  FAIL CLOSED. Nothing in this repository sets NODE_ENV (not the
+  //  Dockerfile, compose, deploy.sh or the deployment doc), so "not
+  //  production" was true wherever nobody remembered to set it — and this
+  //  flag decides whether the sign-in code is echoed back to the caller.
+  //  Production is the default; a debug posture must be asked for by name.
+  const isProd = () => !["development", "test"].includes(String(process.env.NODE_ENV || "").toLowerCase());
 
   function normalizePhone(raw) {
     if (!raw) return null;

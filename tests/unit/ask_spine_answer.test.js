@@ -36,6 +36,9 @@ const stubDb = (over) => ({
     if (/from obligations/.test(sql)) {
       return { rows: (over && over.obligations) || [] };
     }
+    if (/select name from properties/.test(sql)) {
+      return { rows: [{ name: "Chestnut Street Test Property" }] };
+    }
     return { rows: (over && over.rows) || [] };
   },
 });
@@ -194,9 +197,17 @@ function modelFacts(spy) {
      !/"open"\s*:/.test(spy.lastRequest.messages[0].content),
      "the model was handed navigation targets; it can now compose a link " +
      "Spine never resolved");
-  ok("G4  …and the facts it was given name the server-derived property",
-     spy.lastRequest.messages[0].content.includes(PROP),
+  //  BY NAME, NEVER BY ID. The model must know which property it is
+  //  talking about (so the wording is right) and must never hold its
+  //  record id (§40.8 — an id in model context is an id it can put in a
+  //  sentence). This assertion used to require the UUID in the prompt; the
+  //  property's name satisfies the intent without handing over the id.
+  ok("G4  …and the facts it was given name the server-derived property BY NAME",
+     spy.lastRequest.messages[0].content.includes("Chestnut Street Test Property"),
      "the model was not told which property it is talking about");
+  ok("G4b …and NOT by its record id",
+     !spy.lastRequest.messages[0].content.includes(PROP),
+     "the property's UUID reached the model");
 
   //  THE INSTRUCTION IS THE PRODUCT. If these sentences go missing, the
   //  surface can fabricate and nothing else here would notice.

@@ -681,7 +681,8 @@ module.exports = function applicationsModule(deps) {
           ? { remaining: r.gate_inputs || [], obligation_status: r.gate_status, gate_kind: r.gate_kind,
               packet: r.pk_id ? { id: r.pk_id, version: r.pk_version, status: r.pk_status } : null }
           : null));
-      const pending = applications.filter((a) => !["active", "declined", "withdrawn"].includes(a.status)).length;
+      //  `expired` is terminal (application_lifecycle.js) and was counted as pending.
+      const pending = applications.filter((a) => !["active", "declined", "withdrawn", "expired"].includes(a.status)).length;
       res.json({ property_id: req.params.propertyId, count: applications.length, pending, applications });
     } catch (e) {
       console.error("applications list:", e);

@@ -418,16 +418,23 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
       //  Supersession, not mutation: the previous line is RETIRED rather
       //  than overwritten, so a number moving between properties stays
       //  auditable (§6 — corrections do not erase history).
-      await pool.query("begin");
+      //  ONE CLIENT. `pool.query("begin")` ran BEGIN on whichever idle
+      //  connection the pool handed out and returned it; the update, the
+      //  insert and COMMIT each took a different one. The retire-then-insert
+      //  was never atomic, and the connection that ran BEGIN went back to
+      //  the pool idle-in-transaction, so later unrelated writes that landed
+      //  on it were never committed. The only BEGIN on a pool in src/.
+      const client = await pool.connect();
       try {
-        await pool.query(
+        await client.query("begin");
+        await client.query(
           `update communication_lines
               set status = 'retired', superseded_at = now(), updated_at = now()
             where property_id = $1 and line_type = 'property_facing' and status = 'active'`,
           [propertyId]);
 
         if (number) {
-          await pool.query(
+          await client.query(
             `insert into communication_lines
                (e164, line_type, property_id, authority_ceiling, permitted_audience,
                 inbound_enabled, outbound_enabled, status, notes)
@@ -435,10 +442,12 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
                 true, false, 'active', 'configured via operator property-line route')`,
             [number, propertyId]);
         }
-        await pool.query("commit");
+        await client.query("commit");
       } catch (e) {
-        await pool.query("rollback");
+        await client.query("rollback").catch(() => {});
         throw e;
+      } finally {
+        client.release();
       }
 
       const r = await pool.query(
@@ -766,10 +775,15 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
       const ledger = (await pool.query(
         `select label, kind, amount, occurred_at from ledger_entries
           where lease_id = $1 order by occurred_at desc limit 10`, [place.lease_id])).rows;
+      //  098 replaced work_orders.person_id with two facts — who REPORTED
+      //  it and whose HOME it affects. A resident's "my open work" is either:
+      //  the leak they reported in the hallway and the one in their kitchen
+      //  a neighbour reported both belong on their page.
       const workOrders = (await pool.query(
         `select id, title, issue_type, description, status, created_at
            from work_orders
-          where person_id = $1 and property_id = $2 and status <> 'complete'
+          where (reported_by_person_id = $1 or affected_person_id = $1)
+            and property_id = $2 and status <> 'complete'
           order by created_at desc`, [sess.person_id, sess.property_id])).rows;
 
       res.json({

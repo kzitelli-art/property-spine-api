@@ -104,6 +104,9 @@ async function resolveOperatingWindow(pool, { property_id, start_local, end_loca
 async function currentMonthWindow(pool, { property_id, as_of = null } = {}) {
   const tz = await loadPropertyOperatingTimeZone(pool, property_id);
   const asOfUtc = as_of ? new Date(as_of) : new Date();
+  //  Same refusal resolveOperatingWindow gives; unvalidated, toISOString()
+  //  below threw RangeError and the caller got a 500 for a bad parameter.
+  if (Number.isNaN(asOfUtc.getTime())) throw badRequest("as_of must be a valid instant", "bad_as_of");
   if (!tz) {
     return resolveOperatingWindow(pool, {
       property_id, start_local: "2000-01-01", end_local: "2000-01-01",

@@ -1076,12 +1076,18 @@ module.exports = function applicationSubmissionModule(deps) {
     if (!inv) return { state: "invalid", receipt: "This application link is not valid." };
     if (inv.status === "revoked") return { state: "revoked", receipt: "This application link was revoked. Contact the leasing office." };
     if (inv.status === "expired") return { state: "expired", receipt: "This application link has expired. Contact the leasing office for a new one." };
+    //  CONSUMED BEFORE THE DATE CHECK. A consumed invitation produced an
+    //  application; it is finished, not expired. Checked after the lazy
+    //  expire, any public load of the link after expires_at rewrote a
+    //  consumed row to 'expired' — the record then said the link expired
+    //  unused, and the applicant was told to contact the office instead
+    //  of that their application is in.
+    if (inv.status === "consumed") return { state: "already_submitted", receipt: "This application has already been submitted. The leasing team has it." };
     if (inv.expires_at && new Date(inv.expires_at) < new Date()) {
       await client.query("update application_invitations set status='expired', updated_at=now() where id=$1", [inv.id]);
       return { state: "expired", receipt: "This application link has expired. Contact the leasing office for a new one." };
     }
     if (inv.status === "prepared") return { state: "not_sent", receipt: "This link is not active yet." };
-    if (inv.status === "consumed") return { state: "already_submitted", receipt: "This application has already been submitted. The leasing team has it." };
     if (!["manually_sent", "provider_dispatched"].includes(inv.status)) {
       return { state: "unavailable", receipt: `This link is not currently open (${inv.status}).` };
     }

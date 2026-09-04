@@ -498,6 +498,18 @@ module.exports = function movein(deps) {
         [unit.id]
       );
       if (duplicate.rows.length) throw httpError(409, "MOVE_IN_ALREADY_SCHEDULED", "This unit already has a scheduled move-in.", { unit_event_id: duplicate.rows[0].id });
+      //  A lease named here is later read back by approveReadiness, which
+      //  satisfies THAT lease's `unit_ready` delivery gate. Unchecked, a
+      //  lease on another unit — another property — had its gate cleared by
+      //  this unit's readiness. The lease must sit on this unit.
+      if (lease_id) {
+        const onUnit = await client.query(
+          `select 1 from leases l join spaces s on s.id = l.space_id
+            where l.id = $1 and s.unit_id = $2`, [lease_id, unit.id]);
+        if (!onUnit.rows.length) {
+          throw httpError(409, "LEASE_NOT_ON_UNIT", "That lease is not on this unit. A move-in is scheduled against the lease for the space being delivered.", { lease_id, unit_id: unit.id });
+        }
+      }
       const payload = { ...(tenant_name ? { tenant_name } : {}), ...(lease_id ? { lease_id } : {}), ...(rent != null ? { rent } : {}) };
       const row = (await client.query(
         `insert into unit_events (unit_id,property_id,event_type,effective_date,payload,source,status,lease_id)

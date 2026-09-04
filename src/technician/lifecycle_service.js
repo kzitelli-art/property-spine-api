@@ -36,6 +36,9 @@
 const { preservedEvidenceFor, allEvidenceFor, completionEligibleEvidenceFor,
         COMPLETION_EVIDENCE_CLASSIFICATIONS } = require("./evidence_service");
 const proofEvaluations = require("../maintenance/proof_evaluation_service.js");
+//  The routed follow-up vocabulary, derived from the reasons map so a new
+//  reason cannot be added without this writer learning about it.
+const { FOLLOW_UP_TYPES } = require("../maintenance/not_done_reasons");
 
 const PROGRESS_KINDS = ["en_route", "no_access", "blocked", "finding", "completion_claimed", "completed"];
 
@@ -254,12 +257,22 @@ async function claimCompletion(client, {
   //  globally unique — true today, and not a property any of this should
   //  depend on. Every other write in this transaction is scoped; this one
   //  now is too.
+  //
+  //  ONLY THE WORK. Everything linked to this work order used to close here
+  //  as `satisfied` — including `billback_decision`, the manager's money
+  //  decision on a tenant-caused repair, and the routed follow-ups a not-done
+  //  handed to a supply, vendor or approval owner. A technician's "done" is
+  //  proof the repair is done. It is not a decision on who pays, and it is
+  //  not another role's approval; those stay open for their owner and close
+  //  through completeObligation, which insists on their required input.
   await client.query(
     `update obligations set status = 'complete', completed_at = now(),
             resolution_code = 'satisfied', updated_at = now()
       where related_type = 'work_order' and related_id = $1 and property_id = $2
-        and status <> 'complete'`,
-    [work_order_id, claim.workOrder.property_id]);
+        and status <> 'complete'
+        and type <> 'billback_decision'
+        and not (type = any($3::text[]))`,
+    [work_order_id, claim.workOrder.property_id, FOLLOW_UP_TYPES]);
 
   const closedWo = (await client.query(`select * from work_orders where id=$1`, [work_order_id])).rows[0];
   const done = await appendProgress(client, {

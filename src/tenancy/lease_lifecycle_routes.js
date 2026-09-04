@@ -102,6 +102,16 @@ router.post("/leases", async (req, res) => {
 //     recurring=[{charge_type,label,amount}],  // pet_rent, parking, etc.
 //     concession: { months, treatment } }      // treatment: upfront | amortized
 router.post("/leases/:id/generate-schedule", async (req, res) => {
+  //  ── CONTAINED 2026-09-04 ────────────────────────────────────────────
+  //  Writes label, due_on, is_move_in_gate and recurs into scheduled_charges. Migration 036 rebuilt that table without them, so this has failed on every call since; it never wrote a governed charge.
+  //  Same shape as POST /leases above: warn, refuse with a sentence, name
+  //  the governed path. Reversible by deleting this block.
+  console.warn("legacy_schedule_writer_contained", JSON.stringify({ at: new Date().toISOString(), lease_id: req.params.id, ua: req.get("user-agent") || null }));
+  return res.status(410).json({
+    error: "legacy_schedule_writer_contained",
+    receipt: "This schedule generator predates governed charges and has not been able to write since migration 036. Charges are generated from the governed pricing and the lease through the charges door.",
+    what_you_can_do: { governed: "POST /properties/:id/charges/generate — the income rung's charge generation, from the lease and published pricing." },
+  });
   const force = req.query.force === "true";
   const body = req.body || {};
   const client = await pool.connect();
@@ -201,6 +211,16 @@ router.post("/leases/:id/generate-schedule", async (req, res) => {
 
 // ── READ a lease's schedule, with the move-in gate and balance computed ──
 router.get("/leases/:id/schedule", async (req, res) => {
+  //  ── CONTAINED 2026-09-04 ────────────────────────────────────────────
+  //  Orders by scheduled_charges.due_on, a column migration 036 removed; the read has thrown on every call since.
+  //  Same shape as POST /leases above: warn, refuse with a sentence, name
+  //  the governed path. Reversible by deleting this block.
+  console.warn("legacy_schedule_read_contained", JSON.stringify({ at: new Date().toISOString(), lease_id: req.params.id, ua: req.get("user-agent") || null }));
+  return res.status(410).json({
+    error: "legacy_schedule_read_contained",
+    receipt: "This schedule read predates governed charges and has not been able to run since migration 036.",
+    what_you_can_do: { governed: "GET /properties/:id/charges/summary — the governed charge schedule and its balances." },
+  });
   try {
     const lr = await pool.query("select * from leases where id=$1", [req.params.id]);
     if (lr.rows.length === 0) return res.status(404).json({ error: "lease not found" });
@@ -273,6 +293,16 @@ function chargePriority(c) {
 // ── record a tenant payment and allocate it ──
 // Body: { amount, method?, occurred_at? }
 router.post("/leases/:id/payments", async (req, res) => {
+  //  ── CONTAINED 2026-09-04 ────────────────────────────────────────────
+  //  Applies a payment to scheduled_charges where status='scheduled' — a word migration 036's vocabulary (claimed | partially_paid | paid) does not contain — and sorts by the removed due_on. It could only ever apply nothing.
+  //  Same shape as POST /leases above: warn, refuse with a sentence, name
+  //  the governed path. Reversible by deleting this block.
+  console.warn("legacy_payment_writer_contained", JSON.stringify({ at: new Date().toISOString(), lease_id: req.params.id, ua: req.get("user-agent") || null }));
+  return res.status(410).json({
+    error: "legacy_payment_writer_contained",
+    receipt: "A payment is recorded through the payment-proof door, which applies it to governed charges and can tie it to a bank deposit.",
+    what_you_can_do: { governed: "POST /properties/:id/payments, then POST /payments/:id/apply and /payments/:id/link-bank." },
+  });
   const { amount, method, occurred_at } = req.body || {};
   const payAmount = Number(amount);
   if (!payAmount || payAmount <= 0) return res.status(400).json({ error: "a positive amount is required" });
@@ -612,6 +642,16 @@ router.get("/leases/:id/approval-package", async (req, res) => {
 // Body: { decision: "approve"|"reject", decided_by?, note? }
 // Recorded as an event; on approve, lease moves pending → active.
 router.patch("/leases/:id/approval", async (req, res) => {
+  //  ── CONTAINED 2026-09-04 ────────────────────────────────────────────
+  //  Set lease_status='active' on ANY lease — cancelled, expired, rescinded — with a body-supplied actor and no precondition, outside economic tenancy activation. An ungoverned writer of the same class as the retired POST /leases.
+  //  Same shape as POST /leases above: warn, refuse with a sentence, name
+  //  the governed path. Reversible by deleting this block.
+  console.warn("bare_lease_approval_contained", JSON.stringify({ at: new Date().toISOString(), lease_id: req.params.id, ua: req.get("user-agent") || null }));
+  return res.status(410).json({
+    error: "bare_lease_approval_contained",
+    receipt: "A lease is not approved into 'active' by posting a decision with a shared key. Activation records who did it, from an executed lease, through the tenancy door.",
+    what_you_can_do: { signed_in_spine: "The leasing flow: verify the executed lease, confirm the term, then POST /operator/leasing/leases/:leaseId/activate-tenancy." },
+  });
   const { decision, decided_by, note } = req.body || {};
   if (!["approve", "reject"].includes(decision)) {
     return res.status(400).json({ error: 'decision must be "approve" or "reject"' });

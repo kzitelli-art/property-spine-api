@@ -13,7 +13,7 @@ const meetingReceiptService = require("../../src/meeting_evidence/meeting_receip
 const meetingEvidenceRoutes = require("../../src/meeting_evidence/meeting_evidence_routes");
 const release = require("../../src/meeting_evidence/meeting_receipt_release_readiness");
 
-const EXPECTED = 80;
+const EXPECTED = 81;
 let passed = 0;
 let failed = 0;
 
@@ -213,15 +213,28 @@ function modelOutput() {
   ok("unresolved resolution cannot smuggle a resolved label", await rejects(Promise.resolve().then(() =>
     extractorRunner.compileExtractorOutput(unresolvedWithLabel, { meeting, transcriptVersion, segments, speakerPeople })
   ), "extractor_unresolved_label_forbidden"));
+  //  TRANSCRIPT-NAMED means the transcript names them. The fixture's one
+  //  segment says "Amory handled Saturday coverage." — so "Amory" is an
+  //  owner the transcript supports and may stay unresolved; "Katie Leung"
+  //  appears nowhere and is an invented owner, which the server rejects.
+  //  This case used to pass "Katie Leung" through, asserting the exact
+  //  failure it was named to prevent.
   const unresolvedNamedOwner = modelOutput();
   unresolvedNamedOwner.candidates[0].owner_status = "named";
-  unresolvedNamedOwner.candidates[0].owner_label = "Katie Leung";
+  unresolvedNamedOwner.candidates[0].owner_label = "Amory";
   unresolvedNamedOwner.candidates[0].owner_resolution_status = "unresolved";
   const unresolvedNamedOwnerRun = extractorRunner.compileExtractorOutput(unresolvedNamedOwner, {
     meeting, transcriptVersion, segments, speakerPeople,
   });
-  ok("transcript-named owner may remain unresolved", unresolvedNamedOwnerRun.candidates[0].owner_label === "Katie Leung");
+  ok("transcript-named owner may remain unresolved", unresolvedNamedOwnerRun.candidates[0].owner_label === "Amory");
   ok("unresolved named owner receives no person id", unresolvedNamedOwnerRun.candidates[0].owner_person_id === null);
+  const inventedOwner = modelOutput();
+  inventedOwner.candidates[0].owner_status = "named";
+  inventedOwner.candidates[0].owner_label = "Katie Leung";
+  inventedOwner.candidates[0].owner_resolution_status = "unresolved";
+  ok("an unresolved owner the transcript never names is REJECTED, not recorded", await rejects(Promise.resolve().then(() =>
+    extractorRunner.compileExtractorOutput(inventedOwner, { meeting, transcriptVersion, segments, speakerPeople })
+  ), "extractor_owner_label_missing"));
   const forward = modelOutput();
   forward.candidates[0].supersedes_candidate_key = "later";
   forward.candidates.push({ ...forward.candidates[0], candidate_key: "later", supersedes_candidate_key: null });

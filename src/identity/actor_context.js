@@ -149,23 +149,25 @@ async function resolveActorContext(pool, { user_id, property_id, as_of = null } 
 
   const authorityRole = assignments.find((a) => FULL_AUTHORITY_ROLES.has(a.role)) || null;
   const roleBasis = authorityRole ? `assignment:${authorityRole.role}` : null;
-  const grant = grants[0] || null;
 
-  const resolve = (grantField) => {
-    if (authorityRole) return { granted: true, basis: roleBasis };
-    if (grant && grant[grantField]) return { granted: true, basis: `grant:${grant.id}` };
-    return { granted: false, basis: null };
+  //  EVERY LIVE GRANT COUNTS. The query above has no ORDER BY and nothing
+  //  makes (person, property) unique, so `grants[0]` was whichever row the
+  //  planner returned first: a person holding one grant that reviews and
+  //  another that publishes got an arbitrary subset, and `basis` named a
+  //  grant that had not conferred the verb. A capability is granted if ANY
+  //  live grant confers it, and the basis cites the grant that did.
+  const grantFor = (...fields) => grants.find((g) => fields.some((f) => g[f])) || null;
+  const viaGrant = (...fields) => {
+    const g = grantFor(...fields);
+    return g ? { granted: true, basis: `grant:${g.id}` } : { granted: false, basis: null };
   };
+  const resolve = (grantField) => (authorityRole ? { granted: true, basis: roleBasis } : viaGrant(grantField));
   // may_prepare honours the older may_edit_pricing column, which meant the
   // same thing before the verb had a name — silently revoking authority
   // somebody was already given would be its own defect.
-  const prepare = authorityRole ? { granted: true, basis: roleBasis }
-    : grant && (grant.may_prepare_pricing || grant.may_edit_pricing)
-      ? { granted: true, basis: `grant:${grant.id}` } : { granted: false, basis: null };
+  const prepare = authorityRole ? { granted: true, basis: roleBasis } : viaGrant("may_prepare_pricing", "may_edit_pricing");
   const review = resolve("may_review_pricing");
-  const publish = authorityRole ? { granted: true, basis: roleBasis }
-    : grant && grant.may_publish_public_offers
-      ? { granted: true, basis: `grant:${grant.id}` } : { granted: false, basis: null };
+  const publish = authorityRole ? { granted: true, basis: roleBasis } : viaGrant("may_publish_public_offers");
   const manage = resolve("may_manage_concession_authority");
 
   const capabilities = {

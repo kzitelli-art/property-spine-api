@@ -7,6 +7,10 @@
 //  Every other endpoint later is THIS pattern repeated.
 // ════════════════════════════════════════════════════════════════════
 const express = require("express");
+//  A rejected async handler becomes an honest 500 instead of a dead process.
+//  Installed before any Router exists — see src/shared/async_route_safety.js.
+const { installAsyncRouteSafety, terminalErrorHandler } = require("./src/shared/async_route_safety");
+installAsyncRouteSafety();
 const cors = require("cors");
 const { Pool } = require("pg");
 const Anthropic = require("@anthropic-ai/sdk");
@@ -134,6 +138,14 @@ const { databaseSsl } = require("./src/shared/database_ssl");
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: databaseSsl(process.env.DATABASE_URL),
+});
+//  pg emits 'error' on the POOL when an IDLE client fails (Neon closes idle
+//  connections; a network reset arrives on a client nobody is using). With
+//  no listener that is an unhandled 'error' event, which terminates the
+//  process. The client is already discarded by the pool; the next checkout
+//  gets a fresh one. Log it and stay up.
+pool.on("error", (err) => {
+  console.error("[pg pool] idle client error (connection discarded, service continues):", err && err.message);
 });
 
 // ── READ AI WEBHOOK — raw bytes before JSON middleware ───────────────
@@ -782,6 +794,10 @@ if (process.env.DEMO_MODE === "true") {
     })
     .catch((err) => console.warn(`[slots] boot seed error (ignored, API still starting): ${err.message}`));
 }
+
+//  LAST. Anything a handler rejected or threw lands here and is answered as
+//  JSON in the receipt vocabulary; the stack goes to the log, not the wire.
+app.use(terminalErrorHandler);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));

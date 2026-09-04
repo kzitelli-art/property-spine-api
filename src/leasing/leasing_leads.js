@@ -820,6 +820,22 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //    • attempt_sms=false: the AI opening response is PREPARED, never claimed sent
   //      ('ai_response_prepared'). No transport call is made.
   // ════════════════════════════════════════════════════════════════════
+  //  The tour STATUS vocabulary — migration 039's leasing_tours_status_check,
+  //  restated here so the projection can tell a state from an event. The
+  //  four terminal states are the ones completeTourService already treats
+  //  as write-once.
+  const TOUR_STATUS_VOCAB = new Set(["requested", "scheduled", "confirmed_by_prospect", "checked_in",
+                                     "completed", "no_show", "cancelled", "rescheduled"]);
+  const TERMINAL_TOUR_STATUSES = new Set(["completed", "no_show", "cancelled", "rescheduled"]);
+  //  One sentence for "this tour is settled", used by every route that must
+  //  refuse to move it. A settled tour keeps its truth (§4, §6).
+  function settledTourRefusal(res, tour) {
+    return res.status(409).json({
+      receipt: `This tour is already ${tour.status}. A settled tour keeps its outcome; a wrong outcome is corrected through /leasing/tours/:tourId/correct-outcome, never re-written.`,
+      tour_id: tour.id, status: tour.status,
+    });
+  }
+
   const DEMO_INTAKE_PROP_NAME = "Property Spine Demo Building"; // MUST match operator.js DEMO_PROP_NAME
   const DEMO_INTAKE_SOURCE = "boardroom_demo";
   const _demoRate = { ip: new Map(), phone: new Map() };
@@ -833,8 +849,14 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   }
 
   // TEMP DIAGNOSTIC — GET status page, viewable in a normal browser.
+  //  DEMO-ONLY. "/demo/" skips the operator-key gate, and this answered
+  //  anyone with a constraint definition and internal self-heal state. It
+  //  is a demo-runtime diagnostic; outside DEMO_MODE it is refused.
   router.get("/demo/intake/health", async (req, res) => {
     res.set("Cache-Control", "no-store");
+    if (String(process.env.DEMO_MODE || "").toLowerCase() !== "true") {
+      return res.status(403).json({ receipt: "The live demo is not enabled on this deployment." });
+    }
     let db = "unknown", checkdef = null;
     try {
       await pool.query("select 1");
@@ -1473,8 +1495,16 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       completed: "completed_at", no_show: "no_show_at",
       cancelled: "cancelled_at", rescheduled: null, // rescheduled stamps no own col; successor tour carries on
     };
+    //  STATUS IS A PROJECTION OF STATUS EVENTS. Not every event is a state:
+    //  a reminder went out, an outcome was corrected — the tour is exactly
+    //  as scheduled or as completed as it was. Writing every event's name
+    //  into `status` handed the CHECK constraint a word it does not hold
+    //  (23514, whole transaction gone), and would have been wrong even where
+    //  it passed. Only the vocabulary leasing_tours_status_check enumerates
+    //  moves the status; the rest stamp their own timestamp, if they have one.
     const tsCol = TS_COL[type];
-    const sets = [`status=$1`]; const vals = [type]; let i = 2;
+    const sets = []; const vals = []; let i = 1;
+    if (TOUR_STATUS_VOCAB.has(type)) { sets.push(`status=$${i++}`); vals.push(type); }
     if (tsCol) { sets.push(`${tsCol}=$${i++}`); vals.push(ev.event_at); }
     sets.push(`updated_at=now()`); vals.push(tourId);
     await client.query(`update leasing_tours set ${sets.join(", ")} where id=$${i}`, vals);
@@ -2371,6 +2401,15 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       };
 
       // APPEND the correction event — the original is never touched.
+      //
+      //  ⚠ NOT YET ACCEPTED BY THE SCHEMA. tour_events.event_type is checked
+      //  against migration 039's eight words and 'outcome_corrected' is not
+      //  one of them, so this insert fails with 23514 on every database that
+      //  exists. Widening the constraint is a migration; 188 and 189 are
+      //  already claimed on four unmerged branches, so this thread writes
+      //  none (docs/THREAD_HANDOFF.md: two branches, one number). Until that
+      //  migration lands the route refuses in a sentence, below, rather than
+      //  rolling back into a raw 500 — the original outcome stands either way.
       await recordTourEvent(client, {
         tourId, leadId: tour.lead_id, type: "outcome_corrected",
         actorType: "human", actorId: correctedBy,
@@ -2403,6 +2442,15 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       });
     } catch (e) {
       try { await client.query("rollback"); } catch (_) {}
+      //  23514 = the tour_events CHECK refused 'outcome_corrected' (see the
+      //  note above the insert). Say so; the original outcome is untouched.
+      if (e && e.code === "23514") {
+        return res.status(409).json({
+          error: "outcome_correction_not_enabled",
+          receipt: "Outcome corrections are not enabled on this database yet: the tour event vocabulary " +
+                   "does not include 'outcome_corrected' (a migration is needed). The original outcome stands and nothing was changed.",
+        });
+      }
       return res.status(e.httpStatus || 500).json({ receipt: e.publicMessage || e.message });
     } finally { client.release(); }
   });
@@ -2416,8 +2464,9 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+      const tour = (await client.query(`select * from leasing_tours where id=$1 for update`, [tourId])).rows[0];
       if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+      if (TERMINAL_TOUR_STATUSES.has(tour.status)) { await client.query("rollback"); return settledTourRefusal(res, tour); }
       await recordTourEvent(client, {
         tourId, leadId: tour.lead_id, type: "no_show",
         actorType: b.actor_id ? "human" : "system", actorId: (await resolveRecorderUserId(req)) || b.actor_id || null,
@@ -2485,8 +2534,11 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+      const tour = (await client.query(`select * from leasing_tours where id=$1 for update`, [tourId])).rows[0];
       if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+      //  A completed tour cannot be "called off": that re-opened its slot and
+      //  rewrote the outcome. Settled is settled.
+      if (TERMINAL_TOUR_STATUSES.has(tour.status)) { await client.query("rollback"); return settledTourRefusal(res, tour); }
       // a cancel before the slot frees the slot for someone else
       if (tour.slot_id) {
         await client.query(
@@ -2515,8 +2567,11 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const oldTour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+      const oldTour = (await client.query(`select * from leasing_tours where id=$1 for update`, [tourId])).rows[0];
       if (!oldTour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+      //  Rescheduling a settled tour would spawn a successor inheriting a
+      //  conversion that already resolved. Settled is settled.
+      if (TERMINAL_TOUR_STATUSES.has(oldTour.status)) { await client.query("rollback"); return settledTourRefusal(res, oldTour); }
 
       const newSlot = (await client.query(`select * from tour_availability where id=$1 for update`, [b.new_slot_id])).rows[0];
       if (!newSlot) { await client.query("rollback"); return res.status(404).json({ receipt: "No new slot with that id." }); }

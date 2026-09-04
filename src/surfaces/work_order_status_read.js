@@ -252,8 +252,18 @@ async function readWorkOrderStatus(db, {
   if (workOrder.affected_person_id) {
     //  VALID FOR THIS PROPERTY, or it is not an answer. A person id that
     //  resolves somewhere else is a cross-property leak wearing a name.
+    //  A person is DURABLE and belongs to no property (§12); the property
+    //  relationship is a lease. "On this property" therefore means: named
+    //  on a lease here — the same read tenant_link's placeOf and the
+    //  communications boundary use. The previous query asked for a
+    //  persons.property_id column that no migration ever created, and the
+    //  route failed for every work order that named an affected person.
     const hit = (await db.query(
-      `select id, name from persons where id = $1 and property_id = $2`,
+      `select p.id, p.name
+         from persons p
+        where p.id = $1
+          and exists (select 1 from leases l
+                       where l.property_id = $2 and p.id = any(l.tenant_ids))`,
       [workOrder.affected_person_id, propertyId])).rows[0];
     if (hit) {
       resident = { person_id: hit.id, display_name: hit.name || "(unnamed)",
@@ -264,11 +274,14 @@ async function readWorkOrderStatus(db, {
   }
 
   if (!resident && workOrder.unit_id) {
+    //  Leases attach to SPACES, never directly to units (docs/data-model.md);
+    //  the unit is reached through the space. `l.unit_id` does not exist.
     const tenants = (await db.query(
       `select p.id, p.name
          from leases l
+         join spaces s on s.id = l.space_id
          join persons p on p.id = any(l.tenant_ids)
-        where l.property_id = $1 and l.unit_id = $2
+        where l.property_id = $1 and s.unit_id = $2
           and l.lease_status = 'active'
         order by p.name asc`, [propertyId, workOrder.unit_id])).rows;
     residentCandidates = tenants.length;

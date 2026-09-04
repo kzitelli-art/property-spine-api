@@ -371,6 +371,18 @@ async function gatherFacts(db, {
   };
   const failures = [];
 
+  //  WHICH PROPERTY, BY NAME. The model needs to know what it is talking
+  //  about so its wording is right; it does not need the record id to do
+  //  that, and §40.8 forbids handing it one. property_id stays on the facts
+  //  object for the server's own use and is stripped from the prompt.
+  //  The name is WORDING, not a required reader (§40.7): its failure is
+  //  marked on the fact so the model does not invent a name, but it does
+  //  not join reads_that_failed, which decides whether the answer stands.
+  try {
+    const p = (await db.query("select name from properties where id = $1", [property_id])).rows[0];
+    facts.property = { name: (p && p.name) || null };
+  } catch (e) { facts.property = { name: null, read_state: "READ_FAILED" }; }
+
   if (subject === "work") {
     try {
       const a = await askSpineService.attention(db, { property_id, allowed_modules });
@@ -407,7 +419,17 @@ async function gatherFacts(db, {
         }));
     } catch (e) { failures.push("attention"); }
 
-    try {
+    //  ENTITLEMENT PRECEDES INTELLIGENCE (§40.8). The UI door for this same
+    //  read (/operator/work-orders/status) requires the maintenance module;
+    //  this gather did not, so a leasing-only session put unit numbers,
+    //  titles and assignee names into model context. Attention above already
+    //  scopes itself by module; this block now does too. The composition
+    //  problem §40.8 names as unsolved is not solved by this — it is one
+    //  door brought level with its screen.
+    if (!(allowed_modules || []).includes("maintenance")) {
+      facts.work_orders = { read_state: "NOT_AUTHORIZED",
+                            note: "Work orders are outside this session's modules for this property." };
+    } else try {
       const wo = await workOrderRead.readPropertyWorkOrderStatuses(db,
         { propertyId: property_id, limit: 50 });
       const list = (wo && wo.work_orders) || [];
@@ -1025,7 +1047,10 @@ async function answer(db, anthropic, {
         //  is a model that can compose a link Spine did not resolve.
         { role: "user",
           content: `QUESTION SUBJECT: ${subject}\nFACTS:\n`
-                   + `${JSON.stringify(facts, (k, v) => (k === "__refs" ? undefined : v), 2)}`
+                   //  property_id is a record id too. It was serialized at the top
+                   //  level while every domain block stripped its own — the one id
+                   //  the model saw on every question.
+                   + `${JSON.stringify(facts, (k, v) => (k === "__refs" || k === "property_id" ? undefined : v), 2)}`
                    + `\n\nOPERATOR ASKED: ${q}` },
       ],
     });
@@ -1088,7 +1113,7 @@ async function answer(db, anthropic, {
     //  already on the surfaces the operator can open.
     grounded_on: {
       open_items: facts.attention ? facts.attention.total_open : null,
-      work_orders: facts.work_orders ? facts.work_orders.count : null,
+      work_orders: facts.work_orders && facts.work_orders.count != null ? facts.work_orders.count : null,
       compliance_items: facts.compliance ? facts.compliance.items.length : null,
       compliance_as_of: facts.compliance ? facts.compliance.as_of : null,
       composition_authorization: facts.compliance

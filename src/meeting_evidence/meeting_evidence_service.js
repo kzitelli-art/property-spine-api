@@ -376,18 +376,32 @@ async function ensureReadAiConnection(db, {
   if (!id) throw serviceError(503, "read_ai_connection_not_configured", "READ_AI_CONNECTION_ID is missing or invalid.");
   if (!authorizedByUserId) throw serviceError(401, "no_authorizing_user", "A staff session is required to authorize the Read AI connection.");
 
-  return (await db.query(
+  //  A REVOKED CONNECTION IS NOT RE-OPENED BY A RE-POST. This upsert flipped
+  //  any existing row back to 'active' — so a connection an admin had
+  //  revoked to stop ingress was live again the moment any meeting-evidence
+  //  user (three modules qualify) called this route, with the caller's
+  //  metadata and the ORIGINAL authorizer still on the audit. Now: a revoked
+  //  row is refused, and a re-authorization records who did it and when.
+  const row = (await db.query(
     `insert into integration_connections
        (id, provider, authorized_by_user_id, authorized_at, connection_status, provider_account_metadata)
      values ($1,$2,$3,now(),'active',$4)
      on conflict (id) do update
        set connection_status = 'active',
            provider_account_metadata = excluded.provider_account_metadata,
+           authorized_by_user_id = excluded.authorized_by_user_id,
+           authorized_at = now(),
            updated_at = now()
+       where integration_connections.connection_status <> 'revoked'
      returning id, provider, authorized_by_user_id, authorized_at, connection_status,
                provider_account_metadata`,
     [id, PROVIDER, authorizedByUserId, providerMetadata || {}]
   )).rows[0];
+  if (!row) {
+    throw serviceError(409, "read_ai_connection_revoked",
+      "This Read AI connection was revoked. Re-authorizing it is a deliberate administrative act, not a re-post.");
+  }
+  return row;
 }
 
 async function bindProviderMeeting(db, {

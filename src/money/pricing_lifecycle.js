@@ -244,6 +244,27 @@ async function publishVersion(pool, {
   try {
     await client.query("begin");
 
+    //  THE DRAFT FIRST. This used to close the live sheet and THEN update
+    //  `where id=$1 and status='draft'` with no property predicate and no
+    //  row-count check: a mistyped or foreign draft id retired the property's
+    //  pricing, matched nothing, committed, and answered `published: true`.
+    //  Every quote then handed off with no_published_pricing_version. The
+    //  draft must exist, be THIS property's, still be a draft, and be the
+    //  version the receipt actually reviewed — all before anything moves.
+    const draft = (await client.query(
+      `select id, property_id, status from property_pricing_versions where id=$1 for update`,
+      [draft_version_id])).rows[0];
+    if (!draft || String(draft.property_id) !== String(property_id)) {
+      throw e("draft_not_found", "That draft does not exist on this property. Nothing was published.", 404);
+    }
+    if (draft.status !== "draft") {
+      throw e("draft_not_publishable", `That version is ${draft.status}, not a draft. Nothing was published.`, 409);
+    }
+    if (receipt.reviewed_version_id && String(receipt.reviewed_version_id) !== String(draft_version_id)) {
+      throw e("receipt_for_different_version",
+        "The review receipt was written for a different version. Re-submit this draft for review before publishing.", 409);
+    }
+
     const prior = (await client.query(
       `select id from property_pricing_versions
         where property_id=$1 and status='published'
@@ -258,16 +279,22 @@ async function publishVersion(pool, {
         [prior.id, proposal.effective_from]);
     }
 
-    await client.query(
+    const published = await client.query(
       `update property_pricing_versions
           set status='published', published_by_person_id=$2, published_at=now(),
               authority_basis=$3, review_receipt_id=$4, supersedes_version_id=$5,
               publication_receipt=$6
-        where id=$1 and status='draft'`,
+        where id=$1 and property_id=$7 and status='draft'`,
       [draft_version_id, auth.person_id, JSON.stringify(auth.basis), review_receipt_id,
        prior ? prior.id : null,
        JSON.stringify({ before: preview.receipt.before, after: preview.receipt.after,
-                        checked: preview.receipt.checked, quote_preview: preview.quote_preview })]);
+                        checked: preview.receipt.checked, quote_preview: preview.quote_preview }),
+       property_id]);
+    //  Belt to the braces above: the row was locked and checked, so this can
+    //  only be 0 if something changed under us — and then nothing may commit.
+    if (published.rowCount !== 1) {
+      throw e("draft_not_publishable", "The draft changed while publishing. Nothing was published.", 409);
+    }
 
     if (dry_run) {
       // A real transaction against real constraints and real triggers, then

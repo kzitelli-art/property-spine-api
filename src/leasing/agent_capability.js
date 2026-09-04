@@ -19,10 +19,22 @@ module.exports = function agentCapabilityModule({ anthropic, INGEST_MODEL }) {
   const router = require("express").Router();
   const MODEL = INGEST_MODEL || "claude-sonnet-4-6";
 
+  //  THE GATE IS HERE, NOT IN server.js. "/agent/" is on the public prefix
+  //  allowlist for the browser demo, so the shared operator-key gate never
+  //  ran for this path — the header above said "operator gate" and the
+  //  route had none. Every anonymous hit was a paid model call. Same
+  //  fail-closed check agent.js uses for /agent/inbound.
+  function requireOperator(req, res, next) {
+    const expected = process.env.OPERATOR_KEY;
+    if (!expected) return res.status(503).json({ receipt: "Operator routes are locked: set OPERATOR_KEY in Render's environment, then send it as the x-operator-key header." });
+    if (req.headers["x-operator-key"] !== expected) return res.status(401).json({ receipt: "Operator key missing or wrong." });
+    next();
+  }
+
   // GET /agent/capability — protected (operator gate). One real generation.
   // (The temporary public /demo/agent-capability proof route was removed after
   //  Stage 0 confirmed the model path — capability checks are operator-gated only.)
-  router.get("/agent/capability", async (_req, res) => {
+  router.get("/agent/capability", requireOperator, async (_req, res) => {
     return runCapabilityCheck(res);
   });
 

@@ -31,8 +31,11 @@
 // ════════════════════════════════════════════════════════════════════
 "use strict";
 
+//  FAIL CLOSED: unset is production. The override this guards must never
+//  outrank the governed column merely because a deploy forgot a variable.
+//  A QA rig asks for the override by setting NODE_ENV=development or test.
 function isProduction() {
-  return String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  return !["development", "test"].includes(String(process.env.NODE_ENV || "").toLowerCase());
 }
 
 // Read at CALL TIME (not module load) so QA rigs can set it before invoking
