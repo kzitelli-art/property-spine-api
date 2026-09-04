@@ -3,6 +3,7 @@
 // router at "/" at the exact position these routes were registered inline.
 const express = require("express");
 const propertyCreation = require("../identity/property_creation_service"); // Build 1A-1: THE property write
+const staffSessions = require("../identity/staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 
 module.exports = function baselineRoutes({ pool, spawnObligationFromEvent }) {
   const router = express.Router();

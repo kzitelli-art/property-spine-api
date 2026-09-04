@@ -371,7 +371,21 @@ module.exports = function leasingIntelModule({ pool, upload }) {
   const router = express.Router();
 
   // Upload the living leasing log → parse → store → return the payload.
-  router.post("/properties/:propertyId/leasing-log", upload.single("file"), async (req, res) => {
+  //  Multer is wrapped so an oversize file returns a clean 413 JSON instead of
+  //  throwing past this handler — the same shape as every other upload door.
+  const uploadOne = upload.single("file");
+  router.post("/properties/:propertyId/leasing-log", (req, res, next) => {
+    uploadOne(req, res, (err) => {
+      if (err) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(413).json({ error: "file_too_large",
+            receipt: "That file is over 25 MB. Export just the leasing log sheet." });
+        }
+        return res.status(400).json({ error: "upload_failed", receipt: err.message });
+      }
+      next();
+    });
+  }, async (req, res) => {
     try {
       const prop = (await pool.query("select id, name, address from properties where id=$1", [req.params.propertyId])).rows[0];
       if (!prop) return res.status(404).json({ receipt: "No property with that id." });

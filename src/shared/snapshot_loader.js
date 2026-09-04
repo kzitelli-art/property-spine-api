@@ -1456,7 +1456,22 @@ module.exports = function snapshotLoader(deps) {
   }
 
   if (upload) {
-    router.post("/snapshot/:property/upload", upload.single("file"), async (req, res) => {
+    //  Multer runs first; wrap it so an oversize file returns a clean 413 JSON
+    //  instead of throwing past this handler. Same shape as every other upload
+    //  door in the repo (deal_setup.js, document_ingest_routes.js).
+    const uploadOne = upload.single("file");
+    router.post("/snapshot/:property/upload", (req, res, next) => {
+      uploadOne(req, res, (err) => {
+        if (err) {
+          if (err.code === "LIMIT_FILE_SIZE") {
+            return res.status(413).json({ error: "file_too_large",
+              receipt: "That file is over 25 MB. Export just the rent-roll sheet." });
+          }
+          return res.status(400).json({ error: "upload_failed", receipt: err.message });
+        }
+        next();
+      });
+    }, async (req, res) => {
       const cfg = CONFIGS[String(req.params.property || "").toLowerCase()];
       if (!cfg) return res.status(404).json({ error:"unknown_property", known:Object.keys(CONFIGS) });
       try {

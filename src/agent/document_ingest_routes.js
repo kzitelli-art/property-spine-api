@@ -2,6 +2,7 @@
 // Route paths and registration order are unchanged: server.js mounts this
 // router at "/" at the exact position these routes were registered inline.
 const express = require("express");
+const staffSessions = require("../identity/staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 
 module.exports = function documentIngestRoutes({ pool, upload, runIngestAuto, fileToText }) {
   const router = express.Router();
@@ -316,9 +317,12 @@ router.post("/ingest/:runId/promote", async (req, res) => {
       receipt: "Who promoted these units comes from the signed-in session, not the request body.",
     });
   }
-  const promoter = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
-  const promoted_by = promoter ? promoter.id : null;
   try {
+    //  Resolving the session is itself a database call. It sat outside this
+    //  try, so a transient database error became an unhandled rejection
+    //  rather than a 500 the caller can read.
+    const promoter = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+    const promoted_by = promoter ? promoter.id : null;
     const run = await pool.query("select id, property_id, model_raw_output from ingest_runs where id=$1", [req.params.runId]);
     if (run.rows.length === 0) return res.status(404).json({ error: "run not found" });
     const propertyId = run.rows[0].property_id;
@@ -450,9 +454,11 @@ router.post("/ingest/:runId/approve", async (req, res) => {
     });
   }
   const { candidate_ids } = req.body || {};
-  const reviewer = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
-  const reviewed_by = reviewer ? reviewer.id : null;
   try {
+    //  Inside the try for the same reason as /promote above: resolving the
+    //  session is a database call, and outside it had no handler at all.
+    const reviewer = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+    const reviewed_by = reviewer ? reviewer.id : null;
     const run = await pool.query("select id from ingest_runs where id=$1", [req.params.runId]);
     if (run.rows.length === 0) return res.status(404).json({ error: "run not found" });
 

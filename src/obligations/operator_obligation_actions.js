@@ -93,6 +93,18 @@ module.exports = function operatorObligationActions(deps) {
         return res.status(404).json({ error: "obligation not found" });
       }
 
+      //  Closed work has no owner to claim. The status CASE below only ever
+      //  promotes 'open', so a complete obligation kept its status and quietly
+      //  took an assignee — a name against work nobody is doing. Same word the
+      //  engine refuses on (obligation_engine.js: ALREADY_COMPLETE).
+      if (o.status === "complete") {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "obligation is already complete",
+          receipt: "That work is already closed. Nothing is waiting on an owner.",
+        });
+      }
+
       //  Preserved from the legacy route: do not silently steal work.
       //  Re-claiming your own is a no-op, not a conflict.
       if (o.assigned_user_id && String(o.assigned_user_id) !== String(req.operator.id)) {

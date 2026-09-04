@@ -253,8 +253,11 @@ async function forwardRent(pool, {
       //  What Spine can actually stand behind, and how little that is.
       contractual: contractual,
       contractual_positions: contractualRows.length,
-      contractual_state: contractualRows.length === committed.length ? "established"
-        : (contractualRows.length === 0 ? "NOT_ESTABLISHED" : "partially_established"),
+      //  With NO committed positions there is nothing established: the old
+      //  first test was 0 === 0, so an empty cycle reported "established".
+      contractual_state: committed.length === 0 ? "NOT_ESTABLISHED"
+        : (contractualRows.length === committed.length ? "established"
+        : (contractualRows.length === 0 ? "NOT_ESTABLISHED" : "partially_established")),
       contractual_missing_positions: committed.length - contractualRows.length,
 
       /*  ── ONE DECOMPOSITION, NO RESIDUE, NO OVERLAP ──────────────────

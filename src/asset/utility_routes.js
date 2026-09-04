@@ -137,7 +137,7 @@ module.exports = function utilityRoutes(deps = {}) {
             const text = await fileToText({
               buffer: req.file.buffer,
               mimetype: req.file.mimetype,
-              filename: req.file.originalname,
+              originalname: req.file.originalname,
             });
             proposal = documentRead.propose(text, storedKind);
           } catch (scanError) {
