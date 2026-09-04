@@ -163,7 +163,7 @@ product ruling, and touched no schema:
 |---|---|---|
 | `staffSessions` never imported after the 2026-08-27 split — `POST /properties`, `POST /ingest/:runId/promote`, `POST /ingest/:runId/approve` | `HTTP_PROVEN` for the refusal path (real router, real socket, **stub pool** → `LOCALLY_EXERCISED` by defect #19's own rule) | `/properties` returned `500 {"error":"staffSessions is not defined"}`; now `401 no_authenticated_actor`. Both ingest routes threw `ReferenceError` **outside** their try — an unhandled rejection that killed the process under Node 22. Falsified: reverting crashes the harness at `document_ingest_routes.js:319` |
 | Both ingest session resolutions moved **inside** their try | same | Same statement, same defect class: a database call with no handler |
-| `fileToText({filename:…})` where the parser reads `originalname` — Tax + Utility evidence upload | source-level; **fix not exercised** | Verified both ways in source: `document_ingest.js` dispatches on `file.originalname`, so every PDF/XLSX/DOCX fell through to `buf.toString("utf8")` and `docRead.propose()` got bytes. `artifacts.store({filename:…})` beside it is a **different** function and correctly keeps its key |
+| `fileToText({filename:…})` where the parser reads `originalname` — Tax + Utility evidence upload | `LOCALLY_EXERCISED` | `document_ingest.js` dispatches on `file.originalname`, so the type branch never matched and the buffer fell through to `buf.toString("utf8")`. Exercised both ways on a real workbook: old shape returns raw ZIP bytes (`PK\x03\x04…`, 369× the noise), new shape returns `### SHEET:` text. `artifacts.store({filename:…})` beside it is a **different** function and correctly keeps its key. ⚠ **SEVERITY CORRECTED DOWN, 2026-09-04:** the first write-up implied every proposal was built from garbage. Measured, it is narrower — xlsx shared strings stay findable inside the ZIP, so `tax_document_read.propose()` returned the SAME correct fields from the byte dump as from parsed text at both 3 and 400 rows. The parser was genuinely bypassed and the fix is right; the visible consequence varies by format and was often nil for spreadsheets. The PDF case (how a real tax bill arrives) could NOT be settled here — a hand-built minimal PDF was too thin for `pdf-parse` on either shape |
 | `human_approved_at` stamped `now()` on both ternary branches | source-level; **fix not exercised** | `leasing_interactions.js` — every outbound text recorded an approval instant with `human_approved_by_user_id` null, falsifying the drafted/approved split |
 | Self-claim wrote an owner onto an already-complete obligation | **`HTTP_PROVEN`** — real `pg.Pool`, real router, real socket, schema built from the real migration chain (ceiling 187) | 5/5. Falsified: without the guard a complete obligation returns `200 "Claimed."` with `status:"complete"` and an `assigned_user_id`. `operator_obligations_security_proof.db.js` 21/21 still passes, so the happy path is intact |
 | Two upload doors passed multer straight in (`snapshot_loader`, `leasing_intel`) — oversize threw past the handler | `LOCALLY_EXERCISED` | Now the 413 shape every sibling door returns. Proven with a 10-byte limit over real HTTP |
@@ -174,6 +174,31 @@ needs `HEAD~1`, so it exits 3 on a shallow clone — identical on clean `HEAD`, 
 passes once the clone is unshallowed. `tests/proofs/forward_rent.db.js` stops at
 `no property with enough inventory` (exit 2) **identically on clean `HEAD`** — a
 seeding precondition, not a regression.
+
+**RE-CHECK, 2026-09-04 (same day, second pass).** Every fix was re-driven, three
+gaps in the first pass were closed, and one claim was corrected down:
+
+- **`POST /properties` is now `HTTP_PROVEN` through the real door** — real `server.js`
+  booted against this schema, real operator-key gate, real session: 401 without a
+  session, `insufficient_platform_role` then `actor_has_no_organization` as authority
+  is granted, and finally a **real property row created** (201). The route was totally
+  dead before the fix.
+- **The promote path is now `HTTP_PROVEN` at the line that matters.** The first pass
+  only reached a 404 — which returns *before* `promoted_by` is used, so it never
+  proved the moved `const` was in scope. Re-driven with a real `ingest_run` and an
+  approved candidate: a unit is created and `ingest_candidates.promoted_by` equals the
+  session user. Falsified: reverting crashes the process at `document_ingest_routes.js:319`.
+- **The claim guard and the 413 were re-driven through the real server**, not a stub:
+  409 with the operator receipt, 200 + `in_progress` for an open one, and a genuine
+  25 MB upload returning `file_too_large`.
+- **`human_approved_at` is confirmed against precedent, not just reasoning.**
+  `agent.js:2219` carries the identical fix made 2026-07-25 with the ruling written
+  out — *"An approval TIME with no approver is a claim that someone reviewed this."*
+  Two writers, one already corrected, this one missed. Column is nullable (048), no
+  constraint pairs it, and no reader in `src/` would break on null.
+- **`forward_rent`**: truth-tabled — exactly one case changes, the vacuous `0/0`.
+- Also checked and clean: no circular require from the restored import; the new
+  refusal path releases its client via the existing `finally`.
 
 **What this thread did NOT do:** no browser rung, nothing deployed, nothing observed
 in production, and the 19 reviewer-reported findings were not re-verified. The
