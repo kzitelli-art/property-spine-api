@@ -55,11 +55,12 @@ the workflow logs for the candidate SHA, not the presence of these test files.
 
 ## Holds and next milestone
 
-Legacy ingestion consumer/disposition analysis remains a proposal. Source search
-found no governed operating caller; external usage is unknown. No ingestion
-retirement, provider action, production migration, deployment or real-user
-change is performed. Partial cash proof and concurrent notices on different
-rooms remain explicitly outside this repair checkpoint.
+The subsequent owner ruling authorizes legacy HTTP ingestion retirement on the
+candidate; see [its scope and proof contract](LEGACY_INGESTION_RETIREMENT_2026-09-05.md).
+Source search found no governed operating caller; external usage is unknown.
+No provider action, production migration, deployment or real-user change is
+performed. Partial cash proof and concurrent notices on different rooms remain
+explicitly outside this repair checkpoint.
 
 July Greenery begins with separately accessible, hash-verified real inputs and
 durable review: 64 units, 105 positions, 164 evidence records, 145 assigned claims

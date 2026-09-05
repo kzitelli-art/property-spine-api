@@ -104,6 +104,21 @@ step "parent deposit defect observed" env PROOF_EXPECT_DEFECT=1 node tests/e2e/d
 step "parent comparison defect observed" env PROOF_EXPECT_DEFECT=1 node tests/e2e/shadow_other_property_entitled.e2e.js
 stop_owned_server || exit 1
 
+# Retirement is an owner-authorized contract change after the reviewed repairs.
+# Witness the immediate unchanged parent, not a crash in an older dependency.
+RETIREMENT_PARENT=1283f40ed058d78ec271e2b05f077cc7fb618502
+mkdir "$RUN_DIR/retirement-parent" || exit 1
+git archive "$RETIREMENT_PARENT" | tar -x -C "$RUN_DIR/retirement-parent" || exit 1
+ln -s "$ROOT/node_modules" "$RUN_DIR/retirement-parent/node_modules" || exit 1
+E2E_SERVER_ROOT="$RUN_DIR/retirement-parent" E2E_EXPECT_SERVER_COMMIT="$RETIREMENT_PARENT" ./tests/e2e/boot.sh >"$RUN_DIR/retirement-parent-server.log" 2>&1 &
+SERVER_PID=$!
+if ! node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID"; then
+  tail -40 "$RUN_DIR/retirement-parent-server.log"
+  exit 1
+fi
+step "parent legacy ingestion open" env PROOF_EXPECT_LEGACY_OPEN=1 E2E_EXPECT_SERVER_COMMIT="$RETIREMENT_PARENT" node tests/e2e/legacy_ingestion_retired.e2e.js
+stop_owned_server || exit 1
+
 # ── lease / guarantor database proofs ───────────────────────────────
 # These use the repository's production-refusing harness boundary. CI's
 # E2E database is disposable and becomes the explicit harness target;
@@ -142,6 +157,7 @@ else
   step "authority chain"             node tests/e2e/authority_chain.e2e.js
   step "extracted route bindings"    node tests/e2e/extracted_route_bindings.e2e.js
   step "ingest property authority"   node tests/e2e/ingest_property_authority.e2e.js
+  step "legacy ingestion retired" env E2E_EXPECT_SERVER_COMMIT="$(git rev-parse HEAD)" node tests/e2e/legacy_ingestion_retired.e2e.js
   step "work order person columns"   node tests/e2e/work_order_person_columns.e2e.js
   step "read ai connection authority" node tests/e2e/read_ai_connection_authority.e2e.js
   step "notice space column"         node tests/e2e/notice_space_column.e2e.js

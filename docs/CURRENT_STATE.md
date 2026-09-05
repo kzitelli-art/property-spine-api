@@ -1,5 +1,14 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-05 subsequent owner ruling:** Kameron authorized retirement of the
+nine legacy ingestion HTTP entry points in favor of canonical Deal Setup.
+The candidate returns an explicit 410 after the unchanged operator-key gate;
+retained history and shared services are preserved. This supersedes earlier
+"legacy access undecided/proposal only" notes for candidate implementation.
+External usage is still unverified, and production deployment remains held.
+See [the route list and before/after proof contract](LEGACY_INGESTION_RETIREMENT_2026-09-05.md).
+Check CI for the exact new candidate SHA; older green runs do not prove this change.
+
 **2026-09-05 candidate navigation update:** `codex/qb-proof-checkpoint-20260905`
 descends from the unchanged prior successor `f953449` (not deployed).
 Code checkpoint `2a31892594c707c49cfd863cfaed97e2b6a1d6da` passed

@@ -463,8 +463,8 @@ function appParsedRows(text) {
 
   const promoteActor = await request("POST", "/ingest/00000000-0000-0000-0000-000000000000/promote",
     { headers: KEY, body: { promoted_by: adminA } });
-  ok("H19 the ingest promote route rejects a body actor field",
-     promoteActor.status === 400 && promoteActor.body.error === "body_actor_field_rejected",
+  ok("H19 the retired ingest promote route cannot accept a body actor or promote",
+     promoteActor.status === 410 && promoteActor.body.code === "legacy_ingestion_retired",
      `${promoteActor.status} ${JSON.stringify(promoteActor.body).slice(0, 160)}`);
 
   // ── H20 · THE TWO SIDES SHARE ONE TRUTH ───────────────────────────
