@@ -176,10 +176,16 @@ module.exports = function notice(deps) {
         given_by: given_by || null,
       };
 
+      //  space_id is a COLUMN, not only a payload key. The canonical space
+      //  reader (space_position.js) finds a notice by `ue.space_id`; written
+      //  only into the payload, a notice succeeded here — 201, receipt and
+      //  all — and was invisible to availability, the future rent roll and
+      //  every surface that reads space_position. The resolver above already
+      //  settled which space (a by-bed unit had to name it).
       const ins = await client.query(
-        `insert into unit_events (unit_id, property_id, event_type, effective_date, payload, source, status)
-         values ($1,$2,'notice_given',$3,$4,'manual','scheduled') returning *`,
-        [unit_id, unit.property_id, move_out_date, JSON.stringify(payload)]);
+        `insert into unit_events (unit_id, property_id, space_id, event_type, effective_date, payload, source, status)
+         values ($1,$2,$3,'notice_given',$4,$5,'manual','scheduled') returning *`,
+        [unit_id, unit.property_id, t.space_id, move_out_date, JSON.stringify(payload)]);
 
       await client.query("commit");
       res.status(201).json({
