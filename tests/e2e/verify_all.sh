@@ -127,6 +127,7 @@ else
   step "work order person columns"   node tests/e2e/work_order_person_columns.e2e.js
   step "read ai connection authority" node tests/e2e/read_ai_connection_authority.e2e.js
   step "notice space column"         node tests/e2e/notice_space_column.e2e.js
+  step "notice correction identity" node tests/e2e/notice_supersede_space_identity.e2e.js
   step "move-in lease on unit"       node tests/e2e/movein_lease_on_unit.e2e.js
   step "org roster scope"            node tests/e2e/org_roster_scope.e2e.js
   step "operator build gate"         node tests/e2e/operator_build_gate.e2e.js

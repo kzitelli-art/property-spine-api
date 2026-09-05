@@ -98,6 +98,31 @@ module.exports = function notice(deps) {
     return { lease: l, tenant_name: tenantName, space_id: spaceId };
   }
 
+  // A supersession corrects the date of an existing notice. It does not get
+  // to select a new tenancy. Older notice rows may carry an identity in only
+  // one of the promoted column or JSON snapshot, so either side may supply a
+  // missing value. If both sides exist they must agree; guessing through a
+  // contradiction would turn a correction into an unaudited retarget.
+  function priorIdentity(prior) {
+    const payload = prior && prior.payload && typeof prior.payload === "object"
+      && !Array.isArray(prior.payload) ? prior.payload : {};
+    const settle = (columnValue, payloadValue, field) => {
+      const column = columnValue == null || columnValue === "" ? null : String(columnValue);
+      const snapshot = payloadValue == null || payloadValue === "" ? null : String(payloadValue);
+      if (column && snapshot && column !== snapshot) {
+        return { error: `prior_${field}_contradicts_snapshot` };
+      }
+      if (!column && !snapshot) return { error: `prior_${field}_missing` };
+      return { value: column || snapshot };
+    };
+
+    const space = settle(prior.space_id, payload.space_id, "space_id");
+    if (space.error) return { error: space.error };
+    const lease = settle(prior.lease_id, payload.lease_id, "lease_id");
+    if (lease.error) return { error: lease.error };
+    return { space_id: space.value, lease_id: lease.value, payload };
+  }
+
   // ════════════════════════════════════════════════════════════════
   //  GIVE NOTICE  —  POST /units/:id/notice
   //  Body: { move_out_date (required, YYYY-MM-DD), given_by?, space_id? }
@@ -285,29 +310,68 @@ module.exports = function notice(deps) {
           hint: "use POST /units/:id/notice to give a first notice",
         });
       }
+      if (priorQ.rows.length !== 1) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "multiple open notices exist on this unit — supersession cannot choose one safely",
+          detail: "multiple_open_notices",
+        });
+      }
       const prior = priorQ.rows[0];
 
-      // re-resolve the tenancy from server state (authority), same as give-notice.
-      const t = await resolveActiveTenancy(client, unit_id, space_id || (prior.payload && prior.payload.space_id) || null);
+      const original = priorIdentity(prior);
+      if (original.error) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "the open notice has no safe original tenancy identity — supersession refused",
+          detail: original.error,
+        });
+      }
+
+      // A space in the request is only a consistency assertion. It cannot
+      // move the correction to another bed, even when that bed has a valid
+      // active lease of its own.
+      if (space_id && String(space_id) !== original.space_id) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "a notice correction cannot target a different space",
+          detail: "space_identity_mismatch",
+        });
+      }
+
+      // Re-resolve server authority on the ORIGINAL space. A newly active
+      // lease on the same bed is a different tenancy and must receive its own
+      // notice; silently binding the correction to it would rewrite history.
+      const t = await resolveActiveTenancy(client, unit_id, original.space_id);
       if (t.error) {
         await client.query("rollback");
         return res.status(409).json({ error: "could not resolve the active tenancy to supersede notice", detail: t.error });
       }
+      if (String(t.lease.id) !== original.lease_id) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "the notice belongs to a different tenancy than the active lease on its space",
+          detail: "lease_identity_mismatch",
+        });
+      }
 
       const newPayload = {
-        lease_id: t.lease.id,
-        space_id: t.space_id,
-        lease_end_date: t.lease.end_date,
-        tenant_name: t.tenant_name,
+        lease_id: original.lease_id,
+        space_id: original.space_id,
+        lease_end_date: original.payload.lease_end_date == null
+          ? t.lease.end_date : original.payload.lease_end_date,
+        tenant_name: original.payload.tenant_name == null
+          ? t.tenant_name : original.payload.tenant_name,
         notice_date: new Date().toISOString().slice(0, 10),
         given_by: given_by || null,
         supersedes_event_id: prior.id,
       };
 
       const ins = await client.query(
-        `insert into unit_events (unit_id, property_id, event_type, effective_date, payload, source, status)
-         values ($1,$2,'notice_given',$3,$4,'manual','scheduled') returning *`,
-        [unit_id, unit.property_id, move_out_date, JSON.stringify(newPayload)]);
+        `insert into unit_events (unit_id, property_id, lease_id, space_id, event_type, effective_date, payload, source, status)
+         values ($1,$2,$3,$4,'notice_given',$5,$6,'manual','scheduled') returning *`,
+        [unit_id, unit.property_id, original.lease_id, original.space_id,
+          move_out_date, JSON.stringify(newPayload)]);
 
       // mark the prior notice superseded, pointing forward to the new one.
       const priorPayload = Object.assign({}, prior.payload || {}, { superseded_by_event_id: ins.rows[0].id, superseded_at: new Date().toISOString() });
