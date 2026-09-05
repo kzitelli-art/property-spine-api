@@ -58,7 +58,9 @@ const { Pool } = require("pg");
 const receipt = require("../_run_receipt.js");
 
 const URL = receipt.harnessConnectionString();
-const pool = new Pool({ connectionString: URL, ssl: { rejectUnauthorized: false } });
+const boundary = require("../e2e/proof_boundary");
+boundary.manifest();
+const pool = new Pool({ connectionString: URL, ssl: false });
 
 const OPERATOR_KEY = "harness-operator-key-" + crypto.randomBytes(4).toString("hex");
 const PORT = 3400 + (process.pid % 300);
@@ -75,10 +77,15 @@ const N = 200000 + (process.pid % 700000);
 
 // ── the real server, as a child process ────────────────────────────
 let child = null;
-function startServer() {
-  return new Promise((resolve, reject) => {
-    child = spawn(process.execPath, [path.join(__dirname, "..", "..", "server.js")], {
-      env: Object.assign({}, process.env, {
+async function startServer() {
+  await boundary.assertDatabase();
+  await boundary.portFree(PORT);
+    child = spawn(process.execPath, [
+      "--require", path.join(__dirname, "../e2e/proof_fence_preload.js"),
+      "--require", path.join(__dirname, "../e2e/fake_sms_preload.js"),
+      "--require", path.join(__dirname, "../e2e/fake_anthropic_preload.js"),
+      path.join(__dirname, "..", "..", "server.js")], {
+      env: boundary.serverEnvironment({
         //  The CHILD gets DATABASE_URL; this process never does, so
         //  _run_receipt's same-target refusal stays meaningful.
         DATABASE_URL: URL,
@@ -89,26 +96,34 @@ function startServer() {
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
-    const onData = (b) => {
-      out += String(b);
-      if (/listening on/i.test(out)) resolve();
-    };
+    const onData = (b) => { out += String(b); };
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
-    child.on("exit", (code) => {
-      if (!/listening on/i.test(out)) reject(new Error("server exited " + code + "\n" + out));
+    let spawnError;
+    child.on("error", e => { spawnError = e; });
+    try { await boundary.waitServer(`http://127.0.0.1:${PORT}`, () => !spawnError && child.exitCode === null && child.signalCode === null); }
+    catch (e) { throw new Error(`${e.message}\n${out}`); }
+}
+async function stopServer() {
+  if (!child) return;
+  let forced = false;
+  if (child.exitCode === null && child.signalCode === null) {
+    await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        forced = true;
+      }, 5000);
+      child.once("exit", () => { clearTimeout(timer); resolve(); });
+      child.kill("SIGTERM");
     });
-    setTimeout(() => reject(new Error("server did not start in 25s\n" + out)), 25000);
-  });
+  }
+  child = null;
+  await boundary.portFree(PORT);
+  if (forced) throw new Error("Owned Deal Setup server required SIGKILL; exit and port cleanup verified");
 }
-function stopServer() {
-  return new Promise((resolve) => {
-    if (!child || child.exitCode !== null) return resolve();
-    child.on("exit", () => resolve());
-    child.kill("SIGTERM");
-    setTimeout(resolve, 4000);
-  });
-}
+for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, async () => {
+  try { await stopServer(); await pool.end(); } finally { process.exit(1); }
+});
 
 function request(method, p, { body, headers = {}, raw } = {}) {
   return new Promise((resolve, reject) => {
@@ -495,6 +510,7 @@ function appParsedRows(text) {
   process.exit(fail ? 1 : 0);
 })().catch(async (e) => {
   console.error(e);
-  await stopServer();
+  try { await stopServer(); } catch (cleanupError) { console.error(cleanupError.message); }
+  await pool.end().catch(() => {});
   process.exit(1);
 });

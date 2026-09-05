@@ -46,6 +46,7 @@ jobs:
 
     env:
       E2E_DATABASE_URL: postgres://postgres:spineproof@127.0.0.1:5432/spine_verify
+      E2E_DISPOSABLE_POSTGRES: "1"
 
     steps:
       #  FULL HISTORY, NOT A SHALLOW CLONE.

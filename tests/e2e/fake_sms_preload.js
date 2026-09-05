@@ -7,7 +7,7 @@ const fs = require("fs");
 const path = require("path");
 const Module = require("module");
 
-const transportPath = path.resolve(__dirname, "../../src/comms/sms.js");
+const transportPath = path.resolve(process.env.E2E_SERVER_ROOT || path.resolve(__dirname, "../.."), "src/comms/sms.js");
 const originalLoad = Module._load;
 
 Module._load = function loadWithFakeSms(request, parent, isMain) {

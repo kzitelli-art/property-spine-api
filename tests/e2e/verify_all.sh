@@ -12,8 +12,9 @@
 #  significant defect found in the leasing work was invisible in source
 #  and obvious the moment something ran.
 #
-#      ./tests/e2e/verify_all.sh
-#      E2E_DATABASE_URL=postgres://... ./tests/e2e/verify_all.sh
+#      E2E_DISPOSABLE_POSTGRES=1 E2E_DATABASE_URL=postgres://... ./tests/e2e/verify_all.sh
+#  The target must be a separately provisioned disposable loopback instance;
+#  the existing CI PostgreSQL service meets this contract. No ambient DB is reset.
 #
 #  Requires a reachable Postgres. The browser rung additionally needs
 #  Chromium; when it is absent the rung is reported SKIPPED — loudly, and
@@ -22,32 +23,64 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT" || exit 1
 export E2E_DATABASE_URL="${E2E_DATABASE_URL:-postgres://postgres:spineproof@127.0.0.1:5432/spine_verify}"
-export E2E_SMS_LOG="${E2E_SMS_LOG:-/tmp/property_spine_e2e_sms.log}"
-ADMIN="${E2E_DATABASE_URL%/*}/postgres"
+RUN_DIR=$(mktemp -d) || exit 1
+export E2E_PROOF_MANIFEST="$RUN_DIR/ownership.json"
+export E2E_SMS_LOG="$RUN_DIR/sms.log" E2E_ANTHROPIC_LOG="$RUN_DIR/anthropic.log" E2E_EGRESS_LOG="$RUN_DIR/egress.log"
+export E2E_SESSION_LOG="$RUN_DIR/sessions.log"
+SERVER_PID=""
+stop_owned_server () {
+  local result=0
+  if [ -n "$SERVER_PID" ]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    for _ in $(seq 1 50); do kill -0 "$SERVER_PID" 2>/dev/null || break; sleep .1; done
+    if kill -0 "$SERVER_PID" 2>/dev/null; then kill -KILL "$SERVER_PID" 2>/dev/null; result=1; fi
+    wait "$SERVER_PID" 2>/dev/null || true
+    SERVER_PID=""
+    node tests/e2e/proof_boundary.js port-free "${PORT:-3000}" || result=1
+  fi
+  return "$result"
+}
+cleanup () {
+  local result=$?
+  trap - EXIT INT TERM
+  stop_owned_server || result=1
+  if [ -f "$E2E_PROOF_MANIFEST" ]; then
+    node tests/e2e/proof_boundary.js cleanup || result=1
+  fi
+  if [ -s "$E2E_EGRESS_LOG" ]; then echo "FAIL: attempted nonloopback proof egress"; result=1; fi
+  node tests/e2e/proof_boundary.js port-free "${PORT:-3000}" || result=1
+  if [ "$result" != 0 ]; then echo "Verification incomplete/failed; owned-run evidence: $RUN_DIR"; fi
+  exit "$result"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 FAILED=0; SKIPPED=""
 step () {  # $1 = label, rest = command
   local label="$1"; shift
   printf '── %-34s ' "$label"
-  if "$@" >/tmp/verify_step.log 2>&1; then echo "PASS"; else
+  if "$@" >"$RUN_DIR/step.log" 2>&1; then echo "PASS"; cat "$RUN_DIR/step.log"; else
     echo "FAIL"; FAILED=1
-    sed 's/^/      /' /tmp/verify_step.log | tail -25
+    sed 's/^/      /' "$RUN_DIR/step.log" | tail -40
+    exit 1
   fi
 }
 
 echo "════════════════════════════════════════════════════════════"
 echo "  PROPERTY SPINE — FULL VERIFICATION"
-echo "  database: ${E2E_DATABASE_URL%%\?*}"
+echo "  database: fresh owned disposable target (credentials omitted)"
 echo "════════════════════════════════════════════════════════════"
 
 # ── proofs that need no database ────────────────────────────────────
+step "proof boundary refusal checks" node tests/e2e/proof_boundary.test.js
 step "source governance gates"   node tests/verify_source_governance.js
 step "next-action oracle"        node src/shared/proof_next_action_resolver.js
 step "application review actions" node tests/unit/application_review_action_contract.test.js
 
 # ── build the schema from the REAL chain ────────────────────────────
-psql "$ADMIN" -q -c "drop database if exists $(basename "${E2E_DATABASE_URL%%\?*}")" >/dev/null 2>&1
-psql "$ADMIN" -q -c "create database $(basename "${E2E_DATABASE_URL%%\?*}")"        >/dev/null 2>&1
+node tests/e2e/proof_boundary.js create >"$RUN_DIR/env.sh" || exit 1
+. "$RUN_DIR/env.sh"
 step "schema from the migration chain"  ./tests/e2e/apply_migrations.sh
 step "property fixture"     psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/property_fixture.sql
 step "pricing fixture"      psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/fixtures.sql
@@ -61,14 +94,15 @@ step "governing lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" no
 step "canonical lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/spine_lease_execution.db.js
 step "lease guarantor signing"   env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/lease_guarantor_signing.db.js
 step "pricing authority grants union" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/pricing_authority_grants_union.db.js
+step "canonical Deal Setup HTTP" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/deal_setup_http.db.js
 
 # ── the real server, the real HTTP door ─────────────────────────────
 #  ASK BEFORE LAUNCHING. Polling /health afterwards cannot distinguish
 #  our server from a stale one — see tests/e2e/port_guard.sh.
 . ./tests/e2e/port_guard.sh
-if port_busy 3000; then
-  echo "── server                             FAIL (port 3000 already in use)"
-  port_busy_message 3000 | sed 's/^/      /'
+if port_busy "$PORT"; then
+  echo "── server                             FAIL (proof port already in use)"
+  port_busy_message "$PORT" | sed 's/^/      /'
   FAILED=1; SERVER_PID=""
 else
 ./tests/e2e/boot.sh > /tmp/verify_server.log 2>&1 &
@@ -80,17 +114,13 @@ SERVER_PID=$!
 #  an occupied port; this loop's job is to notice that it did, instead of
 #  polling happily against the impostor.
 UP=0
-for _ in $(seq 1 30); do
-  if ! kill -0 "$SERVER_PID" 2>/dev/null; then break; fi
-  [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/health 2>/dev/null)" = "200" ] && { UP=1; break; }
-  sleep 1
-done
+node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID" && UP=1
 if [ "$UP" != "1" ]; then
   echo "── server                             FAIL (did not become healthy)"
   tail -25 /tmp/verify_server.log | sed 's/^/      /'
   FAILED=1
 else
-  echo "── server                             UP  ($(curl -s http://localhost:3000/health | head -c 120))"
+  echo "── server                             UP (owned PID, run nonce, database marker)"
   step "authority chain"             node tests/e2e/authority_chain.e2e.js
   step "extracted route bindings"    node tests/e2e/extracted_route_bindings.e2e.js
   step "ingest property authority"   node tests/e2e/ingest_property_authority.e2e.js
@@ -123,15 +153,16 @@ else
   else
     echo "── browser: resident signs            SKIPPED (no Chromium)"
     SKIPPED="browser rung"
+    FAILED=1
   fi
   step "invite-to-guarantor lease"  env E2E_DISPOSABLE_DATABASE=true node tests/e2e/tour_application_lease.e2e.js
   step "legacy decision writes closed" node tests/e2e/legacy_decision_writes_disabled.e2e.js
-  kill "$SERVER_PID" 2>/dev/null
+  stop_owned_server || exit 1
 fi
 fi
 
 echo "════════════════════════════════════════════════════════════"
 [ -n "$SKIPPED" ] && echo "  ⚠ NOT RUN: $SKIPPED — this is not a pass."
-if [ "$FAILED" = "0" ]; then echo "  ALL PROOFS PASSED"; else echo "  ✗ VERIFICATION FAILED"; fi
+if [ "$FAILED" = "0" ]; then echo "  ALL REQUIRED ASSERTIONS PASSED — cleanup must also succeed"; else echo "  ✗ VERIFICATION FAILED"; fi
 echo "════════════════════════════════════════════════════════════"
 exit $FAILED
