@@ -836,8 +836,14 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   }
 
   // TEMP DIAGNOSTIC — GET status page, viewable in a normal browser.
+  // Same wall as POST /demo/intake: outside the demo it answers nothing —
+  // this page reads database reachability, a constraint definition and the
+  // self-heal outcome (which can carry a raw database error).
   router.get("/demo/intake/health", async (req, res) => {
     res.set("Cache-Control", "no-store");
+    if (String(process.env.DEMO_MODE || "").toLowerCase() !== "true") {
+      return res.status(403).json({ receipt: "The live demo is not enabled on this deployment." });
+    }
     let db = "unknown", checkdef = null;
     try {
       await pool.query("select 1");
