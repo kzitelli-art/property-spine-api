@@ -75,9 +75,10 @@ module.exports = function orgAdminModule({ pool }) {
         ),
         pool.query(
           `select u.id, u.name, u.email, u.phone, u.platform_role, u.status,
-                  count(distinct a.property_id) as property_count
+                  count(distinct p.id) as property_count
              from users u
              left join property_team_assignments a on a.user_id = u.id and a.active = true
+             left join properties p on p.id = a.property_id and p.organization_id = $1
             where u.organization_id = $1
             group by u.id
             order by u.created_at`,
@@ -123,7 +124,7 @@ module.exports = function orgAdminModule({ pool }) {
                   'allowed_modules', a.allowed_modules,
                   'can_manage_roles', a.can_manage_roles,
                   'active', a.active
-                ) order by p.name) filter (where a.id is not null) as assignments
+                ) order by p.name) filter (where p.id is not null) as assignments
            from users u
            left join property_team_assignments a on a.user_id = u.id
            left join properties p on p.id = a.property_id and p.organization_id = $1
