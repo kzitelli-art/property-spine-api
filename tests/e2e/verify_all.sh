@@ -197,6 +197,14 @@ else
 fi
 fi
 
+if [ "$FAILED" = "0" ]; then
+  E2E_WITHOUT_OPERATOR_KEY=1 ./tests/e2e/boot.sh >"$RUN_DIR/unconfigured-key-server.log" 2>&1 &
+  SERVER_PID=$!
+  node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID" || exit 1
+  step "legacy ingestion key unconfigured" env E2E_WITHOUT_OPERATOR_KEY=1 E2E_EXPECT_SERVER_COMMIT="$(git rev-parse HEAD)" node tests/e2e/legacy_ingestion_retired.e2e.js
+  stop_owned_server || exit 1
+fi
+
 echo "════════════════════════════════════════════════════════════"
 [ -n "$SKIPPED" ] && echo "  ⚠ NOT RUN: $SKIPPED — this is not a pass."
 if [ "$FAILED" = "0" ]; then echo "  ALL REQUIRED ASSERTIONS PASSED — cleanup must also succeed"; else echo "  ✗ VERIFICATION FAILED"; fi

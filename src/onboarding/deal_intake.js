@@ -330,9 +330,9 @@ module.exports = function dealIntake(deps) {
 
       const next_actions = [];
       const rentRollFile = files.find(f => effType(f) === "rent_roll");
-      if (rentRollFile && identity.status === "resolved" && !rentRollFile.ingest_run_id)
-        next_actions.push({ action: "run_rentroll", file_id: rentRollFile.id, property_id: identity.property_id,
-                            note: "Rent roll found and property recognized — run it through ingest." });
+      if (rentRollFile && identity.status === "resolved")
+        next_actions.push({ action: "open_deal_setup", file_id: rentRollFile.id, property_id: identity.property_id,
+                            note: "Open Deal Setup in the signed-in property to review source files. Historical intake evidence is retained; it is not canonical confirmation." });
       if (identity.status === "ambiguous")
         next_actions.push({ action: "resolve_identity", note: `"${identity.label}" matches more than one property — needs a human call.` });
       if (identity.status === "unknown")
@@ -614,9 +614,9 @@ module.exports = function dealIntake(deps) {
         else if (s.rent_roll_state === "missing") next = { action: "upload_missing", note: "Upload: Rent roll (the required gate — nothing onboards without it)." };
         else if (s.identity.status === "unknown") next = { action: "create_or_link_property", note: `"${s.identity.label}" is not a recognized property — link or create it.` };
         else if (s.identity.status === "no_identity_found") next = { action: "identify", note: "No property string found in any file yet — upload an identity-bearing doc (rent roll, T12, OM)." };
-        else if (s.rent_roll_state === "uploaded") next = { action: "run_rentroll", file_id: s.rentRollFile.id, property_id: s.identity.property_id, note: "Rent roll + recognized property — run it through ingest." };
+        else if (s.rent_roll_state === "uploaded") next = { action: "open_deal_setup", file_id: s.rentRollFile.id, property_id: s.identity.property_id, note: "Open Deal Setup in the signed-in property to review source files." };
         else if (s.missing.length) next = { action: "upload_missing", note: `Upload: ${s.missing.join(", ")}` };
-        else next = { action: "review_candidates", note: "Rent roll ingested — review and promote candidates." };
+        else next = { action: "open_deal_setup", note: "Historical ingestion is retained. Open Deal Setup to review source files; historical ingestion is not canonical confirmation." };
 
         return {
           intake_id: i.id,
@@ -640,7 +640,7 @@ module.exports = function dealIntake(deps) {
         d.files === 0 ? "empty"
         : d.rent_roll === "missing" ? "no_rent_roll"
         : d.identity.status !== "resolved" ? "identity_open"
-        : d.rent_roll === "uploaded" ? "ready_to_ingest"
+        : d.rent_roll === "uploaded" ? "deal_setup_review"
         : "ingested";
       const stages = {};
       for (const d of deals) stages[stage(d)] = (stages[stage(d)] || 0) + 1;
@@ -649,7 +649,7 @@ module.exports = function dealIntake(deps) {
         deals: deals.length,
         stages,
         board: deals,
-        note: "READ-ONLY. Stages are honest counts, never blended: empty → no_rent_roll → identity_open → ready_to_ingest → ingested. The rent roll is the gate; identity resolves per file through the registry, never from the deal name.",
+        note: "READ-ONLY. Stages: empty, no_rent_roll, identity_open, deal_setup_review, ingested. Ingested describes retained historical work, not canonical confirmation. Use Deal Setup for source review; property identity comes from the registry.",
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

@@ -29,13 +29,15 @@ if port_busy "$PORT"; then
 fi
 PROP=$(psql "$E" -tAX -c "select id from properties where name='Skyline E2E' order by created_at desc limit 1" | head -1 | tr -d '[:space:]')
 SERVER_ROOT="${E2E_SERVER_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+PROOF_OPERATOR_KEY="e2e-key"
+if [ "${E2E_WITHOUT_OPERATOR_KEY:-0}" = "1" ]; then PROOF_OPERATOR_KEY=""; fi
 cd "$SERVER_ROOT" || exit 1
 exec env -i PATH="$PATH" HOME="$HOME" \
   E2E_PROOF_MANIFEST="$E2E_PROOF_MANIFEST" E2E_DATABASE_URL="$E" E2E_EGRESS_LOG="$E2E_EGRESS_LOG" \
   E2E_SESSION_LOG="$E2E_SESSION_LOG" \
   E2E_SERVER_APPLICATION_NAME="$E2E_SERVER_APPLICATION_NAME" \
   E2E_SERVER_ROOT="$SERVER_ROOT" RENDER_GIT_COMMIT="${E2E_EXPECT_SERVER_COMMIT:-}" \
-  DATABASE_URL="$E" OPERATOR_KEY="e2e-key" OPERATOR_APP_ORIGIN="http://localhost:5173" APP_BASE_URL="http://localhost:3000" \
+  DATABASE_URL="$E" OPERATOR_KEY="$PROOF_OPERATOR_KEY" OPERATOR_APP_ORIGIN="http://localhost:5173" APP_BASE_URL="http://localhost:3000" \
   PUBLIC_APPLY_BASE_URL="http://localhost:3000" \
   SMS_SEND_MODE=customer_care \
   EXECUTED_LEASE_INTAKE_ENABLED=true EXECUTED_LEASE_PROPERTY_IDS="$PROP" \

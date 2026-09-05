@@ -44,6 +44,10 @@ The same proof in successor mode requires nine authenticated 410 refusals and
 nine anonymous 401 refusals, exact retained-row/canonical-table fingerprints
 unchanged after each attempt, no model/SMS invocation, and a still-working
 independent leasing-basis setter. It asserts the exact runtime SHA in both modes.
+An additional owned server with its operator key unset must refuse all nine
+mounted paths with 503, even when a caller supplies a key. Retained summary and
+funnel reads must direct both uploaded and historically ingested rent rolls to
+Deal Setup while preserving their distinct historical states and all evidence.
 The existing authority proof additionally exercises same-property, wrong-property,
 invalid-session and supplied-actor cases. Deal Setup's retained-file/restart,
 review, confirmation and canonical Rent Roll proof continues to run; its old
