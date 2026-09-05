@@ -1,5 +1,23 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-05 candidate navigation update:** `codex/qb-proof-checkpoint-20260905`
+descends from the unchanged remote donor-successor `f953449` (not deployed).
+Code checkpoint `2a31892594c707c49cfd863cfaed97e2b6a1d6da` passed
+[verify run 394](https://github.com/kzitelli-art/property-spine-api/actions/runs/33965050698).
+Its raw job log was inspected: the unchanged f953449 server positively exhibits
+the notice correction/retarget, deposit serialization and comparison defects;
+the candidate passes the corresponding repair proofs, Deal Setup's 31 real-HTTP
+assertions including restart, both browser rungs, and owned-database cleanup.
+Notice corrections preserve original bed/lease identity; attribution locks the
+shared deposit; cross-property shadow requests are explicitly unsupported (400).
+See [the bounded contract and limitations](QB_CHECKPOINT_2026-09-05.md).
+This does not resolve partial-attribution cash-proof semantics, the unit-wide
+notice guard, legacy ingestion access, or real Greenery workbook acceptance.
+Production d55/app484 and Mike's session counts remain dated observations; no
+production/provider work or invitation resend occurred. Older production claims
+below are historical navigation. Run 391 at f953449 also passed, including the
+approval-timestamp proof in its descendant tree; row 60's unread-CI note is stale.
+
 > # ⛔ BEFORE YOU BUILD ANYTHING, SEARCH THIS FILE.
 >
 > This file exists for one reason: **threads keep rebuilding things that already
