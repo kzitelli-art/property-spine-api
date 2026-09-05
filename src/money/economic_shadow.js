@@ -72,7 +72,7 @@ const row = (r) => ({
   cannot_survive_cutover_because: r.cannot_survive_cutover_because ?? null,
 });
 
-async function economicShadowReport(pool, { property_id, other_property_id = null } = {}) {
+async function economicShadowReport(pool, { property_id } = {}) {
   if (!property_id) throw new Error("economicShadowReport requires property_id");
 
   const picture = await effectiveEconomicPicture(pool, { property_id });
@@ -213,19 +213,6 @@ async function economicShadowReport(pool, { property_id, other_property_id = nul
     unsupported_precision: { kind: "legacy_zero_would_read_as_a_price",
       detail: "A numeric 0 in the legacy column is not a free unit; it is an absent decision." },
     cannot_survive_cutover_because: "Not residential inventory — it has no residential pricing decision." }));
-
-  // ── 24. another property ─────────────────────────────────────────
-  if (other_property_id) {
-    const other = await effectiveEconomicPicture(pool, { property_id: other_property_id });
-    rows.push(row({ scenario: "another_property",
-      current_answer: null, current_source: "units.market_rent",
-      governed_answer: null, governed_source: "property_pricing_versions",
-      governed_state: other.base_rent.unresolved_reason || "no_published_pricing_version",
-      governed_disposition: "refused",
-      cannot_survive_cutover_because:
-        "That property has no governed economics and nobody holds authority on it. Cutover is " +
-        "per-property; Demo Building's readiness confers nothing elsewhere." }));
-  }
 
   // ── 25. failed economic read ─────────────────────────────────────
   const deadPool = { query: async () => { throw new Error("simulated economic read failure"); } };

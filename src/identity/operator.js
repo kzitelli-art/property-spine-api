@@ -1985,22 +1985,17 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     res.set("Cache-Control", "no-store");
     try {
       const { economicShadowReport } = require("../money/economic_shadow");
-      const { listAuthorizedProperties } = require("./authorized_properties");
-      // The comparison property is named by the caller and must be one the
-      // operator is seated on — never a property id fixed in source.
-      const other = req.query.other_property_id ? String(req.query.other_property_id) : null;
-      if (other) {
-        const seated = await listAuthorizedProperties(pool, { user_id: req.operator.id });
-        if (!seated.some((p) => String(p.property_id) === other)) {
-          return res.status(403).json({
-            error: "The comparison property must be one you are seated on. Nothing was compared.",
-            acting_on: req.operator.property_id,
-          });
-        }
+      // Economics reads use the active property session. Assignment elsewhere
+      // does not introduce a second read contract through a diagnostic option.
+      if (Object.prototype.hasOwnProperty.call(req.query, "other_property_id")) {
+        return res.status(400).json({
+          error: "Cross-property comparison is not supported. Switch to that property's session to read its economics.",
+          code: "cross_property_comparison_not_supported",
+          acting_on: req.operator.property_id,
+        });
       }
       return res.json(await economicShadowReport(pool, {
         property_id: req.operator.property_id,
-        other_property_id: other,
       }));
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
