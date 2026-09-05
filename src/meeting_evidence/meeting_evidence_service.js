@@ -223,7 +223,11 @@ async function receiveReadWebhook(db, {
   env = process.env,
   requestIp = null,
 } = {}) {
-  const raw = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(rawBody || "");
+  // express.raw hands the route `{}` when a POST carries no body at all;
+  // that delivery is refused and receipted like any other, never thrown.
+  const raw = Buffer.isBuffer(rawBody) ? rawBody
+    : typeof rawBody === "string" ? Buffer.from(rawBody)
+    : Buffer.alloc(0);
   const bodyHash = sha256Hex(raw);
   const byteLength = raw.length;
   const connectionId = asUuidish(env.READ_AI_CONNECTION_ID);
