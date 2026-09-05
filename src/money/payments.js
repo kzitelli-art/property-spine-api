@@ -270,11 +270,36 @@ module.exports = function paymentsModule({ pool }) {
         return res.status(409).json({ receipt: "That bank transaction is not a deposit (its amount is not positive). Rent cash proof must be an inflow." });
       }
 
+      // A link attributes amount_matched when given, else the whole payment.
+      // A deposit cannot prove more cash than it carries, and a link cannot
+      // attribute more than the payment it proves.
+      const matched = b.amount_matched != null ? money(b.amount_matched) : null;
+      if (matched != null && !(matched > 0)) {
+        await client.query("rollback");
+        return res.status(400).json({ receipt: "amount_matched must be a positive amount when given." });
+      }
+      if (matched != null && matched > money(pay.amount)) {
+        await client.query("rollback");
+        return res.status(409).json({ receipt: `amount_matched ${matched.toFixed(2)} exceeds this payment of ${money(pay.amount).toFixed(2)}. A link cannot attribute more than the payment it proves.` });
+      }
+      const attributing = matched != null ? matched : money(pay.amount);
+      const already = money((await client.query(
+        `select coalesce(sum(coalesce(l.amount_matched, p.amount)),0) as attributed
+           from payment_bank_links l join payments p on p.id = l.payment_id
+          where l.bank_transaction_id = $1 and p.status <> 'void'`, [txn.id])).rows[0].attributed);
+      if (money(already + attributing) > money(txn.amount)) {
+        await client.query("rollback");
+        return res.status(409).json({
+          receipt: `That deposit of ${money(txn.amount).toFixed(2)} already proves ${already.toFixed(2)} of payments; attributing ${attributing.toFixed(2)} more would exceed it. A deposit cannot prove more cash than it carries — split it with amount_matched or link a different deposit.`,
+          deposit_amount: money(txn.amount), already_attributed: already, attributing,
+        });
+      }
+
       try {
         await client.query(
           `insert into payment_bank_links (payment_id, bank_transaction_id, amount_matched, confirmed_by)
            values ($1,$2,$3,$4)`,
-          [pay.id, txn.id, b.amount_matched != null ? money(b.amount_matched) : null, b.confirmed_by || null]);
+          [pay.id, txn.id, matched, b.confirmed_by || null]);
       } catch (e) {
         if (e && e.code === "23505") {
           await client.query("rollback");
