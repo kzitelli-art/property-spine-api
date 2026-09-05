@@ -134,6 +134,7 @@ else
   step "read ai webhook empty body"  node tests/e2e/read_ai_webhook_empty_body.e2e.js
   step "demo intake health gate"     node tests/e2e/demo_intake_health_gate.e2e.js
   step "deposit attribution bound"   node tests/e2e/deposit_attribution_bound.e2e.js
+  step "deposit attribution serialized" node tests/e2e/deposit_attribution_serialized.e2e.js
   step "authority grants union"      node tests/e2e/authority_grants_union.e2e.js
   step "pricing term names its months" node tests/e2e/pricing_term_requires_months.e2e.js
   step "shadow other property entitled" node tests/e2e/shadow_other_property_entitled.e2e.js

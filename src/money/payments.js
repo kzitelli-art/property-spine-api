@@ -259,7 +259,8 @@ module.exports = function paymentsModule({ pool }) {
         `select t.id, t.amount, t.txn_type, ba.property_id
            from bank_transactions t
            join bank_accounts ba on ba.id = t.bank_account_id
-          where t.id=$1`, [b.bank_transaction_id])).rows[0];
+          where t.id=$1
+          for no key update of t`, [b.bank_transaction_id])).rows[0];
       if (!txn) { await client.query("rollback"); return res.status(404).json({ receipt: "Bank transaction not found." }); }
       if (txn.property_id !== pay.property_id) {
         await client.query("rollback");
