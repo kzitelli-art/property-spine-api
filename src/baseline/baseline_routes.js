@@ -49,8 +49,16 @@ router.get("/health", async (_req, res) => {
 
 //  The full record — including the untruncated commit — behind the
 //  operator gate, for anyone reconciling a deployment against a branch.
-router.get("/operator/build", (_req, res) => {
+//  The key gate in server.js skips /operator/* because every route there
+//  resolves its own staff session; this one must too, or it is public.
+router.get("/operator/build", async (req, res) => {
   res.set("Cache-Control", "no-store");
+  try {
+    const session = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+    if (!session) return res.status(401).json({ error: "No valid operator session. Sign in." });
+  } catch (e) {
+    return res.status(500).json({ error: "session resolution failed" });
+  }
   res.json({ build: buildIdentity() });
 });
 

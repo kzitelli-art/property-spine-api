@@ -98,6 +98,7 @@ else
   step "notice space column"         node tests/e2e/notice_space_column.e2e.js
   step "move-in lease on unit"       node tests/e2e/movein_lease_on_unit.e2e.js
   step "org roster scope"            node tests/e2e/org_roster_scope.e2e.js
+  step "operator build gate"         node tests/e2e/operator_build_gate.e2e.js
   step "skyline unit-type mapping"   node tests/e2e/skyline_unit_type_mapping.e2e.js
   step "governed pricing publication" node tests/e2e/skyline_pricing_publication.e2e.js
   step "agent pricing wall"          node tests/e2e/agent_pricing_wall.e2e.js
