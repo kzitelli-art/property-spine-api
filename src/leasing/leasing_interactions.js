@@ -93,7 +93,7 @@ module.exports = function leasingInteractionsModule({ pool, sms, leasingLifecycl
        returning *`,
       [property_id, person_id, conv.id, body,
        null, "pending", now,
-       actor_user_id, ai_drafted ? now : null, human_approved_by_user_id, human_approved_by_user_id ? now : now, actor_user_id,
+       actor_user_id, ai_drafted ? now : null, human_approved_by_user_id, human_approved_by_user_id ? now : null, actor_user_id,
        consentAtEvent, conversion_case_id, obligation_id]
     )).rows[0];
 
