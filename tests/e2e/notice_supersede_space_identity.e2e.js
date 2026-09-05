@@ -275,7 +275,7 @@ function assertPosition(reads, ids, expected, label) {
   check("missing predecessor refusal makes zero mutation",
     json(await noticeRows(unit.id)) === missingBefore, json(await noticeRows(unit.id)));
   await pool.query(
-    "update unit_events set lease_id=$2, payload=jsonb_set(payload,'{lease_id}',to_jsonb($2::text)) where id=$1",
+    "update unit_events set lease_id=$2::uuid, payload=jsonb_set(payload,'{lease_id}',to_jsonb($2::uuid)) where id=$1",
     [originalId, leaseA.id]);
 
   console.log("\n── same bed with a different active lease is still a different tenancy ──");
