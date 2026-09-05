@@ -206,7 +206,7 @@ module.exports = function taxEstablishment(deps) {
           try {
             const text = await fileToText({
               buffer: req.file.buffer, mimetype: req.file.mimetype,
-              filename: req.file.originalname,
+              originalname: req.file.originalname,
             });
             proposal = docRead.propose(text, storedKind);
           } catch (scanErr) {

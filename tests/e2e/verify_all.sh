@@ -106,6 +106,7 @@ else
   step "authority grants union"      node tests/e2e/authority_grants_union.e2e.js
   step "pricing term names its months" node tests/e2e/pricing_term_requires_months.e2e.js
   step "shadow other property entitled" node tests/e2e/shadow_other_property_entitled.e2e.js
+  step "evidence upload name key"    node tests/e2e/evidence_upload_name_key.e2e.js
   step "outbound text approval instant" node tests/e2e/outbound_text_approval_instant.e2e.js
   step "skyline unit-type mapping"   node tests/e2e/skyline_unit_type_mapping.e2e.js
   step "governed pricing publication" node tests/e2e/skyline_pricing_publication.e2e.js
