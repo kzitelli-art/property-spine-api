@@ -335,6 +335,26 @@ router.post("/ingest/:runId/promote", async (req, res) => {
     const run = await pool.query("select id, property_id, model_raw_output from ingest_runs where id=$1", [req.params.runId]);
     if (run.rows.length === 0) return res.status(404).json({ error: "run not found" });
     const propertyId = run.rows[0].property_id;
+    //  THE PROPERTY WALL, WHERE A SESSION IS PRESENTED. A staff session is
+    //  seated on ONE property (staff_sessions.property_id). Until now a
+    //  session seated on another building promoted this run's units — and
+    //  was recorded as the promoter. A resolved session that is not seated
+    //  here is refused before anything is written.
+    //
+    //  WHAT THIS DOES NOT DECIDE. With no session at all, this route still
+    //  runs on the shared operator key alone and records no actor (below,
+    //  `promoted_by` null). That key-only path is the pre-Deal-Setup legacy
+    //  door: no app caller at the pinned app commit, no governed consumer
+    //  found in tools/ or docs/. It is preserved here DELIBERATELY and
+    //  CLASSIFIED as ungoverned legacy — retiring it, or requiring a
+    //  session, changes the route's contract and awaits an owner ruling
+    //  (docs/CURRENT_STATE.md #40). Nothing in this file infers it.
+    if (promoter && String(promoter.property_id) !== String(propertyId)) {
+      return res.status(403).json({
+        error: "property_scope_refused",
+        receipt: "Your session operates a different property. This rent roll belongs to another building; nothing was promoted.",
+      });
+    }
 
     const approved = await pool.query(
       "select * from ingest_candidates where run_id=$1 and decision_status='approved'",
@@ -466,8 +486,17 @@ router.post("/ingest/:runId/approve", async (req, res) => {
   try {
     const reviewer = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
     const reviewed_by = reviewer ? reviewer.id : null;
-    const run = await pool.query("select id from ingest_runs where id=$1", [req.params.runId]);
+    const run = await pool.query("select id, property_id from ingest_runs where id=$1", [req.params.runId]);
     if (run.rows.length === 0) return res.status(404).json({ error: "run not found" });
+    //  Same property wall as promote (see there): a session seated on another
+    //  property is refused before any candidate is marked. The key-only,
+    //  no-session path is preserved and classified, not decided, here.
+    if (reviewer && String(reviewer.property_id) !== String(run.rows[0].property_id)) {
+      return res.status(403).json({
+        error: "property_scope_refused",
+        receipt: "Your session operates a different property. This rent roll belongs to another building; nothing was approved.",
+      });
+    }
 
     let result;
     if (Array.isArray(candidate_ids) && candidate_ids.length) {
