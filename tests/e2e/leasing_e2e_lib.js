@@ -3,6 +3,7 @@
 module.paths.unshift(require("path").join(__dirname, "..", "..", "node_modules"));
 const { Pool } = require("pg");
 const sess = require("../../src/identity/staff_session_service.js");
+const { normalizeE164 } = require("../../src/identity/phone_identity.js");
 const CONN = process.env.E2E_DATABASE_URL || "postgres://postgres:spineproof@127.0.0.1:5432/spine_e2e";
 const BASE = "http://127.0.0.1:3000";
 const pool = new Pool({ connectionString: CONN });
@@ -12,6 +13,29 @@ const q = (s, p) => pool.query(s, p);
 //  refused all of them as ambiguous — the right answer to a wrong fixture.
 let __n = 0;
 const HOSTILE_NAME = () => `Probe Tester ${Date.now().toString(36)}${(++__n)}`;
+
+// Intake resolves identity by phone before email. Randomly drawing four digits
+// from the shared 555 fixture range can therefore adopt an earlier suite person
+// and retain that person's name. Allocate from the same range only after
+// checking both canonical and legacy phone columns in this owned database.
+async function unclaimedFixturePhone() {
+  const rows = (await q(
+    `select phone, primary_phone_e164
+       from persons
+      where phone is not null or primary_phone_e164 is not null`)).rows;
+  const claimed = new Set();
+  for (const row of rows) {
+    for (const raw of [row.primary_phone_e164, row.phone]) {
+      const normalized = normalizeE164(raw);
+      if (normalized) claimed.add(normalized);
+    }
+  }
+  for (let suffix = 1000; suffix <= 9999; suffix++) {
+    const candidate = `+1215555${suffix}`;
+    if (!claimed.has(candidate)) return candidate;
+  }
+  throw new Error("fixture: no unclaimed phone remains in +1 215-555-xxxx");
+}
 
 async function api(method, path, { token, body, key } = {}) {
   const h = { "content-type": "application/json" };
@@ -64,12 +88,17 @@ async function ctx({ wipe = true } = {}) {
     Returns { appId, packetId, rawTok }.  Stops before the resident signs.  */
 async function toPacket(C, { bed, rent = 1025, name = null } = {}) {
   const __name = name || HOSTILE_NAME();
-  const phone = "+1215555" + String(Math.floor(1000 + Math.random() * 8999));
+  const phone = await unclaimedFixturePhone();
   const intake = await api("POST", "/leasing/intake", { key: "e2e-key", body: {
     intake_secret: "e2e-intake", property_id: C.prop, name: __name,
     phone, email: `h${Date.now()}${Math.floor(Math.random()*999)}@example.com`, source: "e2e" }});
   if (intake.status >= 400) throw new Error("intake: " + JSON.stringify(intake.body));
   const person = intake.body.person_id;
+  const durablePerson = (await q("select name from persons where id=$1", [person])).rows[0];
+  if (!durablePerson || durablePerson.name !== __name) {
+    throw new Error("fixture identity: intake did not retain the requested person name "
+      + JSON.stringify({ requested: __name, durable: durablePerson && durablePerson.name }));
+  }
   const unitOf = (await q("select unit_id from spaces where id=$1", [bed])).rows[0].unit_id;
   const sub = await api("POST", `/properties/${C.prop}/applications`, { token: C.token, key: "e2e-key", body: {
     applicant_name: __name, person_id: person, unit_id: unitOf, space_id: bed,

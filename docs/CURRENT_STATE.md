@@ -1,7 +1,7 @@
 # CURRENT STATE — what exists, and at what proof level
 
 **2026-09-05 candidate navigation update:** `codex/qb-proof-checkpoint-20260905`
-descends from the unchanged remote donor-successor `f953449` (not deployed).
+descends from the unchanged prior successor `f953449` (not deployed).
 Code checkpoint `2a31892594c707c49cfd863cfaed97e2b6a1d6da` passed
 [verify run 394](https://github.com/kzitelli-art/property-spine-api/actions/runs/33965050698).
 Its raw job log was inspected: the unchanged f953449 server positively exhibits
@@ -17,6 +17,19 @@ Production d55/app484 and Mike's session counts remain dated observations; no
 production/provider work or invitation resend occurred. Older production claims
 below are historical navigation. Run 391 at f953449 also passed, including the
 approval-timestamp proof in its descendant tree; row 60's unread-CI note is stale.
+
+The subsequent documentation-only commit `a5feb48` failed
+[verify run 395](https://github.com/kzitelli-art/property-spine-api/actions/runs/33965246309)
+in the existing named-person reconciliation gate (`NO_SUBJECT`). All three
+parent defect witnesses, three candidate repair stages and Deal Setup's 31
+assertions passed before that failure; owned-database cleanup also passed.
+The earlier green checkpoint does not make this failed run green. Consult the
+workflow for the exact candidate HEAD before accepting the final checkpoint.
+Review identified a fixture hazard: packet setup randomly reused a small phone
+range even though intake resolves an existing person by phone. A collision can
+retain an earlier person's name. The exact failed-run identity was not retained,
+so this is a strong explanation, not recovered database evidence. The fixture
+now selects an unclaimed canonical/legacy phone; product identity is unchanged.
 
 > # ⛔ BEFORE YOU BUILD ANYTHING, SEARCH THIS FILE.
 >
