@@ -86,6 +86,23 @@ step "property fixture"     psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f te
 step "pricing fixture"      psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/fixtures.sql
 step "instrument fixture"   node tests/e2e/instrument_fixture.js
 
+# Same new behavioral oracles, unchanged defective server source. Source is
+# archived from the pinned git object; only the test preloads come from here.
+BASELINE=f95344977b6c7cacacd40f503bed452f501227a0
+mkdir "$RUN_DIR/baseline" || exit 1
+git archive "$BASELINE" | tar -x -C "$RUN_DIR/baseline" || exit 1
+ln -s "$ROOT/node_modules" "$RUN_DIR/baseline/node_modules" || exit 1
+E2E_SERVER_ROOT="$RUN_DIR/baseline" E2E_EXPECT_SERVER_COMMIT="$BASELINE" ./tests/e2e/boot.sh >"$RUN_DIR/baseline-server.log" 2>&1 &
+SERVER_PID=$!
+if ! node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID"; then
+  tail -40 "$RUN_DIR/baseline-server.log"
+  exit 1
+fi
+step "parent notice defect observed" env PROOF_EXPECT_DEFECT=1 E2E_EXPECT_SERVER_COMMIT="$BASELINE" node tests/e2e/notice_supersede_space_identity.e2e.js
+step "parent deposit defect observed" env PROOF_EXPECT_DEFECT=1 node tests/e2e/deposit_attribution_serialized.e2e.js
+step "parent comparison defect observed" env PROOF_EXPECT_DEFECT=1 node tests/e2e/shadow_other_property_entitled.e2e.js
+stop_owned_server || exit 1
+
 # ── lease / guarantor database proofs ───────────────────────────────
 # These use the repository's production-refusing harness boundary. CI's
 # E2E database is disposable and becomes the explicit harness target;
