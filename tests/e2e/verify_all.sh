@@ -20,10 +20,11 @@
 #  Chromium; when it is absent the rung is reported SKIPPED — loudly, and
 #  named in the summary — never silently passed.
 # ════════════════════════════════════════════════════════════════════
-set -u
+set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT" || exit 1
 export E2E_DATABASE_URL="${E2E_DATABASE_URL:-postgres://postgres:spineproof@127.0.0.1:5432/spine_verify}"
-RUN_DIR=$(mktemp -d) || exit 1
+RUN_DIR=$(mktemp -d "${RUNNER_TEMP:-/tmp}/spine-proof-XXXXXXXX") || exit 1
+if [ -n "${GITHUB_ENV:-}" ]; then echo "SPINE_PROOF_LOG_DIR=$RUN_DIR" >> "$GITHUB_ENV"; fi
 export E2E_PROOF_MANIFEST="$RUN_DIR/ownership.json"
 export E2E_SMS_LOG="$RUN_DIR/sms.log" E2E_ANTHROPIC_LOG="$RUN_DIR/anthropic.log" E2E_EGRESS_LOG="$RUN_DIR/egress.log"
 export E2E_SESSION_LOG="$RUN_DIR/sessions.log"

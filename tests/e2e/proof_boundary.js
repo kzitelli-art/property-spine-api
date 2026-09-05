@@ -128,6 +128,7 @@ async function cleanup() {
   try { await c.connect(); await c.query(`DROP DATABASE "${u.pathname.slice(1)}"`); }
   finally { await c.end(); }
   fs.unlinkSync(file);
+  console.error(`Cleanup verified: dropped owned database ${u.pathname.slice(1)}`);
 }
 
 function serverEnvironment(overrides = {}) {

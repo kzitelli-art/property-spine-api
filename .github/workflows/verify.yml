@@ -116,5 +116,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: server-log
-          path: /tmp/verify_server.log
+          path: |
+            /tmp/verify_server.log
+            ${{ env.SPINE_PROOF_LOG_DIR }}/*.log
           if-no-files-found: ignore

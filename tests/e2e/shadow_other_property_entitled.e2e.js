@@ -73,7 +73,8 @@ const one = async (sql, params) => (await pool.query(sql, params)).rows[0];
     values ($1,'published','2026-01-01',now(),'isolated comparison read fixture') returning id`, [propB]);
   const canonical = await require(path.join(ROOT, "src/money/economic_picture.js")).effectiveEconomicPicture(pool, { property_id: propB });
   check("fixture has canonical published pricing, not an unavailable read", canonical.base_rent.published_version
-    && canonical.base_rent.published_version.id === version.id && canonical.base_rent.unresolved_reason === null);
+    && canonical.base_rent.published_version.version_id === version.id && canonical.base_rent.unresolved_reason === null,
+    J({ published_version: canonical.base_rent.published_version, unresolved_reason: canonical.base_rent.unresolved_reason }));
   const own = await shadow(`?other_property_id=${propB}`);
   if (EXPECT_DEFECT) {
     const row = own.body && own.body.comparisons && own.body.comparisons.find(x => x.scenario === "another_property");
@@ -93,7 +94,7 @@ const one = async (sql, params) => (await pool.query(sql, params)).rows[0];
     const rB = await fetch(`${API}/operator/economics/picture`, { headers: { "x-staff-session": sessionB } });
     const bB = await rB.json();
     check("target property's own session still reads its published economics", rB.status === 200
-      && bB.base_rent.published_version && bB.base_rent.published_version.id === version.id);
+      && bB.base_rent.published_version && bB.base_rent.published_version.version_id === version.id);
   }
 
   await pool.end();
