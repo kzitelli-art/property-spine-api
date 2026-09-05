@@ -789,10 +789,16 @@ module.exports = function tenantLinkModule({
       const ledger = (await pool.query(
         `select label, kind, amount, occurred_at from ledger_entries
           where lease_id = $1 order by occurred_at desc limit 10`, [place.lease_id])).rows;
+      //  work_orders.person_id was dropped by migration 098, which split it
+      //  into reported_by_person_id and affected_person_id. This query kept
+      //  the old name, so every resident's /tenant/me answered 500 since.
+      //  A resident's open work is what they REPORTED or what AFFECTS their
+      //  home — 098's two relationships, both of them theirs.
       const workOrders = (await pool.query(
         `select id, title, issue_type, description, status, created_at
            from work_orders
-          where person_id = $1 and property_id = $2 and status <> 'complete'
+          where (reported_by_person_id = $1 or affected_person_id = $1)
+            and property_id = $2 and status <> 'complete'
           order by created_at desc`, [sess.person_id, sess.property_id])).rows;
 
       res.json({

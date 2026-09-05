@@ -93,6 +93,7 @@ else
   step "authority chain"             node tests/e2e/authority_chain.e2e.js
   step "extracted route bindings"    node tests/e2e/extracted_route_bindings.e2e.js
   step "ingest property authority"   node tests/e2e/ingest_property_authority.e2e.js
+  step "work order person columns"   node tests/e2e/work_order_person_columns.e2e.js
   step "skyline unit-type mapping"   node tests/e2e/skyline_unit_type_mapping.e2e.js
   step "governed pricing publication" node tests/e2e/skyline_pricing_publication.e2e.js
   step "agent pricing wall"          node tests/e2e/agent_pricing_wall.e2e.js

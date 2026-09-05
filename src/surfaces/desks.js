@@ -105,13 +105,20 @@ module.exports = function desksModule({ pool }) {
     // tenant_waiting: open tenant-sourced WOs with a reporting tenant and
     // NO work_order_update message sent after the WO was created. Honest
     // definition, stated in the note.
+    //  work_orders.person_id was dropped by migration 098 (split into
+    //  reported_by_person_id / affected_person_id); these desk queries kept
+    //  the old name, so the maintenance desk and the operator-home
+    //  maintenance section have read "unreadable" since. The resident of a
+    //  work order is the person its updates go to — the SAME definition
+    //  technician/conversation.js uses (affected first, then reporter), so
+    //  "tenant waiting" measures the person who would receive the reply.
     const waiting = (await pool.query(
       `select count(*)::int as n from work_orders w
         where w.property_id = $1 and w.status <> 'complete'
-          and w.source = 'tenant' and w.person_id is not null
+          and w.source = 'tenant' and coalesce(w.affected_person_id, w.reported_by_person_id) is not null
           and not exists (
             select 1 from comm_events ce
-             where ce.person_id = w.person_id and ce.property_id = w.property_id
+             where ce.person_id = coalesce(w.affected_person_id, w.reported_by_person_id) and ce.property_id = w.property_id
                and ce.direction = 'outbound' and ce.classification = 'work_order_update'
                and ce.occurred_at > w.created_at)`, [propertyId])).rows[0];
 
@@ -128,11 +135,11 @@ module.exports = function desksModule({ pool }) {
               w.needs_pm_review, w.created_at,
               u.unit_number, per.name as tenant_name,
               c.id as conversation_id,
-              jsonb_build_object('unit_id', w.unit_id, 'person_id', w.person_id) as _details
+              jsonb_build_object('unit_id', w.unit_id, 'person_id', coalesce(w.affected_person_id, w.reported_by_person_id)) as _details
          from work_orders w
          left join units u on u.id = w.unit_id
-         left join persons per on per.id = w.person_id
-         left join conversations c on c.property_id = w.property_id and c.person_id = w.person_id
+         left join persons per on per.id = coalesce(w.affected_person_id, w.reported_by_person_id)
+         left join conversations c on c.property_id = w.property_id and c.person_id = coalesce(w.affected_person_id, w.reported_by_person_id)
         where w.property_id = $1 and w.status <> 'complete'
         order by (coalesce(w.is_emergency,false) or w.title like 'EMERGENCY%') desc, w.created_at asc
         limit 50`, [propertyId])).rows;
@@ -322,10 +329,10 @@ module.exports = function desksModule({ pool }) {
       const waiting = new Set((await pool.query(
         `select w.id from work_orders w
           where w.property_id = $1 and w.status <> 'complete'
-            and w.source = 'tenant' and w.person_id is not null
+            and w.source = 'tenant' and coalesce(w.affected_person_id, w.reported_by_person_id) is not null
             and not exists (
               select 1 from comm_events ce
-               where ce.person_id = w.person_id and ce.property_id = w.property_id
+               where ce.person_id = coalesce(w.affected_person_id, w.reported_by_person_id) and ce.property_id = w.property_id
                  and ce.direction = 'outbound' and ce.classification = 'work_order_update'
                  and ce.occurred_at > w.created_at)`, [propertyId])).rows.map(r => r.id));
       items = items.map(i => ({ ...i, tenant_waiting: waiting.has(i.id) }));
