@@ -60,6 +60,7 @@ step "instrument fixture"   node tests/e2e/instrument_fixture.js
 step "governing lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/governing_lease_execution.db.js
 step "canonical lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/spine_lease_execution.db.js
 step "lease guarantor signing"   env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/lease_guarantor_signing.db.js
+step "pricing authority grants union" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/pricing_authority_grants_union.db.js
 
 # ── the real server, the real HTTP door ─────────────────────────────
 #  ASK BEFORE LAUNCHING. Polling /health afterwards cannot distinguish
