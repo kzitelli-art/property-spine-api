@@ -136,6 +136,18 @@ test("normal CSV defaults to current and preserves quoted cells and logical row 
   assert.equal(parsed.rows[2].Unit, "Total:", "a populated data row is not mistaken for a footer");
 });
 
+test("CSV preserves ISO dates and lexical decimals without host-timezone coercion", () => {
+  const csv = Buffer.from(
+    "Unit,Tenant,Lease From,Lease To,Balance\n" +
+    "C-2,Example Date,2025-07-01,2026-06-30,45.00\n",
+    "utf8");
+  const parsed = parseRentRollSource({ buffer: csv, filename: "raw-text.csv" });
+
+  assert.equal(parsed.rows[0]["Lease From"], "2025-07-01");
+  assert.equal(parsed.rows[0]["Lease To"], "2026-06-30");
+  assert.equal(parsed.rows[0].Balance, "45.00");
+});
+
 test("normal CSV may transition from implicit current rows to an explicit future section", () => {
   const csv = Buffer.from(
     "Unit,Room,Tenant,Market Rent,Actual Rent\n" +

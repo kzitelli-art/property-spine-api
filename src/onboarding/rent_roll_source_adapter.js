@@ -84,7 +84,14 @@ function gridFromSheet(sheet) {
 
 function readWorkbook(buffer, format) {
   try {
-    const workbook = XLSX.read(buffer, { type: "buffer", cellDates: false });
+    // CSV evidence is text. SheetJS otherwise infers ISO-looking cells as
+    // dates and formats them through the host timezone; the same retained
+    // bytes then produce a different day on Windows and Linux. `raw` on CSV
+    // input disables that inference and also preserves lexical values such as
+    // 45.00. Workbook cells keep their authored number/date representation.
+    const workbook = XLSX.read(buffer, {
+      type: "buffer", cellDates: false, raw: format === "csv",
+    });
     if (!workbook || !Array.isArray(workbook.SheetNames) || workbook.SheetNames.length === 0) {
       throw new Error("workbook has no sheets");
     }
