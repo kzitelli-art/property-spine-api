@@ -160,6 +160,137 @@ let pool;
     assert.equal(history.body.rows[0].publication_status,"held_for_review");
     assert.equal(history.body.availability.length,0,"old ambiguous claim cannot open a unit");
     evidence.push({case:"historical_ambiguous_claim",retained_rows:1,historical_status:"promoted",current_publication:"held_for_review"});
+    // Opt-in historical-reader challenge. Product history is replayed only in
+    // this owned synthetic database. TWO MODES, kept apart on purpose:
+    //   "1"         positive defect witness — asserts the OBSERVED defect on the
+    //               unrepaired product (77d6156): a position with no established
+    //               occupancy basis was advertised beside legitimate vacancy.
+    //               Expected to FAIL on repaired code; that failure is the
+    //               evidence the repair changed the observed outcome.
+    //   "successor" acceptance of the repair — the same fixtures, the same
+    //               reads, the opposite outcome, plus controls the witness
+    //               never needed: an operative lease, a future commitment and
+    //               unreconciled evidence each keep their own state.
+    // Neither mode deletes the other's assertions.
+    if (process.env.PROOF_HISTORICAL_READER_CHALLENGE) {
+      const challengeMode=process.env.PROOF_HISTORICAL_READER_CHALLENGE;
+      assert.ok(["1","successor"].includes(challengeMode),"PROOF_HISTORICAL_READER_CHALLENGE must be 1 (witness) or successor");
+      const witness=challengeMode==="1";
+      const {datedPropertyPositions}=require("../../src/tenancy/dated_positions");
+      const {gatherFacts}=require("../../src/agent/ask_spine_answer");
+      const historical=await fixture("Unit,Resident,Market Rent\n101,VACANT,900\n",true);
+      await pool.query("delete from leases where property_id=$1",[historical.property.id]);
+      await pool.query("update proposed_records set status='promoted', confirmed_by=$2, confirmed_at=now() where id=$1",[historical.proposals[0].id,user.id]);
+      await activation.establishOpeningPosition(pool,{user_id:user.id,activation_id:historical.act.id});
+      const untouched=await fixture("Unit,Resident,Market Rent\n101,VACANT,900\n","single");
+      const challenge=[];
+      for (const [name,f,unknownCount] of [["historical_unbound",historical,2],["unconfirmed_source",untouched,1],["valid_single_position",single,0]]) {
+        await pool.query("update spaces set use_type='residential' where unit_id in (select id from units where property_id=$1)",[f.property.id]);
+        const before=await one("select to_jsonb(p) as record from proposed_records p where id=$1",[f.proposals[0].id]);
+        const dp=await datedPropertyPositions(pool,{property_id:f.property.id,as_of:"2026-07-31"});
+        const av=await http(f.token,"/operator/leasing/availability-canonical?as_of=2026-07-31");
+        assert.equal(av.status,200);
+        assert.equal(dp.positions.filter(p=>p.basis_state==="not_established").length,unknownCount);
+        // Every position appears in exactly one state, in both modes.
+        assert.equal(Object.values(av.body.states).reduce((a,b)=>a+b,0),av.body.count,"availability states are exhaustive");
+        assert.equal(av.body.count,dp.positions.length);
+        if (witness) {
+          assert.equal(av.body.rows.filter(r=>r.marketing_state==="marketable_now").length,dp.positions.length,
+            "positive defect witness: missing basis is currently advertised alongside legitimate vacancy");
+        } else {
+          const unknownRows=av.body.rows.filter(r=>r.marketing_state==="occupancy_unknown");
+          assert.equal(unknownRows.length,unknownCount,"every position without an established basis reads occupancy_unknown");
+          assert.equal(av.body.rows.filter(r=>r.marketing_state==="marketable_now").length,dp.positions.length-unknownCount,
+            "only positions with an established basis may be offered");
+          assert.equal(av.body.headline.marketable_now,dp.positions.length-unknownCount);
+          assert.equal(av.body.headline.occupancy_unknown,unknownCount,"the headline never hides an unknown as a remainder");
+          assert.equal(av.body.states.occupancy_unknown,unknownCount);
+          for (const r of unknownRows) {
+            assert.ok(r.space_id && r.unit_number && r.space_label,"an unknown position keeps its exact identity");
+            assert.equal(r.basis_state,"not_established","the basis that produced the state travels with the row");
+            assert.equal(r.available_from,null,"an unknown carries no promised date");
+            assert.equal(r.blocking_fact,"occupancy_basis_not_established");
+            assert.equal(r.blocking_reason,"no_established_occupancy_basis");
+            assert.match(r.blocking_label,/not established/i);
+          }
+          // Same truth, third reader: the Rent Roll unit view refuses these the same way.
+          const rrUnits=await http(f.token,"/operator/rent-roll/units?as_of=2026-07-31");
+          assert.equal(rrUnits.status,200);
+          assert.equal(rrUnits.body.totals.not_established,unknownCount);
+          assert.equal(rrUnits.body.totals.open,unknownCount ? 0 : 1);
+        }
+        assert.ok(av.body.rows.every(r=>r.physical_readiness==="ready" && !r.certified_ready));
+        const client=await pool.connect(); let facts;
+        try {
+          await client.query("begin isolation level repeatable read read only");
+          facts=await gatherFacts(client,{property_id:f.property.id,allowed_modules:["management"],subject:"tenancy"});
+          await client.query("rollback");
+        } finally {client.release();}
+        assert.equal(facts.tenancy.position.not_established,unknownCount);
+        assert.equal(facts.tenancy.position.open,unknownCount ? 0 : 1);
+        assert.deepEqual(await one("select to_jsonb(p) as record from proposed_records p where id=$1",[f.proposals[0].id]),before,
+          "canonical reads must preserve every historical proposal field");
+        challenge.push({case:name,positions:dp.positions.length,not_established:unknownCount,
+          ask_open:facts.tenancy.position.open,marketable_now:av.body.headline.marketable_now,
+          occupancy_unknown:av.body.states.occupancy_unknown ?? null,
+          marketing_states:Object.fromEntries(av.body.rows.map(r=>[r.space_label,r.marketing_state])),
+          evidence_states:av.body.rows.map(r=>r.evidence_state),readiness:av.body.rows.map(r=>r.physical_readiness),
+          certifications:av.body.rows.filter(r=>r.certified_ready).length,proposal_unchanged:true});
+      }
+      if (!witness) {
+        // CONTROL 1 — an operative lease outranks a missing basis. Room1 holds a
+        // lease in force and no opening claim; Room2 holds nothing at all.
+        const leased=await fixture("Unit,Resident,Market Rent\n101,VACANT,900\n",true);
+        await pool.query("update spaces set use_type='residential' where unit_id in (select id from units where property_id=$1)",[leased.property.id]);
+        const leasedAv=await http(leased.token,"/operator/leasing/availability-canonical?as_of=2026-07-31");
+        const leasedStates=Object.fromEntries(leasedAv.body.rows.map(r=>[r.space_label,r.marketing_state]));
+        assert.deepEqual(leasedStates,{Room1:"occupied",Room2:"occupancy_unknown"},"a lease in force is never hidden by a weak or missing opening claim");
+        assert.equal(leasedAv.body.rows.find(r=>r.space_label==="Room1").basis_state,"established");
+        // CONTROL 2 — a future commitment outranks a missing basis. The single
+        // unconfirmed room gains a lease that starts after the as-of date.
+        const [untouchedSpace]=(await pool.query("select s.id from spaces s join units u on u.id=s.unit_id where u.property_id=$1",[untouched.property.id])).rows;
+        await pool.query("insert into leases(property_id,space_id,tenant_ids,rent,start_date,end_date,lease_status) values($1,$2,$3,900,'2026-10-01','2027-09-30','active')",[untouched.property.id,untouchedSpace.id,[]]);
+        const futureAv=await http(untouched.token,"/operator/leasing/availability-canonical?as_of=2026-07-31");
+        assert.equal(futureAv.body.rows.length,1);
+        assert.equal(futureAv.body.rows[0].marketing_state,"successor_pending","a committed future resident is reported as a commitment, not as an unknown and not as an offer");
+        assert.equal(futureAv.body.rows[0].basis_state,"not_established","the commitment does not manufacture an occupancy basis for today");
+        // CONTROL 3 — unreconciled opening evidence keeps its own state. A
+        // confirmed named vacancy under an established baseline is replayed as a
+        // held row (synthetic history, this owned database only): the reader
+        // must say "unresolved", never "unknown" and never "marketable".
+        const held=await fixture(header+vacant,true);
+        assert.equal((await http(held.token,`/deal-setup/proposals/${held.proposals[0].id}/confirm`,"POST")).status,200);
+        await activation.establishOpeningPosition(pool,{user_id:user.id,activation_id:held.act.id});
+        await pool.query("update proposed_records set status='needs_review', status_reason='synthetic replay: held under an established baseline' where id=$1",[held.proposals[0].id]);
+        await pool.query("update spaces set use_type='residential' where unit_id in (select id from units where property_id=$1)",[held.property.id]);
+        const heldDp=await datedPropertyPositions(pool,{property_id:held.property.id,as_of:"2026-07-31"});
+        const heldRoom2=heldDp.positions.find(p=>p.space_label==="Room2");
+        assert.equal(heldRoom2.basis_type,"opening_position_unreconciled");
+        assert.equal(heldRoom2.bucket,"needs_review","the Rent Roll holds the bed for review");
+        const heldAv=await http(held.token,"/operator/leasing/availability-canonical?as_of=2026-07-31");
+        const heldStates=Object.fromEntries(heldAv.body.rows.map(r=>[r.space_label,r.marketing_state]));
+        assert.deepEqual(heldStates,{Room1:"occupied",Room2:"evidence_unreconciled"});
+        const heldRow=heldAv.body.rows.find(r=>r.space_label==="Room2");
+        assert.equal(heldRow.available_from,null);
+        assert.equal(heldRow.blocking_fact,"opening_evidence_unreconciled");
+        assert.equal(heldAv.body.headline.evidence_unreconciled,1);
+        assert.equal(heldAv.body.headline.occupancy_unknown,0,"unresolved evidence is not counted as absence of evidence");
+        const heldClient=await pool.connect(); let heldFacts;
+        try {
+          await heldClient.query("begin isolation level repeatable read read only");
+          heldFacts=await gatherFacts(heldClient,{property_id:held.property.id,allowed_modules:["management"],subject:"tenancy"});
+          await heldClient.query("rollback");
+        } finally {heldClient.release();}
+        assert.equal(heldFacts.tenancy.position.needs_review,1,"Ask Spine holds the same bed for review");
+        assert.equal(heldFacts.tenancy.position.open,0);
+        challenge.push({case:"controls",operative_lease:leasedStates,future_commitment:futureAv.body.rows[0].marketing_state,
+          unreconciled:heldStates,unreconciled_bucket:heldRoom2.bucket,ask_needs_review:heldFacts.tenancy.position.needs_review});
+      }
+      fs.writeFileSync(path.join(process.env.PROOF_OUTPUT_DIR,`historical-reader-challenge-${witness?"witness":"successor"}.json`),JSON.stringify({
+        mode:witness?"positive_defect_witness":"successor",product_base:witness?"77d61569cf184720eea5af9f88e339c0ba2c0779":null,evidence:challenge,
+        actual_source_confirmations:0,limits:["No browser or production proof","Replacement inventory and missing named-room witnesses not exercised"]},null,2));
+      console.log(`PASS historical reader ${witness?"positive defect witnesses":"successor acceptance"}`);
+    }
     const browserFixture=await fixture(header+occupied+vacant+vacant.replace("Room2","Room3"));
     for(const p of browserFixture.proposals) assert.equal((await http(browserFixture.token,`/deal-setup/proposals/${p.id}/confirm`,"POST")).status,200);
     await activation.establishOpeningPosition(pool,{user_id:user.id,activation_id:browserFixture.act.id});

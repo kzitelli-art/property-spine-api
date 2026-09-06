@@ -133,6 +133,49 @@ function marketingState(p, liveOk) {
     return { state: "turnover_required", reason: "turnover_in_progress" };
 
   // ══════════════════════════════════════════════════════════════════
+  //  OCCUPANCY BASIS — THE PRIOR QUESTION, ASKED BEFORE ANY OFFER
+  //
+  //  Everything above this line is a fact Spine HOLDS about the position:
+  //  a contest, a lease, a commitment, possession, a turn in progress.
+  //  Everything below is what a position with none of those may be
+  //  offered as. That step is only valid when Spine has an ESTABLISHED
+  //  occupancy basis for the position (dated_positions.positionBasis).
+  //
+  //  `not_established` is not a fifth tenancy state. It is the statement
+  //  that Spine cannot say whether anyone lives here — no accepted opening
+  //  claim, no lease, no possession. The Rent Roll already refuses to
+  //  bucket such a position (rentRollBucketOf: "no basis, no bucket") and
+  //  Ask Spine counts it as not_established. This classifier did neither:
+  //  a bed no source ever established, a configured use type and no
+  //  turnover row fell through to `marketable_now`. Exercised through real
+  //  HTTP on 2026-09-06: two rooms under a historical bare-unit vacancy
+  //  claim read Ask open=0 and canonical marketable_now=2. Offering a room
+  //  Spine cannot establish is the confident-wrong answer in its purest
+  //  form (§5), and the read that could have caught it was silent because
+  //  cross-surface checks summed states without asking about the basis.
+  //
+  //  Two silences, kept apart (§40.7): NO basis at all, versus an opening
+  //  claim that reached the reader and could not be reconciled to this
+  //  bed. Neither is absence of tenancy; neither is an offer.
+  //
+  //  Deliberately STRICT: a position that does not carry an established
+  //  basis is unknown, whether the field says so or is missing. A caller
+  //  that built a position without asking the prior question has not
+  //  answered it.
+  //
+  //  Deliberately BELOW the operative-lease, commitment, possession and
+  //  turnover guards: a weak or missing opening claim never hides an
+  //  authoritative lease or a commitment Spine holds. Deliberately ABOVE
+  //  the triage overlay and the use-type guards: a certification settles
+  //  physical readiness and nothing else, and a use type is configuration,
+  //  not occupancy. Neither may turn an unknown into an offer.
+  // ══════════════════════════════════════════════════════════════════
+  if (p.basis_state !== "established")
+    return { state: "occupancy_unknown", reason: "no_established_occupancy_basis" };
+  if (p.evidence_state === "unreconciled")
+    return { state: "evidence_unreconciled", reason: "opening_position_unreconciled" };
+
+  // ══════════════════════════════════════════════════════════════════
   //  BUILD 1 TRIAGE OVERLAY — SCOPED TO TRIAGE EVIDENCE, NOTHING ELSE
   //
   //  THIS PROTECTS THE NEW SLICE. IT DOES NOT REPAIR THE HISTORICAL
@@ -279,6 +322,14 @@ function availableFrom(p, state, asOf) {
         : "detailed_inspection_not_completed",
     };
   }
+  //  Neither silence carries a date. An unknown is not "available later";
+  //  it is a question a person has to answer before any date exists.
+  if (state === "occupancy_unknown") {
+    return { available_from: null, availability_confidence: "incomplete", blocking_fact: "occupancy_basis_not_established" };
+  }
+  if (state === "evidence_unreconciled") {
+    return { available_from: null, availability_confidence: "incomplete", blocking_fact: "opening_evidence_unreconciled" };
+  }
   if (state === "occupied") {
     const d = p.lease ? ymd(p.lease.end_date) : null;
     return {
@@ -295,6 +346,8 @@ const HUMAN = {
   down: "Out of service",
   not_marketable_use: "Not marketable in its current operating designation",
   evidence_disagrees: "Occupancy evidence disagrees — confirm whether this is occupied",
+  occupancy_unknown: "Occupancy not established — confirm whether this position is empty before it is marketed",
+  evidence_unreconciled: "Opening evidence unresolved — reconcile the source rows for this position",
   successor_locked: "Committed to a future resident",
   successor_pending: "Successor pending — not yet executed and funded",
   occupied: "Occupied",
@@ -522,6 +575,12 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       evidence_state: p.evidence_state,
       tenancy_state: p.tenancy_state,
       proof_basis: p.proof_basis,
+      //  THE PRIOR QUESTION, relayed not recomputed (dated_positions decided
+      //  it). A consumer can tell "Spine knows nothing here" apart from
+      //  "Spine knows two things and they fight" without reading English.
+      basis_state: p.basis_state,
+      basis_type: p.basis_type,
+      basis_ref: p.basis_ref || null,
       is_down: p.is_down,
       use_type: p.use_type,
     };
@@ -541,6 +600,10 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       expected_within_horizon: withinHorizon.length,
       blocked_by_evidence: inState("evidence_disagrees").length,
       contested: inState("contested").length,
+      //  Positions Spine cannot offer because it cannot establish them.
+      //  Reported in the headline so an unknown is never a quiet remainder.
+      occupancy_unknown: inState("occupancy_unknown").length,
+      evidence_unreconciled: inState("evidence_unreconciled").length,
     },
 
     // Each position appears in exactly one state.
@@ -558,6 +621,8 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       down: inState("down").length,
       evidence_disagrees: inState("evidence_disagrees").length,
       contested: inState("contested").length,
+      occupancy_unknown: inState("occupancy_unknown").length,
+      evidence_unreconciled: inState("evidence_unreconciled").length,
       use_not_configured: inState("use_not_configured").length,
       not_marketable_use: inState("not_marketable_use").length,
     },
