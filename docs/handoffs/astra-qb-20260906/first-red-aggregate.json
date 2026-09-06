@@ -1,0 +1,33 @@
+{
+  "proof": "canonical_onboarding_review",
+  "mode": "shipped_header_failure",
+  "app_source": "unchanged_index_html",
+  "api_origin": "literal_loopback",
+  "external_requests_blocked_before_egress": 0,
+  "sources": [
+    {
+      "source": "july",
+      "source_sha256": "96b901af41a17d8268d218604f3d15d7ab018bc60f86f2825e9080b654853cda",
+      "source_byte_count": 35849,
+      "upload_status": 201,
+      "download_status": 200,
+      "retained_exact_hash_and_bytes": true,
+      "read_source_status": 422,
+      "first_red_reason": "no_unit_column",
+      "first_red_receipt": "Spine could not find a unit column in that file. It read these columns: Rent Roll.",
+      "visible_refusal": true
+    },
+    {
+      "source": "skyline",
+      "source_sha256": "51ae5893b43a80308f88696156e9538972e8ea0212900f1fd71c5a068caa9f4a",
+      "source_byte_count": 40859,
+      "upload_status": 201,
+      "download_status": 200,
+      "retained_exact_hash_and_bytes": true,
+      "read_source_status": 422,
+      "first_red_reason": "no_unit_column",
+      "first_red_receipt": "Spine could not find a unit column in that file. It read these columns: Rent Roll.",
+      "visible_refusal": true
+    }
+  ]
+}

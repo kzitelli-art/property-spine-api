@@ -1,0 +1,115 @@
+diff --git a/src/applications/leasepackets.js b/src/applications/leasepackets.js
+index f38498b..2e605b6 100644
+--- a/src/applications/leasepackets.js
++++ b/src/applications/leasepackets.js
+@@ -1862,7 +1862,7 @@ module.exports = function leasePacketsModule(deps) {
+       const packetSignerId = signer.id || null;
+ 
+       const targetField = (await client.query(
+-        `select field_type, signer_role from lease_packet_fields
++        `select field_type, signer_role, completed, field_value from lease_packet_fields
+           where id=$1 and lease_packet_id=$2 and required=true and signer_role=$3`,
+         [req.params.field_id, pk.id, signer.signer_role])).rows[0];
+       if (!targetField) {
+@@ -1894,6 +1894,30 @@ module.exports = function leasePacketsModule(deps) {
+         }
+       }
+ 
++      // Completion is evidence, not an editable draft. An exact retry after a
++      // lost response is harmless and returns the current packet, but it does
++      // not rewrite when/how the signer acted or append a second audit event.
++      // A different value is a correction request and needs a governed new
++      // packet rather than silently replacing signed evidence in place.
++      if (targetField.completed) {
++        const sameValue = targetField.field_type === "signature"
++          ? normalizeSignatureName(targetField.field_value) === normalizeSignatureName(value)
++          : String(targetField.field_value || "").trim() === value;
++        await client.query("rollback");
++        if (!sameValue) {
++          return res.status(409).json({
++            error: "field_already_completed",
++            receipt: "This field already carries completed evidence and cannot be rewritten. Contact the leasing office if the package needs correction.",
++          });
++        }
++        const bundle = await getBundle(pool, pk.id);
++        return res.json({
++          receipt: "This field was already completed; the original evidence is unchanged.",
++          already_completed: true,
++          packet: signerPacket(bundle, signer),
++        });
++      }
++
+       const field = (await client.query(
+         `update lease_packet_fields
+             set completed=true, completed_at=now(),
+@@ -1903,6 +1927,7 @@ module.exports = function leasePacketsModule(deps) {
+                 signed_by_packet_signer_id = case when field_type='signature'
+                                                   then $8::uuid else signed_by_packet_signer_id end
+           where id=$1 and lease_packet_id=$2 and required=true and signer_role=$9
++            and completed=false
+           returning *`,
+         [req.params.field_id, pk.id, value, req.body?.session_id || null, clientIp(req),
+          req.headers["user-agent"] || null, signerPersonId, packetSignerId,
+diff --git a/tests/e2e/leasing_hostile.e2e.js b/tests/e2e/leasing_hostile.e2e.js
+index 4e99b3f..4034c3c 100644
+--- a/tests/e2e/leasing_hostile.e2e.js
++++ b/tests/e2e/leasing_hostile.e2e.js
+@@ -186,8 +186,56 @@ const head = (t) => console.log(`\n── ${t} ${"─".repeat(Math.max(0, 58 - t
+     }
+   }
+ 
+-  // ═══ 11 · EXACTLY ONE TENANCY ANCHOR PER CLEAN ADMISSION ════════
+-  head("11 · a clean admission produces exactly one tenancy anchor");
++  // ═══ 11 · COMPLETED SIGNER EVIDENCE IS IMMUTABLE ═══════════════
++  head("11 · an exact retry cannot rewrite completed signer evidence");
++  {
++    const P = await toPacket(C, { bed: C.bedA });
++    const view = await api("GET", `/t/lease/${P.rawTok}/data`);
++    const packet = view.body && view.body.packet;
++    const signature = packet && packet.fields
++      && packet.fields.find((f) => f.required && f.field_type === "signature");
++    const signerName = packet && packet.current_signer && packet.current_signer.display_name;
++    if (!signature || !signerName) {
++      bad("completed signer evidence stayed immutable", "the packet exposed no named signer signature control");
++    } else {
++      const first = await api("POST", `/t/lease/${P.rawTok}/fields/${signature.id}/complete`, {
++        body: { value: signerName, consent: true, session_id: "original-session" },
++      });
++      const before = (await q(
++        `select completed, completed_at::text, field_value, session_id
++           from lease_packet_fields where id=$1`, [signature.id])).rows[0];
++      const auditsBefore = Number((await q(
++        `select count(*)::int n from lease_packet_audit_events
++          where lease_packet_id=$1 and event_type='field_completed'
++            and event_json->>'field_key'=$2`, [P.packetId, signature.field_key])).rows[0].n);
++      const retry = await api("POST", `/t/lease/${P.rawTok}/fields/${signature.id}/complete`, {
++        body: { value: signerName, consent: true, session_id: "replacement-session" },
++      });
++      const after = (await q(
++        `select completed, completed_at::text, field_value, session_id
++           from lease_packet_fields where id=$1`, [signature.id])).rows[0];
++      const auditsAfter = Number((await q(
++        `select count(*)::int n from lease_packet_audit_events
++          where lease_packet_id=$1 and event_type='field_completed'
++            and event_json->>'field_key'=$2`, [P.packetId, signature.field_key])).rows[0].n);
++      if (first.status === 200 && retry.status === 200 && retry.body.already_completed === true
++          && before.completed === true && after.completed === true
++          && before.completed_at === after.completed_at
++          && before.field_value === after.field_value
++          && before.session_id === "original-session" && after.session_id === "original-session"
++          && auditsBefore === 1 && auditsAfter === 1) {
++        ok("completed signer evidence stayed immutable on exact retry",
++          `session ${after.session_id} · audits ${auditsBefore}→${auditsAfter}`);
++      } else {
++        bad("completed signer evidence stayed immutable",
++          `first=${first.status} retry=${retry.status} idempotent=${retry.body && retry.body.already_completed} ` +
++          `before=${JSON.stringify(before)} after=${JSON.stringify(after)} audits=${auditsBefore}→${auditsAfter}`);
++      }
++    }
++  }
++
++  // ═══ 12 · EXACTLY ONE TENANCY ANCHOR PER CLEAN ADMISSION ════════
++  head("12 · a clean admission produces exactly one tenancy anchor");
+   {
+     const rows = (await q(`select application_id, count(*)::int n from leases
+                             where property_id=$1 group by application_id having count(*) > 1`, [C.prop])).rows;

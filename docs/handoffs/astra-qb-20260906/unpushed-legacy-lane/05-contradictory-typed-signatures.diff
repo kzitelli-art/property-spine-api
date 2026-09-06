@@ -1,0 +1,96 @@
+diff --git a/src/applications/leasepackets.js b/src/applications/leasepackets.js
+index 4508d9a..f38498b 100644
+--- a/src/applications/leasepackets.js
++++ b/src/applications/leasepackets.js
+@@ -76,6 +76,8 @@ module.exports = function leasePacketsModule(deps) {
+   const sha256 = (v) => crypto.createHash("sha256").update(String(v)).digest("hex");
+   const stableHash = (v) => sha256(JSON.stringify(v ?? {}));
+   const makeToken = () => crypto.randomBytes(32).toString("base64url");
++  const normalizeSignatureName = (v) => String(v || "")
++    .normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+   const clientIp = (req) => {
+     const f = req.headers["x-forwarded-for"];
+     if (typeof f === "string" && f.length) return f.split(",")[0].trim();
+@@ -1875,6 +1877,21 @@ module.exports = function leasePacketsModule(deps) {
+             receipt: "Type your full legal name and intentionally choose Sign.",
+           });
+         }
++        const expectedName = normalizeSignatureName(signer.display_name);
++        if (!expectedName) {
++          await client.query("rollback");
++          return res.status(409).json({
++            error: "signer_identity_unavailable",
++            receipt: "This signing link does not name its signer. Contact the leasing office before signing.",
++          });
++        }
++        if (normalizeSignatureName(value) !== expectedName) {
++          await client.query("rollback");
++          return res.status(400).json({
++            error: "signature_name_mismatch",
++            receipt: "The typed name does not match the signer named on this lease package. Type the full legal name shown for this signing link.",
++          });
++        }
+       }
+ 
+       const field = (await client.query(
+diff --git a/tests/e2e/leasing_e2e_lib.js b/tests/e2e/leasing_e2e_lib.js
+index aeb575c..70253ae 100644
+--- a/tests/e2e/leasing_e2e_lib.js
++++ b/tests/e2e/leasing_e2e_lib.js
+@@ -95,10 +95,13 @@ async function toPacket(C, { bed, rent = 1025, name = null } = {}) {
+ async function residentSigns(rawTok) {
+   const view = await api("GET", `/t/lease/${rawTok}/data`);
+   const required = ((view.body.packet && view.body.packet.fields) || []).filter((f) => f.required);
++  const signerName = view.body.packet && view.body.packet.current_signer
++    && view.body.packet.current_signer.display_name;
++  if (!signerName) throw new Error("packet: current signer name is missing");
+   for (const f of required) {
+     const r = await api("POST", `/t/lease/${rawTok}/fields/${f.id}/complete`, {
+       body: {
+-        value: f.field_type === "signature" ? "Hostile Tester" : "HT",
++        value: f.field_type === "signature" ? signerName : "HT",
+         consent: f.field_type === "signature",
+         session_id: "hostile",
+       } });
+diff --git a/tests/e2e/leasing_hostile.e2e.js b/tests/e2e/leasing_hostile.e2e.js
+index c849af7..4e99b3f 100644
+--- a/tests/e2e/leasing_hostile.e2e.js
++++ b/tests/e2e/leasing_hostile.e2e.js
+@@ -159,8 +159,35 @@ const head = (t) => console.log(`\n── ${t} ${"─".repeat(Math.max(0, 58 - t
+     } else bad("supersession happened", `v2=${v2} superseded_at=${old && old.superseded_at}`);
+   }
+ 
+-  // ═══ 10 · EXACTLY ONE TENANCY ANCHOR PER CLEAN ADMISSION ════════
+-  head("10 · a clean admission produces exactly one tenancy anchor");
++  // ═══ 10 · TYPED SIGNATURE MUST MATCH THE NAMED SIGNER ═══════════
++  head("10 · a typed signature cannot contradict the named signer");
++  {
++    const P = await toPacket(C, { bed: C.bedA });
++    const view = await api("GET", `/t/lease/${P.rawTok}/data`);
++    const packet = view.body && view.body.packet;
++    const signature = packet && packet.fields
++      && packet.fields.find((f) => f.required && f.field_type === "signature");
++    const signerName = packet && packet.current_signer && packet.current_signer.display_name;
++    if (!signature || !signerName) {
++      bad("contradictory typed signature refused", "the packet exposed no named signer signature control");
++    } else {
++      const r = await api("POST", `/t/lease/${P.rawTok}/fields/${signature.id}/complete`, {
++        body: { value: `Not ${signerName}`, consent: true, session_id: "hostile-name" },
++      });
++      const stored = (await q(
++        "select completed, field_value from lease_packet_fields where id=$1", [signature.id])).rows[0];
++      if (r.status === 400 && r.body.error === "signature_name_mismatch"
++          && stored && stored.completed === false && stored.field_value == null) {
++        ok("contradictory typed signature refused before evidence write", r.body.error);
++      } else {
++        bad("contradictory typed signature refused",
++          `${r.status} ${JSON.stringify(r.body).slice(0,90)} · stored=${JSON.stringify(stored)}`);
++      }
++    }
++  }
++
++  // ═══ 11 · EXACTLY ONE TENANCY ANCHOR PER CLEAN ADMISSION ════════
++  head("11 · a clean admission produces exactly one tenancy anchor");
+   {
+     const rows = (await q(`select application_id, count(*)::int n from leases
+                             where property_id=$1 group by application_id having count(*) > 1`, [C.prop])).rows;

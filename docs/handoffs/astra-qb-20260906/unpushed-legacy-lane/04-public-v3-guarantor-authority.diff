@@ -1,0 +1,89 @@
+diff --git a/src/applications/applicationSubmission.js b/src/applications/applicationSubmission.js
+index 3d52fdc..d11f8b3 100644
+--- a/src/applications/applicationSubmission.js
++++ b/src/applications/applicationSubmission.js
+@@ -898,6 +898,30 @@ module.exports = function applicationSubmissionModule(deps) {
+     }
+   }
+ 
++  // V3 captures the guarantor identity once, inside the conditional contact
++  // block that validation just proved complete. The legacy top-level field is
++  // still accepted for V2 callers, but it cannot become a second authority for
++  // V3 packet composition. A contradictory duplicate is refused rather than
++  // silently choosing one claimant; an omitted duplicate is the normal V3
++  // shape and the captured contact supplies the persisted name.
++  function resolvePublicGuarantorName(captured, suppliedName) {
++    if (!captured || captured.application_form_version !== "tenant_v3") {
++      return suppliedName;
++    }
++    const capturedName = captured.guarantor_needed === "yes"
++      ? String(captured.guarantor_contact.name).trim()
++      : null;
++    const duplicateName = suppliedName == null || String(suppliedName).trim() === ""
++      ? null
++      : String(suppliedName).trim();
++    if (duplicateName !== null && duplicateName !== capturedName) {
++      throw httpErr(400,
++        "Guarantor name conflicts with the guarantor contact on this application. " +
++        "Correct the application and submit one identity.");
++    }
++    return capturedName;
++  }
++
+   // 3) PUBLIC SUBMIT — invitation-bound. The applicant submits against a live
+   //    valid token. Resolves identity/conversion FROM the token, runs the
+   //    shared submission service, marks the invitation consumed. Idempotent:
+@@ -937,6 +961,7 @@ module.exports = function applicationSubmissionModule(deps) {
+       intended_move_in: inv.intended_move_in,
+       application_options: validationProperty.lease_config && validationProperty.lease_config.application_options,
+     });
++    const canonicalGuarantorName = resolvePublicGuarantorName(captured, guarantor_name);
+ 
+     // resolve the applicant name: explicit, else the person on file
+     let name = applicant_name;
+@@ -1004,7 +1029,7 @@ module.exports = function applicationSubmissionModule(deps) {
+       //  gap this build exists to close.
+       space_id: inv.space_id,
+       intended_move_in: inv.intended_move_in,
+-      applicant_name: name, rent, deposit, guarantor_name, captured,
++      applicant_name: name, rent, deposit, guarantor_name: canonicalGuarantorName, captured,
+       source: "applicant",
+       conversion_id: inv.conversion_id,
+       progress_obligation_id: inv.progress_obligation_id,
+diff --git a/tests/e2e/tour_application_lease.e2e.js b/tests/e2e/tour_application_lease.e2e.js
+index 64a4900..c737444 100644
+--- a/tests/e2e/tour_application_lease.e2e.js
++++ b/tests/e2e/tour_application_lease.e2e.js
+@@ -454,9 +454,22 @@ async function waitForStaffReply(providerMessageId) {
+     applicant_accuracy_certified: true,
+     electronic_delivery_consent: true,
+   };
++  const conflictingGuarantor = await api("POST", "/applications/submit-public", {
++    key: false,
++    body: {
++      token: applicationToken,
++      applicant_name: name,
++      guarantor_name: `Wrong Guarantor ${suffix}`,
++      captured,
++    },
++  });
++  expect(conflictingGuarantor.status === 400
++      && /conflicts with the guarantor contact/.test(
++        String(conflictingGuarantor.body && conflictingGuarantor.body.receipt || "")),
++    "a contradictory V3 guarantor name is refused before application birth");
+   const submitted = requireOk(await api("POST", "/applications/submit-public", {
+     key: false,
+-    body: { token: applicationToken, applicant_name: name, guarantor_name: guarantorName, captured },
++    body: { token: applicationToken, applicant_name: name, captured },
+   }), "public application submit");
+   const appId = submitted.application && submitted.application.id;
+   const appRow = (await q(
+@@ -469,7 +482,7 @@ async function waitForStaffReply(providerMessageId) {
+     "the tenant application persists exact Bed B");
+   expect((await q("select guarantor_name from lease_applications where id=$1", [appId])).rows[0].guarantor_name
+       === guarantorName,
+-    "the application carries the named guarantor into lease preparation");
++    "the application derives the named guarantor from the validated V3 capture");
+ 
+   const mikeApproval = await api("POST", `/operator/leasing/applications/${appId}/approve`, {
+     token: staffToken, body: {},

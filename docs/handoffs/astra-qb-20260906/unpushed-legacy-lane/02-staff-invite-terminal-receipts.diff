@@ -1,0 +1,59 @@
+diff --git a/src/identity/teamaccess.js b/src/identity/teamaccess.js
+index 8c9678b..71a0919 100644
+--- a/src/identity/teamaccess.js
++++ b/src/identity/teamaccess.js
+@@ -61,15 +61,17 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridg
+   const MAX_FAILED = 5;
+ 
+   // Class 1 — the canonical usability reading for one staff invitation.
+-  // Both OTP issuance and OTP verification consume this same answer so a
+-  // terminal invite can never receive a code that the verifier must reject.
++  // Both OTP issuance and OTP verification consume this same answer, so a
++  // state observed as terminal at either public door is refused consistently.
+   // Expiry is derived from the recorded clock as well as the stored lifecycle
+-  // state; neither public door rewrites history merely by reading it.
++  // state; neither public door rewrites history merely by reading it. (Invite
++  // creation's concurrent-supersession invariant is a separate transaction
++  // question; this reader does not claim to serialize two requests.)
+   function inviteLifecycleState(invite, at = new Date()) {
+     if (invite.status === "accepted") return "accepted";
+     if (invite.status === "revoked") return "revoked";
+     if (invite.status === "superseded") return "superseded";
+-    if (invite.status === "expired" || new Date(invite.expires_at) < at) return "expired";
++    if (invite.status === "expired" || new Date(invite.expires_at) <= at) return "expired";
+     if (invite.status !== "active") return "inactive";
+     if (Number(invite.failed_attempts || 0) >= MAX_FAILED) return "locked";
+     return "active";
+diff --git a/tests/e2e/staff_invite_acceptance.browser.js b/tests/e2e/staff_invite_acceptance.browser.js
+index 885dd5a..a205d60 100644
+--- a/tests/e2e/staff_invite_acceptance.browser.js
++++ b/tests/e2e/staff_invite_acceptance.browser.js
+@@ -228,6 +228,28 @@ async function waitForSms(predicate, label) {
+   const browser = await chromium.launch({
+     executablePath: process.env.CHROMIUM || "/opt/pw-browsers/chromium-1194/chrome-linux/chrome",
+   });
++  const supersededBrowserInvite = await seedInvite(C, { status: "superseded" });
++  const supersededPage = await browser.newPage({ viewport: { width: 390, height: 844 } });
++  const supersededBefore = await inviteRow(supersededBrowserInvite.id);
++  const supersededWireBefore = messagesTo(supersededBrowserInvite.phone_number).length;
++  await supersededPage.goto(`http://localhost:3000/auth/join/${supersededBrowserInvite.token}`,
++    { waitUntil: "networkidle" });
++  await supersededPage.click("#sendCode");
++  await supersededPage.waitForFunction(() => /replaced/i.test(document.querySelector("#status")?.textContent || ""));
++  const supersededReceipt = await supersededPage.locator("#status").innerText();
++  const supersededAfter = await inviteRow(supersededBrowserInvite.id);
++  const supersededWireAfter = messagesTo(supersededBrowserInvite.phone_number).length;
++  if (/replaced/i.test(supersededReceipt)
++      && JSON.stringify(supersededBefore) === JSON.stringify(supersededAfter)
++      && supersededWireBefore === supersededWireAfter) {
++    ok("the browser shows that a replaced link is inert");
++  } else {
++    bad("the browser shows that a replaced link is inert",
++        JSON.stringify({ supersededReceipt, supersededBefore, supersededAfter,
++          supersededWireBefore, supersededWireAfter }));
++  }
++  await supersededPage.close();
++
+   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+   const productErrors = [];
+   page.on("pageerror", (error) => productErrors.push(error.message));
