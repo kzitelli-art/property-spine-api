@@ -70,6 +70,9 @@ let pool;
     if(parent) {
       assert.equal(rr.body.availability.length,1);
       assert.equal(rr.body.availability[0].current_status,reverse?"vacant":"current");
+      const wrongOverlay=rr.body.rows.find(r=>(r.space_label||r.room)==="Room2");
+      assert.ok(wrongOverlay.canonical?.current?.lease_id,"parent overlays the occupied neighbor's lease onto the vacant room");
+      assert.ok(wrongOverlay.person_id,"parent overlays the occupied neighbor's person onto the vacant room");
     } else {
       assert.equal(rr.body.availability.length,2,"each canonical position survives the compatibility read");
       assert.equal(new Set(rr.body.availability.map(r=>r.space_id)).size,2);

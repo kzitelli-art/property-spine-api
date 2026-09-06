@@ -158,6 +158,13 @@ const one = async (db, sql, params = []) => (await db.query(sql, params)).rows[0
     const evidence = (await pool.query(`select id,row_index from import_source_rows
       where import_batch_id=$1 order by row_index`,[reviewBatch.id])).rows;
     const byRow = new Map(evidence.map(row=>[Number(row.row_index),row.id]));
+    // This fixture represents a legitimately established vacancy. The real
+    // importer/confirmation path retains this durable link; status alone is
+    // not authority to infer a rentable position from today's unit number.
+    // Unlinked historical promotions are separately required to stay held by
+    // onboarding_space_availability.db.js, without relaxing these assertions.
+    await pool.query(`update import_source_rows set produced_unit_id=$2, produced_space_id=$3 where id=$1`,
+      [byRow.get(1),unit.id,space.id]);
     await pool.query(`insert into proposed_records
       (activation_id,property_id,module,target_type,natural_key,normalized_json,status,status_reason,import_source_row_id)
       values
