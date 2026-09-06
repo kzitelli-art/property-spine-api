@@ -282,3 +282,82 @@ correction, not to reinstate count-of-one in the reader.
   `unitRentRoll`, `availabilityRead` and `readTenancyStanding` the routes
   call, not the routes. HTTP agreement for the same basis is covered by the
   space-availability successor proof.
+
+---
+
+# Priority 3 — a retained claim that attaches to no position stays intelligible (same day)
+
+API `87ae10a`. Reader only: `src/tenancy/dated_positions.js` (new
+`unattachedOpeningClaims`), relays in `src/tenancy/tenancy_position_read.js`
+and `src/surfaces/rent_roll_unit_view.js`, one tightening in
+`src/tenancy/space_position.js`; proof
+`tests/proofs/opening_claim_unattached.db.js`, in `verify_all.sh`.
+
+## Question
+
+When a confirmed source row attaches to no rentable position — a bare-unit
+vacancy on a multi-bed unit, a named room the unit does not have, a
+whole-unit placeholder beside real beds — what can the existing activation
+and source standing carry so "no fact supplied" and "a retained claim could
+not be attached" stop collapsing into one silence, without a second truth
+store and without broadcasting one claim to N beds?
+
+## Witness (12/12 on `857cf34`)
+
+One synthetic property, one baseline, four confirmed rows, all with unit
+lineage and no space lineage (the historical shape). The activation tally
+said 4 established. Every position on units 201 (bare key, three beds) and
+202 (`202|Room4`, two beds) read not established with no reference to the
+confirmed row; the standing projection, the Rent Roll unit view and Ask
+Spine carried no name for them. Unit 203, a placeholder beside three beds,
+counted as a fourth position **and** absorbed the bare-unit claim: it read
+`opening_claim_vacant`, and availability offered it beside the control —
+two established, two marketable, for one real vacancy.
+
+## What changed
+
+- `unattachedOpeningClaims`: under the chosen baseline, the promoted and
+  held current claims that no position's basis or conflict references,
+  reported by the key the source gave the row (`201`, `202|Room4`, `203`),
+  bounded to 50, no record id. Same proposals the candidate subquery reads,
+  same baseline, derived at read time.
+- Standing projection: `unknowns.confirmed_source_rows_not_attached_to_a_position`,
+  `unknowns.held_source_rows_not_attached_to_a_position`, `unattached_source_rows`.
+  Rent Roll unit view: `totals.confirmed_rows_not_attached`,
+  `totals.held_rows_not_attached`, `unattached_source_rows`. Ask Spine reads
+  the standing projection unchanged (`withoutDatabaseIds` keeps labels).
+- A bare unit key answers only for a whole-unit position that is the unit's
+  **only** position. This is a grain-consistency condition, not identity:
+  identity is still the lineage (Priority 2). It closes the phantom
+  absorption above.
+
+## Successor (14/14)
+
+Three rows named on standing, Rent Roll and Ask, by source key, with no id;
+positions still not established (nine of ten); the control still attaches;
+the phantom placeholder refused; availability offers exactly the control and
+refuses nine as unknown; no proposal rewritten. Regression on this tree:
+identity proof 17/17, Ask Spine reader gate 72/72, tenancy Ask Spine unit
+1/1, space-availability successor, historical challenge and the five
+leasing suites PASS over real HTTP.
+
+## Not done, and why — the product decisions QB and Kameron own
+
+1. **The phantom placeholder is still counted as a position.** Ten positions
+   for nine real ones. Removing it is an inventory correction, not a read:
+   `inventory_materialization` refuses a non-pristine placeholder by design
+   and retirement is unit-level. A governed correction that retires or
+   re-kinds a placeholder beside beds needs a ruling on what
+   `position_kind` should say and who may say it. Until then the count is
+   inflated and the reader keeps it out of every offer.
+2. **The activation tally still says 4 established.** It is history written
+   at establishment; the reader now says beside it "3 of those attach to
+   no position". Rewriting the tally would be re-entry (§7). Whether Deal
+   Setup should show the unattached rows next to their confirmed status is
+   an app change QB may want; the count and keys are on the unit view for
+   it to read.
+3. **No relationship was invented.** A bare-unit claim on a multi-bed unit
+   stays unattached even when every other bed is claimed; a named room the
+   unit lacks stays unattached even when one bed is unnamed. Both are
+   listed by key so a person can confirm by bed. That is the whole of what
+   the existing owners can carry.
