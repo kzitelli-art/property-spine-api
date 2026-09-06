@@ -672,6 +672,54 @@ async function openingTruth(pool, property_id) {
   };
 }
 
+/*  ── RETAINED BUT UNATTACHED ───────────────────────────────────────
+ *  A confirmed source row is history: a human accepted it, and the
+ *  activation's tally counts it as established. Whether it ATTACHES to a
+ *  rentable position is the reader's finding, and the two can disagree —
+ *  a bare-unit vacancy confirmed under the old writer on a three-bed unit,
+ *  a named room the unit does not have, a claim whose lineage points at
+ *  retired inventory. Every position then reads not established and
+ *  nothing says why: "no fact supplied" and "a retained claim could not be
+ *  attached" collapsed into one silence.
+ *
+ *  This names the gap without inventing a relationship. The rows are
+ *  reported by the key the source gave them, never broadcast to N beds,
+ *  never counted as positions, never given a bed by inference. Derived at
+ *  read time from the SAME proposals the candidate subquery reads, under
+ *  the SAME chosen baseline — no second store.  */
+async function unattachedOpeningClaims(pool, baseline, rawPositions) {
+  if (!baseline || !baseline.activation_id) {
+    return { read: "no_baseline", promoted: 0, held: 0, source_rows: [] };
+  }
+  const referenced = new Set();
+  for (const p of rawPositions || []) {
+    const src = p._opening_claim_source;
+    if (!src) continue;
+    if (src.proposal_id) referenced.add(String(src.proposal_id));
+    for (const id of src.conflicting_proposal_ids || []) referenced.add(String(id));
+  }
+  const rows = (await pool.query(
+    `select pr.id, pr.natural_key, pr.status
+       from proposed_records pr
+      where pr.activation_id = $1
+        and pr.target_type = 'lease'
+        and pr.status in ('promoted','needs_review','conflicted')
+        and coalesce(lower(pr.normalized_json->>'section'), 'current') = 'current'
+      order by pr.natural_key, pr.id`, [baseline.activation_id])).rows;
+  const unattached = rows.filter((r) => !referenced.has(String(r.id)));
+  return {
+    read: "ok",
+    //  Confirmed by a human and attached to nothing: the surprising class.
+    promoted: unattached.filter((r) => r.status === "promoted").length,
+    //  Held for review and attached to nothing: already a review-queue item.
+    held: unattached.filter((r) => r.status !== "promoted").length,
+    //  The key the source gave the row (unit, or unit|room) — a label an
+    //  operator can act on, not a record id. Bounded.
+    source_rows: unattached.slice(0, 50).map((r) => ({ source_key: r.natural_key, status: r.status })),
+    truncated: unattached.length > 50,
+  };
+}
+
 async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) {
   if (!property_id) throw new Error("datedPropertyPositions requires property_id");
   const asOf = as_of || new Date().toISOString().slice(0, 10);
@@ -850,6 +898,8 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
      *
      *  Surfaces must branch on this BEFORE presenting buckets. */
     opening_baseline: sp.opening_baseline,
+    //  Confirmed source rows under that baseline that no position reads.
+    opening_claims_unattached: await unattachedOpeningClaims(pool, sp.opening_baseline, sp.positions),
     positions,
   };
 }

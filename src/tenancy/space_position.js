@@ -373,7 +373,13 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
                         or (position('|' in pr.natural_key) = 0
                             and coalesce(s.position_kind,
                                   case when s.space_label is null or s.space_label ~* 'whole\\s*unit'
-                                       then 'unit' else 'bed' end) = 'unit')
+                                       then 'unit' else 'bed' end) = 'unit'
+                            -- and that whole-unit position is the unit's ONLY
+                            -- position. A placeholder left beside real beds
+                            -- is an inventory inconsistency, not a rentable
+                            -- position, and a claim attached to it would
+                            -- inflate marketable inventory by one per unit.
+                            and (select count(*) from spaces s2 where s2.unit_id = u.id) = 1)
                       ))
                   -- 3. NO LINEAGE (legacy rows): text is all there is. It
                   --    answers by exact unit|label, or by bare key for a
@@ -390,7 +396,8 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
                         or (lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number))
                             and coalesce(s.position_kind,
                                   case when s.space_label is null or s.space_label ~* 'whole\\s*unit'
-                                       then 'unit' else 'bed' end) = 'unit')
+                                       then 'unit' else 'bed' end) = 'unit'
+                            and (select count(*) from spaces s2 where s2.unit_id = u.id) = 1)
                       ))
                 )
            ) candidate) as opening_space_claim

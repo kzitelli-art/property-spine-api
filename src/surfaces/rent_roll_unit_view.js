@@ -292,7 +292,13 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
       //  rents this is most of the building, and an operator seeing many
       //  blank rents deserves to know the count is expected.
       rent_not_in_source: rentUnknown,
+      //  Confirmed source rows under the chosen baseline that no position
+      //  reads — the reason a Rent Roll can say Not Established about a
+      //  bed whose source row Deal Setup shows as confirmed.
+      confirmed_rows_not_attached: (dp.opening_claims_unattached || {}).promoted || 0,
+      held_rows_not_attached: (dp.opening_claims_unattached || {}).held || 0,
     },
+    unattached_source_rows: (dp.opening_claims_unattached || {}).source_rows || [],
     units,
   };
 }

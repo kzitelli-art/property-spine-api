@@ -240,7 +240,15 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
       //  Now reachable in practice: an import whose person did not resolve
       //  records the lease with no tenant rather than attaching a guess.
       occupied_positions_with_no_linked_resident: residentUnlinked.length,
+      //  Confirmed source rows the chosen baseline holds that NO position
+      //  reads. The activation counted them as established; the positions
+      //  say not established. Named here so the two numbers can be
+      //  reconciled by a person instead of silently disagreeing.
+      confirmed_source_rows_not_attached_to_a_position: (dp.opening_claims_unattached || {}).promoted || 0,
+      held_source_rows_not_attached_to_a_position: (dp.opening_claims_unattached || {}).held || 0,
     },
+    //  By the key the source gave each row — a label, never a record id.
+    unattached_source_rows: (dp.opening_claims_unattached || {}).source_rows || [],
 
     next_milestone: nextMilestone(positions, dp.as_of),
 
