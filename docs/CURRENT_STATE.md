@@ -7,8 +7,11 @@ person overlays retain per-room identity. Historical promoted claims without a
 current linked space remain visible but held out of current Rent Roll publication.
 The bounded successor HTTP/database proof passes, including named/ambiguous/
 contested/single-position cases, scoped reads and Ask tenancy fact gathering.
-Browser and full July/Skyline rerun are pending for this candidate; broader
-historical-claim behavior in other canonical readers remains under independent
+Full frozen local browser/July/Skyline stage, restart, lineage and mixed proof
+passed at APIaef0d10/app0785cf8; CI34049719757 passed exactaef0d10. Actual-source
+confirmations remain zero. The signed-in app already used canonical availability;
+an unnecessary proposed cutover was removed, retaining only browser proof. Broader
+historical-claim behavior in other canonical readers remains open for independent
 Fable review. See [proof scope and remaining gaps](handoffs/desktop-qb-20260906/space-identity/RECEIPT.md).
 
 **2026-09-06 Fable review and owner clarification:** Kameron directly confirmed

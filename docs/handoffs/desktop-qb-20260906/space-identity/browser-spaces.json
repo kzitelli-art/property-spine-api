@@ -1,0 +1,26 @@
+{
+  "proof": "canonical_onboarding_review",
+  "phase": "spaces",
+  "mode": "server_interpreted_retained_source",
+  "app_source": "successor_index_html",
+  "api_origin": "literal_loopback",
+  "external_requests_blocked_before_egress": 0,
+  "confirmations_attempted": 0,
+  "sources": [
+    {
+      "source": "spaces",
+      "canonical_read_status": 200,
+      "expected_available_labels": [
+        "Room2",
+        "Room3"
+      ],
+      "visible_available_labels": [
+        "Room2",
+        "Room3"
+      ],
+      "occupied_positions_excluded_from_marketable_list": true,
+      "prices_absent": true,
+      "visible_at_paint": true
+    }
+  ]
+}
