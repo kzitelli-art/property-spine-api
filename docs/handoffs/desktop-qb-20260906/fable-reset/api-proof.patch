@@ -1,0 +1,53 @@
+diff --git a/tests/proofs/onboarding_space_availability.db.js b/tests/proofs/onboarding_space_availability.db.js
+index 18e2126..3623c72 100644
+--- a/tests/proofs/onboarding_space_availability.db.js
++++ b/tests/proofs/onboarding_space_availability.db.js
+@@ -160,6 +160,48 @@ let pool;
+     assert.equal(history.body.rows[0].publication_status,"held_for_review");
+     assert.equal(history.body.availability.length,0,"old ambiguous claim cannot open a unit");
+     evidence.push({case:"historical_ambiguous_claim",retained_rows:1,historical_status:"promoted",current_publication:"held_for_review"});
++    // Opt-in, positive defect witnesses for Fable's historical-reader review.
++    // These assert the observed defect, not successor acceptance. Product
++    // history is replayed only in this owned synthetic database.
++    if (process.env.PROOF_HISTORICAL_READER_CHALLENGE === "1") {
++      const {datedPropertyPositions}=require("../../src/tenancy/dated_positions");
++      const {gatherFacts}=require("../../src/agent/ask_spine_answer");
++      const historical=await fixture("Unit,Resident,Market Rent\n101,VACANT,900\n",true);
++      await pool.query("delete from leases where property_id=$1",[historical.property.id]);
++      await pool.query("update proposed_records set status='promoted', confirmed_by=$2, confirmed_at=now() where id=$1",[historical.proposals[0].id,user.id]);
++      await activation.establishOpeningPosition(pool,{user_id:user.id,activation_id:historical.act.id});
++      const untouched=await fixture("Unit,Resident,Market Rent\n101,VACANT,900\n","single");
++      const challenge=[];
++      for (const [name,f,unknownCount] of [["historical_unbound",historical,2],["unconfirmed_source",untouched,1],["valid_single_position",single,0]]) {
++        await pool.query("update spaces set use_type='residential' where unit_id in (select id from units where property_id=$1)",[f.property.id]);
++        const before=await one("select to_jsonb(p) as record from proposed_records p where id=$1",[f.proposals[0].id]);
++        const dp=await datedPropertyPositions(pool,{property_id:f.property.id,as_of:"2026-07-31"});
++        const av=await http(f.token,"/operator/leasing/availability-canonical?as_of=2026-07-31");
++        assert.equal(av.status,200);
++        assert.equal(dp.positions.filter(p=>p.basis_state==="not_established").length,unknownCount);
++        assert.equal(av.body.rows.filter(r=>r.marketing_state==="marketable_now").length,dp.positions.length,
++          "positive defect witness: missing basis is currently advertised alongside legitimate vacancy");
++        assert.ok(av.body.rows.every(r=>r.physical_readiness==="ready" && !r.certified_ready));
++        const client=await pool.connect(); let facts;
++        try {
++          await client.query("begin isolation level repeatable read read only");
++          facts=await gatherFacts(client,{property_id:f.property.id,allowed_modules:["management"],subject:"tenancy"});
++          await client.query("rollback");
++        } finally {client.release();}
++        assert.equal(facts.tenancy.position.not_established,unknownCount);
++        assert.equal(facts.tenancy.position.open,unknownCount ? 0 : 1);
++        assert.deepEqual(await one("select to_jsonb(p) as record from proposed_records p where id=$1",[f.proposals[0].id]),before,
++          "canonical reads must preserve every historical proposal field");
++        challenge.push({case:name,positions:dp.positions.length,not_established:unknownCount,
++          ask_open:facts.tenancy.position.open,marketable_now:av.body.headline.marketable_now,
++          evidence_states:av.body.rows.map(r=>r.evidence_state),readiness:av.body.rows.map(r=>r.physical_readiness),
++          certifications:av.body.rows.filter(r=>r.certified_ready).length,proposal_unchanged:true});
++      }
++      fs.writeFileSync(path.join(process.env.PROOF_OUTPUT_DIR,"historical-reader-challenge.json"),JSON.stringify({
++        mode:"positive_defect_witness",product_base:"77d61569cf184720eea5af9f88e339c0ba2c0779",evidence:challenge,
++        actual_source_confirmations:0,limits:["No browser or production proof","Replacement inventory and missing named-room witnesses not exercised"]},null,2));
++      console.log("PASS historical reader positive defect witnesses");
++    }
+     const browserFixture=await fixture(header+occupied+vacant+vacant.replace("Room2","Room3"));
+     for(const p of browserFixture.proposals) assert.equal((await http(browserFixture.token,`/deal-setup/proposals/${p.id}/confirm`,"POST")).status,200);
+     await activation.establishOpeningPosition(pool,{user_id:user.id,activation_id:browserFixture.act.id});

@@ -1,0 +1,85 @@
+diff --git a/availability_cutover_app.test.js b/availability_cutover_app.test.js
+index 48ab9e2..45510d1 100644
+--- a/availability_cutover_app.test.js
++++ b/availability_cutover_app.test.js
+@@ -87,10 +87,17 @@ ok(!/'\$'|"\$"|asking|market_rent|toLocaleString/.test(fnCode),
+ ok(!/reduce\(/.test(fn), "the renderer computes no totals");
+ 
+ console.log("\n== groups and shared conditions ==");
+-const groups = html.slice(html.indexOf("var PS_AV_GROUPS"), html.indexOf("function psAvRow"));
++const groupSource = html.slice(html.indexOf("var PS_AV_GROUPS"), html.indexOf("function psAvRow"));
++const groups = new Function(groupSource + "\nreturn PS_AV_GROUPS;")();
+ ["Marketable now", "Coming available", "Committed to a future resident", "Blocked", "Contested or unresolved"]
+-  .forEach(t => ok(groups.includes(t), "group present: " + t));
+-ok(/marketable_now/.test(groups) && /activation_pending/.test(groups),
++  .forEach(t => ok(groupSource.includes(t), "group present: " + t));
++const groupFor = (state) => groups.find((group) => group.match({ marketing_state: state }));
++ok(groupFor("occupancy_unknown").key === "unresolved"
++  && groupFor("evidence_unreconciled").key === "unresolved",
++  "occupancy uncertainty stays visible in the unresolved group");
++ok(groupFor("successor_pending").key === "committed",
++  "future commitments remain in the committed group");
++ok(/marketable_now/.test(groupSource) && /activation_pending/.test(groupSource),
+   "activation-pending positions are grouped as committed, never as inventory");
+ ok(/appear vacant but cannot be marketed because occupancy evidence disagrees/.test(fn),
+   "the shared evidence condition is stated once, in plain language");
+diff --git a/canonical_onboarding_review.browser.js b/canonical_onboarding_review.browser.js
+index d0549b1..9bf004c 100644
+--- a/canonical_onboarding_review.browser.js
++++ b/canonical_onboarding_review.browser.js
+@@ -713,18 +713,32 @@ async function verifySpaces(page, state) {
+     const canonicalBody = await response.json();
+     const canonicalRows = (canonicalBody && Array.isArray(canonicalBody.rows)) ? canonicalBody.rows : [];
+     const marketableRows = canonicalRows.filter((row) => row && row.marketing_state === "marketable_now");
++    const unresolvedRows = canonicalRows.filter((row) => row && ["occupancy_unknown", "evidence_unreconciled"]
++      .includes(row.marketing_state));
+     await page.waitForFunction(() => Boolean(document.querySelector(".rrc-row.av-row:not(.rrc-hdr)")), null, { timeout: 30000 });
+     const visibleRows = await page.evaluate(() => Array.from(
+       document.querySelectorAll(".rrc-row.av-row:not(.rrc-hdr)"),
+       (node) => ({ text: node.innerText.trim(), position: (node.querySelector(".rrc-c") || node).innerText.trim() })
+     ));
+-    const shownContexts = visibleRows.map((row) => row.position);
++    const contextFor = (row) => `${row.unit_number || ""}${row.space_label ? ` · ${row.space_label}` : ""}`;
++    const shownContexts = visibleRows.filter((visible) => marketableRows.some((row) =>
++      visible.position.includes(contextFor(row)))).map((row) => row.position);
+     const shown = shownContexts.map((label) => {
+       const parts = label.split("·");
+       return parts.length > 1 ? parts[parts.length - 1].trim() : label.trim();
+     });
+     const expected = fixture.expected_available_labels.map((label) => String(label));
++    const expectedUnresolved = (fixture.expected_unresolved_labels || []).map((label) => String(label));
++    const shownUnresolved = visibleRows.filter((visible) => unresolvedRows.some((row) =>
++      visible.position.includes(contextFor(row)))).map((row) => {
++      const parts = row.position.split("·");
++      return parts.length > 1 ? parts[parts.length - 1].trim() : row.position.trim();
++    });
+     if (JSON.stringify(shown) !== JSON.stringify(expected)) refuse("PROOF_SPACE_AVAILABLE_LABELS_MISMATCH");
++    if (JSON.stringify(shownUnresolved) !== JSON.stringify(expectedUnresolved)
++      || unresolvedRows.length !== expectedUnresolved.length) {
++      refuse("PROOF_SPACE_UNRESOLVED_LABELS_MISMATCH");
++    }
+     if (marketableRows.length !== shownContexts.length || !marketableRows.every((row) =>
+       shownContexts.some((context) => context.includes(String(row.unit_number))
+         && (!row.space_label || context.includes(String(row.space_label)))))) {
+@@ -749,6 +763,8 @@ async function verifySpaces(page, state) {
+       canonical_read_status: response ? response.status() : null,
+       expected_available_labels: expected,
+       visible_available_labels: shown,
++      expected_unresolved_labels: expectedUnresolved,
++      visible_unresolved_labels: shownUnresolved,
+       occupied_positions_excluded_from_marketable_list: true,
+       prices_absent: true,
+       visible_at_paint: true,
+diff --git a/index.html b/index.html
+index 771170c..3f20939 100644
+--- a/index.html
++++ b/index.html
+@@ -23021,7 +23021,7 @@ var PS_AV_GROUPS = [
+   { key: 'blocked', title: 'Blocked',
+     match: function(r){ return ['down','turnover_required','not_ready','not_marketable_use','use_not_configured'].indexOf(r.marketing_state) >= 0; } },
+   { key: 'unresolved', title: 'Contested or unresolved',
+-    match: function(r){ return ['contested','evidence_disagrees'].indexOf(r.marketing_state) >= 0; } }
++     match: function(r){ return ['contested','evidence_disagrees','occupancy_unknown','evidence_unreconciled'].indexOf(r.marketing_state) >= 0; } }
+ ];
+ function psAvRow(r){
+   var where = 'Unit ' + esc(r.unit_number || '—')
