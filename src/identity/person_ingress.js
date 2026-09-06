@@ -351,6 +351,24 @@ async function ingestPerson(client, {
   property_id = null, evidence = {}, channel, authority = null, activation_id = null,
 } = {}) {
   const ev = { ...evidence, channel };
+  // Reuse an explicit confirmation for this exact evidence row. A historical
+  // code match is only a candidate; the signed person proposal is authority.
+  if (channel === "rent_roll" && activation_id && ev.import_source_row_id) {
+    const confirmed = (await client.query(
+      `select promoted_record_id from proposed_records
+        where activation_id=$1 and property_id=$2 and import_source_row_id=$3
+          and target_type='person' and status='promoted'
+          and resolution_kind in ('resolved_existing','created')
+          and confirmed_by is not null and confirmed_at is not null`,
+      [activation_id, property_id, ev.import_source_row_id])).rows[0];
+    if (confirmed) {
+      const live = await liveRecord(client, confirmed.promoted_record_id);
+      if (!live) throw refuse("CONFIRMED_PERSON_UNAVAILABLE", "The confirmed resident identity is no longer resolvable. Review the identity before establishing the lease.");
+      return { disposition:"resolved",person_id:live.person.id,proposal_id:null,
+        resolution_kind:"resolved_existing",candidates:[],evidence_used:["confirmed_person_proposal"],
+        reason:"An authorized person confirmation already resolves this source row." };
+    }
+  }
   const decision = await resolvePersonFromEvidence(client, { property_id, evidence: ev, channel });
 
   if (decision.disposition === "resolved") {

@@ -52,6 +52,25 @@ const claim = (v) => String(v || "").toLowerCase();
 //  Same normalisation, named so it reads clearly inside positionBasis.
 const claimOf = claim;
 
+// A committed import batch is evidence. It is publishable operating truth
+// immediately only when it predates the activation lifecycle; once an
+// activation owns it, the current established opening position is its sole
+// publication authority. Kept as one SQL fragment so the canonical receipt
+// and the legacy snapshot projection cannot disagree about eligibility.
+function publishedSourceBatchSql(alias = "b") {
+  if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(alias)) throw new Error("invalid SQL alias");
+  return `(
+    not exists (select 1 from activations a where a.import_batch_id=${alias}.id)
+    or exists (
+      select 1
+        from activations a
+        join opening_tenancy_positions otp
+          on otp.activation_id=a.id and otp.import_batch_id=${alias}.id
+       where a.import_batch_id=${alias}.id and otp.status='established'
+    )
+  )`;
+}
+
 // ── FOUR INDEPENDENT AXES ────────────────────────────────────────────
 //  A position can simultaneously be contractually occupied, have
 //  inconclusive opening evidence, and have unavailable economics. Those are
@@ -629,8 +648,9 @@ async function openingTruth(pool, property_id) {
   const rows = (await pool.query(
     `select id, source_type, source_file,
             to_char(source_as_of_date, 'YYYY-MM-DD') as source_as_of_date,
-            confidence, status, leasing_model, loaded_at, notes
-       from import_batches where property_id=$1
+            confidence, status, leasing_model, loaded_at, notes,
+            ${publishedSourceBatchSql("b")} as operating_published
+       from import_batches b where property_id=$1
       order by source_as_of_date desc nulls last, loaded_at desc`, [property_id]
   )).rows;
   const sources = rows.map((b) => ({
@@ -640,12 +660,14 @@ async function openingTruth(pool, property_id) {
     source_as_of_date: b.source_as_of_date || null,   // already YYYY-MM-DD text
     confidence: b.confidence || null,
     status: b.status || null,
+    operating_published: Boolean(b.operating_published),
     leasing_model: b.leasing_model || null,
     attribution: { loaded_at: b.loaded_at, notes: b.notes || null },
   }));
   return {
     sources,
-    latest_confirmed_source: sources.find((s) => s.status === "committed" && s.source_type !== "rent_roll_reconciliation") || null,
+    latest_confirmed_source: sources.find((s) => s.status === "committed" &&
+      s.source_type !== "rent_roll_reconciliation" && s.operating_published) || null,
     latest_reconciliation: sources.find((s) => s.source_type === "rent_roll_reconciliation") || null,
   };
 }
@@ -1011,6 +1033,7 @@ module.exports = {
   //  counts as Open" is how the subtraction got there in the first place.
   rentRollBuckets, rentRollBucketOf, rentRollExplain, REASON, positionBasis,
   contractualTermsState,
+  publishedSourceBatchSql,
   RENT_ROLL_LABELS, NOT_ESTABLISHED_LABEL, occupancyClaim,
   //  Re-exported so a surface can ask which baseline answers for a date
   //  without reaching into space_position for it.

@@ -26,6 +26,7 @@ const { resolvePropertyIdentity, resolutionError } = require("../identity/proper
 //  (/operator/rent-roll/import) is deliberately NOT behind this.
 const { syntheticTargetAllowed, syntheticRefusal } = require("./synthetic_data_perimeter.js");
 const { spacePosition } = require("../tenancy/space_position");
+const { publishedSourceBatchSql } = require("../tenancy/dated_positions");
 //  The ONE canonical inventory-materialization rule. The evidence pass must
 //  not create beds beside the trigger's provisional whole-unit placeholder.
 const { materializeRentableSpaces } = require("../tenancy/inventory_materialization.js");
@@ -298,6 +299,24 @@ async function resolveCurrentUnitId(client, propertyId, unitNumber) {
   return cur.rows.length ? cur.rows[0].id : null;
 }
 
+// History is evidence for identity resolution, never authority to bind a
+// person automatically. Keep this lookup shared so every ingress caller hands
+// the same prior-produced candidate to personIngress for governed resolution.
+async function priorProducedPerson(client, propertyId, residentId) {
+  if (!residentId) return null;
+  const q = await client.query(
+    `select s.produced_person_id
+       from import_source_rows s
+       join import_batches b on b.id = s.import_batch_id
+      where b.property_id = $1
+        and s.produced_person_id is not null
+        and s.raw->>'resident_id' = $2
+      order by s.created_at desc
+      limit 1`,
+    [propertyId, String(residentId)]);
+  return q.rows[0] ? q.rows[0].produced_person_id : null;
+}
+
 /*  Pre-flight. Runs over the source's distinct unit numbers BEFORE the
     write loop, so a refusal is a report about the whole file rather than
     a partial load that stopped wherever it happened to notice.  */
@@ -531,25 +550,6 @@ async function loadSnapshot(pool, cfg, inputRows, options = {}) {
       return null;
     }
 
-    //  HISTORY OFFERED AS EVIDENCE, NEVER AS AUTHORITY. A prior import of
-    //  this same source record produced some person; that is a fact about
-    //  what happened, not a statement about who this human is. It rides into
-    //  ingress as a CANDIDATE and a human confirms it.
-    async function priorProducedPerson(row) {
-      if (!row.resident_id) return null;
-      const q = await client.query(
-        `select s.produced_person_id
-           from import_source_rows s
-           join import_batches b on b.id = s.import_batch_id
-          where b.property_id = $1
-            and s.produced_person_id is not null
-            and s.raw->>'resident_id' = $2
-          order by s.created_at desc
-          limit 1`,
-        [propertyId, String(row.resident_id)]);
-      return q.rows[0] ? q.rows[0].produced_person_id : null;
-    }
-
     //  BEFORE ANY WRITE. A source that can only match retired inventory is
     //  a reconciliation question, and the answer is not a partial load.
     await refuseIfSourceOnlyMatchesRetiredInventory(client, propertyId, rows);
@@ -612,7 +612,7 @@ async function loadSnapshot(pool, cfg, inputRows, options = {}) {
             email: row.email || null,
             source_system: options.sourceSystem || null,
             source_record_id: row.resident_id || null,
-            prior_produced_person_id: await priorProducedPerson(row),
+            prior_produced_person_id: await priorProducedPerson(client, propertyId, row.resident_id),
             import_batch_id: batchId,
             source: "historical_snapshot",
             source_type: meta_source_type,
@@ -724,7 +724,7 @@ function summarizeRows(rows) {
   };
 }
 
-function availabilityProjection(rows, positions, asOf) {
+function availabilityProjection(rows, positions, asOf, canonicalOnly = false) {
   const currentByUnit = new Map();
   const futureByUnit = new Map();
   for (const row of rows) {
@@ -737,13 +737,39 @@ function availabilityProjection(rows, positions, asOf) {
     }
   }
   const positionByUnit = new Map();
-  for (const p of positions || []) if (!positionByUnit.has(String(p.unit_number))) positionByUnit.set(String(p.unit_number), p);
+  for (const p of positions || []) {
+    const key = String(p.unit_number);
+    if (!positionByUnit.has(key)) positionByUnit.set(key, []);
+    positionByUnit.get(key).push(p);
+  }
 
   const out = [];
   for (const [unit, cur] of currentByUnit.entries()) {
-    const fut = futureByUnit.get(unit) || [];
-    const pos = positionByUnit.get(unit) || null;
-    const committed = fut.length > 0;
+    const sourceFuture = futureByUnit.get(unit) || [];
+    const unitPositions = positionByUnit.get(unit) || [];
+    const pos = unitPositions[0] || null;
+    // A future source row is evidence awaiting review. Only an actual
+    // canonical lease may close availability, and all positions in a by-bed
+    // unit must be consulted rather than whichever one sorts first.
+    const canonicalFuture = unitPositions
+      .map(p => p.future_lease_position)
+      .filter(Boolean);
+    const commitments = canonicalOnly
+      ? canonicalFuture.map(f => ({
+          lease_id: f.lease_id,
+          resident_name: f.tenants && f.tenants[0] ? f.tenants[0].name || null : null,
+          start_date: f.start_date || null,
+          end_date: f.end_date || null,
+          rent: f.rent == null ? null : Number(f.rent),
+          proof_basis: f.proof_basis || null,
+        }))
+      : sourceFuture.map(r => ({
+          resident_name:r.name,
+          start_date:r.lease_from || r.move_in,
+          end_date:r.lease_to,
+          balance:r.balance,
+        }));
+    const committed = commitments.length > 0;
     const status = cur.status;
     const contractualOpenNow = status === "vacant" && !committed;
     const contractualOpenForward = status === "notice" && !committed;
@@ -766,7 +792,7 @@ function availabilityProjection(rows, positions, asOf) {
       actual_rent: cur.actual_rent,
       lease_end: cur.lease_to,
       move_out: cur.move_out,
-      future_commitments: fut.map(r => ({ resident_name:r.name, start_date:r.lease_from || r.move_in, end_date:r.lease_to, balance:r.balance })),
+      future_commitments: commitments,
       committed,
       contractual_open_now: contractualOpenNow,
       contractual_open_forward: contractualOpenForward,
@@ -809,6 +835,8 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
   });
   const rows     = allRows.filter(r => r.unit_number);
   const unusable = allRows.filter(r => !r.unit_number);
+  const currentRows = rows.filter((r) => r.section !== "future");
+  const futureRows  = rows.filter((r) => r.section === "future");
   if (!rows.length) return { error:"no_rows" };
 
   //  ── ONE TRANSACTION, WHEN THE CALLER NEEDS ONE ──────────────────────
@@ -847,7 +875,7 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
       if (!borrowed) await client.query("rollback");
       return { ok:true, idempotent:true, already_loaded:true, property_id:propertyId,
                import_batch_id:prior.rows[0].id, source_file:sourceFile,
-               source_as_of_date:sourceAsOfDate, parsed_rows:rows.length };
+               source_as_of_date:sourceAsOfDate, parsed_rows:allRows.length };
     }
     const batch = (await client.query(
       `insert into import_batches
@@ -856,16 +884,20 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
        values ($1,'rent_roll_ledger',$2,$3,$4,$5,'parsed',$6,$7) returning id`,
       [propertyId, sourceFile, sourceAsOfDate, options.leasingModel || "unit",
        options.confidence || "confirmed",
-       options.notes || `Dated rent-roll ledger evidence; ${rows.length} normalized rows. No person or lease records fabricated.`,
+       options.notes || `Dated rent-roll ledger evidence; ${allRows.length} normalized rows. No person or lease records fabricated.`,
        //  The retained file this batch was read from (migration 153/156).
        //  Null for every legacy caller, which is honest: they had only a
        //  filename, and a filename is not a file.
        options.sourceArtifactId || null]
     )).rows[0];
     const batchId=batch.id, unitCache=new Map(), spaceCache=new Map();
-    const counts={source_rows:0,units_created:0,units_reused:0,spaces_created:0,spaces_reused:0,current_rows:0,future_rows:0};
-    //  Same pre-flight, same refusal, before this loader writes anything.
-    await refuseIfSourceOnlyMatchesRetiredInventory(client, propertyId, rows);
+    const counts={source_rows:allRows.length,units_created:0,units_reused:0,spaces_created:0,spaces_reused:0,
+                  current_rows:allRows.filter((r) => r.section !== "future").length,
+                  future_rows:allRows.filter((r) => r.section === "future").length};
+    // Only current rows claim what inventory exists. A future-only reference
+    // to an unknown or retired position remains evidence and a discrepancy;
+    // it cannot abort or reshape the current inventory load.
+    await refuseIfSourceOnlyMatchesRetiredInventory(client, propertyId, currentRows);
 
     /*  ── GRAIN IS THE PROPERTY'S, NOT THE CALLER'S ──────────────────
      *  `options.leasingModel` was only ever stamped onto the batch row; the
@@ -882,7 +914,7 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
      *  placeholder for Room1 and then create Room2/Room3 beside it, which
      *  is the phantom by another route.  */
     const labelsByUnit = new Map();
-    for (const r of rows) {
+    for (const r of currentRows) {
       if (!r.unit_number) continue;
       const l = stableSpaceLabel({ leasing_model: grain }, r);
       if (l === "(bed)") continue;                 //  unnamed: not a position
@@ -892,23 +924,36 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
     }
     const discrepancies = [];
 
-    for (const row of rows) {
-      counts.source_rows++; if(row.section==='future') counts.future_rows++; else counts.current_rows++;
+    // Current rows always run first, even when a workbook lists future rows
+    // first. This lets future evidence resolve the inventory current evidence
+    // established without granting it authority to manufacture that inventory.
+    for (const row of [...currentRows, ...futureRows]) {
+      const isFuture = row.section === "future";
+      let discrepancy = null;
       let unitId=unitCache.get(row.unit_number);
       if(!unitId){
         //  CURRENT inventory only — same rule, same imported predicate.
         const currentId=await resolveCurrentUnitId(client,propertyId,row.unit_number);
-        if(currentId){ unitId=currentId; counts.units_reused++; await client.query(
-          `update units set square_feet=coalesce($3,square_feet),market_rent=coalesce($4,market_rent),
-             import_batch_id=$5,source_type='rent_roll_ledger',source_as_of_date=$6,confidence=$7
-           where id=$1 and property_id=$2`,[unitId,propertyId,row.sqft,row.market_rent,batchId,sourceAsOfDate,options.confidence||'confirmed']);
+        if(currentId){
+          unitId=currentId;
+          if (!isFuture) {
+            counts.units_reused++;
+            await client.query(
+              `update units set square_feet=coalesce($3,square_feet),market_rent=coalesce($4,market_rent),
+                 import_batch_id=$5,source_type='rent_roll_ledger',source_as_of_date=$6,confidence=$7
+               where id=$1 and property_id=$2`,
+              [unitId,propertyId,row.sqft,row.market_rent,batchId,sourceAsOfDate,options.confidence||'confirmed']);
+          }
+        }else if(isFuture){
+          discrepancy = `future source names unit ${row.unit_number}, which is not established as current inventory`;
+          counts.future_units_not_established = (counts.future_units_not_established || 0) + 1;
         }else{
           unitId=(await client.query(
             `insert into units (property_id,unit_number,square_feet,market_rent,import_batch_id,source_type,source_as_of_date,confidence)
              values ($1,$2,$3,$4,$5,'rent_roll_ledger',$6,$7) returning id`,
             [propertyId,row.unit_number,row.sqft,row.market_rent,batchId,sourceAsOfDate,options.confidence||'confirmed'])).rows[0].id; counts.units_created++;
         }
-        unitCache.set(row.unit_number,unitId);
+        if (unitId) unitCache.set(row.unit_number,unitId);
       }
       /*  ── THE RENTABLE POSITION THIS EVIDENCE ROW IS ABOUT ──────────
        *
@@ -931,9 +976,12 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
        *  authority to redefine what the building contains.
        */
       const label = stableSpaceLabel({ leasing_model: grain }, row);
-      let spaceId = null, discrepancy = null;
+      let spaceId = null;
 
-      if (label === "(bed)") {
+      if (!unitId) {
+        // The unit-level discrepancy above is the complete answer. Do not
+        // query, materialize or invent a child position beneath no inventory.
+      } else if (label === "(bed)") {
         //  A by-bed row that never named its bed. Activation doctrine already
         //  calls this ambiguous; turning it into a synthetic "(bed)" position
         //  would invent inventory out of a missing identity.
@@ -946,7 +994,12 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
           const q = await client.query(
             "select id from spaces where unit_id=$1 and space_label=$2 limit 1", [unitId, label]);
           if (q.rows.length) { spaceId = q.rows[0].id; counts.spaces_reused++; }
-          else if (grain === "bed" && !(await unitIsMaterialized(client, unitId))) {
+          else if (isFuture) {
+            discrepancy =
+              `future source names position "${label}" on unit ${row.unit_number}, ` +
+              `which is not one of its established current positions`;
+            counts.future_positions_not_established = (counts.future_positions_not_established || 0) + 1;
+          } else if (grain === "bed" && !(await unitIsMaterialized(client, unitId))) {
             //  FRESH unit on a by-bed property: the canonical writer consumes
             //  the trigger's provisional placeholder and creates exactly the
             //  positions the source names. Not a second inventory writer —
@@ -1171,9 +1224,17 @@ function reconciliationAvailability(doc, asOf) {
 async function readLatestReconciliation(pool, propertyId) {
   const batch = (await pool.query(
     `select id, source_type, source_file, source_as_of_date, leasing_model,
-            confidence, status, loaded_at, notes
-       from import_batches
-      where property_id=$1 and status='committed' and source_type='rent_roll_reconciliation'
+            confidence, status, loaded_at, notes,
+            (select a.id
+               from activations a
+               join opening_tenancy_positions otp
+                 on otp.activation_id=a.id and otp.import_batch_id=b.id
+              where a.import_batch_id=b.id and otp.status='established'
+              limit 1) as activation_id
+       from import_batches b
+      where b.property_id=$1 and b.status='committed'
+        and b.source_type='rent_roll_reconciliation'
+        and ${publishedSourceBatchSql("b")}
       order by source_as_of_date desc nulls last, loaded_at desc limit 1`,
     [propertyId]
   )).rows[0];
@@ -1261,9 +1322,17 @@ async function readLatestSnapshot(pool, propertyId, asOf = null) {
   const reconciliation = await readLatestReconciliation(pool, propertyId);
   const batch = (await pool.query(
     `select id, source_type, source_file, source_as_of_date, leasing_model,
-            confidence, status, loaded_at, notes
-       from import_batches
-      where property_id=$1 and status='committed' and source_type in ('rent_roll_ledger','historical_snapshot')
+            confidence, status, loaded_at, notes,
+            (select a.id
+               from activations a
+               join opening_tenancy_positions otp
+                 on otp.activation_id=a.id and otp.import_batch_id=b.id
+              where a.import_batch_id=b.id and otp.status='established'
+              limit 1) as activation_id
+       from import_batches b
+      where b.property_id=$1 and b.status='committed'
+        and b.source_type in ('rent_roll_ledger','historical_snapshot')
+        and ${publishedSourceBatchSql("b")}
       order by case when source_type='rent_roll_ledger' then 0 else 1 end, source_as_of_date desc nulls last, loaded_at desc limit 1`,
     [propertyId]
   )).rows[0];
@@ -1273,15 +1342,35 @@ async function readLatestSnapshot(pool, propertyId, asOf = null) {
   let rows = [];
   if (batch) {
     const sourceRows = (await pool.query(
-      `select row_index, raw, parse_note from import_source_rows
-        where import_batch_id=$1 order by row_index`, [batch.id]
+      `select isr.row_index, isr.raw, isr.parse_note,
+              pr.id as proposal_id, pr.status as proposal_status,
+              pr.status_reason as proposal_status_reason
+         from import_source_rows isr
+         left join proposed_records pr
+           on pr.import_source_row_id=isr.id and pr.target_type='lease'
+          and pr.activation_id=$2::uuid
+        where isr.import_batch_id=$1
+        order by isr.row_index`, [batch.id, batch.activation_id || null]
     )).rows;
     //  Evidence holds every row the source contained, including ones that
     //  could not be placed (no unit number). Those are evidence, not
     //  positions: showing them here would put blank lines in a rent roll
     //  and inflate every count computed from it. They remain readable
     //  through the batch's source rows, which is where they belong.
-    rows = sourceRows.map((r,i) => normalizeRow(r.raw || {}, i)).filter(r => r.unit_number);
+    rows = sourceRows.map((source,i) => {
+      const row = normalizeRow(source.raw || {}, i);
+      if (!batch.activation_id) return row;
+      const promoted = source.proposal_status === "promoted";
+      return {
+        ...row,
+        source_status: row.status,
+        status: promoted ? row.status : "needs_review",
+        proposal_id: source.proposal_id || null,
+        proposal_status: source.proposal_status || null,
+        proposal_status_reason: source.proposal_status_reason || source.parse_note || null,
+        publication_status: promoted ? "published" : "held_for_review",
+      };
+    }).filter(r => r.unit_number);
   } else if (reconciliation) {
     rows = reconciliationRows(reconciliation.document);
   }
@@ -1353,8 +1442,27 @@ async function readLatestSnapshot(pool, propertyId, asOf = null) {
     }
   }
 
-  const summary = summarizeRows(rows);
-  let availability = availabilityProjection(rows, positions, effectiveAsOf);
+  const operatingRows = batch && batch.activation_id
+    ? rows.filter(row => row.publication_status === "published")
+    : rows;
+  const summary = summarizeRows(operatingRows);
+  summary.source_rows = rows.length;
+  summary.source_current_rows = rows.filter(row => row.section !== "future").length;
+  summary.source_future_rows = rows.filter(row => row.section === "future").length;
+  summary.held_for_review = rows.filter(row => row.publication_status === "held_for_review").length;
+  // `future_rows` has always described source evidence. Preserve that count
+  // while separating it from the canonical commitment count below.
+  summary.future_rows = summary.source_future_rows;
+  // Source future rows remain visible and counted as evidence (`future_rows`).
+  // A commitment count is an operating statement and comes only from the
+  // canonical lease reader used by availability below.
+  if (batch && batch.activation_id) {
+    summary.future_commitments = new Set((positions || [])
+      .map(p => p.future_lease_position && p.future_lease_position.lease_id)
+      .filter(Boolean)).size;
+  }
+  let availability = availabilityProjection(
+    operatingRows, positions, effectiveAsOf, Boolean(batch && batch.activation_id));
   if (doc) {
     const inv = doc.inventory || {};
     summary.inventory = Number(inv.residential_units || summary.inventory || 0);
@@ -1619,6 +1727,7 @@ module.exports.loadLedgerSnapshot = loadLedgerSnapshot;
 //  function the evidence pass uses. Two copies of "which unit is this?"
 //  would diverge, and would diverge silently.
 module.exports.resolveCurrentUnitId = resolveCurrentUnitId;
+module.exports.priorProducedPerson = priorProducedPerson;
 module.exports.loadReconciliation = loadReconciliation;
 module.exports.readLatestReconciliation = readLatestReconciliation;
 module.exports.reconciliationAvailability = reconciliationAvailability;

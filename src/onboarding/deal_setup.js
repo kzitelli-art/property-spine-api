@@ -342,7 +342,8 @@ module.exports = function dealSetup({ pool, upload }) {
     } catch (e) { fail(res, e); }
   });
 
-  //  STEP 2: the rows the app parsed, plus the artifact they came from.
+  // STEP 2: interpret the retained artifact. Optional legacy rows are checked
+  // for agreement by the service; they can never replace the retained bytes.
   router.post("/deal-setup/activations/:activationId/read-source",
     requireHuman, rejectBodyActor, async (req, res) => {
     try {
@@ -388,6 +389,14 @@ module.exports = function dealSetup({ pool, upload }) {
         reason: (req.body || {}).reason || null });
       res.json(out);
     } catch (e) { fail(res, e); }
+  });
+
+  router.post("/deal-setup/proposals/:proposedId/resolve-resident", requireHuman, rejectBodyActor, async (req,res) => {
+    try {
+      res.json(await activation.resolveResidentIdentity(pool,{
+        user_id:req.human.id,proposed_id:req.params.proposedId,
+        action:(req.body || {}).action,person_id:(req.body || {}).person_id || null}));
+    } catch(error) { fail(res,error); }
   });
 
   router.post("/deal-setup/activations/:activationId/establish", requireHuman, rejectBodyActor, async (req, res) => {

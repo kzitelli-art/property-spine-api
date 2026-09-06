@@ -285,41 +285,72 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
          *  reader cannot point at is not a basis an operator can check —
          *  the trace, Ask Spine and the row detail all need to name the
          *  exact record, not just repeat its verdict. */
-        (select jsonb_build_object(
-                  'claim', case
-                    when pr.status = 'needs_review' then 'unreconciled'
-                    when coalesce(pr.normalized_json->>'is_vacant','false') = 'true'
-                         or pr.normalized_json->>'tenant_name' is null then 'vacant'
-                    else 'occupied'
-                  end,
-                  'proposal_id', pr.id,
-                  'proposal_status', pr.status,
-                  'natural_key', pr.natural_key,
-                  'opening_position_id', otp.id,
-                  'opening_position_as_of', to_char(otp.as_of_date,'YYYY-MM-DD'))
-           from opening_tenancy_positions otp
-           join proposed_records pr
-             on pr.activation_id = otp.activation_id
-            and pr.status in ('promoted','needs_review')
-            and (
-              lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number || '|' || s.space_label))
-              --  A key naming only the unit answers for the whole unit ONLY
-              --  when the unit is one position. Spreading it across a
-              --  three-bed unit would invent an answer for two beds the
-              --  source never named.
-              or (lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number))
-                  and (select count(*) from spaces s2 where s2.unit_id = u.id) = 1)
-            )
-          --  THE CHOSEN BASELINE, BY ID. Not "whichever row is currently
-          --  marked established" — see openingBaselineAsOf above. A null
-          --  baseline yields a null claim for every bed, which the reader
-          --  reports as a property-level NOT_ESTABLISHED rather than as
-          --  160 individual review exceptions.
-          where otp.id = $2::uuid
-          order by case when lower(btrim(pr.natural_key))
-                             = lower(btrim(u.unit_number || '|' || s.space_label))
-                        then 0 else 1 end
-          limit 1) as opening_space_claim
+        (select case
+                  when count(*) = 0 then null
+                  -- Two current rows that disagree are not an invitation to
+                  -- choose the exact key or the first row. They are an
+                  -- unresolved opening-position claim until reconciled.
+                  when count(distinct candidate.claim) > 1 then
+                    jsonb_build_object(
+                      'claim', 'unreconciled',
+                      'proposal_id', null,
+                      'proposal_status', 'needs_review',
+                      'natural_key', null,
+                      'opening_position_id', (array_agg(candidate.opening_position_id))[1],
+                      'opening_position_as_of', max(candidate.opening_position_as_of),
+                      'conflict_reason', 'conflicting_current_opening_claims',
+                      'conflicting_proposal_ids',
+                        jsonb_agg(candidate.proposal_id order by candidate.match_rank, candidate.proposal_id))
+                  else
+                    (jsonb_agg(candidate.answer
+                       order by candidate.match_rank, candidate.proposal_id))->0
+                end
+           from (
+             select
+               pr.id as proposal_id,
+               case when lower(btrim(pr.natural_key))
+                          = lower(btrim(u.unit_number || '|' || s.space_label))
+                    then 0 else 1 end as match_rank,
+               case
+                 when pr.status in ('needs_review','conflicted') then 'unreconciled'
+                 when coalesce(pr.normalized_json->>'is_vacant','false') = 'true'
+                      or pr.normalized_json->>'tenant_name' is null then 'vacant'
+                 else 'occupied'
+               end as claim,
+               otp.id as opening_position_id,
+               to_char(otp.as_of_date,'YYYY-MM-DD') as opening_position_as_of,
+               jsonb_build_object(
+                 'claim', case
+                   when pr.status in ('needs_review','conflicted') then 'unreconciled'
+                   when coalesce(pr.normalized_json->>'is_vacant','false') = 'true'
+                        or pr.normalized_json->>'tenant_name' is null then 'vacant'
+                   else 'occupied'
+                 end,
+                 'proposal_id', pr.id,
+                 'proposal_status', pr.status,
+                 'natural_key', pr.natural_key,
+                 'opening_position_id', otp.id,
+                 'opening_position_as_of', to_char(otp.as_of_date,'YYYY-MM-DD')) as answer
+               from opening_tenancy_positions otp
+               join proposed_records pr
+                 on pr.activation_id = otp.activation_id
+                and pr.target_type = 'lease'
+                and pr.status in ('promoted','needs_review','conflicted')
+                -- Legacy proposals predate the section field and remain
+                -- current opening evidence. Explicit future proposals never
+                -- answer the current occupancy fallback.
+                and coalesce(lower(pr.normalized_json->>'section'), 'current') = 'current'
+                and (
+                  lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number || '|' || s.space_label))
+                  -- A unit-only key answers only when the unit has one
+                  -- rentable position; it never spreads across a bed set.
+                  or (lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number))
+                      and (select count(*) from spaces s2 where s2.unit_id = u.id) = 1)
+                )
+              -- THE CHOSEN BASELINE, BY ID. A null baseline produces zero
+              -- candidates and therefore a null property-level claim.
+              where otp.id = $2::uuid
+           ) candidate) as opening_space_claim
       from spaces s
       join units u on u.id=s.unit_id
      where u.property_id=$1

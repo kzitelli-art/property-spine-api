@@ -372,12 +372,18 @@ async function store(db, {
   //  escrow statement when Spine holds it as a tax bill — a small lie, in
   //  the one place the product is supposed to be exact about provenance.
   const existing = (await db.query(
-    `select id, original_filename, artifact_kind, byte_size, sha256, uploaded_at
+    `select id, original_filename, artifact_kind, byte_size, sha256, uploaded_at, source_as_of_date
        from source_artifacts
       where scope_type = $1 and scope_id = $2 and sha256 = $3
       limit 1`,
     [scope_type, scope_id, v.sha256])).rows[0];
   if (existing) {
+    const dateText = value => value == null ? null : value instanceof Date
+      ? value.toISOString().slice(0,10) : String(value);
+    if (existing.artifact_kind === "rent_roll" && artifact_kind === "rent_roll" && source_as_of_date != null
+        && dateText(existing.source_as_of_date) !== dateText(source_as_of_date)) {
+      throw refusal("source_date_mismatch", "These bytes are already retained with a different source date. The earlier source has not been relabelled.");
+    }
     const mismatched = existing.artifact_kind !== artifact_kind;
     return { ...existing, deduplicated: true, requested_artifact_kind: artifact_kind,
       kind_differs: mismatched,

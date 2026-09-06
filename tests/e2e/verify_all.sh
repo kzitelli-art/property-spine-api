@@ -29,6 +29,7 @@ export E2E_PROOF_MANIFEST="$RUN_DIR/ownership.json"
 export E2E_SMS_LOG="$RUN_DIR/sms.log" E2E_ANTHROPIC_LOG="$RUN_DIR/anthropic.log" E2E_EGRESS_LOG="$RUN_DIR/egress.log"
 export E2E_SESSION_LOG="$RUN_DIR/sessions.log"
 SERVER_PID=""
+PARENT_WORKTREE=""
 stop_owned_server () {
   local result=0
   if [ -n "$SERVER_PID" ]; then
@@ -45,6 +46,10 @@ cleanup () {
   local result=$?
   trap - EXIT INT TERM
   stop_owned_server || result=1
+  if [ -n "$PARENT_WORKTREE" ] && [ -e "$PARENT_WORKTREE/.git" ]; then
+    git worktree remove --force "$PARENT_WORKTREE" || result=1
+    PARENT_WORKTREE=""
+  fi
   if [ -f "$E2E_PROOF_MANIFEST" ]; then
     node tests/e2e/proof_boundary.js cleanup || result=1
   fi
@@ -78,6 +83,7 @@ step "proof boundary refusal checks" node tests/e2e/proof_boundary.test.js
 step "source governance gates"   node tests/verify_source_governance.js
 step "next-action oracle"        node src/shared/proof_next_action_resolver.js
 step "application review actions" node tests/unit/application_review_action_contract.test.js
+step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
 
 # ── build the schema from the REAL chain ────────────────────────────
 node tests/e2e/proof_boundary.js create >"$RUN_DIR/env.sh" || exit 1
@@ -119,10 +125,36 @@ fi
 step "parent legacy ingestion open" env PROOF_EXPECT_LEGACY_OPEN=1 E2E_EXPECT_SERVER_COMMIT="$RETIREMENT_PARENT" node tests/e2e/legacy_ingestion_retired.e2e.js
 stop_owned_server || exit 1
 
+# The onboarding witnesses inspect the real git identity and cleanliness of
+# the business source they load. Keep the pinned parent as a detached worktree
+# rather than an archive so those checks remain meaningful.
+ONBOARDING_PARENT=e09c5411e2c072c3452e48b434a9f8a8250ce1bb
+PARENT_WORKTREE="$RUN_DIR/onboarding-parent"
+git worktree add --detach "$PARENT_WORKTREE" "$ONBOARDING_PARENT" >"$RUN_DIR/onboarding-parent-worktree.log" 2>&1 || {
+  tail -40 "$RUN_DIR/onboarding-parent-worktree.log"
+  exit 1
+}
+ln -s "$ROOT/node_modules" "$PARENT_WORKTREE/node_modules" || exit 1
+step "parent onboarding source defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_source.db.js
+step "parent onboarding lifecycle defect" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_lifecycle.db.js
+step "parent onboarding snapshot defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_snapshot.db.js
+git worktree remove --force "$PARENT_WORKTREE" || exit 1
+PARENT_WORKTREE=""
+
+# This pending schema belongs only to the owned disposable proof database.
+# Reassert the marker immediately before applying it; it is not in the
+# production migration chain yet.
+step "owned DB before pending claim DDL" node tests/e2e/proof_boundary.js check
+step "pending source claim identity" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f migrations/pending/proposed_source_claim_identity.sql
+
 # ── lease / guarantor database proofs ───────────────────────────────
 # These use the repository's production-refusing harness boundary. CI's
 # E2E database is disposable and becomes the explicit harness target;
 # there is no fallback to DATABASE_URL.
+step "canonical onboarding source" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_source.db.js
+step "canonical onboarding ledger" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_ledger.db.js
+step "canonical onboarding lifecycle" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_lifecycle.db.js
+step "canonical onboarding snapshot" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_snapshot.db.js
 step "governing lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/governing_lease_execution.db.js
 step "canonical lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/spine_lease_execution.db.js
 step "lease guarantor signing"   env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/lease_guarantor_signing.db.js
