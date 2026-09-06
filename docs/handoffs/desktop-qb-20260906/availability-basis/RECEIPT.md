@@ -190,3 +190,95 @@ Priority 3 rules out broadcasting one claim to N beds, and with the
 availability guard in place the beds already read unknown on all three
 readers. What remains is intelligibility of the retained claim, which is
 Priority 3's question.
+
+---
+
+# Priority 2 — a historical claim never acquires a new identity (same day)
+
+API `857cf34` on the same candidate branch. Reader only: `src/tenancy/space_position.js`,
+proof `tests/proofs/opening_claim_identity.db.js`, wired into `verify_all.sh`.
+
+## Question
+
+Does an old opening claim follow a replaced unit with the same number, a
+changed room label, or a multi-room set that later becomes single-room? Tested
+with linked lineage (an `import_source_rows` row carrying
+`produced_unit_id`/`produced_space_id`) and null lineage (no evidence row)
+separately, each case on its own synthetic property.
+
+## What the unrepaired reader did (witness mode, 17/17 on `586da32`)
+
+| Case | Lineage | Observed on the unrepaired reader |
+|---|---|---|
+| A replaced unit, same number | null | claim re-attached to the replacement unit by number text |
+| B replaced unit, same number | linked to the retired space | lineage ignored; claim followed the number |
+| C room relabelled | linked | claim lost; the bed read not established |
+| C room relabelled | null | unknown (correct; labels are not identity) |
+| D 3 beds shrunk to 1 (synthetic; no product writer deletes a space) | unit-linked, no space | bare-unit claim attached to the remaining bed |
+| B downstream | linked | Rent Roll open 1 · availability marketable_now 1 · Ask open 1 on the retired unit's claim |
+
+Two facts learned on the way: `uq_unit_per_property` forbids two live rows
+with one number, so a replacement requires the retired row to be renamed
+first (the retirement row keeps `original_unit_number`); and the baseline
+table admits one current baseline per property with a deferred shape guard,
+so the proof supersedes exactly the way `establishOpeningPosition` does.
+
+## The rule now
+
+```text
+1. produced_space_id          → that position only (survives a relabel;
+                                 never follows a number onto new inventory)
+2. produced_unit_id, no space → inside THAT unit only: named key by label;
+                                 bare key only for the unit's whole-unit
+                                 position — never a bed
+3. no lineage (legacy rows)   → text: exact unit|label, or bare key for a
+                                 whole-unit position; and never once a
+                                 retired unit has carried this number
+```
+
+No creation timestamp, no count of one. The `count(*) = 1` rule is gone;
+grain (`position_kind`, or the whole-unit label when unset, derived exactly
+as `dated_positions` does) replaces it.
+
+## Successor (17/17) and controls
+
+A and B: the replacement unit inherits nothing. C linked: the claim follows
+its durable space through the relabel; C null: stays unknown. D: a bare-unit
+claim never attaches to a bed. E: linked whole-unit, legacy whole-unit with
+no retirement history, and a bed confirmed by bed all still resolve. F: a
+read between two baselines answers from the earlier one, after the later
+one from it; an operative lease outranks either at every date. Downstream
+on B: Rent Roll `not_established 1 / open 0`, availability
+`marketable_now 0 / occupancy_unknown 1`, Ask `not_established 1 / open 0`.
+No proposal row rewritten. The witness re-run on the fixed reader fails at
+exactly the five defect assertions and at nothing else.
+
+Regression on the fixed reader over real HTTP: space-availability successor,
+historical successor challenge, leasing clean path, hostile (16/16),
+reconciliation, standing, Ask Spine — PASS. Unit gates 4/4 and 4/4.
+
+## What this changes for existing data, and one count QB should take
+
+A historical **unlinked** bare-unit confirmation on a unit whose single
+position is a bed (label not "(whole unit)", `position_kind` not `unit`)
+used to resolve by count-of-one and now reads not established. New
+confirmations are unaffected: QB's writer records `produced_space_id`, which
+rule 1 honours regardless of grain. QB should count rows of that historical
+shape on the owned database before release; if the count is material, the
+decision is whether to backfill `produced_space_id` for them by a governed
+correction, not to reinstate count-of-one in the reader.
+
+## Recorded, not changed
+
+- The legacy `/operator/rent-roll` projection (`snapshot_loader.js`,
+  `sourceRowPosition`) prefers `produced_space_id` but for null-lineage rows
+  still resolves by text with `matches.length === 1` — the same class, one
+  reader over. Out of this slice; the canonical readers are the ones the
+  signed-in app uses.
+- Case D cannot occur through any product writer (retirement is unit-level;
+  only `seed_snapshot.js` deletes spaces). It is asserted anyway because the
+  rule is about grain, not about reachability.
+- `opening_claim_identity.db.js` is database-level: it calls the same
+  `unitRentRoll`, `availabilityRead` and `readTenancyStanding` the routes
+  call, not the routes. HTTP agreement for the same basis is covered by the
+  space-availability successor proof.

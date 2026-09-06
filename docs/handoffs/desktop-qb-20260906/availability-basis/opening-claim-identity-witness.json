@@ -1,0 +1,76 @@
+{
+  "mode": "positive_defect_witness",
+  "evidence": [
+    {
+      "case": "A_replaced_unit_null_lineage",
+      "after": {
+        "state": "established",
+        "type": "opening_claim_vacant",
+        "claim": "vacant",
+        "proposal": "<synthetic>"
+      }
+    },
+    {
+      "case": "B_replaced_unit_linked_lineage",
+      "after": {
+        "state": "established",
+        "type": "opening_claim_vacant",
+        "claim": "vacant",
+        "proposal": "<synthetic>"
+      }
+    },
+    {
+      "case": "C_relabel",
+      "linked": {
+        "state": "not_established",
+        "type": null,
+        "claim": "unknown",
+        "proposal": null
+      },
+      "null_lineage": {
+        "state": "not_established",
+        "type": null,
+        "claim": "unknown",
+        "proposal": null
+      }
+    },
+    {
+      "case": "D_shrink_to_single_bed",
+      "after": {
+        "state": "established",
+        "type": "opening_claim_vacant",
+        "claim": "vacant",
+        "proposal": "<synthetic>"
+      }
+    },
+    {
+      "case": "E_valid_confirmations",
+      "basis": [
+        "opening_claim_vacant",
+        "opening_claim_vacant",
+        "opening_claim_vacant"
+      ]
+    },
+    {
+      "case": "F_temporal_and_lease",
+      "june": "opening_claim_vacant",
+      "july": "opening_claim_occupied",
+      "leased": "operative_lease"
+    },
+    {
+      "case": "B_downstream_agreement",
+      "rent_roll": {
+        "not_established": 0,
+        "open": 1
+      },
+      "availability": {
+        "marketable_now": 1,
+        "occupancy_unknown": 0
+      },
+      "ask": {
+        "not_established": 0,
+        "open": 1
+      }
+    }
+  ]
+}
