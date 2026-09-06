@@ -6,7 +6,7 @@ Prepared September 6, 2026 for Kameron to start a **new QB task on his desktop**
 
 Read this file, then [EXECUTION_RECEIPT.md](docs/handoffs/astra-qb-20260906/EXECUTION_RECEIPT.md). The receipt is the final authority for which checks actually finished before shutdown. Use [START_NEW_QB.md](docs/handoffs/astra-qb-20260906/START_NEW_QB.md) as the opening prompt for the desktop task.
 
-**The new onboarding candidate is pushed but is not a release approval.** The immediate milestone is real July source → retained evidence → canonical review → restart, without confirming actual resident claims. API CI run399 passed at cc896dcd, including all new synthetic suites and the existing selected regressions. A Windows local run independently passed the new synthetic suites but stopped at an existing HTTP assertion because retained CSV interpretation disagreed with matching caller rows. The final receipt records the disposition and any later candidate. Do not confuse the successful first-red proof or green CI with successful real-source onboarding.
+**The new onboarding candidate is pushed but is not a release approval.** The immediate milestone is real July source → retained evidence → canonical review → restart, without confirming actual resident claims. API CI run400 passed at1228721, including the CSV portability repair, new synthetic suites and existing selected regressions. A prior Windows run independently passed the new synthetic suites and exposed that CSV defect; its successor local run is tracked in the final receipt. Do not confuse the successful first-red proof or green CI with successful real-source onboarding.
 
 ## Exact custody
 
