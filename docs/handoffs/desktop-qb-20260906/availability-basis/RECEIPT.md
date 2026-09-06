@@ -363,3 +363,84 @@ leasing suites PASS over real HTTP.
    unit lacks stays unattached even when one bed is unnamed. Both are
    listed by key so a person can confirm by bed. That is the whole of what
    the existing owners can carry.
+
+---
+
+# Priority 4 — readiness: one connection made, one ruling owed (same day)
+
+API `7c0fc48`, app `8baf740`. CI run 424 (`e86b746`) and run 425 (`7c0fc48`)
+green; runs 417–423 on this branch were red and were mine (the guard
+exposed the e2e fixture's unestablished bed, fixed by `7417c87`; my grain
+condition contradicted the ledger ruling, restored by `e86b746`).
+
+## What the readiness owners are
+
+| Owner | Where | Says |
+|---|---|---|
+| Certified final walk (BUILD 4) | `unit_readiness_certifications`, state `ready`, revocable by a superseding `revoked`/`corrected` row (`readiness_service.correctCertification`) | ready |
+| Confirmed initial triage (BUILD 1) | `unit_triage_confirmations` → `deriveReadiness` | unknown (triage is not an inspection) or not_ready |
+| Walk assigned, not done | open `initial_unit_walk` obligation | unknown |
+| No confirmation at all | `deriveReadiness({confirmation:null})` | unknown, `no_initial_walk_recorded` |
+| Classifier | `position_classifier.js`: `turning` if a turn is in progress else `ready` | "no turn open", nothing more |
+
+Turnover completion is not certification ("Readiness comes from a
+certified final walk, not from closed work", `unit_turn_read.js`), and the
+classifier only sees turns in progress, which is why the earlier blanket
+`unknown` guard emptied marketable inventory: every position without an
+open turn became unknown at once.
+
+## Observed (`availability_readiness_axis.db.js`, seven shapes, all with an established vacancy basis)
+
+| Unit | Shape | marketing_state | row readiness before | owner says |
+|---|---|---|---|---|
+| 301 | nothing recorded | marketable_now | ready | unknown |
+| 302 | walk assigned, not done | readiness_unknown | ready | unknown |
+| 303 | triaged, no blocker | readiness_unknown | ready | unknown |
+| 304 | triaged, severe | not_ready_confirmed | ready | not_ready |
+| 305 | certified | marketable_now | ready | ready |
+| 306 | certified, then revoked | marketable_now | ready | unknown |
+| 307 | turn completed | marketable_now | ready | unknown |
+
+Every row said `ready`, including the one the same read held as not ready
+and the two it held as unknown. The page rendered "Ready" for all seven.
+
+## The connection made (no policy taken)
+
+The availability row's `physical_readiness` now relays the owners the read
+already loads per unit, and `readiness_basis` names which one answered:
+`certification`, `initial_triage`, `walk_assigned_not_done`,
+`turnover_in_progress`, or `none`. The app renders it as served: Ready
+(with "· certified"), Not ready, Turn in progress, Readiness unknown.
+`marketing_state` is unchanged for every shape. Witness 13/13 against an
+`e86b746` worktree; successor 13/13; both fixtures of the browser spaces
+phase PASS, and the unknown-room screenshot now shows Room2 as
+"Marketable now · Readiness unknown".
+
+## The ruling owed — for Kameron, in operating terms
+
+Three shapes are offered as marketable today while every readiness owner
+says nobody has established the unit is ready: **never walked** (301),
+**certification revoked** (306), and **turn completed but not certified**
+(307). Availability's own doctrine is *vacant ≠ ready ≠ marketable*, and
+the page now says "Marketable now · Readiness unknown" for them, which is
+honest but is a contradiction the operator can see. The options:
+
+1. **Keep offering them** (today). Honest label, marketable inventory
+   unchanged. A prospect can be shown a unit nobody has confirmed is ready.
+2. **Require a live certification to be marketable.** The BUILD 4 rule as
+   written. On a property with no certified walks this empties marketable
+   inventory to zero until walks are certified; that is what the earlier
+   reverted guard did by accident, and it would now do on purpose.
+3. **Require at least a confirmed triage with no blocker**, and treat a
+   revoked certification as "not ready until re-walked" rather than as
+   "never looked". Narrower than 2; still zero on a property with no
+   walks recorded.
+
+Whichever is chosen, revocation deserves its own answer: today revoking a
+certification returns the unit to exactly the state of one nobody ever
+looked at, and under option 1 that means it is offered again immediately.
+
+Not done here: no marketing policy change, no backfill of certifications,
+no equating of an empty task list or a completed turn with readiness.
+QB should count the three shapes on the owned July/Skyline database before
+the ruling is taken.
