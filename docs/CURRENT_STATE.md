@@ -20,7 +20,10 @@ revised when the migration becomes part of the numbered chain.
 alongside unassigned_future; the paired app reads those canonical counts and
 keeps unavailable counts unknown. The browser proof totals all seven statuses.
 Synthetic conflicting-current and current-without-unit witnesses are added to
-the existing retained-source path. Execution/acceptance is recorded separately
+the existing retained-source path. Full owned browser/database review, restart,
+lineage and mixed proof passed at API8fd9e9b/app7f4878e; CI34039624425 passed
+on exact API8fd9e9b. The F1 ceiling192 failure and pending-index success both
+executed. Actual-source confirmations remained zero. Execution/acceptance is recorded separately
 in docs/handoffs/desktop-qb-20260906/FABLE_DISPOSITION.md.
 
 **Residual boundaries (F4/F5):** confirmed is an admitted database status but
