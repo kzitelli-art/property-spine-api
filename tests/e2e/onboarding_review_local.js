@@ -81,9 +81,15 @@ async function stopServer() {
     execFileSync("git",["diff","--exit-code","HEAD","--","index.html"],{cwd:appRoot,windowsHide:true,stdio:"pipe"});
   }
   if (!baselineMode) {
+    await run(process.execPath, [path.join(ROOT,"tests/proofs/onboarding_claim_index_dependency.db.js")], {
+      env: {...process.env,PROOF_CLAIM_INDEX:"released"},
+    });
     await boundary.assertDatabase();
     await pool.query(fs.readFileSync(path.join(ROOT,"migrations/pending/proposed_source_claim_identity.sql"),"utf8"));
     console.log("PENDING_CLAIM_INDEX_APPLIED_TO_OWNED_LOCAL_DB_ONLY");
+    await run(process.execPath, [path.join(ROOT,"tests/proofs/onboarding_claim_index_dependency.db.js")], {
+      env: {...process.env,PROOF_CLAIM_INDEX:"pending"},
+    });
     for (const proof of ["canonical_onboarding_source.db.js","canonical_onboarding_ledger.db.js","canonical_onboarding_lifecycle.db.js","canonical_onboarding_snapshot.db.js","deal_setup_http.db.js"]) {
       await run(process.execPath, [path.join(ROOT,"tests/proofs",proof)], {
         env: {...process.env,PROOF_EXPECT_DEFECT:"0",PROOF_BUSINESS_ROOT:ROOT,HARNESS_DATABASE_URL:owned.url},

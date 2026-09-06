@@ -1,5 +1,39 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-06 Fable review and owner clarification:** Kameron directly confirmed
+retirement authorization in QB task 01a076e5: "yes it my understanding they were
+not being used and i love improving through simplicfication of code". This
+resolves the authorization question. It does not establish external non-use;
+external traffic remains unverified and production deployment remains held.
+
+**Onboarding release coupling (F1):** the candidate's source-row conflict target
+requires the index predicate in migrations/pending/proposed_source_claim_identity.sql.
+The numbered chain ends at192 and retains the broader natural-key uniqueness.
+Do not deploy this candidate on that chain without separately allocating,
+reviewing and applying the index migration. No migration193 is allocated here;
+no live production schema was inspected. The new owned-DB coupling witness
+must show raw23505 with retained bytes before the pending step, then both
+current/future source claims afterward. Its ceiling192 expectation must be
+revised when the migration becomes part of the numbered chain.
+
+**Fable follow-up candidate:** readActivation now includes unassigned_current
+alongside unassigned_future; the paired app reads those canonical counts and
+keeps unavailable counts unknown. The browser proof totals all seven statuses.
+Synthetic conflicting-current and current-without-unit witnesses are added to
+the existing retained-source path. Execution/acceptance is recorded separately
+in docs/handoffs/desktop-qb-20260906/FABLE_DISPOSITION.md.
+
+**Residual boundaries (F4/F5):** confirmed is an admitted database status but
+currently unreachable for lease confirmation (which promotes directly); its
+visible label is not distinct. No new transition/display behavior is added.
+POST /properties/:id/leasing-basis remains a body-driven writer behind the
+operator-key gate, without staff actor attribution or property-scoped session
+authority. It was explicitly excluded from the nine retired paths; its future
+governance remains a separate decision. Rows39/40 below describe pre-retirement
+proofs: the successor's retired ingestion paths now assert authenticated410,
+not their former actor/property checks. POST /properties is separately retained.
+
+
 **2026-09-05 subsequent owner ruling:** Kameron authorized retirement of the
 nine legacy ingestion HTTP entry points in favor of canonical Deal Setup.
 The candidate returns an explicit 410 after the unchanged operator-key gate;

@@ -145,7 +145,9 @@ PARENT_WORKTREE=""
 # Reassert the marker immediately before applying it; it is not in the
 # production migration chain yet.
 step "owned DB before pending claim DDL" node tests/e2e/proof_boundary.js check
+step "ceiling192 claim index dependency" env PROOF_CLAIM_INDEX=released node tests/proofs/onboarding_claim_index_dependency.db.js
 step "pending source claim identity" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f migrations/pending/proposed_source_claim_identity.sql
+step "pending claim index successor" env PROOF_CLAIM_INDEX=pending node tests/proofs/onboarding_claim_index_dependency.db.js
 
 # ── lease / guarantor database proofs ───────────────────────────────
 # These use the repository's production-refusing harness boundary. CI's

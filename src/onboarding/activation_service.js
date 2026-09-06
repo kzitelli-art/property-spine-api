@@ -1066,11 +1066,11 @@ async function readActivation(db, { user_id, activation_id } = {}) {
     a.total++;
     a[future ? "future" : "current"]++;
     if (n.unit_number) a.assigned++;
-    else if (future) a.unassigned_future++;
+    else a[future ? "unassigned_future" : "unassigned_current"]++;
     if (!future && !n.is_vacant && n.tenant_name && n.actual_rent == null) a.missing_actual_current_occupied++;
     if (future && n.unit_number && n.actual_rent == null) a.missing_actual_assigned_future++;
     return a;
-  }, {total:0,current:0,future:0,assigned:0,unassigned_future:0,missing_actual_current_occupied:0,missing_actual_assigned_future:0});
+  }, {total:0,current:0,future:0,assigned:0,unassigned_future:0,unassigned_current:0,missing_actual_current_occupied:0,missing_actual_assigned_future:0});
 
   const artifact = act.source_artifact_id
     ? await artifacts.describe(db, act.source_artifact_id) : null;

@@ -111,6 +111,16 @@ const sourceRows = [{Unit:"101",Room:"Room1",Resident:"Synthetic Tenant (s123456
     check("wrong-property source leaves no evidence batch",Number((await one(
       "select count(*) from import_batches where property_id=$1",[foreign.property.id])).count) === 0);
 
+    const unassigned = await setup(Buffer.from("Unit,Room,Resident,Actual Rent\n,,Synthetic Unassigned,850\n"));
+    await activation.ingestRentRoll(pool, unassigned.args);
+    const unassignedReview = await activation.readActivation(pool,{user_id:user.id,activation_id:unassigned.act.id});
+    check("current resident without a unit remains one blocked review claim",unassignedReview.proposals.length === 1 && unassignedReview.counts.blocked === 1);
+    check("canonical assignment summary includes current unknown unit",unassignedReview.review_counts.total === 1 && unassignedReview.review_counts.current === 1 && unassignedReview.review_counts.assigned === 0 && unassignedReview.review_counts.unassigned_current === 1 && unassignedReview.review_counts.unassigned_future === 0);
+    const conflicts = await setup(Buffer.from("Unit,Room,Resident,Actual Rent\n101,Room1,Synthetic A,850\n101,Room1,Synthetic B,850\n"));
+    await activation.ingestRentRoll(pool, conflicts.args);
+    const conflictReview = await activation.readActivation(pool,{user_id:user.id,activation_id:conflicts.act.id});
+    check("two disagreeing current claims remain two conflicted proposals",conflictReview.proposals.length === 2 && conflictReview.counts.conflicted === 2 && conflictReview.review_counts.total === 2);
+
     const wrongKind = await setup();
     const otherBytes = Buffer.from("Unit,Resident,Actual Rent\n301,Synthetic Other,800\n");
     const otherArtifact = await artifacts.store(pool,{scope_type:"property",scope_id:wrongKind.property.id,
