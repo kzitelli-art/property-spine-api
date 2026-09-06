@@ -1,0 +1,47 @@
+{
+  "source_lineage_verified": true,
+  "restart_unchanged": true,
+  "real_source_confirmations": 0,
+  "ask_spine_fact_gathering_verified": true,
+  "ask_spine_http_or_model_answer_tested": false,
+  "sources": [
+    {
+      "label": "july",
+      "counts": {
+        "units": 64,
+        "spaces": 105,
+        "leases": 0,
+        "persons": 0,
+        "positions": 0
+      },
+      "rows": 164,
+      "proposals": 164
+    },
+    {
+      "label": "skyline",
+      "counts": {
+        "units": 72,
+        "spaces": 160,
+        "leases": 0,
+        "persons": 0,
+        "positions": 0
+      },
+      "rows": 262,
+      "proposals": 262
+    }
+  ],
+  "custody": {
+    "api": {
+      "head": "990ed5d76737d0b79f5fbae8bf592e0a0bf24dad",
+      "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "working_tree_clean": true,
+      "changed_file_sha256": {}
+    },
+    "app": {
+      "head": "41915ad5a8947fce63729ba8d40c97d6a963dd2b",
+      "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "working_tree_clean": true,
+      "changed_file_sha256": {}
+    }
+  }
+}
