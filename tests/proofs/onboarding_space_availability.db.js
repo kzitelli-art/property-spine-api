@@ -297,7 +297,19 @@ let pool;
     await pool.query("update spaces set use_type='residential' where unit_id in (select id from units where property_id=$1)",[browserFixture.property.id]);
     const marketing=await http(browserFixture.token,"/operator/leasing/availability-canonical?as_of=2026-07-31");
     assert.deepEqual(marketing.body.rows.filter(r=>r.marketing_state==="marketable_now").map(r=>r.space_label).sort(),["Room2","Room3"]);
-    browserFixtures.push({token:browserFixture.token,property_id:browserFixture.property.id,expected_available_labels:["Room2","Room3"]});
+    browserFixtures.push({token:browserFixture.token,property_id:browserFixture.property.id,expected_available_labels:["Room2","Room3"],expected_unresolved_labels:[]});
+    // A second browser fixture carrying an UNKNOWN room: Room3's source row is
+    // never confirmed, so under the established baseline it has no basis. The
+    // page must list it with its identity and the server's reason, dated by
+    // nothing, beside a legitimately marketable Room2 and an excluded Room1.
+    const unknownFixture=await fixture(header+occupied+vacant+vacant.replace("Room2","Room3"));
+    for(const p of unknownFixture.proposals.filter(p=>p.natural_key!=="101|Room3")) assert.equal((await http(unknownFixture.token,`/deal-setup/proposals/${p.id}/confirm`,"POST")).status,200);
+    await activation.establishOpeningPosition(pool,{user_id:user.id,activation_id:unknownFixture.act.id});
+    await pool.query("update spaces set use_type='residential' where unit_id in (select id from units where property_id=$1)",[unknownFixture.property.id]);
+    const unknownMarketing=await http(unknownFixture.token,"/operator/leasing/availability-canonical?as_of=2026-07-31");
+    assert.deepEqual(Object.fromEntries(unknownMarketing.body.rows.map(r=>[r.space_label,r.marketing_state])),
+      {Room1:"occupied",Room2:"marketable_now",Room3:"occupancy_unknown"});
+    browserFixtures.push({token:unknownFixture.token,property_id:unknownFixture.property.id,expected_available_labels:["Room2"],expected_unresolved_labels:["Room3"]});
 
   }
   if(!parent) fs.writeFileSync(path.join(process.env.PROOF_OUTPUT_DIR,"space-state.private.json"),JSON.stringify({fixtures:browserFixtures}));
