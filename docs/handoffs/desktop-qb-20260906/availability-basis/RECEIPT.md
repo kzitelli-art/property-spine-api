@@ -229,22 +229,28 @@ so the proof supersedes exactly the way `establishOpeningPosition` does.
 1. produced_space_id          → that position only (survives a relabel;
                                  never follows a number onto new inventory)
 2. produced_unit_id, no space → inside THAT unit only: named key by label;
-                                 bare key only for the unit's whole-unit
-                                 position — never a bed
-3. no lineage (legacy rows)   → text: exact unit|label, or bare key for a
-                                 whole-unit position; and never once a
+                                 bare key only when the unit has exactly one
+                                 position, whatever its label — never one bed
+                                 among several
+3. no lineage (legacy rows)   → text: exact unit|label, or bare key for the
+                                 unit's sole position; and never once a
                                  retired unit has carried this number
 ```
 
-No creation timestamp, no count of one. The `count(*) = 1` rule is gone;
-grain (`position_kind`, or the whole-unit label when unset, derived exactly
-as `dated_positions` does) replaces it.
+No creation timestamp. The sole-position count decides which of a unit's
+positions a unit-level claim describes; it never decides which unit. A first
+draft replaced it with grain (whole-unit position only) and CI run 423
+falsified that against `canonical_onboarding_ledger.db.js`, which froze the
+ruling that a unit-key current claim answers for a unit's sole bed and an
+exact-key future row never outranks it. The ruling stands.
 
 ## Successor (17/17) and controls
 
 A and B: the replacement unit inherits nothing. C linked: the claim follows
-its durable space through the relabel; C null: stays unknown. D: a bare-unit
-claim never attaches to a bed. E: linked whole-unit, legacy whole-unit with
+its durable space through the relabel; C null: stays unknown. D (recorded,
+both modes): a unit shrunk to one bed is indistinguishable from a unit that
+always had one without an inventory history, so the bare claim attaches; no
+product writer deletes a space. E: linked whole-unit, legacy whole-unit with
 no retirement history, and a bed confirmed by bed all still resolve. F: a
 read between two baselines answers from the earlier one, after the later
 one from it; an operative lease outranks either at every date. Downstream
@@ -259,14 +265,10 @@ reconciliation, standing, Ask Spine — PASS. Unit gates 4/4 and 4/4.
 
 ## What this changes for existing data, and one count QB should take
 
-A historical **unlinked** bare-unit confirmation on a unit whose single
-position is a bed (label not "(whole unit)", `position_kind` not `unit`)
-used to resolve by count-of-one and now reads not established. New
-confirmations are unaffected: QB's writer records `produced_space_id`, which
-rule 1 honours regardless of grain. QB should count rows of that historical
-shape on the owned database before release; if the count is material, the
-decision is whether to backfill `produced_space_id` for them by a governed
-correction, not to reinstate count-of-one in the reader.
+None for units that always had one position: the sole-position ruling is
+kept. The classes that change are the three the witness shows — a claim
+against retired inventory, a linked claim on a relabelled room, and a
+placeholder beside real beds — and none of them was a valid confirmation.
 
 ## Recorded, not changed
 
@@ -326,10 +328,10 @@ two established, two marketable, for one real vacancy.
   Rent Roll unit view: `totals.confirmed_rows_not_attached`,
   `totals.held_rows_not_attached`, `unattached_source_rows`. Ask Spine reads
   the standing projection unchanged (`withoutDatabaseIds` keeps labels).
-- A bare unit key answers only for a whole-unit position that is the unit's
-  **only** position. This is a grain-consistency condition, not identity:
-  identity is still the lineage (Priority 2). It closes the phantom
-  absorption above.
+- A bare unit key answers only when the unit has exactly one position.
+  Identity is still the lineage (Priority 2); the count decides which
+  position a unit-level claim describes. A placeholder beside three beds is
+  one of four, so it absorbs nothing — the phantom absorption above.
 
 ## Successor (14/14)
 

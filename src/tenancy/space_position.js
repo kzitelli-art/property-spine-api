@@ -361,29 +361,27 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
                   --    follows a unit number onto replacement inventory.
                   (isr.produced_space_id is not null and isr.produced_space_id = s.id)
                   -- 2. DURABLE UNIT LINEAGE, no space: inside THAT unit only.
-                  --    A named key matches its label there; a bare key is a
-                  --    claim about the unit and answers only for the unit's
-                  --    whole-unit position — never for a bed, however many
-                  --    beds the unit has today.
+                  --    A named key matches its label there. A bare key is a
+                  --    claim about the unit and answers only when the unit
+                  --    has exactly ONE position — that position, whatever its
+                  --    label (the ruling canonical_onboarding_ledger.db.js
+                  --    froze: a unit-key current claim answers for the unit's
+                  --    sole bed, and an exact-key future row never outranks
+                  --    it). It never spreads across a bed set, and it never
+                  --    attaches to a placeholder left beside real beds — that
+                  --    is an inventory inconsistency, not a rentable
+                  --    position, and a claim on it inflates inventory by one.
                   or (isr.produced_space_id is null and isr.produced_unit_id is not null
                       and isr.produced_unit_id = u.id
                       and (
                         (position('|' in pr.natural_key) > 0
                          and lower(btrim(split_part(pr.natural_key, '|', 2))) = lower(btrim(coalesce(s.space_label, ''))))
                         or (position('|' in pr.natural_key) = 0
-                            and coalesce(s.position_kind,
-                                  case when s.space_label is null or s.space_label ~* 'whole\\s*unit'
-                                       then 'unit' else 'bed' end) = 'unit'
-                            -- and that whole-unit position is the unit's ONLY
-                            -- position. A placeholder left beside real beds
-                            -- is an inventory inconsistency, not a rentable
-                            -- position, and a claim attached to it would
-                            -- inflate marketable inventory by one per unit.
                             and (select count(*) from spaces s2 where s2.unit_id = u.id) = 1)
                       ))
                   -- 3. NO LINEAGE (legacy rows): text is all there is. It
                   --    answers by exact unit|label, or by bare key for a
-                  --    whole-unit position, and never once a retired unit
+                  --    unit's sole position, and never once a retired unit
                   --    has carried this number — the claim may have been
                   --    about the inventory that was retired.
                   or ((isr.id is null or (isr.produced_space_id is null and isr.produced_unit_id is null))
@@ -394,9 +392,6 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
                       and (
                         lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number || '|' || coalesce(s.space_label, '')))
                         or (lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number))
-                            and coalesce(s.position_kind,
-                                  case when s.space_label is null or s.space_label ~* 'whole\\s*unit'
-                                       then 'unit' else 'bed' end) = 'unit'
                             and (select count(*) from spaces s2 where s2.unit_id = u.id) = 1)
                       ))
                 )

@@ -206,6 +206,14 @@ const evidence = [];
     //  unit (no space attached, lineage at the unit only). No product
     //  writer deletes a space — retirement is unit-level and only
     //  seed_snapshot deletes spaces — so the shrink is synthetic here.
+    //
+    //  RECORDED, NOT A DEFECT THE READER CAN SEE. canonical_onboarding_ledger
+    //  froze the ruling that a unit-key current claim answers for a unit's
+    //  sole position whatever its label. Without an inventory history a
+    //  unit that shrank to one bed is indistinguishable from a unit that
+    //  always had one, and the reader does not use creation timestamps as
+    //  history. So the claim attaches after the shrink in both modes; the
+    //  identity anchor is still the durable unit (rule 2), never the number.
     const D = await property("shrink", { "103": ["Room1", "Room2", "Room3"] },
       [{ key: "103", json: { unit_number: "103", is_vacant: true }, linked: true, unit: "103", space: null }]);
     const dBefore = await positionsOf(D);
@@ -214,13 +222,8 @@ const evidence = [];
     await pool.query("delete from spaces where id = any($1::uuid[])", [[D.spaceIds["103|Room2"], D.spaceIds["103|Room3"]]]);
     const dAfter = basisOf(await positionsOf(D), "Room1");
     evidence.push({ case: "D_shrink_to_single_bed", after: dAfter });
-    if (parent) {
-      ok("D (defect): once the unit holds one bed the old bare-unit claim attaches to it",
-        dAfter && dAfter.type === "opening_claim_vacant", JSON.stringify(dAfter));
-    } else {
-      ok("D: a bare-unit claim never attaches to a bed — a bed is not the unit",
-        dAfter && dAfter.state === "not_established" && !dAfter.proposal, JSON.stringify(dAfter));
-    }
+    ok("D (both modes, recorded): once the unit holds one position the bare-unit claim answers for it — the sole-position ruling, not identity drift",
+      dAfter && dAfter.type === "opening_claim_vacant", JSON.stringify(dAfter));
 
     // ── E. VALID SINGLE-POSITION CONFIRMATIONS KEEP ANSWERING ───────────
     //  A whole-unit position (by-unit property) with a linked bare-unit
