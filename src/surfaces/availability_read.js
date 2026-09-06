@@ -362,6 +362,34 @@ const HUMAN = {
   unavailable: "Live read failed",
 };
 
+// ── THE READINESS AXIS, FROM ITS OWNERS ───────────────────────────────
+//  The classifier's `physical_readiness` says `turning` when a turn is in
+//  progress and `ready` otherwise — "ready" meaning no turn is open, not
+//  that anyone looked. Every availability row relayed that default, so a
+//  unit this same read called not_ready_confirmed or readiness_unknown
+//  still said `physical_readiness: ready`, and a unit nobody ever walked,
+//  or whose certification was revoked, read "Ready" on the page (observed
+//  2026-09-06, tests/proofs/availability_readiness_axis.db.js).
+//
+//  Readiness has owners, and this read already loads them per unit: a live
+//  certification (BUILD 4), a confirmed triage (BUILD 1, deriveReadiness),
+//  an assigned-but-unfinished walk, a turn in progress. The row now says
+//  what they say, and names which one answered. Where none has spoken the
+//  honest answer is `unknown` — the same answer deriveReadiness gives with
+//  no confirmation, and the same label the unit-turn read already shows.
+//
+//  THIS CHANGES NO OFFER. marketing_state is decided above, exactly as
+//  before; whether a never-walked or revoked unit should still be offered
+//  is a product ruling and is recorded as one, not taken here.
+function readinessAxis(p) {
+  if (p.physical_readiness === "turning") return { physical_readiness: "turning", readiness_basis: "turnover_in_progress" };
+  const t = p.triage;
+  if (t && t.certified_ready) return { physical_readiness: "ready", readiness_basis: "certification" };
+  if (t && t.pending_walk) return { physical_readiness: "unknown", readiness_basis: "walk_assigned_not_done" };
+  if (t && t.readiness) return { physical_readiness: t.readiness, readiness_basis: "initial_triage" };
+  return { physical_readiness: "unknown", readiness_basis: "none" };
+}
+
 async function availabilityRead(pool, { property_id, as_of = null, horizon_days = 90 } = {}) {
   const dp = await datedPropertyPositions(pool, { property_id, as_of });
   const asOf = dp.as_of;
@@ -516,7 +544,9 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
 
       // Availability's OWN context
       possession_state: p.possession_state,
-      physical_readiness: p.physical_readiness,
+      //  From the readiness owners, never the classifier's "no turn open".
+      physical_readiness: readinessAxis(withOps).physical_readiness,
+      readiness_basis: readinessAxis(withOps).readiness_basis,
       turnover_in_progress: p.physical_readiness === "turning",
       turnover: withOps.turnover ? {
         turnover_id: withOps.turnover.turnover_id,
@@ -631,4 +661,4 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
   };
 }
 
-module.exports = { availabilityRead, marketingState, availableFrom, HUMAN };
+module.exports = { availabilityRead, marketingState, availableFrom, readinessAxis, HUMAN };

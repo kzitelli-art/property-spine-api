@@ -219,7 +219,11 @@ let pool;
           assert.equal(rrUnits.body.totals.not_established,unknownCount);
           assert.equal(rrUnits.body.totals.open,unknownCount ? 0 : 1);
         }
-        assert.ok(av.body.rows.every(r=>r.physical_readiness==="ready" && !r.certified_ready));
+        // The witness records the defect: every row said "ready" with no
+        // certification. The successor relays the readiness owners, and with
+        // nobody having looked the honest answer is unknown.
+        if (witness) assert.ok(av.body.rows.every(r=>r.physical_readiness==="ready" && !r.certified_ready));
+        else assert.ok(av.body.rows.every(r=>r.physical_readiness==="unknown" && r.readiness_basis==="none" && !r.certified_ready));
         const client=await pool.connect(); let facts;
         try {
           await client.query("begin isolation level repeatable read read only");

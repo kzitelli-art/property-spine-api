@@ -165,6 +165,7 @@ step "lease guarantor signing"   env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" no
 step "pricing authority grants union" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/pricing_authority_grants_union.db.js
 step "opening claim identity"     node tests/proofs/opening_claim_identity.db.js
 step "opening claim unattached"   node tests/proofs/opening_claim_unattached.db.js
+step "availability readiness axis" node tests/proofs/availability_readiness_axis.db.js
 step "canonical Deal Setup HTTP" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/deal_setup_http.db.js
 
 # ── the real server, the real HTTP door ─────────────────────────────
