@@ -1,30 +1,28 @@
 # Execution receipt — September 6, 2026
 
-Initial battery-safe publication. A final receipt update may follow before shutdown.
+Battery-safe transfer for a new QB on Kameron's desktop. This receipt distinguishes completed evidence from unfinished real-source acceptance.
 
-## Published candidates
+## Published code
 
-- API `cc896dcd791793f01f832ccd596898770a4fc6da`, pushed to `codex/canonical-onboarding-rehearsal-20260905`.
-- App `180c6d10accb3b0033e20129f07ce4e5e585c0de`, pushed to the same branch name in the app repository.
-- Both working trees were clean immediately after their commits/pushes.
-- No production or provider action, merge, rebase, force-push, production migration or actual-source confirmation was performed.
+- API candidate: `122872154dd58224e80665ddbc10d6dc8cc32d01`, branch `codex/canonical-onboarding-rehearsal-20260905`.
+- Its previous commit: `cc896dcd791793f01f832ccd596898770a4fc6da`.
+- App candidate: `180c6d10accb3b0033e20129f07ce4e5e585c0de`, same branch name in the app repository.
+- Code was committed and pushed; API local/remote equality was verified after the final CSV repair. The app was clean after its commit/push.
+- Handoff branch: `codex/astra-qb-handoff-20260906`, documentation/recovery only, based on e09c541. It is not the product checkout.
 
-## Completed evidence before the final run
+## Verified evidence
 
-- Real July and Skyline first-red on unchanged API e09c541/app4849545: upload201, download200, exact bytes/hash, read-source422 `no_unit_column`, visible `Rent Roll` title-row refusal. Zero attempted external requests in the successful browser run. Owned cleanup verified.
-- Retained-source adapter:12 assertions passed; actual source counts164/262 and original hashes preserved.
-- API source-governance:50 gates passed before final commit.
-- App sanctioned static suite:42 harnesses,1576 assertions passed; includes25 assertions for the new review contract.
-- Positive unmodified-parent source witnesses:7 passed, including actual forged staging, contradictory dating, lost future proposal, asking-to-contract rent and unnamed occupied-to-vacant promotion.
-- Positive unmodified-parent lifecycle witnesses:7 passed, including actual post-establishment decision mutations and stale stored totals.
-- Positive unmodified-parent publication witnesses:15 passed, including open evidence replacing operating reads and unconfirmed future commitments.
-- Candidate source/identity DB proof:29 passed on the working candidate before commit.
-- Candidate ledger DB proof:15/16 passed; the failing assertion used the wrong public field for proposal provenance. Final committed oracle checks the inspected `basis_ref.kind` and `basis_ref.proposal_id`. This is not yet a claimed passing rerun.
+- Real July and Skyline first-red on unchanged API e09c541/app4849545: upload201, download200, exact bytes/hash, read-source422 `no_unit_column`, visible `Rent Roll` title-row refusal. Zero attempted external requests in the successful browser run. Owned cleanup verified. See `first-red-aggregate.json`.
+- App sanctioned static suite: **42 harnesses,1576 assertions passed**, including25 assertions for the new review contract.
+- API source-governance:50 gates passed before the cc896dcd commit.
+- [API CI run399](https://github.com/kzitelli-art/property-spine-api/actions/runs/34033396210) **passed on exact cc896dcd**. Job101486998422 logs were independently inspected: unchanged-parent source7/lifecycle7/publication15; successor source29/ledger16/lifecycle10/publication15; Deal Setup HTTP31; all other selected required assertions and owned cleanup passed. Linux/Node22/PostgreSQL16. This does not exercise private workbooks or the paired app browser.
+- A Windows/PostgreSQL17 local run at exact cc896dcd/app180c6d10 independently passed the same parent suites and successor source29/ledger16/lifecycle10/publication15. It then failed existing Deal Setup HTTP H12 with409 `source_rows_mismatch`; the subsequent test TypeError masked the summary but did not obscure the earlier refusal. The real-source successor browser stage was not reached. Owned database dropped, cluster stopped and data removed.
+- Root cause was reproduced with the unchanged cc896dcd adapter: SheetJS's CSV inference changed `2025-07-01` to `6/30/25` on the EDT laptop. Commit1228721 disables type inference for CSV evidence only. The same positive-parent comparison passed against the successor, preserving dates and lexical decimal text; **13 adapter tests passed**. No assertion was weakened to accept the shifted date.
 
-## Still pending at initial publication
+Earlier ledger15/16 failures were incorrect proof field selection; the corrected public `basis_ref.proposal_id` assertion now passes both CI and Windows. They are not outstanding product failures.
 
-The full owned local run at the exact paired candidate SHAs is in progress. It must complete ledger/lifecycle/publication/HTTP regressions, real-source stage/restart/lineage and synthetic mixed Add All. The new API CI result is not yet asserted. The initial publication therefore does **not** claim a completed Greenery review milestone or release readiness.
+## Final local run
 
-Earlier failed run clusters/databases were stopped and removed with verified owned cleanup. Final process custody will be appended after the last run exits.
+A fresh owned local run at API1228721/app180c6d10 was started after the fix. Its final disposition will be recorded below before shutdown. Until that record exists, **real July/Skyline successor review, restart, lineage and synthetic mixed Add All remain unaccepted**.
 
-Actual workbooks, row data, browser screenshots, session tokens and private fixture IDs are not included in this packet. The first-red aggregate receipt is safe to publish separately; raw logs remain private.
+No production/provider action, deployment, merge, rebase, force-push, production migration or actual-source confirmation was performed. Actual workbooks, row data, browser screenshots, session tokens and private fixture IDs are excluded from Git. Raw diagnostic logs remain private; code, proof runners, instruction packet and curated legacy recovery patches are pushed.

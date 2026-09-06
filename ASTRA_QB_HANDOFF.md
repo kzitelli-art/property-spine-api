@@ -6,14 +6,14 @@ Prepared September 6, 2026 for Kameron to start a **new QB task on his desktop**
 
 Read this file, then [EXECUTION_RECEIPT.md](docs/handoffs/astra-qb-20260906/EXECUTION_RECEIPT.md). The receipt is the final authority for which checks actually finished before shutdown. Use [START_NEW_QB.md](docs/handoffs/astra-qb-20260906/START_NEW_QB.md) as the opening prompt for the desktop task.
 
-**The new onboarding candidate is pushed but is not a release approval.** The immediate milestone is real July source → retained evidence → canonical review → restart, without confirming actual resident claims. At this packet's initial publication, that final successor browser run was still in progress. Do not confuse the successful first-red proof with successful onboarding.
+**The new onboarding candidate is pushed but is not a release approval.** The immediate milestone is real July source → retained evidence → canonical review → restart, without confirming actual resident claims. API CI run399 passed at cc896dcd, including all new synthetic suites and the existing selected regressions. A Windows local run independently passed the new synthetic suites but stopped at an existing HTTP assertion because retained CSV interpretation disagreed with matching caller rows. The final receipt records the disposition and any later candidate. Do not confuse the successful first-red proof or green CI with successful real-source onboarding.
 
 ## Exact custody
 
 | Repository / role | Branch | Exact commit |
 |---|---|---|
 | API: last completed pre-onboarding checkpoint | `codex/qb-proof-checkpoint-20260905` | `e09c5411e2c072c3452e48b434a9f8a8250ce1bb` |
-| API: new onboarding candidate | `codex/canonical-onboarding-rehearsal-20260905` | `cc896dcd791793f01f832ccd596898770a4fc6da` |
+| API: new onboarding candidate | `codex/canonical-onboarding-rehearsal-20260905` | `122872154dd58224e80665ddbc10d6dc8cc32d01` |
 | App: new onboarding candidate | `codex/canonical-onboarding-rehearsal-20260905` | `180c6d10accb3b0033e20129f07ce4e5e585c0de` |
 | App baseline | pinned baseline | `4849545118fc422177bc604389608cdbb55df458` |
 | This transfer packet | `codex/astra-qb-handoff-20260906` | Documentation and archived recovery patches, based on e09c541 |
@@ -81,9 +81,11 @@ The new candidate uses the existing owners:
 | Canonical reads | Opening occupancy excludes explicit future/person proposals and exposes conflicting current claims. Activation-bound evidence cannot publish itself as the operating snapshot or latest confirmed source. Promoted decisions alone affect the published activation projection; held claims stay labeled. Legacy unbound history retains its earlier semantics. |
 | Existing app | Uploads once, asks the server to interpret the artifact/date, shows actual versus asking rent and current/future/unassigned counts, provides explicit identity decisions, and reports real Add All successes/refusals/remaining-ready rows. |
 
-The first successor DB runs passed29 source/identity assertions. The ledger run initially stopped on a **proof field-selection error**, not a failed occupancy result: the public proposal reference is `basis_ref.proposal_id`; an internal field and then a descriptive string field were incorrectly assumed to hold it. The final candidate fixes that assertion without removing the proposal-ID check. Its executed result belongs in the execution receipt.
+The ledger run initially stopped on a **proof field-selection error**, not a failed occupancy result: the public proposal reference is `basis_ref.proposal_id`; an internal field and then a descriptive string field were incorrectly assumed to hold it. The committed candidate fixes that assertion without removing the proposal-ID check. Exact-head CI and the later Windows run both passed source29, ledger16, lifecycle10 and publication15 assertions. CI also passed Deal Setup HTTP31; Windows exposed an additional CSV interpretation discrepancy in that same HTTP suite. See the execution receipt for the final disposition.
 
 Independent review also caught a substantive leak: staging committed evidence could replace the operating Rent Roll and create future availability commitments before approval. Fifteen positive parent assertions now reproduce that class. The candidate publication boundary was added in response, rather than labeling retained-file success as canonical truth.
+
+The final Windows HTTP stop uncovered one additional product defect in cc896dcd: SheetJS inferred CSV ISO dates and rendered them through the host timezone (`2025-07-01` became `6/30/25` on the EDT laptop). Commit1228721 preserves CSV text before canonical mapping; XLS/XLSX handling is unchanged. A direct in-memory test loaded the unchanged cc896dcd module, reproduced the changed date, and passed against the successor; all13 adapter tests passed. This is a successor portability repair, not a claim that d55 had this exact new-adapter defect.
 
 ## Actual source controls and private access
 
