@@ -1,0 +1,17 @@
+{
+  "observed_date": "2026-09-06",
+  "repository": "kzitelli-art/property-spine-api",
+  "head_sha": "122872154dd58224e80665ddbc10d6dc8cc32d01",
+  "run_id": 34034017193,
+  "job_id": 101488674889,
+  "conclusion": "success",
+  "run_url": "https://github.com/kzitelli-art/property-spine-api/actions/runs/34034017193",
+  "job_logs_inspected": true,
+  "retained_adapter_tests": 13,
+  "selected_required_assertions_passed": true,
+  "owned_database_cleanup_verified": true,
+  "private_workbook_browser_covered": false,
+  "paired_app_browser_covered": false,
+  "release_authorized": false,
+  "note": "Sanitized aggregate only. Raw logs and runtime identifiers are intentionally omitted. See EXECUTION_RECEIPT.md for exact scope and separate local browser evidence."
+}
