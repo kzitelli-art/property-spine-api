@@ -6,6 +6,8 @@ Prepared September 6, 2026 for Kameron to start a **new QB task on his desktop**
 
 Read this file, then [EXECUTION_RECEIPT.md](docs/handoffs/astra-qb-20260906/EXECUTION_RECEIPT.md). The receipt is the final authority for which checks actually finished before shutdown. Use [START_NEW_QB.md](docs/handoffs/astra-qb-20260906/START_NEW_QB.md) as the opening prompt for the desktop task.
 
+Then read the [critical review](docs/handoffs/astra-qb-20260906/CRITICAL_REVIEW.md): it sharpens the remaining proof correction across restart, identifies the inherited first-room overlay concern, and distinguishes release/schema/concurrency limits from the next review-only milestone.
+
 **The new onboarding candidate is pushed but is not a release approval.** API CI run400 passed at1228721. The final Windows run passed synthetic/HTTP proofs and July's fixed API review totals, then stopped on a browser proof comparison of zero status counters and a vacancy subtotal against a sparse status histogram. All owned processes/data were cleaned up. The exact next correction is in the final receipt. Complete July/Skyline visible review, restart, lineage and mixed Add All remain unaccepted. Do not confuse the successful first-red proof or green CI with successful real-source onboarding.
 
 ## Exact custody
