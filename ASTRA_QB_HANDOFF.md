@@ -6,7 +6,7 @@ Prepared September 6, 2026 for Kameron to start a **new QB task on his desktop**
 
 Read this file, then [EXECUTION_RECEIPT.md](docs/handoffs/astra-qb-20260906/EXECUTION_RECEIPT.md). The receipt is the final authority for which checks actually finished before shutdown. Use [START_NEW_QB.md](docs/handoffs/astra-qb-20260906/START_NEW_QB.md) as the opening prompt for the desktop task.
 
-**The new onboarding candidate is pushed but is not a release approval.** The immediate milestone is real July source → retained evidence → canonical review → restart, without confirming actual resident claims. API CI run400 passed at1228721, including the CSV portability repair, new synthetic suites and existing selected regressions. A prior Windows run independently passed the new synthetic suites and exposed that CSV defect; its successor local run is tracked in the final receipt. Do not confuse the successful first-red proof or green CI with successful real-source onboarding.
+**The new onboarding candidate is pushed but is not a release approval.** API CI run400 passed at1228721. The final Windows run passed synthetic/HTTP proofs and July's fixed API review totals, then stopped on a browser proof comparison of zero status counters and a vacancy subtotal against a sparse status histogram. All owned processes/data were cleaned up. The exact next correction is in the final receipt. Complete July/Skyline visible review, restart, lineage and mixed Add All remain unaccepted. Do not confuse the successful first-red proof or green CI with successful real-source onboarding.
 
 ## Exact custody
 
@@ -132,7 +132,7 @@ API CI now includes the adapter and synthetic parent/successor source, lifecycle
 
 The final execution receipt may complete some of these; do not redo finished checks.
 
-1. Resolve the actual last failing proof, preserving positive-parent and successor assertions. Establish a clean July/Skyline review-and-restart checkpoint on the paired candidate SHAs.
+1. Correct the browser proof's status-histogram comparison (`JULY_CONFLICTED_COUNT_MISMATCH`): absent status counters mean zero, but the write receipt's `vacant` subtotal is not a status. Preserve fixed source controls and independent comparisons. Run the same owned July/Skyline review-and-restart proof on the paired candidate SHAs, updating app custody if the proof changes.
 2. Require zero actual-source persons/leases/opening positions,105/160 rentable positions, exact164/262 claims, immutable artifact hashes and unchanged review after restart. Require ordinary reads/Ask Spine source receipts to avoid presenting open review as established truth.
 3. Review the paired candidate and pending schema separately. No release is authorized.
 4. Next, implement the generic August hierarchy adapter with parent falsifications, Room-level grain, literal-zero preservation, child-row provenance, truthful aggregate totals and no invented lease dates or joins.
