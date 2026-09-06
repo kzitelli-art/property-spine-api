@@ -1,5 +1,16 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-06 room identity candidate:** Fable O1/O2 were positively reproduced
+through local HTTP on unchanged018e6d6. Vacancy confirmation now shares explicit
+space selection and preserves source-space lineage; Rent Roll projection and
+person overlays retain per-room identity. Historical promoted claims without a
+current linked space remain visible but held out of current Rent Roll publication.
+The bounded successor HTTP/database proof passes, including named/ambiguous/
+contested/single-position cases, scoped reads and Ask tenancy fact gathering.
+Browser and full July/Skyline rerun are pending for this candidate; broader
+historical-claim behavior in other canonical readers remains under independent
+Fable review. See [proof scope and remaining gaps](handoffs/desktop-qb-20260906/space-identity/RECEIPT.md).
+
 **2026-09-06 Fable review and owner clarification:** Kameron directly confirmed
 retirement authorization in QB task 01a076e5: "yes it my understanding they were
 not being used and i love improving through simplicfication of code". This

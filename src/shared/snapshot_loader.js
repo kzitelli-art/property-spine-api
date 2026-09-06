@@ -724,36 +724,45 @@ function summarizeRows(rows) {
   };
 }
 
+// Evidence with a durable space link cannot be retargeted by today's unit name.
+// A recorded unresolved link stays unresolved, even if inventory later shrinks.
+function sourceRowPosition(row, positions) {
+  if (Object.prototype.hasOwnProperty.call(row, "produced_space_id")) {
+    return row.produced_space_id
+      ? (positions || []).find(p => p.space_id === row.produced_space_id) || null
+      : null;
+  }
+  const candidates = (positions || []).filter(p => String(p.unit_number) === String(row.unit_number));
+  const label = String(row.space_label || row.room || "").trim().toLowerCase();
+  const matches = label ? candidates.filter(p => String(p.space_label || "").trim().toLowerCase() === label) : candidates;
+  return matches.length === 1 ? matches[0] : null;
+}
+
 function availabilityProjection(rows, positions, asOf, canonicalOnly = false) {
-  const currentByUnit = new Map();
-  const futureByUnit = new Map();
+  const currentByPosition = new Map();
+  const futureByPosition = new Map();
+  const keyFor = row => {
+    const pos = sourceRowPosition(row, positions);
+    if (pos) return pos.space_id;
+    // Keep unresolved evidence separate; it never opens a canonical position.
+    return "unresolved:" + row.unit_number + ":" + (row.space_label || row.room || "");
+  };
   for (const row of rows) {
     if (!row.unit_number) continue;
+    const key = keyFor(row);
     if (row.section === "future") {
-      if (!futureByUnit.has(row.unit_number)) futureByUnit.set(row.unit_number, []);
-      futureByUnit.get(row.unit_number).push(row);
-    } else if (!currentByUnit.has(row.unit_number)) {
-      currentByUnit.set(row.unit_number, row);
-    }
+      if (!futureByPosition.has(key)) futureByPosition.set(key, []);
+      futureByPosition.get(key).push(row);
+    } else if (!currentByPosition.has(key)) currentByPosition.set(key, row);
   }
-  const positionByUnit = new Map();
-  for (const p of positions || []) {
-    const key = String(p.unit_number);
-    if (!positionByUnit.has(key)) positionByUnit.set(key, []);
-    positionByUnit.get(key).push(p);
-  }
-
   const out = [];
-  for (const [unit, cur] of currentByUnit.entries()) {
-    const sourceFuture = futureByUnit.get(unit) || [];
-    const unitPositions = positionByUnit.get(unit) || [];
-    const pos = unitPositions[0] || null;
+  for (const [key, cur] of currentByPosition.entries()) {
+    const unit = cur.unit_number;
+    const sourceFuture = futureByPosition.get(key) || [];
+    const pos = sourceRowPosition(cur, positions);
     // A future source row is evidence awaiting review. Only an actual
-    // canonical lease may close availability, and all positions in a by-bed
-    // unit must be consulted rather than whichever one sorts first.
-    const canonicalFuture = unitPositions
-      .map(p => p.future_lease_position)
-      .filter(Boolean);
+    // canonical lease on this same position may close its availability.
+    const canonicalFuture = pos?.future_lease_position ? [pos.future_lease_position] : [];
     const commitments = canonicalOnly
       ? canonicalFuture.map(f => ({
           lease_id: f.lease_id,
@@ -770,14 +779,15 @@ function availabilityProjection(rows, positions, asOf, canonicalOnly = false) {
           balance:r.balance,
         }));
     const committed = commitments.length > 0;
-    const status = cur.status;
+    const status = canonicalOnly && !pos ? "needs_review" : cur.status;
     const contractualOpenNow = status === "vacant" && !committed;
     const contractualOpenForward = status === "notice" && !committed;
     const nonRevenue = status === "model" || status === "down";
     const readiness = pos?.physical_readiness || "unknown";
     const possession = pos?.current_possession ? "possessed" : (pos ? "not_possessed" : "unknown");
     let state = "occupied";
-    if (nonRevenue) state = `blocked_${status}`;
+    if (status === "needs_review") state = "needs_review";
+    else if (nonRevenue) state = `blocked_${status}`;
     else if (committed) state = "committed_future";
     else if (status === "vacant" && readiness === "ready") state = "ready_now";
     else if (status === "vacant") state = "vacant_readiness_unknown";
@@ -785,6 +795,8 @@ function availabilityProjection(rows, positions, asOf, canonicalOnly = false) {
     const availableFrom = status === "vacant" ? asOf : (cur.move_out || cur.lease_to || null);
     out.push({
       unit_number: unit,
+      space_id: pos?.space_id || null,
+      space_label: pos?.space_label || cur.space_label || cur.room || null,
       unit_type: cur.unit_type || null,
       current_status: status,
       current_resident: cur.name || null,
@@ -801,7 +813,7 @@ function availabilityProjection(rows, positions, asOf, canonicalOnly = false) {
       availability_state: state,
       available_from: availableFrom,
       marketable_now: contractualOpenNow && readiness === "ready" && possession !== "possessed",
-      next_required_action: pos?.next_required_action || (state === "vacant_readiness_unknown" ? "confirm_physical_readiness" : null),
+      next_required_action: pos?.next_required_action || (state === "needs_review" ? "review_source_position" : state === "vacant_readiness_unknown" ? "confirm_physical_readiness" : null),
       position_reason: pos?.reason || null,
     });
   }
@@ -1342,7 +1354,7 @@ async function readLatestSnapshot(pool, propertyId, asOf = null) {
   let rows = [];
   if (batch) {
     const sourceRows = (await pool.query(
-      `select isr.row_index, isr.raw, isr.parse_note,
+      `select isr.row_index, isr.raw, isr.parse_note, isr.produced_space_id,
               pr.id as proposal_id, pr.status as proposal_status,
               pr.status_reason as proposal_status_reason
          from import_source_rows isr
@@ -1358,7 +1370,7 @@ async function readLatestSnapshot(pool, propertyId, asOf = null) {
     //  and inflate every count computed from it. They remain readable
     //  through the batch's source rows, which is where they belong.
     rows = sourceRows.map((source,i) => {
-      const row = normalizeRow(source.raw || {}, i);
+      const row = { ...normalizeRow(source.raw || {}, i), produced_space_id: source.produced_space_id || null };
       if (!batch.activation_id) return row;
       const promoted = source.proposal_status === "promoted";
       return {
@@ -1388,22 +1400,21 @@ async function readLatestSnapshot(pool, propertyId, asOf = null) {
   }
 
   // ── THE PERSON→RENT-ROLL BRIDGE (per-row canonical overlay) ──────────
-  if (positions.length > 0) {
-    const byUnit = new Map();
-    for (const p of positions) {
-      const key = String(p.unit_number || "").trim();
-      if (!key) continue;
-      if (!byUnit.has(key)) byUnit.set(key, []);
-      byUnit.get(key).push(p);
-    }
+  if (batch && batch.activation_id && positionStatus === "ok") {
     for (const row of rows) {
-      const key = String(row.unit_number || "").trim();
-      const unitPositions = key ? (byUnit.get(key) || []) : [];
-      // a unit earns an overlay only when canonical truth exists on it
-      const bearing = unitPositions.filter(p =>
-        p.current_lease_position || p.future_lease_position || p.current_possession);
-      if (bearing.length === 0) continue;
-      const pos = bearing[0]; // by-unit model: one space per unit; extras noted below
+      if (row.publication_status === "published" && !sourceRowPosition(row, positions)) {
+        // Preserve the source and its historical confirmation, but do not
+        // turn an unresolved or retired position into current operating truth.
+        row.publication_status = "held_for_review";
+        row.status = "needs_review";
+        row.position_review_reason = "Source position is not linked to current rentable inventory.";
+      }
+    }
+  }
+  if (positions.length > 0) {
+    for (const row of rows) {
+      const pos = sourceRowPosition(row, positions);
+      if (!pos || !(pos.current_lease_position || pos.future_lease_position || pos.current_possession)) continue;
       const cur = pos.current_lease_position || null;
       const fwd = pos.future_lease_position || null;
 
@@ -1430,7 +1441,7 @@ async function readLatestSnapshot(pool, propertyId, asOf = null) {
         next_required_action: pos.next_required_action || null,
         reason: pos.reason || null,
         conflicts,
-        additional_spaces: bearing.length > 1 ? bearing.length - 1 : 0,
+        additional_spaces: 0,
       };
       // the app's person-keyed doorways key on person_id; current tenant
       // wins, forward tenant otherwise. Reconciliation-only rows keep null.

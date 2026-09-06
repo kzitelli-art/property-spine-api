@@ -84,6 +84,7 @@ step "source governance gates"   node tests/verify_source_governance.js
 step "next-action oracle"        node src/shared/proof_next_action_resolver.js
 step "application review actions" node tests/unit/application_review_action_contract.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
+step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js
 
 # ── build the schema from the REAL chain ────────────────────────────
 node tests/e2e/proof_boundary.js create >"$RUN_DIR/env.sh" || exit 1

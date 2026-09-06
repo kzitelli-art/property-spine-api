@@ -63,6 +63,7 @@ async function stopServer() {
   finally { fs.closeSync(migrationLog); }
   console.log("REAL_MIGRATION_CHAIN_APPLIED");
   const parentRoot = path.resolve(process.env.ONBOARDING_PARENT_ROOT || path.join(ROOT, "../qb-proof-checkpoint"));
+  if (process.env.ONBOARDING_SPACE_PROOF_ONLY !== "1") {
   await run(process.execPath, [path.join(ROOT, "tests/proofs/canonical_onboarding_source.db.js")], {
     env: { ...process.env, PROOF_EXPECT_DEFECT: "1", PROOF_BUSINESS_ROOT: parentRoot },
   });
@@ -72,10 +73,21 @@ async function stopServer() {
   await run(process.execPath, [path.join(ROOT, "tests/proofs/canonical_onboarding_snapshot.db.js")], {
     env: { ...process.env, PROOF_EXPECT_DEFECT: "1", PROOF_BUSINESS_ROOT: parentRoot,HARNESS_DATABASE_URL:owned.url },
   });
+  }
   const { Pool } = require("pg");
   pool = new Pool({ connectionString: owned.url, ssl: false });
   const baselineMode = process.env.PROOF_EXPECT_SHIPPED_HEADER_FAILURE === "1";
-  const businessRoot = baselineMode ? parentRoot : ROOT;
+  const spaceParentMode = process.env.ONBOARDING_SPACE_PROOF_ONLY === "1" && process.env.PROOF_SPACE_EXPECT_DEFECT === "1";
+  const businessRoot = spaceParentMode && process.env.ONBOARDING_SPACE_PARENT_ROOT
+    ? fs.realpathSync(process.env.ONBOARDING_SPACE_PARENT_ROOT) : baselineMode ? parentRoot : ROOT;
+  if (spaceParentMode) {
+    assert.equal(execFileSync("git",["rev-parse","HEAD"],{cwd:businessRoot,encoding:"utf8",windowsHide:true}).trim(),
+      "018e6d621ef7e2e3bd4c074f6c7d6f97e5811061", "space defect witness requires its inspected parent");
+    for (const file of ["src/onboarding/activation_service.js","src/shared/snapshot_loader.js"]) {
+      assert.equal(execFileSync("git",["diff","HEAD","--",file],{cwd:businessRoot,encoding:"utf8",windowsHide:true}).trim(),"",
+        "space defect witness cannot run a modified parent");
+    }
+  }
   if (baselineMode) {
     assert.equal(execFileSync("git",["rev-parse","HEAD"],{cwd:appRoot,encoding:"utf8",windowsHide:true}).trim(),"4849545118fc422177bc604389608cdbb55df458");
     execFileSync("git",["diff","--exit-code","HEAD","--","index.html"],{cwd:appRoot,windowsHide:true,stdio:"pipe"});
@@ -90,7 +102,7 @@ async function stopServer() {
     await run(process.execPath, [path.join(ROOT,"tests/proofs/onboarding_claim_index_dependency.db.js")], {
       env: {...process.env,PROOF_CLAIM_INDEX:"pending"},
     });
-    for (const proof of ["canonical_onboarding_source.db.js","canonical_onboarding_ledger.db.js","canonical_onboarding_lifecycle.db.js","canonical_onboarding_snapshot.db.js","deal_setup_http.db.js"]) {
+    for (const proof of (process.env.ONBOARDING_SPACE_PROOF_ONLY === "1" ? [] : ["canonical_onboarding_source.db.js","canonical_onboarding_ledger.db.js","canonical_onboarding_lifecycle.db.js","canonical_onboarding_snapshot.db.js","deal_setup_http.db.js"])) {
       await run(process.execPath, [path.join(ROOT,"tests/proofs",proof)], {
         env: {...process.env,PROOF_EXPECT_DEFECT:"0",PROOF_BUSINESS_ROOT:ROOT,HARNESS_DATABASE_URL:owned.url},
       });
@@ -156,13 +168,22 @@ async function stopServer() {
   console.log(`OWNED_API_READY=${apiSha}`);
   };
   await startServer();
+  if (!baselineMode) {
+    await run(process.execPath,[path.join(ROOT,"tests/proofs/onboarding_space_availability.db.js")]);
+  }
   const runBrowser = async phase => run(process.execPath, [path.join(appRoot, baselineMode ? "canonical_onboarding_first_red.browser.js" : "canonical_onboarding_review.browser.js")], {
     cwd: appRoot,
     env: { ...process.env, SP: ROOT, API: process.env.E2E_API_BASE, SESSION: session,
       PROOF_PHASE:phase,PROOF_REVIEW_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"review-state.private.json"),
       PROOF_SYNTHETIC_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"mixed-state.private.json"),
+      PROOF_SPACE_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"space-state.private.json"),
       PROOF_API_SHA: apiSha, PROOF_APP_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: appRoot, encoding: "utf8", windowsHide: true }).trim() },
   });
+  if (!baselineMode && !spaceParentMode && process.env.PROOF_SPACE_BROWSER === "1") await runBrowser("spaces");
+  if (process.env.ONBOARDING_SPACE_PROOF_ONLY === "1") {
+    for (const name of ["E2E_SMS_LOG","E2E_ANTHROPIC_LOG","E2E_EGRESS_LOG"]) assert.equal(fs.statSync(process.env[name]).size,0);
+    return;
+  }
   await runBrowser("stage");
   if (!baselineMode) {
     const state = JSON.parse(fs.readFileSync(path.join(process.env.PROOF_OUTPUT_DIR,"review-state.private.json"),"utf8"));

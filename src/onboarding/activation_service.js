@@ -531,86 +531,6 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
       throw refusal(422, "actual_rent_required", "The source has no actual rent for this resident. Asking rent cannot establish their contract rent.");
     }
 
-    //  A vacant row establishes the UNIT and no lease. That is a real
-    //  position — a vacancy is part of an opening position, not an
-    //  omission from it — and inventing a lease for it would be the
-    //  wrong-confident value this whole path exists to prevent.
-    if (n.is_vacant || !n.tenant_name) {
-      /*  ── A VACANCY IS A CLAIM, AND IT CAN BE CONTRADICTED ───────────
-       *  Confirming "this bed is empty" while a lease in force says
-       *  someone lives there accepts one of two contradicting sources
-       *  without saying so. Skyline 109A is exactly that: the July rent
-       *  roll called the bed vacant, an April lease says Navraj Julka is
-       *  active at $825, and the vacancy was confirmed straight through —
-       *  after which the Rent Roll had two answers and showed one.
-       *
-       *  The occupied path already refuses this (§2c). The vacant path did
-       *  not, because it returns before any space is resolved. So the
-       *  space is resolved HERE, and resolved NON-FATALLY: a vacant row
-       *  the source never tied to a specific bed still promotes exactly as
-       *  it did before. Only a row that DOES resolve to a bed, and finds
-       *  an operative lease on it, becomes an exception.
-       *
-       *  Spine does not choose the winner. It stops claiming there is no
-       *  contest.  */
-      const vacantUnitId = await resolveCurrentUnitId(client, propertyId, String(n.unit_number));
-      let vacantSpace = null;
-      if (vacantUnitId) {
-        const vs = (await client.query(
-          "select id, space_label from spaces where unit_id=$1 order by created_at", [vacantUnitId])).rows;
-        const namedLabel = n.space_label ? String(n.space_label).trim() : "";
-        if (namedLabel) {
-          vacantSpace = vs.find((s) => String(s.space_label || "").trim().toLowerCase()
-                                       === namedLabel.toLowerCase()) || null;
-        } else if (vs.length === 1) {
-          vacantSpace = vs[0];
-        }
-      }
-
-      if (vacantSpace) {
-        await client.query("select id from spaces where id=$1 for update", [vacantSpace.id]);
-        const competing = await competingOperativeLeases(client, {
-          space_id: vacantSpace.id,
-          start_date: n.start_date ?? null,
-          end_date: n.end_date ?? null,
-        });
-        if (competing.length) {
-          const where = `Unit ${n.unit_number}` +
-            (vacantSpace.space_label ? ` · ${vacantSpace.space_label}` : "");
-          await client.query(
-            `update proposed_records
-                set status='needs_review', status_reason=$2, updated_at=now()
-              where id=$1`,
-            [proposed_id,
-             `${where} is reported empty by this source, but ${competing.length === 1
-               ? "a lease in force says it is occupied"
-               : `${competing.length} leases in force say it is occupied`}: ` +
-             `${describeCompeting(competing)}. Spine has no basis to choose between the ` +
-              `source and the lease record, so this row was not confirmed.`]);
-          await client.query("commit");
-          throw refusal(409, "vacancy_contradicted_by_operative_lease",
-            `${where} is shown as empty on this rent roll, but Spine holds a lease in force ` +
-            `for it. One of the two is out of date and Spine cannot tell which, so this row ` +
-            `is marked for review — check whether the resident moved out, and retire or ` +
-            `correct the lease if they did.`,
-            { competing: competing.map((l) => ({
-                lease_id: l.id, lease_status: l.lease_status,
-                start_date: l.start_date, end_date: l.end_date,
-                tenant_ids: l.tenant_ids || [] })) });
-        }
-      }
-
-      await client.query(
-        `update proposed_records
-            set status='promoted', promoted_record_id=null,
-                confirmed_by=$2, confirmed_at=now(), updated_at=now(),
-                status_reason='Confirmed as a vacant unit. No lease was created.'
-          where id=$1`, [proposed_id, String(user_id)]);
-      await client.query("commit");
-      return { lease_id: null, vacant: true,
-        receipt: `Unit ${n.unit_number} recorded as vacant.` };
-    }
-
     //  1) the unit — created by the evidence pass already, but resolved
     //     rather than assumed, because a human may have renamed it.
     //  CURRENT inventory only, through the SAME resolver the evidence pass
@@ -622,6 +542,14 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
       ? (await client.query(`select * from units where id=$1`, [currentUnitId])).rows[0]
       : undefined;
     if (!unit) {
+      if (n.is_vacant || !n.tenant_name) {
+        await client.query(
+          `update proposed_records set status='needs_review', status_reason=$2, updated_at=now() where id=$1`,
+          [proposed_id, "The source unit is no longer in current inventory. Review its position before confirming vacancy."]);
+        await client.query("commit");
+        throw refusal(422, "current_unit_unavailable",
+          "The source unit is no longer in current inventory. Review its position before confirming vacancy.");
+      }
       unit = (await client.query(
         `insert into units (property_id, unit_number, market_rent)
          values ($1,$2,$3) returning *`,
@@ -669,7 +597,7 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
         await client.query("commit");
         throw refusal(422, "unknown_space_label",
           `Unit ${n.unit_number} has no position called "${namedLabel}". Spine will not ` +
-          `attach this lease to a different one.`,
+          `attach this claim to a different one.`,
           { named: namedLabel, available: spaces.map((s) => s.space_label) });
       }
     } else if (spaces.length > 1) {
@@ -678,13 +606,73 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
           where id=$1`,
         [proposed_id,
          `Unit ${n.unit_number} has ${spaces.length} beds and this row does not say which one ` +
-         `this lease is for. It has to be confirmed by bed.`]);
+         `this claim is for. It has to be confirmed by bed.`]);
       await client.query("commit");
       throw refusal(422, "ambiguous_bed",
         `Unit ${n.unit_number} leases by the bed. This row does not say which bed, so Spine ` +
         `will not guess.`, { space_count: spaces.length });
     } else {
       space = spaces[0];
+    }
+
+    //  A vacant row establishes a resolved rentable position and no lease. That is a real
+    //  position — a vacancy is part of an opening position, not an
+    //  omission from it — and inventing a lease for it would be the
+    //  wrong-confident value this whole path exists to prevent.
+    if (n.is_vacant || !n.tenant_name) {
+      // Vacancies and occupied claims resolve the same rentable position.
+      const vacantSpace = space;
+
+      if (vacantSpace) {
+        await client.query("select id from spaces where id=$1 for update", [vacantSpace.id]);
+        const competing = await competingOperativeLeases(client, {
+          space_id: vacantSpace.id,
+          start_date: n.start_date ?? null,
+          end_date: n.end_date ?? null,
+        });
+        if (competing.length) {
+          const where = `Unit ${n.unit_number}` +
+            (vacantSpace.space_label ? ` · ${vacantSpace.space_label}` : "");
+          await client.query(
+            `update proposed_records
+                set status='needs_review', status_reason=$2, updated_at=now()
+              where id=$1`,
+            [proposed_id,
+             `${where} is reported empty by this source, but ${competing.length === 1
+               ? "a lease in force says it is occupied"
+               : `${competing.length} leases in force say it is occupied`}: ` +
+             `${describeCompeting(competing)}. Spine has no basis to choose between the ` +
+              `source and the lease record, so this row was not confirmed.`]);
+          await client.query("commit");
+          throw refusal(409, "vacancy_contradicted_by_operative_lease",
+            `${where} is shown as empty on this rent roll, but Spine holds a lease in force ` +
+            `for it. One of the two is out of date and Spine cannot tell which, so this row ` +
+            `is marked for review — check whether the resident moved out, and retire or ` +
+            `correct the lease if they did.`,
+            { competing: competing.map((l) => ({
+                lease_id: l.id, lease_status: l.lease_status,
+                start_date: l.start_date, end_date: l.end_date,
+                tenant_ids: l.tenant_ids || [] })) });
+        }
+      }
+
+      // Close the same source-to-position lineage as occupied confirmation.
+      if (p.import_source_row_id) {
+        await client.query(
+          `update import_source_rows
+              set produced_unit_id=coalesce(produced_unit_id,$2),
+                  produced_space_id=coalesce(produced_space_id,$3)
+            where id=$1`, [p.import_source_row_id, unit.id, space.id]);
+      }
+      await client.query(
+        `update proposed_records
+            set status='promoted', promoted_record_id=null,
+                confirmed_by=$2, confirmed_at=now(), updated_at=now(),
+                status_reason='Confirmed as a vacant rentable position. No lease was created.'
+          where id=$1`, [proposed_id, String(user_id)]);
+      await client.query("commit");
+      return { lease_id: null, vacant: true,
+        receipt: `Unit ${n.unit_number}${space.space_label ? ` · ${space.space_label}` : ""} recorded as vacant.` };
     }
 
     //  ── 2c. ONE SPACE, ONE TENANCY ────────────────────────────────

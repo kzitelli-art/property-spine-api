@@ -1,0 +1,46 @@
+{
+  "mode": "successor",
+  "evidence": [
+    {
+      "case": "occupied_first",
+      "rent_roll_rows": 2,
+      "rent_roll_statuses": [
+        "current",
+        "vacant"
+      ],
+      "canonical_states": {
+        "Room1": "occupied",
+        "Room2": "use_not_configured"
+      }
+    },
+    {
+      "case": "vacant_first",
+      "rent_roll_rows": 2,
+      "rent_roll_statuses": [
+        "vacant",
+        "current"
+      ],
+      "canonical_states": {
+        "Room1": "occupied",
+        "Room2": "use_not_configured"
+      }
+    },
+    {
+      "case": "ambiguous_vacancy",
+      "confirm_status": 422,
+      "error": "ambiguous_bed"
+    },
+    {
+      "case": "named_vacancy_boundaries",
+      "empty_neighbor": 200,
+      "occupied_room": 409,
+      "unknown_label": 422
+    },
+    {
+      "case": "historical_ambiguous_claim",
+      "retained_rows": 1,
+      "historical_status": "promoted",
+      "current_publication": "held_for_review"
+    }
+  ]
+}
