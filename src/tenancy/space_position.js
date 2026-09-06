@@ -308,9 +308,11 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
            from (
              select
                pr.id as proposal_id,
-               case when lower(btrim(pr.natural_key))
-                          = lower(btrim(u.unit_number || '|' || s.space_label))
-                    then 0 else 1 end as match_rank,
+               -- Durable lineage outranks text; exact text outranks a bare key.
+               case when isr.produced_space_id = s.id then 0
+                    when lower(btrim(pr.natural_key))
+                          = lower(btrim(u.unit_number || '|' || s.space_label)) then 1
+                    else 2 end as match_rank,
                case
                  when pr.status in ('needs_review','conflicted') then 'unreconciled'
                  when coalesce(pr.normalized_json->>'is_vacant','false') = 'true'
@@ -340,16 +342,57 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
                 -- current opening evidence. Explicit future proposals never
                 -- answer the current occupancy fallback.
                 and coalesce(lower(pr.normalized_json->>'section'), 'current') = 'current'
-                and (
-                  lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number || '|' || s.space_label))
-                  -- A unit-only key answers only when the unit has one
-                  -- rentable position; it never spreads across a bed set.
-                  or (lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number))
-                      and (select count(*) from spaces s2 where s2.unit_id = u.id) = 1)
-                )
+               -- THE LINEAGE CONFIRMATION WROTE. import_source_rows carries
+               -- produced_unit_id / produced_space_id for the rentable
+               -- position a confirmation actually resolved. That is identity;
+               -- unit-number text, a room label and today's space count are
+               -- not, and each of them drifted (2026-09-06): a claim confirmed
+               -- against a unit later retired for superseded grain followed
+               -- its number onto the replacement unit; a linked claim vanished
+               -- when its room was relabelled; a bare-unit claim attached to
+               -- whichever bed a unit had left.
+               left join import_source_rows isr on isr.id = pr.import_source_row_id
               -- THE CHOSEN BASELINE, BY ID. A null baseline produces zero
               -- candidates and therefore a null property-level claim.
               where otp.id = $2::uuid
+                and (
+                  -- 1. DURABLE SPACE LINEAGE: the exact position the
+                  --    confirmation resolved. Survives a relabel; never
+                  --    follows a unit number onto replacement inventory.
+                  (isr.produced_space_id is not null and isr.produced_space_id = s.id)
+                  -- 2. DURABLE UNIT LINEAGE, no space: inside THAT unit only.
+                  --    A named key matches its label there; a bare key is a
+                  --    claim about the unit and answers only for the unit's
+                  --    whole-unit position — never for a bed, however many
+                  --    beds the unit has today.
+                  or (isr.produced_space_id is null and isr.produced_unit_id is not null
+                      and isr.produced_unit_id = u.id
+                      and (
+                        (position('|' in pr.natural_key) > 0
+                         and lower(btrim(split_part(pr.natural_key, '|', 2))) = lower(btrim(coalesce(s.space_label, ''))))
+                        or (position('|' in pr.natural_key) = 0
+                            and coalesce(s.position_kind,
+                                  case when s.space_label is null or s.space_label ~* 'whole\\s*unit'
+                                       then 'unit' else 'bed' end) = 'unit')
+                      ))
+                  -- 3. NO LINEAGE (legacy rows): text is all there is. It
+                  --    answers by exact unit|label, or by bare key for a
+                  --    whole-unit position, and never once a retired unit
+                  --    has carried this number — the claim may have been
+                  --    about the inventory that was retired.
+                  or ((isr.id is null or (isr.produced_space_id is null and isr.produced_unit_id is null))
+                      and not exists (select 1 from inventory_retirements ir
+                                       where ir.property_id = u.property_id
+                                         and ir.reversed_at is null
+                                         and lower(btrim(ir.original_unit_number)) = lower(btrim(u.unit_number)))
+                      and (
+                        lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number || '|' || coalesce(s.space_label, '')))
+                        or (lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number))
+                            and coalesce(s.position_kind,
+                                  case when s.space_label is null or s.space_label ~* 'whole\\s*unit'
+                                       then 'unit' else 'bed' end) = 'unit')
+                      ))
+                )
            ) candidate) as opening_space_claim
       from spaces s
       join units u on u.id=s.unit_id

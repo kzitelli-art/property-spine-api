@@ -163,6 +163,7 @@ step "governing lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" no
 step "canonical lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/spine_lease_execution.db.js
 step "lease guarantor signing"   env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/lease_guarantor_signing.db.js
 step "pricing authority grants union" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/pricing_authority_grants_union.db.js
+step "opening claim identity"     node tests/proofs/opening_claim_identity.db.js
 step "canonical Deal Setup HTTP" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/deal_setup_http.db.js
 
 # ── the real server, the real HTTP door ─────────────────────────────
