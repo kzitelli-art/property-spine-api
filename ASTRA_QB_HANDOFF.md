@@ -14,7 +14,7 @@ Read this file, then [EXECUTION_RECEIPT.md](docs/handoffs/astra-qb-20260906/EXEC
 |---|---|---|
 | API: last completed pre-onboarding checkpoint | `codex/qb-proof-checkpoint-20260905` | `e09c5411e2c072c3452e48b434a9f8a8250ce1bb` |
 | API: new onboarding candidate | `codex/canonical-onboarding-rehearsal-20260905` | `122872154dd58224e80665ddbc10d6dc8cc32d01` |
-| App: new onboarding candidate | `codex/canonical-onboarding-rehearsal-20260905` | `180c6d10accb3b0033e20129f07ce4e5e585c0de` |
+| App: new onboarding candidate | `codex/canonical-onboarding-rehearsal-20260905` | `a8b9241a106289c77e2dd2d42a2f501c504a50d2` |
 | App baseline | pinned baseline | `4849545118fc422177bc604389608cdbb55df458` |
 | This transfer packet | `codex/astra-qb-handoff-20260906` | Documentation and archived recovery patches, based on e09c541 |
 
@@ -87,6 +87,8 @@ Independent review also caught a substantive leak: staging committed evidence co
 
 The final Windows HTTP stop uncovered one additional product defect in cc896dcd: SheetJS inferred CSV ISO dates and rendered them through the host timezone (`2025-07-01` became `6/30/25` on the EDT laptop). Commit1228721 preserves CSV text before canonical mapping; XLS/XLSX handling is unchanged. A direct in-memory test loaded the unchanged cc896dcd module, reproduced the changed date, and passed against the successor; all13 adapter tests passed. This is a successor portability repair, not a claim that d55 had this exact new-adapter defect.
 
+The next Windows run passed all synthetic suites and Deal Setup HTTP31, then successfully interpreted July over HTTP201. Its browser proof stopped because it read `review_counts` from the write receipt rather than the canonical activation GET. App commita8b9241 corrects only that proof contract, retaining fixed source controls and the independent write/read counts check; product code is identical to180c6d10. Syntax and diff checks passed. The final receipt states whether the subsequent full browser rerun completed.
+
 ## Actual source controls and private access
 
 These files were readable on the laptop; hashes were rechecked September6. **Original workbooks, raw resident rows, screenshots, tokens and private runtime identifiers are not in Git.** The desktop QB must verify access and hashes before claiming real-source proof. A Windows path in an old task is not source access.
@@ -143,6 +145,8 @@ Use Sol for bounded proof/adapter/UI/custody tasks, Astra for integration and ad
 The new API/app changes are pushed, rather than left as laptop-only edits. The handoff includes [recovery material for the older divergent lane](docs/handoffs/astra-qb-20260906/unpushed-legacy-lane/README.md): six plain source/test patches and a manifest of ten local commits, with curated dated summaries of four documentation-only commits.
 
 That older checkout remains unchanged at `c1622e2af0865d998579d377c5fa9455c9ae9e69`, branch `codex/skyline-guarantor-agent-20260822`,65 behind/10 ahead of upstream `91690eade84355461615aacb1af94a8fac7c1f77`. Its exact branch history was not pushed or merged into this candidate. Its code changes are recoverable from the archive, but must not be blindly applied; they concern invitation/signing/guarantor evidence and need lineage review.
+
+Final custody inspection also found three pre-existing modified paths in the detached donor review checkout at fd574aa. Its only normalized content difference is a one-line meeting-evidence test correction: locate `app.use(express.json(` without hard-coding the JSON limit. The two proof manifests appear modified to Git status but have no normalized content diff. The content patch is archived as [donor-local-review.diff](docs/handoffs/astra-qb-20260906/donor-local-review.diff); authorship and previous execution were not re-established. That donor checkout remains untouched and is not an accepted candidate. Do not describe every laptop worktree as clean.
 
 Still private/local: original workbooks, private diagnostic logs/screenshots and exact historical runtime identifiers. They are excluded intentionally. The main packet includes the mission and controls, so the old local-only Greenery instruction failure is not repeated. A private local custody note on the laptop gives optional diagnostic/input locators; it is not required to restore the code.
 

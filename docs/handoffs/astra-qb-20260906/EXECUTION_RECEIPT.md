@@ -6,7 +6,7 @@ Battery-safe transfer for a new QB on Kameron's desktop. This receipt distinguis
 
 - API candidate: `122872154dd58224e80665ddbc10d6dc8cc32d01`, branch `codex/canonical-onboarding-rehearsal-20260905`.
 - Its previous commit: `cc896dcd791793f01f832ccd596898770a4fc6da`.
-- App candidate: `180c6d10accb3b0033e20129f07ce4e5e585c0de`, same branch name in the app repository.
+- App candidate: `a8b9241a106289c77e2dd2d42a2f501c504a50d2`, same branch name in the app repository. Product code is unchanged from180c6d10; the final commit corrects the browser proof's response-contract assumption.
 - Code was committed and pushed; API local/remote equality was verified after the final CSV repair. The app was clean after its commit/push.
 - Handoff branch: `codex/astra-qb-handoff-20260906`, documentation/recovery only, based on e09c541. It is not the product checkout.
 
@@ -24,6 +24,10 @@ Earlier ledger15/16 failures were incorrect proof field selection; the corrected
 
 ## Final local run
 
-A fresh owned local run at API1228721/app180c6d10 was started after the fix. Its final disposition will be recorded below before shutdown. Until that record exists, **real July/Skyline successor review, restart, lineage and synthetic mixed Add All remain unaccepted**.
+A fresh owned local run at API1228721/app180c6d10 passed parent source7/lifecycle7/publication15, successor source29/ledger16/lifecycle10/publication15, and Deal Setup HTTP31. The Windows CSV refusal is closed. July upload/read then reached HTTP201, with no server error, before the browser proof raised `JULY_SOURCE_TOTAL_MISMATCH`.
+
+Source inspection established a proof-contract error: read-source returns `rows_read` and insert-status counts; `review_counts` belongs to the subsequent activation GET. App commita8b9241 reads totals from that canonical response and continues comparing them to fixed workbook controls and independent write counts. Syntax and diff checks passed. The preceding failure does not prove rows were lost. Zero external requests were blocked/attempted in that browser run; no actual-source confirmations occurred. The owned database was dropped, server/cluster stopped and data removed.
+
+A last fresh run at API1228721/appa8b9241 is in progress. Its final disposition will be recorded before shutdown. Until that record exists, **real July/Skyline successor review, restart, lineage and synthetic mixed Add All remain unaccepted**.
 
 No production/provider action, deployment, merge, rebase, force-push, production migration or actual-source confirmation was performed. Actual workbooks, row data, browser screenshots, session tokens and private fixture IDs are excluded from Git. Raw diagnostic logs remain private; code, proof runners, instruction packet and curated legacy recovery patches are pushed.
