@@ -193,6 +193,30 @@ async function stopServer() {
         assert.equal(dated.opening_baseline,null);
         assert.equal(dated.positions.length,counts.spaces);
         assert.ok(dated.positions.every(position=>position.basis_state === "not_established" && position.lease === null && position.contributes_trusted_rent === false));
+        // Exercise Ask Spine's real fact-gathering boundary as well as the
+        // direct readers. No model/provider call; do not claim answer/HTTP proof.
+        const askClient = await pool.connect();
+        try {
+          await askClient.query("begin isolation level repeatable read read only");
+          const { gatherFacts } = require("../../src/agent/ask_spine_answer.js");
+          const facts = await gatherFacts(askClient, {
+            property_id: source.property_id, allowed_modules: ["management"], subject: "tenancy",
+          });
+          assert.equal(facts.tenancy.read_state,"OK");
+          assert.equal(facts.tenancy.standing.truth_state,"NOT_ESTABLISHED");
+          assert.equal(facts.tenancy.established_from,null,"Ask Spine cannot cite the open review as established source");
+          assert.equal(facts.tenancy.position.rentable_positions,counts.spaces);
+          assert.equal(facts.tenancy.position.not_established,counts.spaces);
+          for (const key of ["established","occupied","open","positions_with_a_known_next"]) {
+            assert.equal(facts.tenancy.position[key],0,`Ask Spine review-only ${key}`);
+          }
+          const denied = await gatherFacts(askClient, {
+            property_id: source.property_id, allowed_modules: [], subject: "tenancy",
+          });
+          assert.equal(denied.tenancy,undefined,"Unentitled tenancy facts never enter the gathered envelope");
+          await askClient.query("rollback");
+        } catch (error) { await askClient.query("rollback").catch(()=>{}); throw error; }
+        finally { askClient.release(); }
         const fingerprint = createHash("sha256").update(JSON.stringify({act,batch,rows,proposals,counts})).digest("hex");
         result.push({label:source.label,counts,rows:rows.length,proposals:proposals.length,fingerprint});
       }
@@ -207,6 +231,7 @@ async function stopServer() {
     assert.deepEqual(after,before,"Restart and review preserve every source, claim, decision and inventory record");
     fs.writeFileSync(path.join(process.env.PROOF_OUTPUT_DIR,"canonical-review-db-receipt.json"),JSON.stringify({
       source_lineage_verified:true,restart_unchanged:true,real_source_confirmations:0,
+      ask_spine_fact_gathering_verified:true,ask_spine_http_or_model_answer_tested:false,
       sources:after.map(({fingerprint,...safe})=>safe),custody},null,2));
     console.log("REAL_SOURCE_DB_LINEAGE_AND_RESTART_PROOF_PASSED");
     // Separate synthetic fixture exercises a genuine mixed HTTP outcome.
