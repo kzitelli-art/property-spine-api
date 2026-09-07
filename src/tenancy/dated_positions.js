@@ -696,6 +696,7 @@ async function unattachedOpeningClaims(pool, baseline, rawPositions) {
     const src = p._opening_claim_source;
     if (!src) continue;
     if (src.proposal_id) referenced.add(String(src.proposal_id));
+    for (const id of src.supporting_proposal_ids || []) referenced.add(String(id));
     for (const id of src.conflicting_proposal_ids || []) referenced.add(String(id));
   }
   const rows = (await pool.query(

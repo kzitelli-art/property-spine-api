@@ -302,8 +302,10 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
                       'conflicting_proposal_ids',
                         jsonb_agg(candidate.proposal_id order by candidate.match_rank, candidate.proposal_id))
                   else
-                    (jsonb_agg(candidate.answer
-                       order by candidate.match_rank, candidate.proposal_id))->0
+                    ((jsonb_agg(candidate.answer
+                       order by candidate.match_rank, candidate.proposal_id))->0)
+                    || jsonb_build_object('supporting_proposal_ids',
+                         jsonb_agg(candidate.proposal_id order by candidate.match_rank, candidate.proposal_id))
                 end
            from (
              select

@@ -1,5 +1,16 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-07 retained-claim reader repair:** based on Fable API `6a2d46f`,
+`codex/claim-relay-20260907` preserves every agreeing eligible source reference,
+keeps retained claims in zero-inventory standing/Ask facts without establishing
+occupancy, and relays bounded-list truncation. Three parent defects reproduced
+before repair; successor owned DB/HTTP checks: 20 passed, plus identity17,
+unattached14, readiness13, historical/space and index controls. Cleanup passed.
+No new app panel, Ask model answer, deployment or actual-source confirmation.
+Full July/Skyline browser/restart proof was green at API6a2d46f/app8baf740;
+it has not been repeated on this reader successor. See
+[receipt](handoffs/desktop-qb-20260906/claim-relay/RECEIPT.md).
+
 **2026-09-06 availability basis candidate (Fable acting lead):** the canonical
 availability classifier offered any position with no lease, no possession and
 no turn as `marketable_now`, whether or not Spine held an established

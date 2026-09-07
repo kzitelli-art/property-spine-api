@@ -168,6 +168,15 @@ async function stopServer() {
   console.log(`OWNED_API_READY=${apiSha}`);
   };
   await startServer();
+  if (!baselineMode && !spaceParentMode) {
+    await run(process.execPath, [path.join(ROOT,"tests/proofs/opening_claim_relay_edges.db.js")], {
+      env: {...process.env, PROOF_RELAY_HTTP:"1", PROOF_EXPECT_DEFECT:process.env.PROOF_RELAY_EXPECT_DEFECT || "0",
+        PROOF_BUSINESS_ROOT:process.env.PROOF_RELAY_PARENT_ROOT || ROOT},
+    });
+    for (const proof of ["opening_claim_identity", "opening_claim_unattached", "availability_readiness_axis"]) {
+      await run(process.execPath, [path.join(ROOT, `tests/proofs/${proof}.db.js`)]);
+    }
+  }
   if (!baselineMode) {
     await run(process.execPath,[path.join(ROOT,"tests/proofs/onboarding_space_availability.db.js")]);
   }

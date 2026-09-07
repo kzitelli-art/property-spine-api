@@ -121,6 +121,15 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
   if (!property_id) throw new Error("readTenancyStanding requires property_id");
   const dp = await datedPropertyPositions(pool, { property_id, as_of });
   const positions = dp.positions || [];
+  const unattached = dp.opening_claims_unattached || {};
+  const retainedUnknowns = {
+    confirmed_source_rows_not_attached_to_a_position: unattached.promoted || 0,
+    held_source_rows_not_attached_to_a_position: unattached.held || 0,
+  };
+  const retainedRows = {
+    unattached_source_rows: unattached.source_rows || [],
+    unattached_source_rows_truncated: unattached.truncated === true,
+  };
 
   const base = {
     contract_version: CONTRACT_VERSION,
@@ -133,9 +142,8 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
   };
 
   //  NOT_ESTABLISHED is the PROPERTY's silence and must never be dressed as
-  //  a healthy empty building (§40.7). A property with no inventory has not
-  //  told Spine anything yet; that is a different fact from "nobody lives
-  //  here", and collapsing them is how a confident wrong answer gets made.
+  //  a healthy empty building (§40.7). Retained source claims can outlive
+  //  current inventory; carry them without asserting occupancy or a position.
   if (!positions.length) {
     return {
       ...base,
@@ -143,7 +151,8 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
         why: "no rentable position is recorded for this property in Spine" },
       established_from: null,
       position: null,
-      unknowns: null,
+      unknowns: unattached.promoted || unattached.held ? retainedUnknowns : null,
+      ...retainedRows,
       next_milestone: null,
       does_not_establish: [
         "Anything about occupancy, rent or commitments — tenancy has no inventory " +
@@ -244,11 +253,10 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
       //  reads. The activation counted them as established; the positions
       //  say not established. Named here so the two numbers can be
       //  reconciled by a person instead of silently disagreeing.
-      confirmed_source_rows_not_attached_to_a_position: (dp.opening_claims_unattached || {}).promoted || 0,
-      held_source_rows_not_attached_to_a_position: (dp.opening_claims_unattached || {}).held || 0,
+      ...retainedUnknowns,
     },
     //  By the key the source gave each row — a label, never a record id.
-    unattached_source_rows: (dp.opening_claims_unattached || {}).source_rows || [],
+    ...retainedRows,
 
     next_milestone: nextMilestone(positions, dp.as_of),
 

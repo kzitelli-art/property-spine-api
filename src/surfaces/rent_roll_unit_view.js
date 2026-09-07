@@ -299,6 +299,7 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
       held_rows_not_attached: (dp.opening_claims_unattached || {}).held || 0,
     },
     unattached_source_rows: (dp.opening_claims_unattached || {}).source_rows || [],
+    unattached_source_rows_truncated: (dp.opening_claims_unattached || {}).truncated === true,
     units,
   };
 }
