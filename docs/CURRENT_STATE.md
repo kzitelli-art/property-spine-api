@@ -1,5 +1,16 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-07 leasing retirement exclusion:** the shared leasing occupancy reader
+and leasing desk availability now reuse the canonical inventory retirement
+predicate. Root observed 8 retirement-specific failures before editing; all 41
+behavioral checks pass afterward, preserving the leased sibling, label rules,
+unknown basis, write refusals, and reinstatement. Full July/Skyline review,
+restart, lineage, mixed Add All and six existing browser phases passed with
+zero actual-source confirmations and owned cleanup. The current authenticated
+Leasing home fetches but does not paint its condition strip; visible occupancy
+presentation and hold-denominator meaning remain separate. No app change or
+deployment. See [retirement receipt](handoffs/desktop-qb-20260906/occupancy-retirement/RECEIPT.md).
+
 **2026-09-07 retained-source authority:** members now need a live target-property
 Leasing/Management assignment for rent-roll setup/read; existing administrator
 authority is preserved. Downloads and opening-position composition reuse that

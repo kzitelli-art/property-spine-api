@@ -30,6 +30,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");
+const { NOT_RETIRED_SQL } = require("../tenancy/inventory_retirement");
 const { computeExposure } = require("../money/exposure");
 const { computeOnboardingState } = require("../onboarding/onboarding_funnel"); // onboarding bridge: shared compute, never re-derived
 
@@ -260,6 +261,7 @@ module.exports = function desksModule({ pool }) {
         `select u.id as unit_id, u.unit_number, u.market_rent
            from units u
           where u.property_id = $1
+            and ${NOT_RETIRED_SQL('u')}
             and not exists (
               select 1 from leases l join spaces s on s.id = l.space_id
                where s.unit_id = u.id and l.lease_status = 'active')

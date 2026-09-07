@@ -196,6 +196,7 @@ else
   echo "── server                             UP (owned PID, run nonce, database marker)"
   step "mixed-grain onboarding writer" node tests/proofs/mixed_grain_writer_challenge.db.js
   step "retained source authority" node tests/proofs/retained_source_authority_observation.db.js
+  step "leasing occupancy retirement" node tests/proofs/leasing_occupancy_retirement.db.js
   step "authority chain"             node tests/e2e/authority_chain.e2e.js
   step "extracted route bindings"    node tests/e2e/extracted_route_bindings.e2e.js
   step "ingest property authority"   node tests/e2e/ingest_property_authority.e2e.js

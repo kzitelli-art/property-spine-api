@@ -174,14 +174,17 @@ async function stopServer() {
   console.log(`OWNED_API_READY=${apiSha}`);
   };
   await startServer();
-  if (!baselineMode && !spaceParentMode && process.env.PROOF_SOURCE_AUTH_OBSERVATION === "1") {
-    await run(process.execPath, [path.join(ROOT,"tests/proofs/retained_source_authority_observation.db.js")], {
+  const focusedProof = process.env.PROOF_FOCUSED_NAME || (process.env.PROOF_SOURCE_AUTH_OBSERVATION === "1" ? "retained_source_authority_observation" : null);
+  if (!baselineMode && !spaceParentMode && focusedProof) {
+    assert.match(focusedProof, /^[a-z0-9_]+$/);
+    await run(process.execPath, [path.join(ROOT,`tests/proofs/${focusedProof}.db.js`)], {
       env: {...process.env, PROOF_BUSINESS_ROOT:businessRoot},
     });
     for (const name of ["E2E_SMS_LOG","E2E_ANTHROPIC_LOG","E2E_EGRESS_LOG"]) assert.equal(fs.statSync(process.env[name]).size,0);
     return;
   }
   if (!baselineMode && !spaceParentMode) {
+    await run(process.execPath, [path.join(ROOT,"tests/proofs/leasing_occupancy_retirement.db.js")]);
     await run(process.execPath, [path.join(ROOT,"tests/proofs/retained_source_authority_observation.db.js")]);
     await run(process.execPath, [path.join(ROOT,"tests/proofs/mixed_grain_writer_challenge.db.js")], {
       env: {...process.env, PROOF_EXPECT_DEFECT:process.env.PROOF_MIXED_GRAIN_EXPECT_DEFECT || "0"},

@@ -30,11 +30,14 @@ function Assert-OwnedRoot {
     throw 'Owned local proof directory verification failed.'
   }
 }
-if($env:PROOF_SOURCE_AUTH_OBSERVATION -eq '1'){
-  $taskProof=Join-Path $apiRoot 'tests/proofs/retained_source_authority_observation.db.js'
-  if(-not(Test-Path -LiteralPath $taskProof -PathType Leaf)){throw 'Source authority proof must be saved and reviewed before allocating its runtime.'}
+$focusedProofName=$env:PROOF_FOCUSED_NAME
+if(-not $focusedProofName -and $env:PROOF_SOURCE_AUTH_OBSERVATION -eq '1'){$focusedProofName='retained_source_authority_observation'}
+if($focusedProofName){
+  if($focusedProofName -notmatch '^[a-z0-9_]+$'){throw 'Focused proof must name a file inside tests/proofs.'}
+  $taskProof=Join-Path $apiRoot "tests/proofs/$focusedProofName.db.js"
+  if(-not(Test-Path -LiteralPath $taskProof -PathType Leaf)){throw 'Focused proof must be saved and reviewed before allocating its runtime.'}
   & $node --check $taskProof
-  if($LASTEXITCODE -ne 0){throw 'Source authority proof syntax check failed before runtime allocation.'}
+  if($LASTEXITCODE -ne 0){throw 'Focused proof syntax check failed before runtime allocation.'}
 }
 try {
   foreach($required in @($AppRoot,$JulySource,$SkylineSource,$Chrome,$initdb,$pgCtl)) {
