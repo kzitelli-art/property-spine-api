@@ -444,3 +444,96 @@ Not done here: no marketing policy change, no backfill of certifications,
 no equating of an empty task list or a completed turn with readiness.
 QB should count the three shapes on the owned July/Skyline database before
 the ruling is taken.
+
+---
+
+# QB's September 7 return — falsification pass, September 7
+
+Read-only on `src/` and `tests/` (QB owns integration). The correction is
+PARKED, not committed: `fable-reset2/relay.patch` (4 files, +31/−3, applies
+cleanly to `6a2d46f` with `git apply --check`) beside the proof that
+reproduces the findings and accepts the patch,
+`fable-reset2/qb_findings_relay.db.js`, and its two artifacts. Whoever owns
+`tests/` copies the proof to `tests/proofs/` and adds one verify_all step.
+
+## Findings 1–3: reproduced on the real readers, then falsified against the patch
+
+Owned disposable database, real `datedPropertyPositions`, `unitRentRoll`
+and `readTenancyStanding`; no injected input. Commands and exits:
+
+```text
+PROOF_EXPECT_DEFECT=1 node docs/.../fable-reset2/qb_findings_relay.db.js   (6a2d46f)  11 passed, 0 failed, exit 0
+git apply fable-reset2/relay.patch  (working tree only)
+node docs/.../fable-reset2/qb_findings_relay.db.js                          (patched)  13 passed, 0 failed, exit 0
+```
+
+| # | Shape seeded | Unpatched `6a2d46f` (witness) | Patched (successor) |
+|---|---|---|---|
+| 1 | one unit, one linked confirmed vacancy, unit retired for superseded grain → 0 positions | helper promoted 1 · Rent Roll `confirmed_rows_not_attached` 1 · **Ask `unknowns: null`, no list** | Ask `unknowns.confirmed_source_rows_not_attached_to_a_position` 1 and the row `401|Room1` listed, standing still NOT_ESTABLISHED / `position: null` |
+| 2 | sole Room1; `402` (unit-linked) and `402|Room1` (space-linked) both confirmed vacant | position `opening_claim_vacant` from `402|Room1`, no conflict, **`402` counted unattached (1)** on helper, Rent Roll and Ask | 0 unattached everywhere; `basis_ref.supporting_keys = ["402|Room1","402"]`, selected first |
+| 3 | 52 confirmed rows naming rooms the unit lacks | helper 52 / list 50 / `truncated: true`; **Rent Roll and Ask relay 50 rows and no flag** | both relay `unattached_source_rows_truncated: true` beside the unbounded count 52 |
+
+Competing explanations considered and rejected: (1) that the empty-inventory
+branch is right to say nothing — no, the retained row is baseline history
+and the Rent Roll already shows it, so Ask disagreeing with the Rent Roll is
+the §33 failure, not a silence; (2) that finding 2 needs a same-key
+duplicate — no, two distinct keys reach one position through rules 1 and 2
+without touching `uq_proposed_natural`, exactly as QB said; (3) that finding
+3 is cosmetic — no, "50 rows" with no flag is a claim that 50 is all.
+
+## The patch, and why it is the smallest
+
+- `space_position.js`: the selected answer is merged with
+  `supporting_proposal_ids` and `supporting_keys` — every candidate that
+  matched the position and agreed. Conflict handling is untouched: two
+  candidates that disagree still become `unreconciled` with
+  `conflicting_proposal_ids`. Selection still picks the exact key first.
+- `dated_positions.js`: attached = selected, conflicting **or supporting**;
+  the helper carries `total` beside the bounded list. `positionBasis`'s
+  ref names `supporting_keys` so the trace can show both rows.
+- `tenancy_position_read.js`: the empty-inventory branch relays the two
+  counts and the list (standing, `position: null` and the
+  does-not-establish sentence unchanged); both branches relay
+  `unattached_source_rows_truncated`.
+- `rent_roll_unit_view.js`: relays `unattached_source_rows_truncated`.
+
+No new store, no detail lookup invented: the honest detail path is the
+count (unbounded) plus the flag; a paged list is a later contract if an
+operator ever needs the 51st key.
+
+Regression on the patched tree: identity 17/17, unattached 14/14, readiness
+13/13, ledger PASS, Ask Spine reader gate 72/72; over real HTTP on a fresh
+owned database: space-availability successor, historical challenge, the
+five leasing suites and invite-to-guarantor lease all PASS. Proposed
+verify_all step: `step "qb relay findings" node tests/proofs/qb_findings_relay.db.js`.
+
+## Finding 4: the stale identity artifact and the count wording
+
+`opening-claim-identity-successor.json` is regenerated from the current
+proof (case D now `opening_claim_vacant`, both modes). CURRENT_STATE row
+63 no longer says "no count of one" or "five defect assertions": the exact
+rule is that the sole-position count decides which of a unit's positions a
+unit-level claim describes, never which unit, and the shrink-to-one edge is
+a compatibility boundary under the ledger ruling, not a repaired drift.
+
+**Present-null versus absent lineage.** Rule 3 admits both `isr.id is null`
+(no evidence row) and an evidence row whose `produced_unit_id` and
+`produced_space_id` are both null. Today they are indistinguishable to the
+reader and both fall to text. Who produces present-null: the evidence pass
+writes `produced_unit_id` when a row's unit resolves at ingest, and both
+confirmation paths (occupied, and vacant since `0414e52`) write
+`produced_space_id`; so a *promoted* row with present-null lineage is
+exclusively a pre-`0414e52` confirmation — the ledger ruling's own shape.
+Absent lineage is a legacy proposal with no evidence row at all, which the
+pending index still admits. Recommendation: no rule change. Treating
+present-null as "resolved nothing" would un-attach every old-writer
+vacancy confirmation, which is the population the ruling protects. If a
+future writer ever records "resolved nothing" deliberately, it should say
+so in a column, not by leaving two nulls.
+
+## Not changed, still true
+
+The compatibility boundary (shrink-to-one attaches), the phantom
+placeholder count, the desk repaint race, the readiness offer policy, and
+the legacy `/operator/rent-roll` text match are all as recorded above. None
+of them was touched by this pass.

@@ -1,0 +1,47 @@
+{
+  "mode": "positive_defect_witness",
+  "evidence": {
+    "zero_inventory": {
+      "positions": 0,
+      "helper": {
+        "read": "ok",
+        "promoted": 1,
+        "held": 0,
+        "source_rows": [
+          {
+            "source_key": "401|Room1",
+            "status": "promoted"
+          }
+        ],
+        "truncated": false
+      },
+      "rent_roll": 1,
+      "ask_unknowns": null,
+      "ask_list": null
+    },
+    "two_keys": {
+      "basis_type": "opening_claim_vacant",
+      "selected_key": "402|Room1",
+      "helper": {
+        "read": "ok",
+        "promoted": 1,
+        "held": 0,
+        "source_rows": [
+          {
+            "source_key": "402",
+            "status": "promoted"
+          }
+        ],
+        "truncated": false
+      },
+      "supporting": null
+    },
+    "truncation": {
+      "helper": {
+        "promoted": 52,
+        "listed": 50,
+        "truncated": true
+      }
+    }
+  }
+}

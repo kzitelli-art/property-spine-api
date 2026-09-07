@@ -1,0 +1,103 @@
+diff --git a/src/surfaces/rent_roll_unit_view.js b/src/surfaces/rent_roll_unit_view.js
+index 7fce471..81427db 100644
+--- a/src/surfaces/rent_roll_unit_view.js
++++ b/src/surfaces/rent_roll_unit_view.js
+@@ -299,6 +299,7 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
+       held_rows_not_attached: (dp.opening_claims_unattached || {}).held || 0,
+     },
+     unattached_source_rows: (dp.opening_claims_unattached || {}).source_rows || [],
++    unattached_source_rows_truncated: !!(dp.opening_claims_unattached || {}).truncated,
+     units,
+   };
+ }
+diff --git a/src/tenancy/dated_positions.js b/src/tenancy/dated_positions.js
+index 663d0c4..b5aaeef 100644
+--- a/src/tenancy/dated_positions.js
++++ b/src/tenancy/dated_positions.js
+@@ -153,6 +153,8 @@ function positionBasis(p) {
+     proposal_id: src.proposal_id || null,
+     proposal_status: src.proposal_status || null,
+     natural_key: src.natural_key || null,
++    //  Every source key that supports this basis, the selected one first.
++    supporting_keys: src.supporting_keys || (src.natural_key ? [src.natural_key] : []),
+   } : null;
+ 
+   if (p.conflict_state === "conflicted") {
+@@ -697,6 +699,9 @@ async function unattachedOpeningClaims(pool, baseline, rawPositions) {
+     if (!src) continue;
+     if (src.proposal_id) referenced.add(String(src.proposal_id));
+     for (const id of src.conflicting_proposal_ids || []) referenced.add(String(id));
++    //  Selected is not attached: every candidate that matched this position
++    //  and agreed with the answer is attached evidence too.
++    for (const id of src.supporting_proposal_ids || []) referenced.add(String(id));
+   }
+   const rows = (await pool.query(
+     `select pr.id, pr.natural_key, pr.status
+@@ -716,6 +721,7 @@ async function unattachedOpeningClaims(pool, baseline, rawPositions) {
+     //  The key the source gave the row (unit, or unit|room) — a label an
+     //  operator can act on, not a record id. Bounded.
+     source_rows: unattached.slice(0, 50).map((r) => ({ source_key: r.natural_key, status: r.status })),
++    total: unattached.length,
+     truncated: unattached.length > 50,
+   };
+ }
+diff --git a/src/tenancy/space_position.js b/src/tenancy/space_position.js
+index 2511a89..64594a7 100644
+--- a/src/tenancy/space_position.js
++++ b/src/tenancy/space_position.js
+@@ -302,12 +302,23 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
+                       'conflicting_proposal_ids',
+                         jsonb_agg(candidate.proposal_id order by candidate.match_rank, candidate.proposal_id))
+                   else
+-                    (jsonb_agg(candidate.answer
+-                       order by candidate.match_rank, candidate.proposal_id))->0
++                    -- The selected answer, plus EVERY candidate that agreed
++                    -- with it. Selection is not attachment: a bare "101"
++                    -- and an exact "101|Room1" can both describe this one
++                    -- position, and the one not selected is still attached
++                    -- evidence, not an unmatched row.
++                    ((jsonb_agg(candidate.answer
++                       order by candidate.match_rank, candidate.proposal_id))->0)
++                    || jsonb_build_object(
++                         'supporting_proposal_ids',
++                           jsonb_agg(candidate.proposal_id order by candidate.match_rank, candidate.proposal_id),
++                         'supporting_keys',
++                           jsonb_agg(candidate.natural_key order by candidate.match_rank, candidate.proposal_id))
+                 end
+            from (
+              select
+                pr.id as proposal_id,
++               pr.natural_key,
+                -- Durable lineage outranks text; exact text outranks a bare key.
+                case when isr.produced_space_id = s.id then 0
+                     when lower(btrim(pr.natural_key))
+diff --git a/src/tenancy/tenancy_position_read.js b/src/tenancy/tenancy_position_read.js
+index 145a8be..433e911 100644
+--- a/src/tenancy/tenancy_position_read.js
++++ b/src/tenancy/tenancy_position_read.js
+@@ -143,7 +143,15 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
+         why: "no rentable position is recorded for this property in Spine" },
+       established_from: null,
+       position: null,
+-      unknowns: null,
++      //  No inventory is still not "nothing to say": a confirmed source row
++      //  the baseline retains stays visible when every position it could
++      //  have described has been retired.
++      unknowns: (dp.opening_claims_unattached && dp.opening_claims_unattached.read === "ok") ? {
++        confirmed_source_rows_not_attached_to_a_position: dp.opening_claims_unattached.promoted,
++        held_source_rows_not_attached_to_a_position: dp.opening_claims_unattached.held,
++      } : null,
++      unattached_source_rows: (dp.opening_claims_unattached || {}).source_rows || [],
++      unattached_source_rows_truncated: !!(dp.opening_claims_unattached || {}).truncated,
+       next_milestone: null,
+       does_not_establish: [
+         "Anything about occupancy, rent or commitments — tenancy has no inventory " +
+@@ -249,6 +257,8 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
+     },
+     //  By the key the source gave each row — a label, never a record id.
+     unattached_source_rows: (dp.opening_claims_unattached || {}).source_rows || [],
++    //  The list is bounded; the counts above are not. Say so.
++    unattached_source_rows_truncated: !!(dp.opening_claims_unattached || {}).truncated,
+ 
+     next_milestone: nextMilestone(positions, dp.as_of),
+ 

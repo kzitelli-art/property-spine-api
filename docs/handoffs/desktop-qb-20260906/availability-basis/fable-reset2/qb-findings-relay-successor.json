@@ -1,0 +1,58 @@
+{
+  "mode": "successor",
+  "evidence": {
+    "zero_inventory": {
+      "positions": 0,
+      "helper": {
+        "read": "ok",
+        "promoted": 1,
+        "held": 0,
+        "source_rows": [
+          {
+            "source_key": "401|Room1",
+            "status": "promoted"
+          }
+        ],
+        "total": 1,
+        "truncated": false
+      },
+      "rent_roll": 1,
+      "ask_unknowns": {
+        "confirmed_source_rows_not_attached_to_a_position": 1,
+        "held_source_rows_not_attached_to_a_position": 0
+      },
+      "ask_list": [
+        {
+          "source_key": "401|Room1",
+          "status": "promoted"
+        }
+      ]
+    },
+    "two_keys": {
+      "basis_type": "opening_claim_vacant",
+      "selected_key": "402|Room1",
+      "helper": {
+        "read": "ok",
+        "promoted": 0,
+        "held": 0,
+        "source_rows": [],
+        "total": 0,
+        "truncated": false
+      },
+      "supporting": [
+        "402|Room1",
+        "402"
+      ]
+    },
+    "truncation": {
+      "helper": {
+        "promoted": 52,
+        "listed": 50,
+        "truncated": true,
+        "total": 52
+      },
+      "rent_roll_flag": true,
+      "ask_flag": true
+    }
+  }
+}

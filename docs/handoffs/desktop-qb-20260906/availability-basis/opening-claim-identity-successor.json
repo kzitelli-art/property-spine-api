@@ -37,10 +37,10 @@
     {
       "case": "D_shrink_to_single_bed",
       "after": {
-        "state": "not_established",
-        "type": null,
-        "claim": "unknown",
-        "proposal": null
+        "state": "established",
+        "type": "opening_claim_vacant",
+        "claim": "vacant",
+        "proposal": "<synthetic>"
       }
     },
     {
