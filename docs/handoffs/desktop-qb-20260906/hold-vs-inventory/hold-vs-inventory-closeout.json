@@ -1,0 +1,730 @@
+{
+  "calls": [
+    {
+      "name": "availability-canonical",
+      "how": "HTTP"
+    },
+    {
+      "name": "leaseable-units",
+      "how": "HTTP"
+    },
+    {
+      "name": "rent-roll/units",
+      "how": "HTTP"
+    },
+    {
+      "name": "ask-spine/ask",
+      "how": "HTTP"
+    },
+    {
+      "name": "readTenancyStanding",
+      "how": "service"
+    },
+    {
+      "name": "gatherFacts(tenancy)",
+      "how": "service"
+    },
+    {
+      "name": "occupancyByBasis",
+      "how": "service"
+    },
+    {
+      "name": "leasing-dashboard (operator key)",
+      "how": "HTTP"
+    },
+    {
+      "name": "rent-roll/canonical",
+      "how": "HTTP"
+    },
+    {
+      "name": "leasing/forward-rent",
+      "how": "HTTP"
+    },
+    {
+      "name": "rent-roll/future-facts",
+      "how": "HTTP"
+    },
+    {
+      "name": "deal-setup upload",
+      "how": "HTTP"
+    },
+    {
+      "name": "deal-setup activation",
+      "how": "HTTP"
+    },
+    {
+      "name": "deal-setup read-source",
+      "how": "HTTP"
+    },
+    {
+      "name": "deal-setup activation read",
+      "how": "HTTP"
+    },
+    {
+      "name": "deal-setup confirm",
+      "how": "HTTP"
+    },
+    {
+      "name": "deal-setup establish",
+      "how": "HTTP"
+    },
+    {
+      "name": "units/:id/down (wrong key)",
+      "how": "HTTP"
+    },
+    {
+      "name": "units/:id/down",
+      "how": "HTTP"
+    },
+    {
+      "name": "triage/confirm (foreign session)",
+      "how": "HTTP"
+    },
+    {
+      "name": "leaseable-units (maintenance-only seat)",
+      "how": "HTTP"
+    },
+    {
+      "name": "units/:id/down/resolve",
+      "how": "HTTP"
+    }
+  ],
+  "sections": {
+    "baseline": {
+      "consumers": {
+        "http_status": {
+          "availability": 200,
+          "leaseable": 200,
+          "rent_roll": 200,
+          "ask": 200
+        },
+        "availability": {
+          "placeholder": "marketable_now",
+          "placeholder_reason": null,
+          "placeholder_basis_state": "established",
+          "room1": "marketable_now",
+          "room1_basis_state": "established",
+          "room1_reason": null,
+          "room2": "marketable_now",
+          "n302_room1": "occupied",
+          "n302_room2": "marketable_now"
+        },
+        "leaseable_301": [
+          "(whole unit)",
+          "Room1",
+          "Room2"
+        ],
+        "leaseable_302": [
+          "Room2"
+        ],
+        "rent_roll": {
+          "positions_301": 3,
+          "placeholder_bucket": "open",
+          "placeholder_basis": "established",
+          "room1_bucket": "open",
+          "n302_room1_bucket": "occupied"
+        },
+        "standing": {
+          "truth_state": "ESTABLISHED",
+          "why": "5 rentable positions are recorded across 2 units",
+          "rentable_positions": 5,
+          "open": 4,
+          "occupied": 1,
+          "not_established": 0
+        },
+        "ask_http": {
+          "outcome": "unavailable",
+          "grounded_on_present": false
+        },
+        "ask_facts": {
+          "read_state": "OK",
+          "open": 4,
+          "rentable_positions": 5
+        }
+      },
+      "financial": {
+        "occupancy_primitive": {
+          "status": "ok",
+          "occupied": 1,
+          "rentable": 5,
+          "excluded": 0,
+          "ratio": 0.2,
+          "source": "space_label"
+        },
+        "leasing_desk": {
+          "status": 200,
+          "occupancy": {
+            "value": 0.2,
+            "label": "20.0% occupied"
+          }
+        },
+        "canonical": {
+          "status": 200,
+          "inventory": 5,
+          "leasable": 5,
+          "down": 0,
+          "occupancy": {
+            "occupied": 1,
+            "denominator": 5,
+            "pct": 20,
+            "beside": {
+              "unresolved_positions": 0,
+              "evidence_disagrees": 0,
+              "evidence_inconclusive": 0
+            }
+          },
+          "contractual_rent_trusted": 850,
+          "positions_contributing_rent": 1,
+          "placeholder_tenancy_state": "vacant",
+          "sibling_tenancy_state": "contractually_occupied",
+          "sibling_rent": 850
+        },
+        "forward_rent": {
+          "status": 200,
+          "error": null,
+          "positions": 5,
+          "remaining": 4,
+          "committed_rent": {
+            "contractual": 0,
+            "contractual_positions": 0,
+            "contractual_state": "NOT_ESTABLISHED"
+          },
+          "open_bed_assumption": {
+            "read_state": "ok",
+            "monthly": 0,
+            "lines": 0
+          }
+        },
+        "future_facts": {
+          "status": 200,
+          "monthly_contractual_rent_known": 0,
+          "positions": 5,
+          "open_or_uncovered": 4
+        },
+        "vacancy_loss": {
+          "owner": null,
+          "note": "no vacancy-loss or gross-potential-rent calculation exists in src/ (searched vacancy loss, loss to vacancy, economic vacancy, gross_potential); cannot be read through any live path"
+        }
+      }
+    },
+    "source_correction": {
+      "upload": 201,
+      "read": 201,
+      "confirms": [
+        [
+          "301|Room1",
+          200,
+          "staged"
+        ],
+        [
+          "301|Room2",
+          200,
+          "staged"
+        ],
+        [
+          "302|Room1",
+          409,
+          "staged"
+        ],
+        [
+          "302|Room2",
+          200,
+          "staged"
+        ]
+      ],
+      "establish": 201,
+      "consumers": {
+        "http_status": {
+          "availability": 200,
+          "leaseable": 200,
+          "rent_roll": 200,
+          "ask": 200
+        },
+        "availability": {
+          "placeholder": "occupancy_unknown",
+          "placeholder_reason": "no_established_occupancy_basis",
+          "placeholder_basis_state": "not_established",
+          "room1": "marketable_now",
+          "room1_basis_state": "established",
+          "room1_reason": null,
+          "room2": "marketable_now",
+          "n302_room1": "occupied",
+          "n302_room2": "marketable_now"
+        },
+        "leaseable_301": [
+          "Room1",
+          "Room2"
+        ],
+        "leaseable_302": [
+          "Room2"
+        ],
+        "rent_roll": {
+          "positions_301": 3,
+          "placeholder_bucket": null,
+          "placeholder_basis": "not_established",
+          "room1_bucket": "open",
+          "n302_room1_bucket": "needs_review"
+        },
+        "standing": {
+          "truth_state": "PARTIALLY_ESTABLISHED",
+          "why": "4 of 5 rentable positions have an established basis; 1 do not",
+          "rentable_positions": 5,
+          "open": 3,
+          "occupied": 0,
+          "not_established": 1
+        },
+        "ask_http": {
+          "outcome": "unavailable",
+          "grounded_on_present": false
+        },
+        "ask_facts": {
+          "read_state": "OK",
+          "open": 3,
+          "rentable_positions": 5
+        }
+      },
+      "financial": {
+        "occupancy_primitive": {
+          "status": "ok",
+          "occupied": 1,
+          "rentable": 5,
+          "excluded": 0,
+          "ratio": 0.2,
+          "source": "space_label"
+        },
+        "leasing_desk": {
+          "status": 200,
+          "occupancy": {
+            "value": 0.2,
+            "label": "20.0% occupied"
+          }
+        },
+        "canonical": {
+          "status": 200,
+          "inventory": 5,
+          "leasable": 5,
+          "down": 0,
+          "occupancy": {
+            "occupied": 1,
+            "denominator": 5,
+            "pct": 20,
+            "beside": {
+              "unresolved_positions": 1,
+              "evidence_disagrees": 0,
+              "evidence_inconclusive": 1
+            }
+          },
+          "contractual_rent_trusted": 850,
+          "positions_contributing_rent": 1,
+          "placeholder_tenancy_state": "unresolved",
+          "sibling_tenancy_state": "contractually_occupied",
+          "sibling_rent": 850
+        },
+        "forward_rent": {
+          "status": 200,
+          "error": null,
+          "positions": 5,
+          "remaining": 4,
+          "committed_rent": {
+            "contractual": 0,
+            "contractual_positions": 0,
+            "contractual_state": "NOT_ESTABLISHED"
+          },
+          "open_bed_assumption": {
+            "read_state": "ok",
+            "monthly": 0,
+            "lines": 0
+          }
+        },
+        "future_facts": {
+          "status": 200,
+          "monthly_contractual_rent_known": 0,
+          "positions": 5,
+          "open_or_uncovered": 4
+        },
+        "vacancy_loss": {
+          "owner": null,
+          "note": "no vacancy-loss or gross-potential-rent calculation exists in src/ (searched vacancy loss, loss to vacancy, economic vacancy, gross_potential); cannot be read through any live path"
+        }
+      }
+    },
+    "down": {
+      "wrong_key": 401,
+      "down": 201,
+      "consumers": {
+        "http_status": {
+          "availability": 200,
+          "leaseable": 200,
+          "rent_roll": 200,
+          "ask": 200
+        },
+        "availability": {
+          "placeholder": "down",
+          "placeholder_reason": "out_of_service",
+          "placeholder_basis_state": "not_established",
+          "room1": "down",
+          "room1_basis_state": "established",
+          "room1_reason": "out_of_service",
+          "room2": "down",
+          "n302_room1": "occupied",
+          "n302_room2": "marketable_now"
+        },
+        "leaseable_301": [],
+        "leaseable_302": [
+          "Room2"
+        ],
+        "rent_roll": {
+          "positions_301": 3,
+          "placeholder_bucket": null,
+          "placeholder_basis": "not_established",
+          "room1_bucket": "open",
+          "n302_room1_bucket": "needs_review"
+        },
+        "standing": {
+          "truth_state": "PARTIALLY_ESTABLISHED",
+          "why": "4 of 5 rentable positions have an established basis; 1 do not",
+          "rentable_positions": 5,
+          "open": 3,
+          "occupied": 0,
+          "not_established": 1
+        },
+        "ask_http": {
+          "outcome": "unavailable",
+          "grounded_on_present": false
+        },
+        "ask_facts": {
+          "read_state": "OK",
+          "open": 3,
+          "rentable_positions": 5
+        }
+      },
+      "financial": {
+        "occupancy_primitive": {
+          "status": "ok",
+          "occupied": 1,
+          "rentable": 5,
+          "excluded": 0,
+          "ratio": 0.2,
+          "source": "space_label"
+        },
+        "leasing_desk": {
+          "status": 200,
+          "occupancy": {
+            "value": 0.2,
+            "label": "20.0% occupied"
+          }
+        },
+        "canonical": {
+          "status": 200,
+          "inventory": 5,
+          "leasable": 2,
+          "down": 3,
+          "occupancy": {
+            "occupied": 1,
+            "denominator": 2,
+            "pct": 50,
+            "beside": {
+              "unresolved_positions": 1,
+              "evidence_disagrees": 0,
+              "evidence_inconclusive": 1
+            }
+          },
+          "contractual_rent_trusted": 850,
+          "positions_contributing_rent": 1,
+          "placeholder_tenancy_state": "unresolved",
+          "sibling_tenancy_state": "contractually_occupied",
+          "sibling_rent": 850
+        },
+        "forward_rent": {
+          "status": 200,
+          "error": null,
+          "positions": 5,
+          "remaining": 4,
+          "committed_rent": {
+            "contractual": 0,
+            "contractual_positions": 0,
+            "contractual_state": "NOT_ESTABLISHED"
+          },
+          "open_bed_assumption": {
+            "read_state": "ok",
+            "monthly": 0,
+            "lines": 0
+          }
+        },
+        "future_facts": {
+          "status": 200,
+          "monthly_contractual_rent_known": 0,
+          "positions": 5,
+          "open_or_uncovered": 4
+        },
+        "vacancy_loss": {
+          "owner": null,
+          "note": "no vacancy-loss or gross-potential-rent calculation exists in src/ (searched vacancy loss, loss to vacancy, economic vacancy, gross_potential); cannot be read through any live path"
+        }
+      },
+      "foreign_property": 403,
+      "maintenance_only_on_selector": 403,
+      "resolve": 200,
+      "after_resolve": {
+        "consumers": {
+          "http_status": {
+            "availability": 200,
+            "leaseable": 200,
+            "rent_roll": 200,
+            "ask": 200
+          },
+          "availability": {
+            "placeholder": "occupancy_unknown",
+            "placeholder_reason": "no_established_occupancy_basis",
+            "placeholder_basis_state": "not_established",
+            "room1": "marketable_now",
+            "room1_basis_state": "established",
+            "room1_reason": null,
+            "room2": "marketable_now",
+            "n302_room1": "occupied",
+            "n302_room2": "marketable_now"
+          },
+          "leaseable_301": [
+            "Room1",
+            "Room2"
+          ],
+          "leaseable_302": [
+            "Room2"
+          ],
+          "rent_roll": {
+            "positions_301": 3,
+            "placeholder_bucket": null,
+            "placeholder_basis": "not_established",
+            "room1_bucket": "open",
+            "n302_room1_bucket": "needs_review"
+          },
+          "standing": {
+            "truth_state": "PARTIALLY_ESTABLISHED",
+            "why": "4 of 5 rentable positions have an established basis; 1 do not",
+            "rentable_positions": 5,
+            "open": 3,
+            "occupied": 0,
+            "not_established": 1
+          },
+          "ask_http": {
+            "outcome": "unavailable",
+            "grounded_on_present": false
+          },
+          "ask_facts": {
+            "read_state": "OK",
+            "open": 3,
+            "rentable_positions": 5
+          }
+        },
+        "financial": {
+          "occupancy_primitive": {
+            "status": "ok",
+            "occupied": 1,
+            "rentable": 5,
+            "excluded": 0,
+            "ratio": 0.2,
+            "source": "space_label"
+          },
+          "leasing_desk": {
+            "status": 200,
+            "occupancy": {
+              "value": 0.2,
+              "label": "20.0% occupied"
+            }
+          },
+          "canonical": {
+            "status": 200,
+            "inventory": 5,
+            "leasable": 5,
+            "down": 0,
+            "occupancy": {
+              "occupied": 1,
+              "denominator": 5,
+              "pct": 20,
+              "beside": {
+                "unresolved_positions": 1,
+                "evidence_disagrees": 0,
+                "evidence_inconclusive": 1
+              }
+            },
+            "contractual_rent_trusted": 850,
+            "positions_contributing_rent": 1,
+            "placeholder_tenancy_state": "unresolved",
+            "sibling_tenancy_state": "contractually_occupied",
+            "sibling_rent": 850
+          },
+          "forward_rent": {
+            "status": 200,
+            "error": null,
+            "positions": 5,
+            "remaining": 4,
+            "committed_rent": {
+              "contractual": 0,
+              "contractual_positions": 0,
+              "contractual_state": "NOT_ESTABLISHED"
+            },
+            "open_bed_assumption": {
+              "read_state": "ok",
+              "monthly": 0,
+              "lines": 0
+            }
+          },
+          "future_facts": {
+            "status": 200,
+            "monthly_contractual_rent_known": 0,
+            "positions": 5,
+            "open_or_uncovered": 4
+          },
+          "vacancy_loss": {
+            "owner": null,
+            "note": "no vacancy-loss or gross-potential-rent calculation exists in src/ (searched vacancy loss, loss to vacancy, economic vacancy, gross_potential); cannot be read through any live path"
+          }
+        }
+      }
+    },
+    "retirement": {
+      "retired_count": 1,
+      "reason_code": "superseded_by_corrected_inventory_grain",
+      "reinstated": true,
+      "during": {
+        "consumers": {
+          "http_status": {
+            "availability": 200,
+            "leaseable": 200,
+            "rent_roll": 200,
+            "ask": 200
+          },
+          "availability": {
+            "placeholder_reason": null,
+            "room1_reason": null,
+            "n302_room1": "occupied",
+            "n302_room2": "marketable_now"
+          },
+          "leaseable_301": [],
+          "leaseable_302": [
+            "Room2"
+          ],
+          "rent_roll": {
+            "n302_room1_bucket": "needs_review"
+          },
+          "standing": {
+            "truth_state": "ESTABLISHED",
+            "why": "2 rentable positions are recorded across 1 units",
+            "rentable_positions": 2,
+            "open": 1,
+            "occupied": 0,
+            "not_established": 0
+          },
+          "ask_http": {
+            "outcome": "unavailable",
+            "grounded_on_present": false
+          },
+          "ask_facts": {
+            "read_state": "OK",
+            "open": 1,
+            "rentable_positions": 2
+          }
+        },
+        "financial": {
+          "occupancy_primitive": {
+            "status": "ok",
+            "occupied": 1,
+            "rentable": 5,
+            "excluded": 0,
+            "ratio": 0.2,
+            "source": "space_label"
+          },
+          "leasing_desk": {
+            "status": 200,
+            "occupancy": {
+              "value": 0.2,
+              "label": "20.0% occupied"
+            }
+          },
+          "canonical": {
+            "status": 200,
+            "inventory": 2,
+            "leasable": 2,
+            "down": 0,
+            "occupancy": {
+              "occupied": 1,
+              "denominator": 2,
+              "pct": 50,
+              "beside": {
+                "unresolved_positions": 0,
+                "evidence_disagrees": 0,
+                "evidence_inconclusive": 0
+              }
+            },
+            "contractual_rent_trusted": 850,
+            "positions_contributing_rent": 1,
+            "sibling_tenancy_state": "contractually_occupied",
+            "sibling_rent": 850
+          },
+          "forward_rent": {
+            "status": 200,
+            "error": null,
+            "positions": 2,
+            "remaining": 1,
+            "committed_rent": {
+              "contractual": 0,
+              "contractual_positions": 0,
+              "contractual_state": "NOT_ESTABLISHED"
+            },
+            "open_bed_assumption": {
+              "read_state": "ok",
+              "monthly": 0,
+              "lines": 0
+            }
+          },
+          "future_facts": {
+            "status": 200,
+            "monthly_contractual_rent_known": 0,
+            "positions": 2,
+            "open_or_uncovered": 1
+          },
+          "vacancy_loss": {
+            "owner": null,
+            "note": "no vacancy-loss or gross-potential-rent calculation exists in src/ (searched vacancy loss, loss to vacancy, economic vacancy, gross_potential); cannot be read through any live path"
+          }
+        }
+      },
+      "identity_equal": true,
+      "consumers_equal": true,
+      "retirement_rows": [
+        {
+          "unit_id": "<uuid>",
+          "reason_code": "superseded_by_corrected_inventory_grain",
+          "original_unit_number": "301",
+          "retired": true,
+          "reversed": true
+        }
+      ],
+      "artifact_sha256_present": true,
+      "identity_shape": {
+        "spaces": 5,
+        "proposals": 9,
+        "evidence_rows": 9,
+        "baselines": 2,
+        "batches": 2,
+        "artifacts": 1,
+        "lease": true,
+        "cycle": 1
+      }
+    },
+    "explainability": {
+      "source_correction": {
+        "occupancy_axis": "not_established",
+        "marketing_axis": "occupancy_unknown",
+        "reason": "no_established_occupancy_basis",
+        "rent_roll_bucket": null
+      },
+      "down_hold_room1": {
+        "occupancy_axis": "established",
+        "marketing_axis": "down",
+        "reason": "out_of_service",
+        "rent_roll_bucket": "open"
+      }
+    }
+  }
+}
