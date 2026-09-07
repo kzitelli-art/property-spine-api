@@ -47,6 +47,7 @@ function ok(label, condition, detail = "") {
     const deal = await one(`insert into deal_intakes(onboarding_type,status,deal_name,organization_id)
       values('existing_asset','classified',$1,$2) returning id`, [tag, org.id]);
     const httpFixtures = [];
+    const browserFixtures = [];
     async function verifyHttp(propertyId, expectedCount, truncated, revoke = false) {
       if (process.env.PROOF_RELAY_HTTP !== "1") return;
       const api = process.env.E2E_API_BASE;
@@ -83,10 +84,13 @@ function ok(label, condition, detail = "") {
         ok("HTTP query cannot retarget the signed-in property",true);
       }
       httpFixtures.push(propertyId);
+      browserFixtures.push({token, property_id:propertyId, expected_count:expectedCount,
+        expected_truncated:truncated, expected_positions:result.body.totals.rentable_positions});
       if (revoke) {
         await pool.query("update property_team_assignments set allowed_modules='{management}' where property_id=$1 and user_id=$2",[propertyId,user.id]);
         assert.equal((await get("")).status,403);
         ok("HTTP refuses retained claim reads after leasing entitlement removal",true);
+        await pool.query("update property_team_assignments set allowed_modules='{management,leasing}' where property_id=$1 and user_id=$2",[propertyId,user.id]);
       }
     }
 
@@ -149,6 +153,31 @@ function ok(label, condition, detail = "") {
         await client.query("rollback").catch(() => {});
         throw error;
       } finally { client.release(); }
+    }
+
+    // A completed baseline read with zero retained claims is known zero;
+    // no baseline remains an unknown. Neither establishes current inventory.
+    {
+      const propertyId = await property("empty-baseline");
+      const absent = await readTenancyStanding(pool,{property_id:propertyId,as_of:AS_OF});
+      assert.equal(absent.unknowns,null);
+      assert.equal(absent.standing.truth_state,"NOT_ESTABLISHED");
+      const {batchId,activationId} = await activation(propertyId,"empty-baseline");
+      await baseline(propertyId,activationId,batchId,0,0);
+      const standing = await readTenancyStanding(pool,{property_id:propertyId,as_of:AS_OF});
+      const facts = await ask(propertyId);
+      assert.equal(standing.position,null);
+      assert.equal(standing.standing.truth_state,"NOT_ESTABLISHED");
+      if (parent || process.env.PROOF_RELAY_ZERO_EXPECT_DEFECT === "1") {
+        assert.equal(standing.unknowns,null);
+        assert.equal(facts.unknowns,null);
+        ok("parent witness: successful empty baseline read loses explicit zero counts",true);
+      } else {
+        assert.equal(standing.unknowns.confirmed_source_rows_not_attached_to_a_position,0);
+        assert.equal(standing.unknowns.held_source_rows_not_attached_to_a_position,0);
+        assert.deepEqual(facts.unknowns,standing.unknowns);
+        ok("empty baseline preserves known zeros; absent baseline remains unknown",true);
+      }
     }
 
     // 1. Two distinct agreeing keys answer the same sole position. The relay
@@ -281,6 +310,8 @@ function ok(label, condition, detail = "") {
 
     console.log(`\n==== opening claim relay edges: ${passed} passed, ${failed} failed ====`);
     if (process.env.PROOF_OUTPUT_DIR) {
+      if (browserFixtures.length) fs.writeFileSync(path.join(process.env.PROOF_OUTPUT_DIR,"claim-relay-state.private.json"),
+        JSON.stringify({fixtures:browserFixtures},null,2));
       fs.writeFileSync(path.join(process.env.PROOF_OUTPUT_DIR,
         `opening-claim-relay-edges-${parent ? "parent" : "successor"}.json`),
         JSON.stringify({ mode: parent ? "positive_defect_witness" : "successor", http_checked: process.env.PROOF_RELAY_HTTP === "1" && !parent, passed, failed, evidence }, null, 2));

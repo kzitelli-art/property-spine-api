@@ -151,7 +151,7 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
         why: "no rentable position is recorded for this property in Spine" },
       established_from: null,
       position: null,
-      unknowns: unattached.promoted || unattached.held ? retainedUnknowns : null,
+      unknowns: unattached.read === "ok" ? retainedUnknowns : null,
       ...retainedRows,
       next_milestone: null,
       does_not_establish: [

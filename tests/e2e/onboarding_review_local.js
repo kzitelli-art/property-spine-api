@@ -186,9 +186,11 @@ async function stopServer() {
       PROOF_PHASE:phase,PROOF_REVIEW_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"review-state.private.json"),
       PROOF_SYNTHETIC_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"mixed-state.private.json"),
       PROOF_SPACE_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"space-state.private.json"),
+      PROOF_RELAY_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"claim-relay-state.private.json"),
       PROOF_API_SHA: apiSha, PROOF_APP_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: appRoot, encoding: "utf8", windowsHide: true }).trim() },
   });
   if (!baselineMode && !spaceParentMode && process.env.PROOF_SPACE_BROWSER === "1") await runBrowser("spaces");
+  if (!baselineMode && !spaceParentMode && process.env.PROOF_RELAY_BROWSER === "1") await runBrowser("relay");
   if (process.env.ONBOARDING_SPACE_PROOF_ONLY === "1") {
     for (const name of ["E2E_SMS_LOG","E2E_ANTHROPIC_LOG","E2E_EGRESS_LOG"]) assert.equal(fs.statSync(process.env[name]).size,0);
     return;

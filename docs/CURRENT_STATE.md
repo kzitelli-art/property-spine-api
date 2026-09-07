@@ -1,5 +1,15 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-07 retained-entry screen/restart follow-up:** the existing unit Rent Roll
+now displays unmatched source entries in one expandable review section, including
+when no current inventory exists, and discloses a bounded list. Standing preserves
+known zero counts after a successful baseline read. Full owned Windows July/Skyline
+review/restart/lineage/mixed and browser spaces/retained-entry/failure/retry passed
+on frozen API94298bc/app8baf740 plus the recorded changes. App44/1648 passed;
+cleanup complete; actual-source confirmations0. This is browser-verified rehearsal,
+not deployment or established occupancy. Exact source custody and limits:
+[screen receipt](handoffs/desktop-qb-20260906/claim-relay/SCREEN_RECEIPT.md).
+
 **2026-09-07 retained-claim reader repair:** based on Fable API `6a2d46f`,
 `codex/claim-relay-20260907` preserves every agreeing eligible source reference,
 keeps retained claims in zero-inventory standing/Ask facts without establishing
