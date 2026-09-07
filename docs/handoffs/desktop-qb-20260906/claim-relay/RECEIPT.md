@@ -77,6 +77,23 @@ read-only reviewer verified this candidate's branch/HEAD and reread the philosop
 
 ## Scope remaining
 
+Fable's independent return at `4915c9d00c04a13289f0b09dad2976f08d836a29`
+reports 11 parent and 13 patched successor assertions. QB inspected the parked
+patch: its three core repairs agree with `c9d2cb9`. It additionally exposes
+`basis_ref.supporting_keys` and an aggregate `total`; those additions are not in
+the QB candidate. They require an identified consumer/use before adoption.
+Its empty-inventory branch also carries literal zero counts whenever a baseline
+was read; QB's branch currently returns null unknowns when no retained claims
+exist. This difference remains a follow-up semantic check, not equivalence.
+
+The regenerated identity artifact at Fable's commit exactly matches QB's own
+final identity run after replacing the two synthetic proposal IDs with markers.
+QB incorporated that artifact and corrected the overstated no-text/no-count
+wording. Case D still attaches after shrink-to-one under the compatibility rule;
+that behavior is not a repaired identity drift. Fable's claim that all promoted
+present-null lineage must come from old writers remains a historical hypothesis
+pending writer-path evidence; no identity policy change is adopted from it.
+
 This slice repairs API readers. The app has no new retained-claim panel; HTTP
 field availability is not browser display proof. Ask fact gathering is not Ask
 HTTP, a generated answer, or cross-domain authorization acceptance. The full
