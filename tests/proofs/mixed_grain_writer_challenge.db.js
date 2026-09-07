@@ -34,6 +34,7 @@ const { unitRentRoll } = require(path.join(root, "src/surfaces/rent_roll_unit_vi
 const { readTenancyStanding } = require(path.join(root, "src/tenancy/tenancy_position_read.js"));
 const { availabilityRead } = require(path.join(root, "src/surfaces/availability_read.js"));
 const { resolveApplicationTarget } = require(path.join(root, "src/applications/application_target_authority.js"));
+const snapshotLoader = require(path.join(root, "src/shared/snapshot_loader.js"));
 
 let passed = 0, failed = 0;
 const clean = value => String(value == null ? "" : value)
@@ -167,14 +168,26 @@ const evidence = { mode: parent ? "positive_parent_defect" : "successor", sectio
         (select count(*) from import_source_rows r join import_batches b on b.id=r.import_batch_id where b.property_id=$1)::int as lineage,
         (select count(*) from proposed_records where property_id=$1)::int as proposals,
         (select count(*) from leases where property_id=$1)::int as leases,
-        (select count(*) from opening_tenancy_positions where property_id=$1)::int as baselines`, [p.id]);
+        (select count(*) from opening_tenancy_positions where property_id=$1)::int as baselines,
+        (select count(*) from import_batches where property_id=$1)::int as batches`, [p.id]);
       return r;
+    }
+    async function activationState(p, activationId) {
+      return one(`select status, import_batch_id, source_artifact_id
+        from activations where id=$1 and property_id=$2`, [activationId, p.id]);
     }
     async function artifactMeta(id) {
       return one(`select original_filename, byte_size::int as byte_size, sha256, source_as_of_date::text as source_as_of_date
         from source_artifacts where id=$1`, [id]);
     }
-    const sameState = (a, b) => ["units", "spaces", "lineage", "proposals", "leases", "baselines"].every(k => Number(a[k]) === Number(b[k]));
+    const sameState = (a, b) => ["units", "spaces", "lineage", "proposals", "leases", "baselines", "batches"].every(k => Number(a[k]) === Number(b[k]));
+    const sameActivation = (a, b) => ["status", "import_batch_id", "source_artifact_id"]
+      .every(k => (a && a[k] || null) === (b && b[k] || null));
+    const comparatorBaseline = { units:0, spaces:0, lineage:0, proposals:0, leases:0, baselines:0, batches:0 };
+    const comparatorActivation = { status:"open", import_batch_id:null, source_artifact_id:null };
+    evidence.sections.comparator = { scope: "helper_only" };
+    ok("helper-only comparator: a batch-only mutation is unequal", !sameState(comparatorBaseline, { ...comparatorBaseline, batches:1 }));
+    ok("helper-only comparator: an activation-link-only mutation is unequal", !sameActivation(comparatorActivation, { ...comparatorActivation, source_artifact_id:"synthetic-artifact-link" }));
 
     async function reads(p, unit) {
       await pool.query("update spaces set use_type='residential' where use_type is null and unit_id in (select id from units where property_id=$1)", [p.id]);
@@ -228,6 +241,75 @@ const evidence = { mode: parent ? "positive_parent_defect" : "successor", sectio
       }
     }
     ok("1: parent witness and successor guard use the same two input orders", Object.keys(S1).length === 2);
+
+    // 1b. A valid earlier unit must not survive a later contradiction.
+    const composite = await property("valid-then-mixed", "bed");
+    const compositePrep = await prepare(composite,
+      HEADER + "500,Room1,VACANT,900,,,\n" +
+               "501,(whole unit),VACANT,900,,,\n" +
+               "501,Room1,VACANT,900,,,\n");
+    const compositeBefore = await state(composite);
+    const compositeActivationBefore = await activationState(composite, compositePrep.activation);
+    const compositeArtifactBefore = await artifactMeta(compositePrep.artifact.id);
+    const compositeResult = await readSource(composite, compositePrep);
+    const compositeAfter = await state(composite);
+    const compositeActivationAfter = await activationState(composite, compositePrep.activation);
+    const compositeArtifactAfter = await artifactMeta(compositePrep.artifact.id);
+
+    if (parent) {
+      ok("1b parent: valid earlier unit and later mixed unit are accepted on the parent",
+        compositeResult.ok === true && compositeResult.proposals.length === 3);
+      ok("1b parent: the parent commits both source units",
+        compositeAfter.units === 2 && compositeAfter.spaces === 3 && compositeAfter.lineage === 3 && compositeAfter.batches === 1);
+      ok("1b parent: activation links the committed batch to the retained artifact",
+        compositeActivationAfter && compositeActivationAfter.status === "open" &&
+        compositeActivationAfter.import_batch_id && compositeActivationAfter.source_artifact_id === compositePrep.artifact.id);
+    } else {
+      const msg = compositeResult.error && compositeResult.error.message || "";
+      ok("1b successor: later mixed unit refuses the whole retained-source read",
+        compositeResult.error && compositeResult.error.status === 409 &&
+        (api ? compositeResult.error.code === "refused" : compositeResult.error.code === "MIXED_GRAIN_LABELS"));
+      if (api) ok("1b successor HTTP: receipt names the later unit and review action",
+        /501/.test(msg) && /whole.?unit/i.test(msg) && /Room1/i.test(msg) && /review|source|restate/i.test(msg) &&
+        !/MIXED_GRAIN_LABELS/.test(msg));
+      ok("1b successor: the valid earlier unit was rolled back too", sameState(compositeBefore, compositeAfter));
+      ok("1b successor: no empty batch or baseline survived", compositeAfter.batches === compositeBefore.batches && compositeAfter.baselines === compositeBefore.baselines);
+      ok("1b successor: activation remains open and unlinked", compositeActivationAfter &&
+        sameActivation(compositeActivationBefore, compositeActivationAfter));
+      ok("1b successor: retained artifact metadata survives", compositeArtifactAfter && compositeArtifactBefore &&
+        compositeArtifactAfter.sha256 === compositeArtifactBefore.sha256 &&
+        compositeArtifactAfter.byte_size === compositeArtifactBefore.byte_size);
+    }
+
+    // 1c. The older generic snapshot entry must reach the same materializer.
+    // This direct call is the exported function used by the older /snapshot
+    // doors; it is not a replacement for the canonical retained-source proof.
+    const legacy = await property("legacy-snapshot-mixed", "bed");
+    const legacyBefore = await state(legacy);
+    const legacyRows = [
+      { unit_number: "600", room: "Room1", status: "vacant" },
+      { unit_number: "601", room: "(whole unit)", status: "vacant" },
+      { unit_number: "601", room: "Room1", status: "vacant" },
+    ];
+    const legacyResult = await snapshotLoader.loadSnapshot(pool,
+      { ...snapshotLoader.CONFIGS.skyline, key: "synthetic-legacy", source_file: "legacy-mixed.csv",
+        source_as_of_date: AS_OF, leasing_model: "bed", confidence: "confirmed" },
+      legacyRows,
+      { targetPropertyId: legacy.id, sourceFile: "legacy-mixed.csv", sourceAsOfDate: AS_OF,
+        leasingModel: "bed", confidence: "confirmed", force: true });
+    const legacyAfter = await state(legacy);
+
+    if (parent) {
+      ok("1c parent: older loadSnapshot accepts the mixed source", legacyResult.ok === true);
+      ok("1c parent: older entry commits the earlier and contradictory units",
+        legacyAfter.units === 2 && legacyAfter.spaces === 3 && legacyAfter.batches === 1);
+    } else {
+      ok("1c successor: older loadSnapshot reaches MIXED_GRAIN_LABELS and reports its legacy wrapper",
+        legacyResult.error === "load_failed" && /whole.?unit/i.test(String(legacyResult.detail || "")) &&
+        /601/.test(String(legacyResult.detail || "")));
+      ok("1c successor: older loadSnapshot rolls back the earlier valid unit too",
+        sameState(legacyBefore, legacyAfter));
+    }
 
     // 2. Direct materialization controls. The direct service exposes the
     // machine-readable refusal; the HTTP door deliberately does not.

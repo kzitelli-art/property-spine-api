@@ -1,5 +1,14 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-07 source-refusal recovery proof:** unchanged API43d30ed/app28df16d
+product passed stronger whole-file rollback and existing-browser recovery checks.
+Mixed-grain35 includes empty-batch/activation linkage, a valid earlier unit and
+direct older-loader refusal. Browser same-file retry deduplicates; a corrected
+file reaches review in the same setup without confirmation. Full July/Skyline
+restart/lineage/mixed passed; cleanup complete. Rejected retained-file access
+from the screen remains a separate question. See
+[recovery receipt](handoffs/desktop-qb-20260906/mixed-grain-writer/RECOVERY_RECEIPT.md).
+
 **2026-09-07 contradictory new inventory guard:** a retained source naming the
 whole-unit sentinel beside a named room on one by-bed unit previously created
 and offered both positions. Parent27 assertions reproduced this through owned
