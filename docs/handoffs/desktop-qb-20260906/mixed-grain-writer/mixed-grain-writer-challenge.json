@@ -1,0 +1,822 @@
+{
+  "rung": "real HTTP through the owned server for the writer path",
+  "sections": {
+    "writer": {
+      "whole_then_room": {
+        "ingest": null,
+        "spaces": [
+          {
+            "unit_number": "401",
+            "space_label": "(whole unit)",
+            "position_kind": "bed"
+          },
+          {
+            "unit_number": "401",
+            "space_label": "Room1",
+            "position_kind": "bed"
+          }
+        ],
+        "lineage": [
+          {
+            "row_index": 2,
+            "unit_number": "401",
+            "label": "(whole unit)",
+            "unit_linked": true,
+            "produced_space": "(whole unit)",
+            "parse_note": "current ledger row — evidence only"
+          },
+          {
+            "row_index": 3,
+            "unit_number": "401",
+            "label": "Room1",
+            "unit_linked": true,
+            "produced_space": "Room1",
+            "parse_note": "current ledger row — evidence only"
+          }
+        ],
+        "proposals": [
+          [
+            "401|(whole unit)",
+            "staged"
+          ],
+          [
+            "401|Room1",
+            "staged"
+          ]
+        ],
+        "confirm": [
+          {
+            "key": "401|(whole unit)",
+            "status": 200,
+            "code": null
+          },
+          {
+            "key": "401|Room1",
+            "status": 200,
+            "code": null
+          }
+        ],
+        "establish": 201,
+        "lineage_after_confirm": [
+          {
+            "row_index": 2,
+            "unit_number": "401",
+            "label": "(whole unit)",
+            "unit_linked": true,
+            "produced_space": "(whole unit)",
+            "parse_note": "current ledger row — evidence only"
+          },
+          {
+            "row_index": 3,
+            "unit_number": "401",
+            "label": "Room1",
+            "unit_linked": true,
+            "produced_space": "Room1",
+            "parse_note": "current ledger row — evidence only"
+          }
+        ],
+        "reads": {
+          "positions": [
+            {
+              "label": "(whole unit)",
+              "derived_kind": "bed",
+              "basis_state": "established",
+              "basis_type": "opening_claim_vacant"
+            },
+            {
+              "label": "Room1",
+              "derived_kind": "bed",
+              "basis_state": "established",
+              "basis_type": "opening_claim_vacant"
+            }
+          ],
+          "rent_roll_positions": 2,
+          "standing_rentable_positions": 2,
+          "availability": [
+            {
+              "label": "(whole unit)",
+              "marketing_state": "marketable_now",
+              "kind": "bed"
+            },
+            {
+              "label": "Room1",
+              "marketing_state": "marketable_now",
+              "kind": "bed"
+            }
+          ],
+          "targets": [
+            {
+              "label": "(whole unit)",
+              "offerable": true,
+              "refusal": null
+            },
+            {
+              "label": "Room1",
+              "offerable": true,
+              "refusal": null
+            }
+          ],
+          "http": {
+            "availability_rows_for_unit": [
+              [
+                "(whole unit)",
+                "marketable_now"
+              ],
+              [
+                "Room1",
+                "marketable_now"
+              ]
+            ],
+            "eligible_targets_for_unit": [
+              "(whole unit)",
+              "Room1"
+            ],
+            "rent_roll_status": 200,
+            "rent_roll_positions_for_unit": 2
+          }
+        }
+      },
+      "room_then_whole": {
+        "ingest": null,
+        "spaces": [
+          {
+            "unit_number": "402",
+            "space_label": "(whole unit)",
+            "position_kind": "bed"
+          },
+          {
+            "unit_number": "402",
+            "space_label": "Room1",
+            "position_kind": "bed"
+          }
+        ],
+        "lineage": [
+          {
+            "row_index": 2,
+            "unit_number": "402",
+            "label": "Room1",
+            "unit_linked": true,
+            "produced_space": "Room1",
+            "parse_note": "current ledger row — evidence only"
+          },
+          {
+            "row_index": 3,
+            "unit_number": "402",
+            "label": "(whole unit)",
+            "unit_linked": true,
+            "produced_space": "(whole unit)",
+            "parse_note": "current ledger row — evidence only"
+          }
+        ],
+        "proposals": [
+          [
+            "402|Room1",
+            "staged"
+          ],
+          [
+            "402|(whole unit)",
+            "staged"
+          ]
+        ],
+        "confirm": [
+          {
+            "key": "402|Room1",
+            "status": 200,
+            "code": null
+          },
+          {
+            "key": "402|(whole unit)",
+            "status": 200,
+            "code": null
+          }
+        ],
+        "establish": 201,
+        "lineage_after_confirm": [
+          {
+            "row_index": 2,
+            "unit_number": "402",
+            "label": "Room1",
+            "unit_linked": true,
+            "produced_space": "Room1",
+            "parse_note": "current ledger row — evidence only"
+          },
+          {
+            "row_index": 3,
+            "unit_number": "402",
+            "label": "(whole unit)",
+            "unit_linked": true,
+            "produced_space": "(whole unit)",
+            "parse_note": "current ledger row — evidence only"
+          }
+        ],
+        "reads": {
+          "positions": [
+            {
+              "label": "(whole unit)",
+              "derived_kind": "bed",
+              "basis_state": "established",
+              "basis_type": "opening_claim_vacant"
+            },
+            {
+              "label": "Room1",
+              "derived_kind": "bed",
+              "basis_state": "established",
+              "basis_type": "opening_claim_vacant"
+            }
+          ],
+          "rent_roll_positions": 2,
+          "standing_rentable_positions": 2,
+          "availability": [
+            {
+              "label": "(whole unit)",
+              "marketing_state": "marketable_now",
+              "kind": "bed"
+            },
+            {
+              "label": "Room1",
+              "marketing_state": "marketable_now",
+              "kind": "bed"
+            }
+          ],
+          "targets": [
+            {
+              "label": "(whole unit)",
+              "offerable": true,
+              "refusal": null
+            },
+            {
+              "label": "Room1",
+              "offerable": true,
+              "refusal": null
+            }
+          ],
+          "http": {
+            "availability_rows_for_unit": [
+              [
+                "(whole unit)",
+                "marketable_now"
+              ],
+              [
+                "Room1",
+                "marketable_now"
+              ]
+            ],
+            "eligible_targets_for_unit": [
+              "(whole unit)",
+              "Room1"
+            ],
+            "rent_roll_status": 200,
+            "rent_roll_positions_for_unit": 2
+          }
+        }
+      }
+    },
+    "materialization": {
+      "both_orders": {
+        "a": {
+          "receipt": {
+            "unit_id": "<uuid>",
+            "wanted": [
+              "(whole unit)",
+              "Room1"
+            ],
+            "consumed_placeholder": null,
+            "created": [
+              "Room1"
+            ],
+            "kept": [
+              "(whole unit)"
+            ],
+            "total": 2
+          }
+        },
+        "b": {
+          "receipt": {
+            "unit_id": "<uuid>",
+            "wanted": [
+              "Room1",
+              "(whole unit)"
+            ],
+            "consumed_placeholder": null,
+            "created": [
+              "Room1"
+            ],
+            "kept": [
+              "(whole unit)"
+            ],
+            "total": 2
+          }
+        }
+      },
+      "spaces": [
+        {
+          "unit_number": "411",
+          "space_label": "(whole unit)",
+          "position_kind": "bed"
+        },
+        {
+          "unit_number": "411",
+          "space_label": "Room1",
+          "position_kind": "bed"
+        },
+        {
+          "unit_number": "412",
+          "space_label": "(whole unit)",
+          "position_kind": "bed"
+        },
+        {
+          "unit_number": "412",
+          "space_label": "Room1",
+          "position_kind": "bed"
+        },
+        {
+          "unit_number": "413",
+          "space_label": "(whole unit)",
+          "position_kind": null
+        }
+      ],
+      "control_consume": {
+        "receipt": {
+          "unit_id": "<uuid>",
+          "wanted": [
+            "Room1"
+          ],
+          "consumed_placeholder": {
+            "space_id": "<uuid>",
+            "became": "Room1"
+          },
+          "created": [],
+          "kept": [
+            "Room1"
+          ],
+          "total": 1
+        }
+      }
+    },
+    "controls": {
+      "single_whole_unit": {
+        "ingest_error": null,
+        "proposals": [
+          [
+            "501",
+            "staged"
+          ]
+        ],
+        "spaces": [
+          {
+            "unit_number": "501",
+            "space_label": "(whole unit)",
+            "position_kind": null
+          }
+        ],
+        "lineage": [
+          {
+            "label": null,
+            "unit": "501",
+            "produced": "(whole unit)",
+            "note": "current ledger row — evidence only"
+          }
+        ],
+        "confirm": [
+          {
+            "key": "501",
+            "status": 200,
+            "code": null
+          }
+        ],
+        "establish": 201
+      },
+      "sole_bed_ledger_label": {
+        "ingest_error": null,
+        "proposals": [
+          [
+            "3B|Bed B",
+            "staged"
+          ]
+        ],
+        "spaces": [
+          {
+            "unit_number": "3B",
+            "space_label": "Bed B",
+            "position_kind": "bed"
+          }
+        ],
+        "lineage": [
+          {
+            "label": "Bed B",
+            "unit": "3B",
+            "produced": "Bed B",
+            "note": "current ledger row — evidence only"
+          }
+        ],
+        "confirm": [
+          {
+            "key": "3B|Bed B",
+            "status": 200,
+            "code": null
+          }
+        ],
+        "establish": 201
+      },
+      "fixture_shape_reread": {
+        "ingest_error": null,
+        "proposals": [
+          [
+            "3B|Bed B",
+            "staged"
+          ]
+        ],
+        "spaces": [
+          {
+            "unit_number": "3B",
+            "space_label": "(whole unit)",
+            "position_kind": null
+          },
+          {
+            "unit_number": "3B",
+            "space_label": "Bed B",
+            "position_kind": null
+          }
+        ],
+        "lineage": [
+          {
+            "label": "Bed B",
+            "unit": "3B",
+            "produced": "Bed B",
+            "note": "current ledger row — evidence only"
+          }
+        ],
+        "confirm": [
+          {
+            "key": "3B|Bed B",
+            "status": 200,
+            "code": null
+          }
+        ],
+        "establish": 201,
+        "reads": {
+          "positions": [
+            {
+              "label": "(whole unit)",
+              "derived_kind": "unit",
+              "basis_state": "not_established",
+              "basis_type": null
+            },
+            {
+              "label": "Bed B",
+              "derived_kind": "bed",
+              "basis_state": "established",
+              "basis_type": "opening_claim_vacant"
+            }
+          ],
+          "rent_roll_positions": 2,
+          "standing_rentable_positions": 2,
+          "availability": [
+            {
+              "label": "(whole unit)",
+              "marketing_state": "occupancy_unknown",
+              "kind": "unit"
+            },
+            {
+              "label": "Bed B",
+              "marketing_state": "marketable_now",
+              "kind": "bed"
+            }
+          ],
+          "targets": [
+            {
+              "label": "(whole unit)",
+              "offerable": false,
+              "refusal": "not_offerable"
+            },
+            {
+              "label": "Bed B",
+              "offerable": true,
+              "refusal": null
+            }
+          ],
+          "http": {
+            "availability_rows_for_unit": [
+              [
+                "(whole unit)",
+                "occupancy_unknown"
+              ],
+              [
+                "Bed B",
+                "marketable_now"
+              ]
+            ],
+            "eligible_targets_for_unit": [
+              "Bed B"
+            ],
+            "rent_roll_status": 200,
+            "rent_roll_positions_for_unit": 2
+          }
+        }
+      },
+      "multi_bed": {
+        "ingest_error": null,
+        "proposals": [
+          [
+            "701|Room1",
+            "staged"
+          ],
+          [
+            "701|Room2",
+            "staged"
+          ],
+          [
+            "701|Room3",
+            "staged"
+          ]
+        ],
+        "spaces": [
+          {
+            "unit_number": "701",
+            "space_label": "Room1",
+            "position_kind": "bed"
+          },
+          {
+            "unit_number": "701",
+            "space_label": "Room2",
+            "position_kind": "bed"
+          },
+          {
+            "unit_number": "701",
+            "space_label": "Room3",
+            "position_kind": "bed"
+          }
+        ],
+        "lineage": [
+          {
+            "label": "Room1",
+            "unit": "701",
+            "produced": "Room1",
+            "note": "current ledger row — evidence only"
+          },
+          {
+            "label": "Room2",
+            "unit": "701",
+            "produced": "Room2",
+            "note": "current ledger row — evidence only"
+          },
+          {
+            "label": "Room3",
+            "unit": "701",
+            "produced": "Room3",
+            "note": "current ledger row — evidence only"
+          }
+        ],
+        "confirm": [
+          {
+            "key": "701|Room1",
+            "status": 200,
+            "code": null
+          },
+          {
+            "key": "701|Room2",
+            "status": 200,
+            "code": null
+          },
+          {
+            "key": "701|Room3",
+            "status": 200,
+            "code": null
+          }
+        ],
+        "establish": 201
+      },
+      "mixed_property": {
+        "ingest_error": null,
+        "proposals": [
+          [
+            "801|(whole unit)",
+            "staged"
+          ],
+          [
+            "802|Room1",
+            "staged"
+          ],
+          [
+            "802|Room2",
+            "staged"
+          ]
+        ],
+        "spaces": [
+          {
+            "unit_number": "801",
+            "space_label": "(whole unit)",
+            "position_kind": null
+          },
+          {
+            "unit_number": "802",
+            "space_label": "Room1",
+            "position_kind": "bed"
+          },
+          {
+            "unit_number": "802",
+            "space_label": "Room2",
+            "position_kind": "bed"
+          }
+        ],
+        "lineage": [
+          {
+            "label": "(whole unit)",
+            "unit": "801",
+            "produced": "(whole unit)",
+            "note": "current ledger row — evidence only"
+          },
+          {
+            "label": "Room1",
+            "unit": "802",
+            "produced": "Room1",
+            "note": "current ledger row — evidence only"
+          },
+          {
+            "label": "Room2",
+            "unit": "802",
+            "produced": "Room2",
+            "note": "current ledger row — evidence only"
+          }
+        ],
+        "confirm": [
+          {
+            "key": "801|(whole unit)",
+            "status": 200,
+            "code": null
+          },
+          {
+            "key": "802|Room1",
+            "status": 200,
+            "code": null
+          },
+          {
+            "key": "802|Room2",
+            "status": 200,
+            "code": null
+          }
+        ],
+        "establish": 201
+      },
+      "history_blocks_conversion": {
+        "ingest_error": {
+          "status": 409,
+          "code": "refused",
+          "message": "Unit already has history recorded at whole-unit grain, so its '(whole unit)' position cannot become a bed. Held by: leases.space_id (1)."
+        },
+        "spaces": [
+          {
+            "unit_number": "901",
+            "space_label": "(whole unit)",
+            "position_kind": null
+          }
+        ]
+      },
+      "future_only_rooms": {
+        "ingest_error": null,
+        "proposals": [
+          [
+            "1001|Room1",
+            "staged"
+          ],
+          [
+            "1001|Room9",
+            "needs_review"
+          ],
+          [
+            "1002|Room1",
+            "needs_review"
+          ]
+        ],
+        "spaces": [
+          {
+            "unit_number": "1001",
+            "space_label": "Room1",
+            "position_kind": "bed"
+          }
+        ],
+        "lineage": [
+          {
+            "label": "Room1",
+            "unit": "1001",
+            "produced": "Room1",
+            "note": "current ledger row — evidence only"
+          },
+          {
+            "label": "Room9",
+            "unit": "1001",
+            "produced": null,
+            "note": "discrepancy — evidence only, established no position: future source names position \"Room9\" on unit 1001, which is not one of its established current positions"
+          },
+          {
+            "label": "Room1",
+            "unit": "1002",
+            "produced": null,
+            "note": "discrepancy — evidence only, established no position: future source names unit 1002, which is not established as current inventory"
+          }
+        ]
+      }
+    },
+    "correction": {
+      "materialize_room1_only": {
+        "status": 409,
+        "code": "PLACEHOLDER_NOT_PRISTINE",
+        "message": "Unit already has history recorded at whole-unit grain, so its '(whole unit)' position cannot become a bed. Held by: import_source_rows.produced_space_id (1)."
+      },
+      "corrected_file_same_name": {
+        "status": 409,
+        "code": "already_established_from_this_file",
+        "message": "This rent roll (correction.csv, as of 2026-07-31) has already been read for this property. Re-reading it would double the evidence underneath the position."
+      },
+      "corrected_file_new_setup": {
+        "upload_status": 201,
+        "ingest_error": null,
+        "proposals": [
+          [
+            "421|Room1",
+            "staged"
+          ]
+        ],
+        "confirm": [
+          {
+            "key": "421|Room1",
+            "status": 200,
+            "code": null
+          }
+        ],
+        "establish": 201,
+        "spaces": [
+          {
+            "unit_number": "421",
+            "space_label": "(whole unit)",
+            "position_kind": "bed"
+          },
+          {
+            "unit_number": "421",
+            "space_label": "Room1",
+            "position_kind": "bed"
+          }
+        ],
+        "reads": {
+          "positions": [
+            {
+              "label": "(whole unit)",
+              "derived_kind": "bed",
+              "basis_state": "not_established",
+              "basis_type": null
+            },
+            {
+              "label": "Room1",
+              "derived_kind": "bed",
+              "basis_state": "established",
+              "basis_type": "opening_claim_vacant"
+            }
+          ],
+          "rent_roll_positions": 2,
+          "standing_rentable_positions": 2,
+          "availability": [
+            {
+              "label": "(whole unit)",
+              "marketing_state": "occupancy_unknown",
+              "kind": "bed"
+            },
+            {
+              "label": "Room1",
+              "marketing_state": "marketable_now",
+              "kind": "bed"
+            }
+          ],
+          "targets": [
+            {
+              "label": "(whole unit)",
+              "offerable": false,
+              "refusal": "not_offerable"
+            },
+            {
+              "label": "Room1",
+              "offerable": true,
+              "refusal": null
+            }
+          ],
+          "http": {
+            "availability_rows_for_unit": [
+              [
+                "(whole unit)",
+                "occupancy_unknown"
+              ],
+              [
+                "Room1",
+                "marketable_now"
+              ]
+            ],
+            "eligible_targets_for_unit": [
+              "Room1"
+            ],
+            "rent_roll_status": 200,
+            "rent_roll_positions_for_unit": 2
+          }
+        }
+      }
+    }
+  }
+}
