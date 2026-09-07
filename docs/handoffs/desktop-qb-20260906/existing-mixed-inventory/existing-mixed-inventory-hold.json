@@ -1,0 +1,346 @@
+{
+  "rung": "real HTTP through the owned server for every door that has one; services where none does",
+  "candidates": {
+    "source_correction": {
+      "upload": 201,
+      "read": 201,
+      "confirms": [
+        [
+          "301|Room1",
+          200
+        ],
+        [
+          "301|Room2",
+          200
+        ],
+        [
+          "302|Room1",
+          200
+        ],
+        [
+          "302|Room2",
+          200
+        ]
+      ],
+      "establish": 201,
+      "spaces": [
+        {
+          "unit_number": "301",
+          "space_label": "(whole unit)"
+        },
+        {
+          "unit_number": "301",
+          "space_label": "Room1"
+        },
+        {
+          "unit_number": "301",
+          "space_label": "Room2"
+        },
+        {
+          "unit_number": "302",
+          "space_label": "Room1"
+        },
+        {
+          "unit_number": "302",
+          "space_label": "Room2"
+        }
+      ],
+      "consumers": {
+        "http_status": {
+          "availability": 200,
+          "leaseable": 200,
+          "rent_roll": 200,
+          "ask": 200
+        },
+        "availability": {
+          "placeholder": "occupancy_unknown",
+          "room1": "marketable_now",
+          "room2": "marketable_now",
+          "n302_room1": "marketable_now",
+          "placeholder_reason": "no_established_occupancy_basis"
+        },
+        "leaseable_301": [
+          "Room1",
+          "Room2"
+        ],
+        "leaseable_302": [
+          "Room1",
+          "Room2"
+        ],
+        "rent_roll": {
+          "positions_301": 3,
+          "placeholder_bucket": null,
+          "placeholder_basis": "not_established",
+          "room1_bucket": "open"
+        },
+        "standing": {
+          "truth_state": "PARTIALLY_ESTABLISHED",
+          "why": "4 of 5 rentable positions have an established basis; 1 do not",
+          "rentable_positions": 5,
+          "open": 4,
+          "not_established": 1,
+          "unknowns": {
+            "occupied_positions_with_no_recorded_rent": 0,
+            "positions_with_unresolved_occupancy_evidence": 1,
+            "positions_with_overlapping_lease_claims": 0,
+            "occupied_positions_proven_only_by_the_opening_import": 0,
+            "occupied_positions_with_no_linked_resident": 0,
+            "confirmed_source_rows_not_attached_to_a_position": 0,
+            "held_source_rows_not_attached_to_a_position": 0
+          }
+        },
+        "ask_http": {
+          "outcome": "unavailable",
+          "grounded_keys": null,
+          "tenancy_in_grounding": false
+        },
+        "ask_facts": {
+          "read_state": "OK",
+          "truth_state": "PARTIALLY_ESTABLISHED",
+          "open": 4,
+          "rentable_positions": 5
+        }
+      },
+      "history": {
+        "superseded_baselines": 1,
+        "placeholder_claim_promoted": 1
+      }
+    },
+    "down": {
+      "wrong_key": 401,
+      "down": 201,
+      "consumers": {
+        "http_status": {
+          "availability": 200,
+          "leaseable": 200,
+          "rent_roll": 200,
+          "ask": 200
+        },
+        "availability": {
+          "placeholder": "down",
+          "room1": "down",
+          "room2": "down",
+          "n302_room1": "marketable_now",
+          "placeholder_reason": "out_of_service"
+        },
+        "leaseable_301": [],
+        "leaseable_302": [
+          "Room1",
+          "Room2"
+        ],
+        "rent_roll": {
+          "positions_301": 3,
+          "placeholder_bucket": "open",
+          "placeholder_basis": "established",
+          "room1_bucket": "open"
+        },
+        "standing": {
+          "truth_state": "ESTABLISHED",
+          "why": "5 rentable positions are recorded across 2 units",
+          "rentable_positions": 5,
+          "open": 5,
+          "not_established": 0,
+          "unknowns": {
+            "occupied_positions_with_no_recorded_rent": 0,
+            "positions_with_unresolved_occupancy_evidence": 0,
+            "positions_with_overlapping_lease_claims": 0,
+            "occupied_positions_proven_only_by_the_opening_import": 0,
+            "occupied_positions_with_no_linked_resident": 0,
+            "confirmed_source_rows_not_attached_to_a_position": 0,
+            "held_source_rows_not_attached_to_a_position": 0
+          }
+        },
+        "ask_http": {
+          "outcome": "unavailable",
+          "grounded_keys": null,
+          "tenancy_in_grounding": false
+        },
+        "ask_facts": {
+          "read_state": "OK",
+          "truth_state": "ESTABLISHED",
+          "open": 5,
+          "rentable_positions": 5
+        }
+      },
+      "resolve": 200,
+      "after_resolve": {
+        "placeholder": "marketable_now",
+        "room1": "marketable_now",
+        "room2": "marketable_now",
+        "n302_room1": "marketable_now",
+        "placeholder_reason": null
+      }
+    },
+    "triage": {
+      "foreign_property": 403,
+      "maintenance_only_on_leasing_selector": 403,
+      "triage": 201,
+      "consumers": {
+        "http_status": {
+          "availability": 200,
+          "leaseable": 200,
+          "rent_roll": 200,
+          "ask": 200
+        },
+        "availability": {
+          "placeholder": "not_ready_confirmed",
+          "room1": "not_ready_confirmed",
+          "room2": "not_ready_confirmed",
+          "n302_room1": "marketable_now",
+          "placeholder_reason": "severe_condition_confirmed"
+        },
+        "leaseable_301": [],
+        "leaseable_302": [
+          "Room1",
+          "Room2"
+        ],
+        "rent_roll": {
+          "positions_301": 3,
+          "placeholder_bucket": "open",
+          "placeholder_basis": "established",
+          "room1_bucket": "open"
+        },
+        "standing": {
+          "truth_state": "ESTABLISHED",
+          "why": "5 rentable positions are recorded across 2 units",
+          "rentable_positions": 5,
+          "open": 5,
+          "not_established": 0,
+          "unknowns": {
+            "occupied_positions_with_no_recorded_rent": 0,
+            "positions_with_unresolved_occupancy_evidence": 0,
+            "positions_with_overlapping_lease_claims": 0,
+            "occupied_positions_proven_only_by_the_opening_import": 0,
+            "occupied_positions_with_no_linked_resident": 0,
+            "confirmed_source_rows_not_attached_to_a_position": 0,
+            "held_source_rows_not_attached_to_a_position": 0
+          }
+        },
+        "ask_http": {
+          "outcome": "unavailable",
+          "grounded_keys": null,
+          "tenancy_in_grounding": false
+        },
+        "ask_facts": {
+          "read_state": "OK",
+          "truth_state": "ESTABLISHED",
+          "open": 5,
+          "rentable_positions": 5
+        }
+      }
+    },
+    "retirement": {
+      "space_level_writer_exported": false,
+      "consumers": {
+        "http_status": {
+          "availability": 200,
+          "leaseable": 200,
+          "rent_roll": 200,
+          "ask": 200
+        },
+        "availability": {
+          "n302_room1": "marketable_now",
+          "placeholder_reason": null
+        },
+        "leaseable_301": [],
+        "leaseable_302": [
+          "Room1",
+          "Room2"
+        ],
+        "rent_roll": {},
+        "standing": {
+          "truth_state": "ESTABLISHED",
+          "why": "2 rentable positions are recorded across 1 units",
+          "rentable_positions": 2,
+          "open": 2,
+          "not_established": 0,
+          "unknowns": {
+            "occupied_positions_with_no_recorded_rent": 0,
+            "positions_with_unresolved_occupancy_evidence": 0,
+            "positions_with_overlapping_lease_claims": 0,
+            "occupied_positions_proven_only_by_the_opening_import": 0,
+            "occupied_positions_with_no_linked_resident": 0,
+            "confirmed_source_rows_not_attached_to_a_position": 3,
+            "held_source_rows_not_attached_to_a_position": 0
+          }
+        },
+        "ask_http": {
+          "outcome": "unavailable",
+          "grounded_keys": null,
+          "tenancy_in_grounding": false
+        },
+        "ask_facts": {
+          "read_state": "OK",
+          "truth_state": "ESTABLISHED",
+          "open": 2,
+          "rentable_positions": 2
+        }
+      },
+      "reinstated": true,
+      "after": {
+        "placeholder": "marketable_now",
+        "room1": "marketable_now",
+        "room2": "marketable_now",
+        "n302_room1": "marketable_now",
+        "placeholder_reason": null
+      }
+    }
+  },
+  "baseline": {
+    "http_status": {
+      "availability": 200,
+      "leaseable": 200,
+      "rent_roll": 200,
+      "ask": 200
+    },
+    "availability": {
+      "placeholder": "marketable_now",
+      "room1": "marketable_now",
+      "room2": "marketable_now",
+      "n302_room1": "marketable_now",
+      "placeholder_reason": null
+    },
+    "leaseable_301": [
+      "(whole unit)",
+      "Room1",
+      "Room2"
+    ],
+    "leaseable_302": [
+      "Room1",
+      "Room2"
+    ],
+    "rent_roll": {
+      "positions_301": 3,
+      "placeholder_bucket": "open",
+      "placeholder_basis": "established",
+      "room1_bucket": "open"
+    },
+    "standing": {
+      "truth_state": "ESTABLISHED",
+      "why": "5 rentable positions are recorded across 2 units",
+      "rentable_positions": 5,
+      "open": 5,
+      "not_established": 0,
+      "unknowns": {
+        "occupied_positions_with_no_recorded_rent": 0,
+        "positions_with_unresolved_occupancy_evidence": 0,
+        "positions_with_overlapping_lease_claims": 0,
+        "occupied_positions_proven_only_by_the_opening_import": 0,
+        "occupied_positions_with_no_linked_resident": 0,
+        "confirmed_source_rows_not_attached_to_a_position": 0,
+        "held_source_rows_not_attached_to_a_position": 0
+      }
+    },
+    "ask_http": {
+      "outcome": "unavailable",
+      "grounded_keys": null,
+      "tenancy_in_grounding": false
+    },
+    "ask_facts": {
+      "read_state": "OK",
+      "truth_state": "ESTABLISHED",
+      "open": 5,
+      "rentable_positions": 5
+    }
+  }
+}
