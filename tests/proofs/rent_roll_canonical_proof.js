@@ -94,9 +94,11 @@ const ECONOMICS = ["available", "unavailable", "not_applicable"];
 
   console.log("\n== BLOCK D - occupancy is explainable ==");
   const occ = rr.totals.confirmed_contractual_occupancy;
-  ok(occ.occupied === ten.contractually_occupied, "occupancy numerator is the tenancy axis only");
-  ok(occ.of_leasable_resolved === rr.totals.leasable - ten.contested,
-    "the denominator excludes down and contested, and says so");
+  const excludedIds = new Set(rr.rows.filter(r => r.is_down || r.tenancy_state === "contested").map(r => r.space_id));
+  ok(occ.occupied === rr.rows.filter(r => r.tenancy_state === "contractually_occupied" && !excludedIds.has(r.space_id)).length,
+    "occupancy numerator counts occupied positions within its denominator");
+  ok(occ.of_leasable_resolved === rr.rows.length - excludedIds.size,
+    "the denominator excludes each down or contested position once");
   ok(occ.reported_beside.unresolved_positions === ten.unresolved
      && occ.reported_beside.evidence_disagrees === evi.disagrees
      && occ.reported_beside.evidence_inconclusive === evi.inconclusive,

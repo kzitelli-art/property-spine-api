@@ -17,11 +17,11 @@
 //                               separately with the rent they implicate, so
 //                               the money is visible without being counted
 //                               and no lease is chosen silently.
-//    resolved_leasable          the denominator: leasable positions whose
-//                               occupancy is actually resolved. down and
-//                               non_revenue are NOT silently included;
-//                               contested and evidence_disagrees are
-//                               excluded and reported beside it.
+//    occupancy population       non-down, non-contested positions. Unresolved
+//                               positions remain in this set without being
+//                               called vacant. Evidence is a separate axis.
+//                               The numerator counts occupied within this same
+//                               set; full tenancy and rent totals remain intact.
 //
 //  economics_unavailable increments its own count and adds zero to rent —
 //  a missing rent is never coerced to $0 at the row level.
@@ -112,8 +112,11 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
   const inventory = rows.length;
   // Leasable excludes physically down positions. use_type is not yet a durable
   // field, so non-revenue cannot be excluded honestly — see the schema plan.
-  const leasable = inventory - downRows.length;
-  const occupancy_denominator = leasable - contested.length;   // contested makes no claim either way
+  const leasableRows = rows.filter((r) => !r.is_down);
+  const leasable = leasableRows.length;
+  const occupancyRows = leasableRows.filter((r) => r.tenancy_state !== "contested");
+  const occupancy_denominator = occupancyRows.length;
+  const occupancy_numerator = occupancyRows.filter((r) => r.tenancy_state === "contractually_occupied").length;
 
   return {
     property_id: dp.property_id,
@@ -155,16 +158,17 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
       leasable,
       down: downRows.length,
 
-      // Occupancy from the TENANCY axis only. Evidence and economics do not
-      // move a position in or out of it.
+      // Occupied tenancy within the same leasable, uncontested population as
+      // the denominator. Full tenancy_summary and contractual rent above are
+      // independent of physical holds. Evidence and economics do not change it.
       // LANGUAGE: this is CONFIRMED contractual occupancy. Unresolved positions
       // remain in the denominator, and the wording must never imply they are
       // confirmed vacant — they are simply not yet established either way.
       confirmed_contractual_occupancy: {
-        occupied: occupied.length,
+        occupied: occupancy_numerator,
         of_leasable_resolved: occupancy_denominator,
-        pct: occupancy_denominator ? Math.round(occupied.length / occupancy_denominator * 10000) / 100 : null,
-        excluded_from_denominator: { down: downRows.length, contested: contested.length },
+        pct: occupancy_denominator ? Math.round(occupancy_numerator / occupancy_denominator * 10000) / 100 : null,
+        excluded_from_denominator: { down: downRows.length, contested: leasable - occupancy_denominator },
         reported_beside: {
           unresolved_positions: unresolved.length,
           evidence_disagrees: disagrees.length,

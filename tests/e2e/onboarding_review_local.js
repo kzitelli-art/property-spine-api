@@ -184,6 +184,7 @@ async function stopServer() {
     return;
   }
   if (!baselineMode && !spaceParentMode) {
+    await run(process.execPath, [path.join(ROOT,"tests/proofs/canonical_occupancy_holds.db.js")]);
     await run(process.execPath, [path.join(ROOT,"tests/proofs/leasing_occupancy_retirement.db.js")]);
     await run(process.execPath, [path.join(ROOT,"tests/proofs/retained_source_authority_observation.db.js")]);
     await run(process.execPath, [path.join(ROOT,"tests/proofs/mixed_grain_writer_challenge.db.js")], {
@@ -208,9 +209,11 @@ async function stopServer() {
       PROOF_SPACE_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"space-state.private.json"),
       PROOF_RELAY_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"claim-relay-state.private.json"),
       PROOF_SOURCE_AUTH_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"source-auth-state.private.json"),
+      PROOF_HOLDS_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"holds-state.private.json"),
       PROOF_API_SHA: apiSha, PROOF_APP_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: appRoot, encoding: "utf8", windowsHide: true }).trim() },
   });
   if (!baselineMode && !spaceParentMode && process.env.PROOF_SOURCE_AUTH_BROWSER === "1") await runBrowser("source-auth");
+  if (!baselineMode && !spaceParentMode && process.env.PROOF_HOLDS_BROWSER === "1") await runBrowser("holds");
   if (!baselineMode && !spaceParentMode && process.env.PROOF_SPACE_BROWSER === "1") await runBrowser("spaces");
   if (!baselineMode && !spaceParentMode && process.env.PROOF_RELAY_BROWSER === "1") await runBrowser("relay");
   if (process.env.ONBOARDING_SPACE_PROOF_ONLY === "1") {

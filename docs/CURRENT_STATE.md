@@ -1,5 +1,16 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-07 canonical occupancy under holds:** the current rent-roll fraction
+now counts occupied positions within the same non-down, non-contested population
+as its denominator, excluding overlaps once. Full tenancy and rent totals remain
+unchanged. Parent 65/16 reproduced impossible fractions; successor 81 behavioral
+checks plus five browser-fixture checks passed. Formal Schedule and its client
+CSV showed the all-down 0 of 0 while canonical pct stayed null and rent stayed
+1750. All six existing onboarding browser phases, July/Skyline lineage/restart,
+and mixed Add All passed with zero actual-source confirmations and owned cleanup.
+Availability for historical occupied claims without leases remains a separate
+Fable assignment. No deployment. See [hold receipt](handoffs/desktop-qb-20260906/occupancy-holds/RECEIPT.md).
+
 **2026-09-07 leasing retirement exclusion:** the shared leasing occupancy reader
 and leasing desk availability now reuse the canonical inventory retirement
 predicate. Root observed 8 retirement-specific failures before editing; all 41
