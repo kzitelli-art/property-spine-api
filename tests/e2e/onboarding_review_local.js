@@ -169,6 +169,9 @@ async function stopServer() {
   };
   await startServer();
   if (!baselineMode && !spaceParentMode) {
+    await run(process.execPath, [path.join(ROOT,"tests/proofs/mixed_grain_writer_challenge.db.js")], {
+      env: {...process.env, PROOF_EXPECT_DEFECT:process.env.PROOF_MIXED_GRAIN_EXPECT_DEFECT || "0"},
+    });
     await run(process.execPath, [path.join(ROOT,"tests/proofs/opening_claim_relay_edges.db.js")], {
       env: {...process.env, PROOF_RELAY_HTTP:"1", PROOF_EXPECT_DEFECT:process.env.PROOF_RELAY_EXPECT_DEFECT || "0",
         PROOF_BUSINESS_ROOT:process.env.PROOF_RELAY_PARENT_ROOT || ROOT},

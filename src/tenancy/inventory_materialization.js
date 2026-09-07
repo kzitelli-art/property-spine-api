@@ -144,6 +144,16 @@ async function materializeRentableSpaces(client, {
       { unit_id });
   }
 
+  // The provisional whole-unit position and named rooms cannot describe
+  // one unit's materialized grain together. Keep the source for review;
+  // never resolve that contradiction by publishing both kinds of position.
+  if (wanted.includes(PLACEHOLDER_LABEL) && wanted.length > 1) {
+    throw err("MIXED_GRAIN_LABELS",
+      `The source names both the whole unit and individual rooms for unit ${notRetired.unit_number}: ` +
+      `${wanted.join(", ")}. Review whether this unit is rented whole or by room before importing it.`,
+      { unit_id, labels: wanted });
+  }
+
   const existing = (await client.query(
     `select id, space_label from spaces where unit_id = $1 order by created_at, id`,
     [unit_id])).rows;

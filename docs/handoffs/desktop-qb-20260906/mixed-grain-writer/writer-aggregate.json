@@ -1,0 +1,64 @@
+{
+  "mode": "successor",
+  "http": true,
+  "parent_assertions": 27,
+  "successor_assertions": 25,
+  "writer": {
+    "whole_then_room": {
+      "result": {
+        "status": 409,
+        "code": "refused",
+        "message": "The source names both the whole unit and individual rooms for unit 401: (whole unit), Room1. Review whether this unit is rented whole or by room before importing it."
+      },
+      "before": {
+        "units": 0,
+        "spaces": 0,
+        "lineage": 0,
+        "proposals": 0,
+        "leases": 0,
+        "baselines": 0
+      },
+      "after": {
+        "units": 0,
+        "spaces": 0,
+        "lineage": 0,
+        "proposals": 0,
+        "leases": 0,
+        "baselines": 0
+      },
+      "artifact_preserved": true
+    },
+    "room_then_whole": {
+      "result": {
+        "status": 409,
+        "code": "refused",
+        "message": "The source names both the whole unit and individual rooms for unit 402: Room1, (whole unit). Review whether this unit is rented whole or by room before importing it."
+      },
+      "before": {
+        "units": 0,
+        "spaces": 0,
+        "lineage": 0,
+        "proposals": 0,
+        "leases": 0,
+        "baselines": 0
+      },
+      "after": {
+        "units": 0,
+        "spaces": 0,
+        "lineage": 0,
+        "proposals": 0,
+        "leases": 0,
+        "baselines": 0
+      },
+      "artifact_preserved": true
+    }
+  },
+  "cleanup": {
+    "model_bytes": 0,
+    "cluster_stopped": true,
+    "egress_bytes": 0,
+    "database_dropped": true,
+    "sms_bytes": 0,
+    "data_removed": true
+  }
+}

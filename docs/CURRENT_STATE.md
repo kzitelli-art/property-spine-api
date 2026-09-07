@@ -1,5 +1,15 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-07 contradictory new inventory guard:** a retained source naming the
+whole-unit sentinel beside a named room on one by-bed unit previously created
+and offered both positions. Parent27 assertions reproduced this through owned
+HTTP before editing. The existing materializer now refuses that combination;
+successor25 covers both orders, rollback and valid-layout controls. Both browser
+refusals and full July/Skyline stage/restart/lineage/mixed passed on frozen
+API01fac5f/appa60550f plus recorded changes. Cleanup complete, actual-source
+confirmations0; existing mixed historical inventory remains a separate question.
+See [writer receipt](handoffs/desktop-qb-20260906/mixed-grain-writer/RECEIPT.md).
+
 **2026-09-07 retained-entry screen/restart follow-up:** the existing unit Rent Roll
 now displays unmatched source entries in one expandable review section, including
 when no current inventory exists, and discloses a bounded list. Standing preserves
