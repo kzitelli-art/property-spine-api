@@ -1,0 +1,796 @@
+{
+  "calls": [
+    {
+      "name": "occupancyByBasis (primitive)",
+      "how": "service"
+    },
+    {
+      "name": "leasing/condition",
+      "how": "HTTP"
+    },
+    {
+      "name": "leasing-dashboard (operator key)",
+      "how": "HTTP"
+    },
+    {
+      "name": "management-dashboard (operator key)",
+      "how": "HTTP"
+    },
+    {
+      "name": "rent-roll/canonical",
+      "how": "HTTP"
+    },
+    {
+      "name": "rent-roll/institutional",
+      "how": "HTTP"
+    },
+    {
+      "name": "rent-roll (legacy snapshot)",
+      "how": "HTTP"
+    },
+    {
+      "name": "availability-canonical",
+      "how": "HTTP"
+    },
+    {
+      "name": "rent-roll/units",
+      "how": "HTTP"
+    },
+    {
+      "name": "ask-spine/ask",
+      "how": "HTTP"
+    },
+    {
+      "name": "readTenancyStanding (standing/Ask facts)",
+      "how": "service"
+    },
+    {
+      "name": "units/:id/down (wrong key)",
+      "how": "HTTP"
+    },
+    {
+      "name": "leasing/forward-rent (maintenance-only seat)",
+      "how": "HTTP"
+    },
+    {
+      "name": "units/:id/down",
+      "how": "HTTP"
+    },
+    {
+      "name": "units/:id/down/resolve",
+      "how": "HTTP"
+    }
+  ],
+  "measures": {
+    "baseline": {
+      "http": {
+        "condition": 200,
+        "leasingDesk": 200,
+        "mgmtDesk": 200,
+        "canonical": 200,
+        "institutional": 200,
+        "legacy": 200,
+        "availability": 200,
+        "rentRollUnits": 200,
+        "ask": 200
+      },
+      "primitive": {
+        "occupied": 3,
+        "rentable": 8,
+        "excluded": 0,
+        "pct": 37.5,
+        "exclusions_source": "space_label"
+      },
+      "condition": {
+        "occupied": 3,
+        "rentable": 8,
+        "pct": 37.5,
+        "basis": "bed"
+      },
+      "leasing_desk": {
+        "label": "37.5% occupied",
+        "value": 0.375
+      },
+      "mgmt_desk": {
+        "label": "37.5% occupied",
+        "note": "3 of 8 beds carry an active lease — lease-based, not a confirmed-status walk"
+      },
+      "canonical": {
+        "inventory": 8,
+        "leasable": 8,
+        "down": 0,
+        "occupied": 2,
+        "denominator": 7,
+        "pct": 28.57,
+        "excluded": {
+          "down": 0,
+          "contested": 1
+        },
+        "beside": {
+          "unresolved_positions": 1,
+          "evidence_disagrees": 0,
+          "evidence_inconclusive": 0
+        },
+        "trusted_rent": 1750,
+        "rows": {
+          "301|Room1": [
+            "contractually_occupied",
+            false
+          ],
+          "303|Room1": [
+            "contested",
+            false
+          ],
+          "303|Room2": [
+            "unresolved",
+            false
+          ],
+          "304|Room1": [
+            "vacant",
+            false
+          ]
+        }
+      },
+      "institutional": {
+        "total_positions": 8,
+        "confirmed_contractual_occupancy": 2,
+        "occupancy_denominator": 7,
+        "positions_down": 0,
+        "label_as_rendered": "Confirmed contractual occupancy: 2 of 7"
+      },
+      "legacy": {
+        "inventory": 8,
+        "occupied": 4,
+        "vacant": 4,
+        "down": 0,
+        "current_occupancy_pct": 50,
+        "leasable_occupancy_pct": 50,
+        "reconciled": false,
+        "published_rows": 8
+      },
+      "availability": {
+        "headline": {
+          "marketable_now": 5,
+          "contested": 1,
+          "blocked_by_evidence": 0
+        },
+        "rows": {
+          "301|Room1": [
+            "occupied",
+            "contractually_occupied",
+            true,
+            false
+          ],
+          "302|Room1": [
+            "occupied",
+            "contractually_occupied"
+          ],
+          "303|Room1": [
+            "contested",
+            "contested"
+          ],
+          "303|Room2": [
+            "marketable_now",
+            "unresolved"
+          ],
+          "304|Room1": [
+            "marketable_now",
+            "vacant"
+          ]
+        }
+      },
+      "rent_roll_units": {
+        "positions": 8,
+        "buckets": {
+          "301|Room1": "occupied",
+          "301|Room2": "open",
+          "302|Room1": "occupied",
+          "302|Room2": "open",
+          "303|Room1": "needs_review",
+          "303|Room2": "occupied",
+          "304|Room1": "open",
+          "304|Room2": "open"
+        }
+      },
+      "standing": {
+        "truth_state": "ESTABLISHED",
+        "rentable_positions": 8,
+        "occupied": 3,
+        "open": 4,
+        "needs_review": 1,
+        "unknowns": {
+          "contested": 1,
+          "unresolved_evidence": 0
+        }
+      },
+      "ask": {
+        "outcome": "unavailable",
+        "grounded": false
+      }
+    },
+    "hold_301": {
+      "http": {
+        "condition": 200,
+        "leasingDesk": 200,
+        "mgmtDesk": 200,
+        "canonical": 200,
+        "institutional": 200,
+        "legacy": 200,
+        "availability": 200,
+        "rentRollUnits": 200,
+        "ask": 200
+      },
+      "primitive": {
+        "occupied": 3,
+        "rentable": 8,
+        "excluded": 0,
+        "pct": 37.5,
+        "exclusions_source": "space_label"
+      },
+      "condition": {
+        "occupied": 3,
+        "rentable": 8,
+        "pct": 37.5,
+        "basis": "bed"
+      },
+      "leasing_desk": {
+        "label": "37.5% occupied",
+        "value": 0.375
+      },
+      "mgmt_desk": {
+        "label": "37.5% occupied",
+        "note": "3 of 8 beds carry an active lease — lease-based, not a confirmed-status walk"
+      },
+      "canonical": {
+        "inventory": 8,
+        "leasable": 6,
+        "down": 2,
+        "occupied": 2,
+        "denominator": 5,
+        "pct": 40,
+        "excluded": {
+          "down": 2,
+          "contested": 1
+        },
+        "beside": {
+          "unresolved_positions": 1,
+          "evidence_disagrees": 0,
+          "evidence_inconclusive": 0
+        },
+        "trusted_rent": 1750,
+        "rows": {
+          "301|Room1": [
+            "contractually_occupied",
+            true
+          ],
+          "303|Room1": [
+            "contested",
+            false
+          ],
+          "303|Room2": [
+            "unresolved",
+            false
+          ],
+          "304|Room1": [
+            "vacant",
+            false
+          ]
+        }
+      },
+      "institutional": {
+        "total_positions": 8,
+        "confirmed_contractual_occupancy": 2,
+        "occupancy_denominator": 5,
+        "positions_down": 2,
+        "label_as_rendered": "Confirmed contractual occupancy: 2 of 5"
+      },
+      "legacy": {
+        "inventory": 8,
+        "occupied": 4,
+        "vacant": 4,
+        "down": 0,
+        "current_occupancy_pct": 50,
+        "leasable_occupancy_pct": 50,
+        "reconciled": false,
+        "published_rows": 8
+      },
+      "availability": {
+        "headline": {
+          "marketable_now": 4,
+          "contested": 1,
+          "blocked_by_evidence": 0
+        },
+        "rows": {
+          "301|Room1": [
+            "down",
+            "contractually_occupied",
+            true,
+            true
+          ],
+          "302|Room1": [
+            "occupied",
+            "contractually_occupied"
+          ],
+          "303|Room1": [
+            "contested",
+            "contested"
+          ],
+          "303|Room2": [
+            "marketable_now",
+            "unresolved"
+          ],
+          "304|Room1": [
+            "marketable_now",
+            "vacant"
+          ]
+        }
+      },
+      "rent_roll_units": {
+        "positions": 8,
+        "buckets": {
+          "301|Room1": "occupied",
+          "301|Room2": "open",
+          "302|Room1": "occupied",
+          "302|Room2": "open",
+          "303|Room1": "needs_review",
+          "303|Room2": "occupied",
+          "304|Room1": "open",
+          "304|Room2": "open"
+        }
+      },
+      "standing": {
+        "truth_state": "ESTABLISHED",
+        "rentable_positions": 8,
+        "occupied": 3,
+        "open": 4,
+        "needs_review": 1,
+        "unknowns": {
+          "contested": 1,
+          "unresolved_evidence": 0
+        }
+      },
+      "ask": {
+        "outcome": "unavailable",
+        "grounded": false
+      }
+    },
+    "hold_301_302_303": {
+      "http": {
+        "condition": 200,
+        "leasingDesk": 200,
+        "mgmtDesk": 200,
+        "canonical": 200,
+        "institutional": 200,
+        "legacy": 200,
+        "availability": 200,
+        "rentRollUnits": 200,
+        "ask": 200
+      },
+      "primitive": {
+        "occupied": 3,
+        "rentable": 8,
+        "excluded": 0,
+        "pct": 37.5,
+        "exclusions_source": "space_label"
+      },
+      "condition": {
+        "occupied": 3,
+        "rentable": 8,
+        "pct": 37.5,
+        "basis": "bed"
+      },
+      "leasing_desk": {
+        "label": "37.5% occupied",
+        "value": 0.375
+      },
+      "mgmt_desk": {
+        "label": "37.5% occupied",
+        "note": "3 of 8 beds carry an active lease — lease-based, not a confirmed-status walk"
+      },
+      "canonical": {
+        "inventory": 8,
+        "leasable": 2,
+        "down": 6,
+        "occupied": 2,
+        "denominator": 1,
+        "pct": 200,
+        "excluded": {
+          "down": 6,
+          "contested": 1
+        },
+        "beside": {
+          "unresolved_positions": 1,
+          "evidence_disagrees": 0,
+          "evidence_inconclusive": 0
+        },
+        "trusted_rent": 1750,
+        "rows": {
+          "301|Room1": [
+            "contractually_occupied",
+            true
+          ],
+          "303|Room1": [
+            "contested",
+            true
+          ],
+          "303|Room2": [
+            "unresolved",
+            true
+          ],
+          "304|Room1": [
+            "vacant",
+            false
+          ]
+        }
+      },
+      "institutional": {
+        "total_positions": 8,
+        "confirmed_contractual_occupancy": 2,
+        "occupancy_denominator": 1,
+        "positions_down": 6,
+        "label_as_rendered": "Confirmed contractual occupancy: 2 of 1"
+      },
+      "legacy": {
+        "inventory": 8,
+        "occupied": 4,
+        "vacant": 4,
+        "down": 0,
+        "current_occupancy_pct": 50,
+        "leasable_occupancy_pct": 50,
+        "reconciled": false,
+        "published_rows": 8
+      },
+      "availability": {
+        "headline": {
+          "marketable_now": 2,
+          "contested": 1,
+          "blocked_by_evidence": 0
+        },
+        "rows": {
+          "301|Room1": [
+            "down",
+            "contractually_occupied",
+            true,
+            true
+          ],
+          "302|Room1": [
+            "down",
+            "contractually_occupied"
+          ],
+          "303|Room1": [
+            "contested",
+            "contested"
+          ],
+          "303|Room2": [
+            "down",
+            "unresolved"
+          ],
+          "304|Room1": [
+            "marketable_now",
+            "vacant"
+          ]
+        }
+      },
+      "rent_roll_units": {
+        "positions": 8,
+        "buckets": {
+          "301|Room1": "occupied",
+          "301|Room2": "open",
+          "302|Room1": "occupied",
+          "302|Room2": "open",
+          "303|Room1": "needs_review",
+          "303|Room2": "occupied",
+          "304|Room1": "open",
+          "304|Room2": "open"
+        }
+      },
+      "standing": {
+        "truth_state": "ESTABLISHED",
+        "rentable_positions": 8,
+        "occupied": 3,
+        "open": 4,
+        "needs_review": 1,
+        "unknowns": {
+          "contested": 1,
+          "unresolved_evidence": 0
+        }
+      },
+      "ask": {
+        "outcome": "unavailable",
+        "grounded": false
+      }
+    },
+    "all_down": {
+      "http": {
+        "condition": 200,
+        "leasingDesk": 200,
+        "mgmtDesk": 200,
+        "canonical": 200,
+        "institutional": 200,
+        "legacy": 200,
+        "availability": 200,
+        "rentRollUnits": 200,
+        "ask": 200
+      },
+      "primitive": {
+        "occupied": 3,
+        "rentable": 8,
+        "excluded": 0,
+        "pct": 37.5,
+        "exclusions_source": "space_label"
+      },
+      "condition": {
+        "occupied": 3,
+        "rentable": 8,
+        "pct": 37.5,
+        "basis": "bed"
+      },
+      "leasing_desk": {
+        "label": "37.5% occupied",
+        "value": 0.375
+      },
+      "mgmt_desk": {
+        "label": "37.5% occupied",
+        "note": "3 of 8 beds carry an active lease — lease-based, not a confirmed-status walk"
+      },
+      "canonical": {
+        "inventory": 8,
+        "leasable": 0,
+        "down": 8,
+        "occupied": 2,
+        "denominator": -1,
+        "pct": -200,
+        "excluded": {
+          "down": 8,
+          "contested": 1
+        },
+        "beside": {
+          "unresolved_positions": 1,
+          "evidence_disagrees": 0,
+          "evidence_inconclusive": 0
+        },
+        "trusted_rent": 1750,
+        "rows": {
+          "301|Room1": [
+            "contractually_occupied",
+            true
+          ],
+          "303|Room1": [
+            "contested",
+            true
+          ],
+          "303|Room2": [
+            "unresolved",
+            true
+          ],
+          "304|Room1": [
+            "vacant",
+            true
+          ]
+        }
+      },
+      "institutional": {
+        "total_positions": 8,
+        "confirmed_contractual_occupancy": 2,
+        "occupancy_denominator": -1,
+        "positions_down": 8,
+        "label_as_rendered": "Confirmed contractual occupancy: 2 of -1"
+      },
+      "legacy": {
+        "inventory": 8,
+        "occupied": 4,
+        "vacant": 4,
+        "down": 0,
+        "current_occupancy_pct": 50,
+        "leasable_occupancy_pct": 50,
+        "reconciled": false,
+        "published_rows": 8
+      },
+      "availability": {
+        "headline": {
+          "marketable_now": 0,
+          "contested": 1,
+          "blocked_by_evidence": 0
+        },
+        "rows": {
+          "301|Room1": [
+            "down",
+            "contractually_occupied",
+            true,
+            true
+          ],
+          "302|Room1": [
+            "down",
+            "contractually_occupied"
+          ],
+          "303|Room1": [
+            "contested",
+            "contested"
+          ],
+          "303|Room2": [
+            "down",
+            "unresolved"
+          ],
+          "304|Room1": [
+            "down",
+            "vacant"
+          ]
+        }
+      },
+      "rent_roll_units": {
+        "positions": 8,
+        "buckets": {
+          "301|Room1": "occupied",
+          "301|Room2": "open",
+          "302|Room1": "occupied",
+          "302|Room2": "open",
+          "303|Room1": "needs_review",
+          "303|Room2": "occupied",
+          "304|Room1": "open",
+          "304|Room2": "open"
+        }
+      },
+      "standing": {
+        "truth_state": "ESTABLISHED",
+        "rentable_positions": 8,
+        "occupied": 3,
+        "open": 4,
+        "needs_review": 1,
+        "unknowns": {
+          "contested": 1,
+          "unresolved_evidence": 0
+        }
+      },
+      "ask": {
+        "outcome": "unavailable",
+        "grounded": false
+      }
+    },
+    "after_resolve": {
+      "http": {
+        "condition": 200,
+        "leasingDesk": 200,
+        "mgmtDesk": 200,
+        "canonical": 200,
+        "institutional": 200,
+        "legacy": 200,
+        "availability": 200,
+        "rentRollUnits": 200,
+        "ask": 200
+      },
+      "primitive": {
+        "occupied": 3,
+        "rentable": 8,
+        "excluded": 0,
+        "pct": 37.5,
+        "exclusions_source": "space_label"
+      },
+      "condition": {
+        "occupied": 3,
+        "rentable": 8,
+        "pct": 37.5,
+        "basis": "bed"
+      },
+      "leasing_desk": {
+        "label": "37.5% occupied",
+        "value": 0.375
+      },
+      "mgmt_desk": {
+        "label": "37.5% occupied",
+        "note": "3 of 8 beds carry an active lease — lease-based, not a confirmed-status walk"
+      },
+      "canonical": {
+        "inventory": 8,
+        "leasable": 8,
+        "down": 0,
+        "occupied": 2,
+        "denominator": 7,
+        "pct": 28.57,
+        "excluded": {
+          "down": 0,
+          "contested": 1
+        },
+        "beside": {
+          "unresolved_positions": 1,
+          "evidence_disagrees": 0,
+          "evidence_inconclusive": 0
+        },
+        "trusted_rent": 1750,
+        "rows": {
+          "301|Room1": [
+            "contractually_occupied",
+            false
+          ],
+          "303|Room1": [
+            "contested",
+            false
+          ],
+          "303|Room2": [
+            "unresolved",
+            false
+          ],
+          "304|Room1": [
+            "vacant",
+            false
+          ]
+        }
+      },
+      "institutional": {
+        "total_positions": 8,
+        "confirmed_contractual_occupancy": 2,
+        "occupancy_denominator": 7,
+        "positions_down": 0,
+        "label_as_rendered": "Confirmed contractual occupancy: 2 of 7"
+      },
+      "legacy": {
+        "inventory": 8,
+        "occupied": 4,
+        "vacant": 4,
+        "down": 0,
+        "current_occupancy_pct": 50,
+        "leasable_occupancy_pct": 50,
+        "reconciled": false,
+        "published_rows": 8
+      },
+      "availability": {
+        "headline": {
+          "marketable_now": 5,
+          "contested": 1,
+          "blocked_by_evidence": 0
+        },
+        "rows": {
+          "301|Room1": [
+            "occupied",
+            "contractually_occupied",
+            true,
+            false
+          ],
+          "302|Room1": [
+            "occupied",
+            "contractually_occupied"
+          ],
+          "303|Room1": [
+            "contested",
+            "contested"
+          ],
+          "303|Room2": [
+            "marketable_now",
+            "unresolved"
+          ],
+          "304|Room1": [
+            "marketable_now",
+            "vacant"
+          ]
+        }
+      },
+      "rent_roll_units": {
+        "positions": 8,
+        "buckets": {
+          "301|Room1": "occupied",
+          "301|Room2": "open",
+          "302|Room1": "occupied",
+          "302|Room2": "open",
+          "303|Room1": "needs_review",
+          "303|Room2": "occupied",
+          "304|Room1": "open",
+          "304|Room2": "open"
+        }
+      },
+      "standing": {
+        "truth_state": "ESTABLISHED",
+        "rentable_positions": 8,
+        "occupied": 3,
+        "open": 4,
+        "needs_review": 1,
+        "unknowns": {
+          "contested": 1,
+          "unresolved_evidence": 0
+        }
+      },
+      "ask": {
+        "outcome": "unavailable",
+        "grounded": false
+      }
+    }
+  }
+}
