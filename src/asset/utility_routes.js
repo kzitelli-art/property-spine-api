@@ -1,5 +1,10 @@
 "use strict";
 
+const EVIDENCE_KINDS = Object.freeze([
+  "utility_statement", "utility_service_agreement", "utility_addendum",
+  "utility_meter_schedule", "utility_account_confirmation",
+]);
+
 module.exports = function utilityRoutes(deps = {}) {
   const express = require("express");
   const multer = require("multer");
@@ -21,10 +26,6 @@ module.exports = function utilityRoutes(deps = {}) {
   }
 
   const gate = [requireOperator, refuseClientAuthority, requireAssetManagementModule];
-  const EVIDENCE_KINDS = Object.freeze([
-    "utility_statement", "utility_service_agreement", "utility_addendum",
-    "utility_meter_schedule", "utility_account_confirmation",
-  ]);
 
   function fail(res, error) {
     const sayable = new Set([
@@ -167,7 +168,7 @@ module.exports = function utilityRoutes(deps = {}) {
     async (req, res) => {
       try {
         const artifact = await artifacts.read(pool, req.params.artifactId);
-        if (!artifact || artifact.scope_type !== "property"
+        if (!artifact || !EVIDENCE_KINDS.includes(artifact.artifact_kind) || artifact.scope_type !== "property"
             || String(artifact.scope_id) !== String(req.operator.property_id)) {
           return res.status(404).json({ error: "utility_evidence_not_found" });
         }
@@ -377,7 +378,4 @@ module.exports = function utilityRoutes(deps = {}) {
   return router;
 };
 
-module.exports.EVIDENCE_KINDS = Object.freeze([
-  "utility_statement", "utility_service_agreement", "utility_addendum",
-  "utility_meter_schedule", "utility_account_confirmation",
-]);
+module.exports.EVIDENCE_KINDS = EVIDENCE_KINDS;

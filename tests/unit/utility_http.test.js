@@ -70,13 +70,21 @@ async function main() {
     async read(_db, id) {
       if (id === "artifact-a") return {
         id, scope_type: "property", scope_id: "property-a",
+        artifact_kind: "utility_statement",
         original_filename: "statement.pdf", mime_type: "application/pdf",
         content: Buffer.from("%PDF-1.7"),
       };
       if (id === "artifact-b") return {
         id, scope_type: "property", scope_id: "property-b",
+        artifact_kind: "utility_statement",
         original_filename: "other.pdf", mime_type: "application/pdf",
         content: Buffer.from("%PDF-1.7"),
+      };
+      if (id === "artifact-c") return {
+        id, scope_type: "property", scope_id: "property-a",
+        artifact_kind: "rent_roll",
+        original_filename: "rent-roll.xlsx", mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content: Buffer.from("rent roll"),
       };
       return null;
     },
@@ -242,6 +250,8 @@ async function main() {
 
     const foreignEvidence = await request(`${path}/evidence/artifact-b`, { token: "entitled" });
     ok("cross-property Utility evidence is indistinguishable from missing", foreignEvidence.status === 404);
+    const wrongKindEvidence = await request(`${path}/evidence/artifact-c`, { token: "entitled" });
+    ok("same-property non-Utility evidence is indistinguishable from missing", wrongKindEvidence.status === 404);
     const ownEvidence = await request(`${path}/evidence/artifact-a`, { token: "entitled" });
     ok("same-property retained evidence is openable", ownEvidence.status === 200);
     ok("evidence responses are private and not cached",

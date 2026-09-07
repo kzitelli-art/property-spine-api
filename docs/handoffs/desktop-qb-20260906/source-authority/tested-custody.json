@@ -1,0 +1,27 @@
+{
+  "api": {
+    "head": "c8dc7d1c011de50cbca9417491e88e36d61c3d1e",
+    "tracked_diff_sha256": "7b3558cf3de947e3ff6bc3070afc5d8cbddc4cf92215878e2e48420035676c22",
+    "working_tree_clean": false,
+    "changed_file_sha256": {
+      "src/asset/contracted_service_routes.js": "83890da97f48459af7ccfe68a1debd9606d687c499d121bba5842e93f2982a70",
+      "src/asset/utility_routes.js": "6d60da1bffff9c2c8206cbecb94f2c965d876a5a5d1b785ba31a4f7a6e370519",
+      "src/onboarding/activation_service.js": "70c5592d12c7a7f805f0edacea4cd2a1a5d1ed1f88724f45890f7c61ace260d9",
+      "src/onboarding/deal_setup.js": "052766a49d0521ce36bfd428f453d0dd371cbecfe5dd6aba736e1497972512ee",
+      "tests/e2e/onboarding_review_local.js": "8e50af5bf2ac8f0ccc6d00fa2fbb42da0322c7628ad002f9c22329dafe36f911",
+      "tests/e2e/onboarding_review_local.ps1": "969db9871189a803ff5d0fedcd8889efcbddce15cdda04f608ace307d2442f92",
+      "tests/e2e/verify_all.sh": "17fd2df2973972a183d6acfed71820b25e2198e51098054ef1823c9ea5698990",
+      "tests/proofs/retained_source_authority_observation.db.js": "2a826a2beaa29f0113054dee12805465b30b6d5e3e5817d4e85d44d5d1f82b3d",
+      "tests/unit/contracted_service_http.test.js": "110fc16e4c73e8b5dd0004c84ce400b152a344ecb09ee23629838818bff636d4",
+      "tests/unit/utility_http.test.js": "1074b3843d8f57b31236b1d61fdc465daff97691358d8fcada8c92b7f62b710a"
+    }
+  },
+  "app": {
+    "head": "93d37d6d027d145c1bb78b4e7b23e605819c2c8c",
+    "tracked_diff_sha256": "43a824955b8792c9d97162ce0bdd121ee54e378f4bf4f6c5108948557b8280b0",
+    "working_tree_clean": false,
+    "changed_file_sha256": {
+      "canonical_onboarding_review.browser.js": "84a8ae79efbe21e562c7b8a6b0e427edb5e6d9357c04c8f39ae6e64dea27cbe8"
+    }
+  }
+}

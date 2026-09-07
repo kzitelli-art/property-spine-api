@@ -302,7 +302,7 @@ module.exports = function dealSetup({ pool, upload }) {
   router.get("/deal-setup/source/:artifactId/download", requireHuman, async (req, res) => {
     try {
       const a = await artifacts.read(pool, req.params.artifactId);
-      if (!a) return res.status(404).json({ error: "not_found", receipt: "That file is not on record." });
+      if (!a || a.artifact_kind !== "rent_roll") return res.status(404).json({ error: "not_found", receipt: "That rent roll is not on record." });
 
       //  Scope is checked HERE, against the actor, not inside the storage
       //  service: what a file is and who may see it are different questions.
@@ -312,9 +312,8 @@ module.exports = function dealSetup({ pool, upload }) {
             where dp.property_id = $1 and dp.status='current'`, [a.scope_id])).rows[0];
         if (!held) return res.status(403).json({ error: "no_current_deal",
           receipt: "That file's property is not currently on a deal you can open." });
-        const scope = await dealService.resolveDealScope(pool, {
-          user_id: req.human.id, deal_intake_id: held.intake_id });
-        if (!scope.ok) return res.status(scope.status).json({ error: scope.reason, receipt: scope.receipt });
+        await activation.resolveActivationScope(pool, {
+          user_id: req.human.id, deal_intake_id: held.intake_id, property_id: a.scope_id });
       } else {
         const scope = await dealService.resolveDealScope(pool, {
           user_id: req.human.id, deal_intake_id: a.scope_id });
@@ -418,9 +417,8 @@ module.exports = function dealSetup({ pool, upload }) {
           where property_id=$1 and status='current'`, [req.params.propertyId])).rows[0];
       if (!held) return res.status(404).json({ error: "no_current_deal",
         receipt: "That property is not currently on a deal." });
-      const scope = await dealService.resolveDealScope(pool, {
-        user_id: req.human.id, deal_intake_id: held.intake_id });
-      if (!scope.ok) return res.status(scope.status).json({ error: scope.reason, receipt: scope.receipt });
+      await activation.resolveActivationScope(pool, {
+        user_id: req.human.id, deal_intake_id: held.intake_id, property_id: req.params.propertyId });
 
       const position = (await pool.query(
         `select op.*, ib.source_file, ib.source_as_of_date as batch_as_of

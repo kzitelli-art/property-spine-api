@@ -95,9 +95,9 @@ function rowClaims(mapped) {
     .filter(key => key !== "_raw" && row[key] != null).sort().map(key => [key,row[key]]))));
 }
 
-/*  Can this actor operate this property, and is it inside this deal?
- *  Membership is authority here: a property reached through a deal the
- *  actor may operate is a property the actor may activate. */
+/*  Can this actor operate this property's lease and occupancy setup?
+ *  Deal ownership bounds the organization. Members also need a current
+ *  assignment with the relevant capability on the target property. */
 async function resolveActivationScope(db, { user_id, deal_intake_id, property_id } = {}) {
   const scope = await dealService.resolveDealScope(db, { user_id, deal_intake_id });
   if (!scope.ok) throw refusal(scope.status, scope.reason, scope.receipt, scope);
@@ -111,6 +111,18 @@ async function resolveActivationScope(db, { user_id, deal_intake_id, property_id
   if (!member) {
     throw refusal(403, "property_not_in_deal",
       "That property is not currently part of this deal, so it cannot be set up from here.");
+  }
+  if (!["org_admin", "super_admin"].includes(scope.actor.platform_role)) {
+    const assignment = (await db.query(
+      `select allowed_modules from property_team_assignments
+        where user_id = $1 and property_id = $2 and active = true`,
+      [scope.actor.id, member.id])).rows[0];
+    if (!assignment || !assignment.allowed_modules.some(module =>
+      module === "leasing" || module === "management")) {
+      throw refusal(403, "property_setup_access_required",
+        "You need Leasing or Management access to this property to review its rent roll and set up lease and occupancy.");
+    }
+    return { ...scope, property: member, authority_basis: "property_team_assignment:leasing_or_management" };
   }
   return { ...scope, property: member };
 }

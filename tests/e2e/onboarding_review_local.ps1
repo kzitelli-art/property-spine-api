@@ -30,6 +30,12 @@ function Assert-OwnedRoot {
     throw 'Owned local proof directory verification failed.'
   }
 }
+if($env:PROOF_SOURCE_AUTH_OBSERVATION -eq '1'){
+  $taskProof=Join-Path $apiRoot 'tests/proofs/retained_source_authority_observation.db.js'
+  if(-not(Test-Path -LiteralPath $taskProof -PathType Leaf)){throw 'Source authority proof must be saved and reviewed before allocating its runtime.'}
+  & $node --check $taskProof
+  if($LASTEXITCODE -ne 0){throw 'Source authority proof syntax check failed before runtime allocation.'}
+}
 try {
   foreach($required in @($AppRoot,$JulySource,$SkylineSource,$Chrome,$initdb,$pgCtl)) {
     if(-not(Test-Path -LiteralPath $required)){throw "Required local input unavailable: $required"}

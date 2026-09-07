@@ -1,5 +1,15 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-07 retained-source authority:** members now need a live target-property
+Leasing/Management assignment for rent-roll setup/read; existing administrator
+authority is preserved. Downloads and opening-position composition reuse that
+scope owner. Utility/Contracted Services downloads enforce their existing kinds,
+and Deal Setup download requires rent_roll. Corrected parent refusals,77 successor
+HTTP checks, five browser actors and full July/Skyline review/restart/mixed passed.
+Actual-source confirmations0; owned runtime cleanup complete. Local candidate
+proof only; retained-file discovery and historical mixed inventory remain separate.
+See [authority receipt](handoffs/desktop-qb-20260906/source-authority/RECEIPT.md).
+
 **2026-09-07 source-refusal recovery proof:** unchanged API43d30ed/app28df16d
 product passed stronger whole-file rollback and existing-browser recovery checks.
 Mixed-grain35 includes empty-batch/activation linkage, a valid earlier unit and

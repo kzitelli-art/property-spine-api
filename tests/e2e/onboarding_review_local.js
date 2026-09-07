@@ -78,8 +78,14 @@ async function stopServer() {
   pool = new Pool({ connectionString: owned.url, ssl: false });
   const baselineMode = process.env.PROOF_EXPECT_SHIPPED_HEADER_FAILURE === "1";
   const spaceParentMode = process.env.ONBOARDING_SPACE_PROOF_ONLY === "1" && process.env.PROOF_SPACE_EXPECT_DEFECT === "1";
-  const businessRoot = spaceParentMode && process.env.ONBOARDING_SPACE_PARENT_ROOT
+  const sourceAuthParent = process.env.PROOF_SOURCE_AUTH_OBSERVATION === "1" && Boolean(process.env.ONBOARDING_SOURCE_AUTH_PARENT_ROOT);
+  const businessRoot = sourceAuthParent ? fs.realpathSync(process.env.ONBOARDING_SOURCE_AUTH_PARENT_ROOT) : spaceParentMode && process.env.ONBOARDING_SPACE_PARENT_ROOT
     ? fs.realpathSync(process.env.ONBOARDING_SPACE_PARENT_ROOT) : baselineMode ? parentRoot : ROOT;
+  if (sourceAuthParent) {
+    assert.equal(execFileSync("git", ["rev-parse", "HEAD"], {cwd:businessRoot, encoding:"utf8", windowsHide:true}).trim(),
+      "c8dc7d1c011de50cbca9417491e88e36d61c3d1e");
+    execFileSync("git", ["diff", "--exit-code", "HEAD", "--", "src", "server.js", "migrations"], {cwd:businessRoot, windowsHide:true, stdio:"pipe"});
+  }
   if (spaceParentMode) {
     assert.equal(execFileSync("git",["rev-parse","HEAD"],{cwd:businessRoot,encoding:"utf8",windowsHide:true}).trim(),
       "018e6d621ef7e2e3bd4c074f6c7d6f97e5811061", "space defect witness requires its inspected parent");
@@ -168,7 +174,15 @@ async function stopServer() {
   console.log(`OWNED_API_READY=${apiSha}`);
   };
   await startServer();
+  if (!baselineMode && !spaceParentMode && process.env.PROOF_SOURCE_AUTH_OBSERVATION === "1") {
+    await run(process.execPath, [path.join(ROOT,"tests/proofs/retained_source_authority_observation.db.js")], {
+      env: {...process.env, PROOF_BUSINESS_ROOT:businessRoot},
+    });
+    for (const name of ["E2E_SMS_LOG","E2E_ANTHROPIC_LOG","E2E_EGRESS_LOG"]) assert.equal(fs.statSync(process.env[name]).size,0);
+    return;
+  }
   if (!baselineMode && !spaceParentMode) {
+    await run(process.execPath, [path.join(ROOT,"tests/proofs/retained_source_authority_observation.db.js")]);
     await run(process.execPath, [path.join(ROOT,"tests/proofs/mixed_grain_writer_challenge.db.js")], {
       env: {...process.env, PROOF_EXPECT_DEFECT:process.env.PROOF_MIXED_GRAIN_EXPECT_DEFECT || "0"},
     });
@@ -190,8 +204,10 @@ async function stopServer() {
       PROOF_SYNTHETIC_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"mixed-state.private.json"),
       PROOF_SPACE_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"space-state.private.json"),
       PROOF_RELAY_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"claim-relay-state.private.json"),
+      PROOF_SOURCE_AUTH_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"source-auth-state.private.json"),
       PROOF_API_SHA: apiSha, PROOF_APP_SHA: execFileSync("git", ["rev-parse", "HEAD"], { cwd: appRoot, encoding: "utf8", windowsHide: true }).trim() },
   });
+  if (!baselineMode && !spaceParentMode && process.env.PROOF_SOURCE_AUTH_BROWSER === "1") await runBrowser("source-auth");
   if (!baselineMode && !spaceParentMode && process.env.PROOF_SPACE_BROWSER === "1") await runBrowser("spaces");
   if (!baselineMode && !spaceParentMode && process.env.PROOF_RELAY_BROWSER === "1") await runBrowser("relay");
   if (process.env.ONBOARDING_SPACE_PROOF_ONLY === "1") {
