@@ -1,0 +1,184 @@
+{
+  "mode": "observation",
+  "evidence": {
+    "ingest": {
+      "sole_bed": {
+        "lineage": [
+          {
+            "row_index": 2,
+            "unit_linked": true,
+            "space_id": null,
+            "space_label": null
+          }
+        ],
+        "spaces": [
+          {
+            "unit_number": "101",
+            "space_label": "Room1",
+            "position_kind": null
+          }
+        ]
+      },
+      "bed_set": {
+        "lineage": [
+          {
+            "row_index": 2,
+            "unit_linked": true,
+            "space_id": null,
+            "space_label": null
+          }
+        ],
+        "spaces": [
+          {
+            "unit_number": "102",
+            "space_label": "Room1",
+            "position_kind": null
+          },
+          {
+            "unit_number": "102",
+            "space_label": "Room2",
+            "position_kind": null
+          },
+          {
+            "unit_number": "102",
+            "space_label": "Room3",
+            "position_kind": null
+          }
+        ]
+      },
+      "by_unit": {
+        "lineage": [
+          {
+            "row_index": 2,
+            "unit_linked": true,
+            "space_id": "<uuid>",
+            "space_label": "(whole unit)"
+          }
+        ],
+        "spaces": [
+          {
+            "unit_number": "103",
+            "space_label": "(whole unit)",
+            "position_kind": null
+          }
+        ]
+      }
+    },
+    "confirm": {
+      "sole": {
+        "result": {
+          "ok": {
+            "lease_id": null,
+            "vacant": true,
+            "receipt": "Unit 101 · Room1 recorded as vacant."
+          }
+        },
+        "lineage": {
+          "space_linked": true,
+          "label": "Room1",
+          "status": "promoted"
+        }
+      },
+      "set": {
+        "result": {
+          "err": "Unit 102 leases by the bed. This row does not say which bed, so Spine will not guess."
+        },
+        "lineage": {
+          "space_linked": false,
+          "label": null,
+          "status": "needs_review"
+        }
+      },
+      "unit": {
+        "result": {
+          "ok": {
+            "lease_id": null,
+            "vacant": true,
+            "receipt": "Unit 103 · (whole unit) recorded as vacant."
+          }
+        },
+        "lineage": {
+          "space_linked": true,
+          "label": "(whole unit)",
+          "status": "promoted"
+        }
+      }
+    },
+    "shapes": {
+      "new_sole": {
+        "state": "established",
+        "type": "opening_claim_vacant",
+        "key": "101"
+      },
+      "old_bed_set": [
+        "not_established",
+        "not_established",
+        "not_established"
+      ],
+      "old_sole": {
+        "state": "established",
+        "type": "opening_claim_vacant",
+        "key": "104"
+      },
+      "old_sole_lineage": {
+        "unit_linked": true,
+        "space_null": true
+      }
+    },
+    "reversal": {
+      "reversal": {
+        "reinstated": true,
+        "retirement_id": "<uuid>"
+      },
+      "before": {
+        "state": "not_established",
+        "type": null,
+        "key": null
+      },
+      "after_replacement": {
+        "state": "not_established",
+        "type": null,
+        "key": null
+      },
+      "after_reinstated": {
+        "state": "established",
+        "type": "opening_claim_vacant",
+        "key": "201"
+      },
+      "live_units": [
+        "201",
+        "201 (retired)"
+      ]
+    },
+    "reversal_null_lineage": {
+      "after_replacement": {
+        "state": "established",
+        "type": "opening_claim_vacant",
+        "key": "202"
+      },
+      "after_reinstated": {
+        "state": "not_established",
+        "type": null,
+        "key": null
+      }
+    },
+    "placeholder": {
+      "positions": 7,
+      "named": {
+        "state": "established",
+        "type": "opening_claim_vacant",
+        "key": "301|(whole unit)"
+      },
+      "linked": {
+        "state": "established",
+        "type": "opening_claim_vacant",
+        "key": "302"
+      },
+      "marketing": {
+        "301": "marketable_now",
+        "302": "marketable_now"
+      },
+      "headline": 2
+    }
+  }
+}

@@ -33,6 +33,7 @@ const root = path.resolve(process.env.PROOF_BUSINESS_ROOT || path.join(__dirname
 const parent = process.env.PROOF_EXPECT_DEFECT === "1";
 const { availabilityRead } = require(path.join(root, "src/surfaces/availability_read.js"));
 const { deriveReadiness } = require(path.join(root, "src/maintenance/unit_triage_service.js"));
+const { evaluateOfferability } = require(path.join(root, "src/applications/application_target_authority.js"));
 
 let passed = 0, failed = 0;
 const ok = (label, condition, detail = "") => {
@@ -129,6 +130,10 @@ const AS_OF = "2026-07-31";
       availability: rows[n].marketing_state, blocking: rows[n].blocking_reason,
       row_physical_readiness: rows[n].physical_readiness, row_certified: rows[n].certified_ready,
       owner_readiness: owner[shape].readiness, owner_reason: owner[shape].readiness_reason,
+      //  APPLICATION TARGETING: the same availability row through the
+      //  application authority's isolated policy. No separate readiness gate
+      //  exists there — it admits marketable_now and refuses the rest.
+      application: (() => { const v = evaluateOfferability(rows[n]); return v.offerable ? "offerable" : v.refusal_code; })(),
     }));
     for (const t of table) console.log("  " + JSON.stringify(t));
 
@@ -168,6 +173,12 @@ const AS_OF = "2026-07-31";
       rows["306"].marketing_state === "marketable_now");
     ok("turn completed: availability offers the unit (policy, both modes) — completion is not certification",
       rows["307"].marketing_state === "marketable_now" && owner.turn_completed.readiness === "unknown");
+    const app = Object.fromEntries(table.map((t) => [t.unit, t.application]));
+    ok("application targeting follows the marketing state exactly — offerable where availability offers, not_offerable where it holds; readiness is never consulted a second time",
+      JSON.stringify(app) === JSON.stringify({ "301": "offerable", "302": "not_offerable", "303": "not_offerable",
+        "304": "not_offerable", "305": "offerable", "306": "offerable", "307": "offerable" }), JSON.stringify(app));
+    ok("nothing recorded, certification revoked and turn completed are all APPLICATION-offerable while the readiness owner says unknown",
+      ["301", "306", "307"].every((n) => app[n] === "offerable"));
     ok("the three shapes the readiness owner calls unknown and availability still offers are 301, 306 and 307 — the ruling owed",
       ["301", "306", "307"].every((n) => rows[n].marketing_state === "marketable_now" && owner[SHAPES.find(([u]) => u === n)[1]].readiness === "unknown"));
 
