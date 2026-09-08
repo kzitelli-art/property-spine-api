@@ -167,7 +167,6 @@ step "opening claim identity"     node tests/proofs/opening_claim_identity.db.js
 step "opening claim relay edges"  node tests/proofs/opening_claim_relay_edges.db.js
 step "opening claim unattached"   node tests/proofs/opening_claim_unattached.db.js
 step "availability readiness axis" node tests/proofs/availability_readiness_axis.db.js
-step "availability uncorroborated claim" node tests/proofs/availability_uncorroborated_claim.db.js
 step "canonical Deal Setup HTTP" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/deal_setup_http.db.js
 
 # ── the real server, the real HTTP door ─────────────────────────────
@@ -199,6 +198,7 @@ else
   step "retained source authority" node tests/proofs/retained_source_authority_observation.db.js
   step "leasing occupancy retirement" node tests/proofs/leasing_occupancy_retirement.db.js
   step "canonical occupancy under holds" node tests/proofs/canonical_occupancy_holds.db.js
+  step "availability uncorroborated claim" node tests/proofs/availability_uncorroborated_claim.db.js
   step "authority chain"             node tests/e2e/authority_chain.e2e.js
   step "extracted route bindings"    node tests/e2e/extracted_route_bindings.e2e.js
   step "ingest property authority"   node tests/e2e/ingest_property_authority.e2e.js

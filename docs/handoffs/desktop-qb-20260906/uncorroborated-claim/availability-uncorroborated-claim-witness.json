@@ -188,5 +188,10 @@
     "not_marketable_use": 0
   },
   "down": 201,
-  "entitlement_refusal": 403
+  "entitlement_refusal": 403,
+  "lease_rows": {
+    "before": 4,
+    "after": 4,
+    "identical": true
+  }
 }

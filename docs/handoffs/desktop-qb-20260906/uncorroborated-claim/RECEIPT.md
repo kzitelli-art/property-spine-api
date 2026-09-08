@@ -55,8 +55,11 @@ PROOF_EXPECT_DEFECT=1 PROOF_BUSINESS_ROOT=<3df9ed9 worktree> PROOF_SERVER_ROOT=<
 node tests/e2e/proof_boundary.js cleanup   → owned database dropped
 ```
 
-`tests/e2e/verify_all.sh` now runs the successor proof after the readiness
-axis proof.
+`tests/e2e/verify_all.sh` runs the successor proof inside the owned-server
+block, after `proof_boundary.js wait` reports the server UP and beside the
+other HTTP proofs (mixed-grain writer, retained source authority, leasing
+occupancy retirement, canonical occupancy under holds). See "QB review
+repairs" below for the runner evidence.
 
 ## Source custody and fixture classification
 
@@ -137,6 +140,38 @@ confirmed vacancy supports an offer.
   this fixture would mean adding a fixture entry to that proof, which is a
   change to a browser proof QB owns. Reported as not exercised, not as
   passed.
+
+## QB review repairs (second push on this branch)
+
+1. **Runner order (High).** On 8222c29 the step sat at the pre-server
+   position (after "availability readiness axis", before `boot.sh`), where
+   `E2E_API_BASE` is set but no server answers, so the proof's first fetch
+   would fail in CI. Moved into the `UP` branch of the owned-server block:
+
+   ```text
+   ./tests/e2e/boot.sh > /tmp/verify_server.log 2>&1 &
+   node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID" && UP=1
+   … echo "── server  UP (owned PID, run nonce, database marker)"
+     step "mixed-grain onboarding writer"      …
+     step "retained source authority"          …
+     step "leasing occupancy retirement"       …
+     step "canonical occupancy under holds"    …
+     step "availability uncorroborated claim"  node tests/proofs/availability_uncorroborated_claim.db.js   ← here
+     step "authority chain"                    …
+   ```
+
+   Standalone runs do not prove CI wiring; the CI run on the pushed head is
+   the evidence and is reported in the return message. `verify_all.sh` itself
+   cannot be run in this sandbox (its `boot.sh` port guard binds IPv6, which
+   is refused here), so the local runs use the same owned-server harness the
+   earlier receipts used.
+2. **Lease snapshot (Medium).** The proof now selects every column of every
+   lease row on the property, ordered by id, before any read, and compares
+   the full row set after; the count control (4 before, 4 after) is kept
+   inside the same assertion. Both modes 18/18.
+3. **Comment (Low).** The product comment cites
+   `tests/proofs/availability_uncorroborated_claim.db.js` and is reduced to
+   the governing condition, precedence and reason (10 lines).
 
 ## Strongest surviving counterexample
 

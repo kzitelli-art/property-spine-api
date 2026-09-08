@@ -170,6 +170,13 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
     const down = await http("units/:id/down", null, `/units/${units["302"]}/down`, { method: "POST", key: OPERATOR_KEY, body: { down_reason: "hvac", down_blocker: "synthetic hold" } });
     await pool.query("insert into obligations(property_id,unit_id,module,type,status,label) values($1,$2,'maintenance','initial_unit_walk','open','walk 306')", [P.id, units["306"]]);
 
+    // ── LEASE SNAPSHOT BEFORE ANY READ ───────────────────────────────
+    //  Every column of every lease row on the property, ordered by id, so a
+    //  changed rent, date, status, tenant, or a replaced row is detected —
+    //  not only the count.
+    const leaseRows = async () => (await pool.query("select * from leases where property_id=$1 order by id", [P.id])).rows;
+    const leasesBefore = await leaseRows();
+
     // ── READS ────────────────────────────────────────────────────────
     const av = await http("availability-canonical", P.token, `/operator/leasing/availability-canonical?as_of=${AS_OF}`);
     const lu = await http("leaseable-units", P.token, `/operator/leasing/leaseable-units`);
@@ -218,7 +225,9 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
     ok("control: a maintenance-only seat is refused 403 at the availability read", refused.status === 403);
     ok("reconciliation: unit Rent Roll buckets 303 Room2 'occupied'; standing counts it occupied; the canonical rent roll keeps 'unresolved' on its contractual axis — the claim supports occupancy, nothing supports an offer, and no measure was forced to agree",
       bucket("303|Room2") === "occupied" && standing.position.occupied === 4 && canonRow("303|Room2").tenancy_state === "unresolved" && canonRow("303|Room2").evidence_state === "uncorroborated", JSON.stringify([bucket("303|Room2"), evidence.standing, evidence.canonical_303_room2]));
-    ok("no lease row was created or changed by any read (leases: 4)", (await one("select count(*)::int as n from leases where property_id=$1", [P.id])).n === 4);
+    const leasesAfter = await leaseRows();
+    evidence.lease_rows = { before: leasesBefore.length, after: leasesAfter.length, identical: JSON.stringify(leasesBefore) === JSON.stringify(leasesAfter) };
+    ok("no lease row was created, replaced or changed by any read — 4 rows before, 4 after, every column of every row identical", leasesBefore.length === 4 && leasesAfter.length === 4 && evidence.lease_rows.identical, JSON.stringify(evidence.lease_rows));
 
     if (process.env.PROOF_OUTPUT_DIR) fs.writeFileSync(path.join(process.env.PROOF_OUTPUT_DIR, `availability-uncorroborated-claim-${parent ? "witness" : "successor"}.json`), JSON.stringify(evidence, null, 2));
   } finally { await pool.end(); }

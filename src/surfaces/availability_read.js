@@ -175,33 +175,16 @@ function marketingState(p, liveOk) {
   if (p.evidence_state === "unreconciled")
     return { state: "evidence_unreconciled", reason: "opening_position_unreconciled" };
 
-  // ══════════════════════════════════════════════════════════════════
   //  AN ACCEPTED OPENING CLAIM THAT SAYS OCCUPIED, WITH NO OPERATIVE LEASE.
-  //
-  //  The dated position already classifies this: evidence_state is
-  //  `uncorroborated` (dated_positions.evidenceState — the source says
-  //  occupied, Spine holds no lease), the Rent Roll buckets it `occupied`
-  //  (rentRollBucketOf, basis_type opening_claim_occupied) and standing
-  //  counts it occupied. This read consumed none of that and fell through
-  //  to marketable_now, so the application selector offered a bed the
-  //  Rent Roll called occupied (observed 2026-09-07,
-  //  tests/proofs/occupancy_measures_under_holds.db.js).
-  //
-  //  UNCORROBORATED IS NOT CONTRADICTORY. `disagrees` (a lease Spine holds
-  //  against a vacant claim) keeps its own state above. This is the other
-  //  direction: an accepted claim that nothing in Spine confirms or denies.
-  //  What that knowledge supports is the CLAIM — the position is treated
-  //  as occupied because the accepted opening truth says so — and never an
-  //  OFFER, which needs a lease end or a governed vacancy. So the state is
-  //  the existing `occupied`, the reason names the basis, and availableFrom
-  //  carries the same reason as the blocking fact. No tenancy state is
-  //  invented here; the canonical rent roll keeps calling the position
-  //  `unresolved` on its contractual axis, which is a different question.
-  //
-  //  Deliberately BELOW the lease, commitment, possession and turnover
-  //  guards (those are stronger facts) and ABOVE the triage overlay (an
-  //  occupied bed does not read as readiness_unknown).
-  // ══════════════════════════════════════════════════════════════════
+  //  The dated position classifies it as evidence_state 'uncorroborated'
+  //  (dated_positions.evidenceState); the Rent Roll buckets it occupied and
+  //  standing counts it occupied. Consumed here so it cannot fall through to
+  //  marketable_now (tests/proofs/availability_uncorroborated_claim.db.js).
+  //  Uncorroborated is not contradictory: `disagrees` keeps its own state
+  //  above. The claim supports treating the position as occupied; nothing
+  //  supports an offer, so the state is `occupied` and the reason names the
+  //  basis. Below the lease, commitment, possession, turnover, unknown-basis
+  //  and unreconciled guards; above the triage overlay.
   if (p.evidence_state === "uncorroborated")
     return { state: "occupied", reason: "opening_claim_occupied_uncorroborated" };
 
