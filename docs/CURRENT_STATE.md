@@ -1,5 +1,14 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-07 occupied opening claim:** availability now honors the existing
+accepted occupied claim when no operative lease exists, withholding an offer
+without inventing lease terms. Rent Roll detail shows the existing server reason
+and resident identity as Not established. Root reproduced classifier and browser
+failures before repair; successor18 DB/HTTP checks and all nine combined browser
+phases passed, including July/Skyline restart and mixed Add All. Zero actual-source
+confirmations, provider logs empty, owned cleanup verified. Application targeting
+is HTTP/service proven; picker UI and Ask model answers are not claimed. See
+[occupied claim receipt](handoffs/desktop-qb-20260906/occupied-claim/RECEIPT.md).
 **2026-09-07 Management reconciled zero:** the app preserves explicit zero in
 six existing count selections. Owned HTTP import/read10 passed; unchanged parent
 browser showed100% despite source occupied0. Successor Management visibly showed
@@ -16,8 +25,7 @@ checks plus five browser-fixture checks passed. Formal Schedule and its client
 CSV showed the all-down 0 of 0 while canonical pct stayed null and rent stayed
 1750. All six existing onboarding browser phases, July/Skyline lineage/restart,
 and mixed Add All passed with zero actual-source confirmations and owned cleanup.
-Availability for historical occupied claims without leases remains a separate
-Fable assignment. No deployment. See [hold receipt](handoffs/desktop-qb-20260906/occupancy-holds/RECEIPT.md).
+Availability for historical occupied claims is covered by the later receipt above. No deployment. See [hold receipt](handoffs/desktop-qb-20260906/occupancy-holds/RECEIPT.md).
 
 **2026-09-07 leasing retirement exclusion:** the shared leasing occupancy reader
 and leasing desk availability now reuse the canonical inventory retirement

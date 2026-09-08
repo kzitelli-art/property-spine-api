@@ -175,6 +175,19 @@ function marketingState(p, liveOk) {
   if (p.evidence_state === "unreconciled")
     return { state: "evidence_unreconciled", reason: "opening_position_unreconciled" };
 
+  //  AN ACCEPTED OPENING CLAIM THAT SAYS OCCUPIED, WITH NO OPERATIVE LEASE.
+  //  The dated position classifies it as evidence_state 'uncorroborated'
+  //  (dated_positions.evidenceState); the Rent Roll buckets it occupied and
+  //  standing counts it occupied. Consumed here so it cannot fall through to
+  //  marketable_now (tests/proofs/availability_uncorroborated_claim.db.js).
+  //  Uncorroborated is not contradictory: `disagrees` keeps its own state
+  //  above. The claim supports treating the position as occupied; nothing
+  //  supports an offer, so the state is `occupied` and the reason names the
+  //  basis. Below the lease, commitment, possession, turnover, unknown-basis
+  //  and unreconciled guards; above the triage overlay.
+  if (p.evidence_state === "uncorroborated")
+    return { state: "occupied", reason: "opening_claim_occupied_uncorroborated" };
+
   // ══════════════════════════════════════════════════════════════════
   //  BUILD 1 TRIAGE OVERLAY — SCOPED TO TRIAGE EVIDENCE, NOTHING ELSE
   //
@@ -335,7 +348,8 @@ function availableFrom(p, state, asOf) {
     return {
       available_from: null,   // an expiration is not an availability date
       availability_confidence: "incomplete",
-      blocking_fact: d ? "lease_runs_to_" + d : "no_lease_end_date",
+      blocking_fact: d ? "lease_runs_to_" + d
+        : (p.evidence_state === "uncorroborated" ? "opening_claim_occupied_uncorroborated" : "no_lease_end_date"),
     };
   }
   return { available_from: null, availability_confidence: "incomplete", blocking_fact: "position_not_available" };
