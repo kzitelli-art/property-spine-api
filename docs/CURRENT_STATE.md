@@ -1,5 +1,13 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-07 application picker:** the existing Leasing Work route is now browser
+verified through canonical intake, walk-in tour, conversion and explicit next
+action.25 assertions passed; exact server target identities matched the visible
+picker, the occupied claim stayed excluded, and Cancel sent nothing. This is a
+focused synthetic proof, with one locally refused intake draft, no further model
+attempts, SMS0, egress0 and owned cleanup. Product code unchanged. Conversation
+shortcut and actual dispatch are not claimed. See
+[picker receipt](handoffs/desktop-qb-20260906/application-picker/RECEIPT.md).
 **2026-09-07 occupied opening claim:** availability now honors the existing
 accepted occupied claim when no operative lease exists, withholding an offer
 without inventing lease terms. Rent Roll detail shows the existing server reason

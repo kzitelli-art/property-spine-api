@@ -10,6 +10,10 @@ const { spawn, execFileSync } = require("node:child_process");
 const assert = require("node:assert/strict");
 const boundary = require("./proof_boundary.js");
 const ROOT = path.resolve(__dirname, "../..");
+if (process.env.PROOF_PICKER_BROWSER === "1") {
+  assert.equal(process.env.PROOF_FOCUSED_NAME,"availability_uncorroborated_claim","Picker is a focused canonical-intake proof; workbook rehearsal keeps its zero-model-call contract");
+  assert.equal(process.env.PROOF_CLAIM_BROWSER,"1","Picker proof requires the claim browser phase");
+}
 const runRoot = fs.realpathSync(process.env.PSPINE_OWNED_CLUSTER_ROOT);
 const token = process.env.PSPINE_OWNED_CLUSTER_TOKEN;
 assert.match(token || "", /^[a-f0-9]{32}$/);
@@ -148,13 +152,20 @@ async function stopServer() {
       fs.existsSync(path.join(cwd,file)) ? createHash("sha256").update(fs.readFileSync(path.join(cwd,file))).digest("hex") : "deleted"]));
   }
   fs.writeFileSync(path.join(process.env.PROOF_OUTPUT_DIR,"worktree-custody.json"),JSON.stringify(custody,null,2));
+  const pickerEnv = process.env.PROOF_PICKER_BROWSER === "1" ? {
+    LEASING_INTAKE_SECRET: "e2e-intake",
+    LEASING_INTAKE_PROPERTY_IDS: (process.env.PROOF_PICKER_PROPERTY_ID = randomUUID()),
+    APPLICATION_INTENT_PREPARE_ENABLED: "true",
+    LEASING_DESK_SHOW_INTERNAL_QA: "true",
+  } : {};
+  if (pickerEnv.LEASING_INTAKE_PROPERTY_IDS) pickerEnv.APPLICATION_INTENT_PROPERTY_IDS = pickerEnv.LEASING_INTAKE_PROPERTY_IDS;
   const startServer = async () => {
   server = spawn(process.execPath, [
     "--require", path.join(__dirname, "proof_fence_preload.js"),
     "--require", path.join(__dirname, "fake_sms_preload.js"),
     "--require", path.join(__dirname, "fake_anthropic_preload.js"), "server.js"], {
     cwd: businessRoot, windowsHide: true, stdio: ["ignore", "pipe", "pipe"],
-    env: boundary.serverEnvironment({ OPERATOR_KEY: "e2e-key", PORT: process.env.PORT,
+    env: boundary.serverEnvironment({ ...pickerEnv, OPERATOR_KEY: "e2e-key", PORT: process.env.PORT,
       E2E_SERVER_ROOT: businessRoot, RENDER_GIT_COMMIT: apiSha, OPERATOR_APP_ORIGIN: "http://localhost:5173" }),
   });
   server.stdout.on("data", chunk => fs.writeSync(childLog, chunk));
@@ -188,7 +199,14 @@ async function stopServer() {
     });
     if (focusedProof === "management_zero_counts" && process.env.PROOF_ZERO_BROWSER === "1") await runCountBrowser("zero");
     if (focusedProof === "availability_uncorroborated_claim" && process.env.PROOF_CLAIM_BROWSER === "1") await runCountBrowser("claim");
-    for (const name of ["E2E_SMS_LOG","E2E_ANTHROPIC_LOG","E2E_EGRESS_LOG"]) assert.equal(fs.statSync(process.env[name]).size,0);
+    for (const name of ["E2E_SMS_LOG","E2E_EGRESS_LOG"]) assert.equal(fs.statSync(process.env[name]).size,0);
+    if (focusedProof === "availability_uncorroborated_claim" && process.env.PROOF_PICKER_BROWSER === "1") {
+      // Canonical phone intake deliberately prepares a draft. The fixture
+      // proves its single attempt is locally refused; browser reads add none.
+      const state=JSON.parse(fs.readFileSync(path.join(process.env.PROOF_OUTPUT_DIR,"uncorroborated-state.private.json"),"utf8"));
+      assert.equal(state.intake_model_attempts,1);
+      assert.match(fs.readFileSync(process.env.E2E_ANTHROPIC_LOG,"utf8"),/^\d+ messages\.create\r?\n$/);
+    } else assert.equal(fs.statSync(process.env.E2E_ANTHROPIC_LOG).size,0);
     return;
   }
   if (!baselineMode && !spaceParentMode) {

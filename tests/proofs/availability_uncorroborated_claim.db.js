@@ -81,13 +81,19 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
       let json = null; try { json = await r.json(); } catch (_) { json = null; }
       return { status: r.status, body: json };
     };
+    const commBoundary = require(path.join(root, "src/comms/communications_boundary.js"))({
+      pool, sms: { enabled: () => false },
+    });
     const session = async (userId, propertyId) => {
       const c = await pool.connect();
       try { await c.query("begin"); const t = (await sessions.issueStaffSession(c, { userId, propertyId, purpose: "sms_otp" })).session_token; await c.query("commit"); return t; } finally { c.release(); }
     };
-    async function property(name) {
+    async function property(name, forcedId = null) {
       const deal = await deals.createDeal(pool, { user_id: operator.id, deal_name: `${tag}-${name}`, creation_source: "deal_setup_console" });
-      const p = await one("insert into properties(name,canonical_key,organization_id,leasing_basis) values($1,$1,$2,'bed') returning id", [`${tag}-${name}`, org.id]);
+      const propertyName = `${tag}-${name}`;
+      const p = forcedId
+        ? await one("insert into properties(id,name,canonical_key,organization_id,leasing_basis) values($1,$2,$2,$3,'bed') returning id", [forcedId, propertyName, org.id])
+        : await one("insert into properties(name,canonical_key,organization_id,leasing_basis) values($1,$1,$2,'bed') returning id", [propertyName, org.id]);
       await deals.addProperty(pool, { user_id: operator.id, deal_intake_id: deal.id, property_id: p.id });
       for (const [u, mods] of [[operator, "{management,leasing,maintenance}"], [maintOnly, "{maintenance}"]]) {
         await pool.query("insert into property_team_assignments(property_id,user_id,role_title,allowed_modules,active) values($1,$2,'Proof Seat',$3,true)", [p.id, u.id, mods]);
@@ -120,7 +126,12 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
     }
 
     // ── THE FIXTURE (direct rows — the retained historical shape) ──────
-    const P = await property("claims");
+    const pickerPropertyId = !parent && process.env.PROOF_PICKER_BROWSER === "1"
+      ? String(process.env.PROOF_PICKER_PROPERTY_ID || "").trim() : null;
+    if (!parent && process.env.PROOF_PICKER_BROWSER === "1" && !/^[0-9a-f-]{36}$/i.test(pickerPropertyId || "")) {
+      throw new Error("PROOF_PICKER_PROPERTY_ID must be a UUID when picker mode is enabled");
+    }
+    const P = await property("claims", pickerPropertyId);
     const units = {}, spaces = {};
     for (const n of ["301", "302", "303", "304", "305", "306"]) {
       const u = await one("insert into units(property_id,unit_number) values($1,$2) returning id", [P.id, n]); units[n] = u.id;
@@ -229,9 +240,93 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
     evidence.lease_rows = { before: leasesBefore.length, after: leasesAfter.length, identical: JSON.stringify(leasesBefore) === JSON.stringify(leasesAfter) };
     ok("no lease row was created, replaced or changed by any read — 4 rows before, 4 after, every column of every row identical", leasesBefore.length === 4 && leasesAfter.length === 4 && evidence.lease_rows.identical, JSON.stringify(evidence.lease_rows));
 
-    if (!parent && process.env.PROOF_CLAIM_BROWSER === "1" && failed === 0) {
+    // ── OPTIONAL PICKER FIXTURE ─────────────────────────────────────
+    // This is a canonical application path fixture for the browser proof.
+    // Intake is property-bound by the server's LEASING_INTAKE_PROPERTY_IDS;
+    // the property above uses the runner's preallocated id in this mode.
+    // Consent and tour conversion use their existing HTTP/service owners.
+    // No send-application door is called, so this creates no provider egress.
+    let pickerState = null;
+    if (!parent && process.env.PROOF_PICKER_BROWSER === "1" && failed === 0) {
+      const pickerTag = randomUUID();
+      const modelLogBefore = fs.readFileSync(process.env.E2E_ANTHROPIC_LOG,"utf8");
+      const applicationsBefore = await one("select count(*)::int as n from lease_applications where property_id=$1", [P.id]);
+      const intake = await http("picker canonical intake", null, "/leasing/intake", {
+        method: "POST",
+        body: {
+          intake_secret: "e2e-intake",
+          property_id: P.id,
+          name: `Synthetic Picker Prospect ${pickerTag.slice(0, 8)}`,
+          phone: "+12025550171",
+          email: `picker-${pickerTag}@example.test`,
+          source: "proof_picker",
+          attempt_sms: false,
+          text_consent: "yes",
+        },
+      });
+      ok("picker fixture enters through the property-bound canonical intake door", intake.status === 200 && intake.body && intake.body.person_id && intake.body.lead_id, "HTTP " + intake.status);
+      const modelLogAfter = fs.readFileSync(process.env.E2E_ANTHROPIC_LOG,"utf8");
+      // Phone intake prepares a first response even when attempt_sms is false.
+      // Its one model attempt must be refused by the existing local sentinel;
+      // every later read remains forbidden from attempting generation.
+      ok("canonical phone intake attempted exactly one locally refused model draft", modelLogBefore === "" && /^\d+ messages\.create\r?\n$/.test(modelLogAfter));
+
+      let consent = null;
+      if (intake.body && intake.body.person_id) {
+        try {
+          consent = await commBoundary.enrollInternalQa({
+            person_id: intake.body.person_id, property_id: P.id, actor_user_id: operator.id,
+            reason: "synthetic picker proof",
+          });
+        } catch (e) { consent = { error: String(e.publicMessage || e.message) }; }
+      }
+      ok("picker fixture records opted-in consent through canonical QA enrollment", !!consent && !consent.error, consent && consent.error ? "enrollment failed" : "enrolled");
+
+      const walk = intake.body && intake.body.lead_id ? await http("picker canonical walk-in tour", P.token, "/operator/leasing/walk-in-tour", {
+        method: "POST",
+        body: {
+          lead_id: intake.body.lead_id,
+          unit_id: units["301"],
+          occurred_at: new Date().toISOString(),
+          idempotency_key: `proof-picker-${pickerTag}`,
+          feedback: { standing: "ready_to_apply", tour_given: true, next_move: "send_application", notes: "synthetic picker proof" },
+          units_shown: [units["301"]],
+          preferred_unit_id: units["301"],
+        },
+      }) : { status: 0, body: null };
+      ok("picker fixture reaches the canonical walk-in tour to conversion path", walk.status === 200 && walk.body && walk.body.conversion_id, "HTTP " + walk.status);
+
+      const desk = walk.body && walk.body.conversion_id ? await http("picker leasing desk", P.token, "/operator/leasing/desk") : { status: 0, body: null };
+      const deskStages = desk.body && desk.body.stages ? Object.values(desk.body.stages).flat() : [];
+      const deskRow = deskStages.find((r) => r && String(r.conversion_id) === String(walk.body && walk.body.conversion_id));
+      evidence.picker_desk = { status: desk.status, matching_row: !!deskRow,
+        action_code: deskRow && deskRow.primary_action ? deskRow.primary_action.code : null,
+        action_kind: deskRow && deskRow.primary_action ? deskRow.primary_action.kind : null,
+        qa_hidden: desk.body ? desk.body.internal_qa_hidden : null };
+      ok("picker conversion appears on the canonical Leasing Desk with the send-application decision", desk.status === 200 && deskRow && deskRow.primary_action && deskRow.primary_action.code === "send_application", "HTTP " + desk.status);
+
+      const pickerUnits = await http("picker leaseable targets", P.token, "/operator/leasing/leaseable-units");
+      const pickerTarget = pickerUnits.body && Array.isArray(pickerUnits.body.eligible_targets)
+        ? pickerUnits.body.eligible_targets.find((t) => String(t.unit_id) === String(units["301"]) && String(t.space_id) === String(spaces["301|Room2"])) : null;
+      ok("picker selector keeps the confirmed vacant 301 Room2 target", pickerUnits.status === 200 && !!pickerTarget, "HTTP " + pickerUnits.status);
+      const applicationsAfter = await one("select count(*)::int as n from lease_applications where property_id=$1", [P.id]);
+      const pickerLeases = (await pool.query("select * from leases where property_id=$1 order by id", [P.id])).rows;
+      ok("picker preparation creates no application and preserves every lease row", applicationsBefore.n === applicationsAfter.n && JSON.stringify(pickerLeases) === JSON.stringify(leasesAfter));
+
+      if (deskRow && deskRow.desk_key && walk.body && walk.body.conversion_id && intake.body && intake.body.person_id) {
+        pickerState = {
+          conversation_id: intake.body.conversation_id || null,
+          conversion_id: walk.body.conversion_id,
+          person_id: intake.body.person_id,
+          desk_key: deskRow.desk_key,
+          intake_model_attempts: 1,
+        };
+      }
+    }
+
+    if (!parent && (process.env.PROOF_CLAIM_BROWSER === "1" || process.env.PROOF_PICKER_BROWSER === "1") && failed === 0) {
       if (!process.env.PROOF_OUTPUT_DIR) throw new Error("Owned private output is required for the claim browser fixture");
-      fs.writeFileSync(path.join(process.env.PROOF_OUTPUT_DIR, "uncorroborated-state.private.json"), JSON.stringify({
+      const privateState = {
         proof: "uncorroborated_claim",
         version: 1,
         token: P.token,
@@ -241,7 +336,9 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
         claim_unit: "303",
         claim_label: "Room2",
         vacant_space_id: spaces["301|Room2"],
-      }), { mode: 0o600 });
+        ...(pickerState || {}),
+      };
+      fs.writeFileSync(path.join(process.env.PROOF_OUTPUT_DIR, "uncorroborated-state.private.json"), JSON.stringify(privateState), { mode: 0o600 });
     }
 
     if (process.env.PROOF_OUTPUT_DIR) fs.writeFileSync(path.join(process.env.PROOF_OUTPUT_DIR, `availability-uncorroborated-claim-${parent ? "witness" : "successor"}.json`), JSON.stringify(evidence, null, 2));
