@@ -1,0 +1,22 @@
+{
+  "api": {
+    "head": "3df9ed97e65abfd8c2ac06a50f8290355dc141bc",
+    "tracked_diff_sha256": "606cb85dde1cec49da0010fa7e0f48793c394e1784cf41639034f7161a9d431e",
+    "working_tree_clean": false,
+    "changed_file_sha256": {
+      "docs/handoffs/desktop-qb-20260906/management-zero/RECEIPT.md": "3bf05f9d57a60dac899e094898a89111b2aefe4f9b4ccc6b2fe684ec1186a694",
+      "tests/e2e/onboarding_review_local.js": "0f093e1fce44b5a24c8312055ae1dadc30955f63c5afd8c1b28f458654bbf903",
+      "tests/proofs/management_zero_counts.db.js": "4782119913febfc1a8d2115001855ae36e636126394135fac89943eedfd66341"
+    }
+  },
+  "app": {
+    "head": "22d705d8d5f35408fc5ae3abd7f2d1bbcd05fee5",
+    "tracked_diff_sha256": "c4811eb775e63099ac1334107183d62c138cb78b0763a82299a95e7b08e666c8",
+    "working_tree_clean": false,
+    "changed_file_sha256": {
+      "canonical_onboarding_review.browser.js": "0d6c998e942a2b66bd430f5598b7c8a7add6d623221c5e79820827ebc9b25579",
+      "canonical_onboarding_review_app.test.js": "6d6ede7b130ee83ceaa676d7148943ece8d86934b01f5eff5ff56cf78d55528c",
+      "index.html": "8c354628704ce894db1aa1706f5a2276101621dbbbe26ca6aad8ce4bae43d6f2"
+    }
+  }
+}

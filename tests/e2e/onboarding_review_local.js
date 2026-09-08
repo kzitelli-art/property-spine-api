@@ -174,16 +174,26 @@ async function stopServer() {
   console.log(`OWNED_API_READY=${apiSha}`);
   };
   await startServer();
+  const runZeroBrowser = async () => run(process.execPath, [path.join(appRoot,"canonical_onboarding_review.browser.js")], {
+    cwd:appRoot, env:{...process.env,SP:ROOT,API:process.env.E2E_API_BASE,SESSION:session,
+      PROOF_PHASE:"zero",PROOF_ZERO_STATE:path.join(process.env.PROOF_OUTPUT_DIR,"zero-state.private.json"),
+      PROOF_API_SHA:apiSha,PROOF_APP_SHA:execFileSync("git",["rev-parse","HEAD"],{cwd:appRoot,encoding:"utf8",windowsHide:true}).trim()},
+  });
   const focusedProof = process.env.PROOF_FOCUSED_NAME || (process.env.PROOF_SOURCE_AUTH_OBSERVATION === "1" ? "retained_source_authority_observation" : null);
   if (!baselineMode && !spaceParentMode && focusedProof) {
     assert.match(focusedProof, /^[a-z0-9_]+$/);
     await run(process.execPath, [path.join(ROOT,`tests/proofs/${focusedProof}.db.js`)], {
       env: {...process.env, PROOF_BUSINESS_ROOT:businessRoot},
     });
+    if (focusedProof === "management_zero_counts" && process.env.PROOF_ZERO_BROWSER === "1") await runZeroBrowser();
     for (const name of ["E2E_SMS_LOG","E2E_ANTHROPIC_LOG","E2E_EGRESS_LOG"]) assert.equal(fs.statSync(process.env[name]).size,0);
     return;
   }
   if (!baselineMode && !spaceParentMode) {
+    if (process.env.PROOF_ZERO_BROWSER === "1") {
+      await run(process.execPath,[path.join(ROOT,"tests/proofs/management_zero_counts.db.js")]);
+      await runZeroBrowser();
+    }
     await run(process.execPath, [path.join(ROOT,"tests/proofs/canonical_occupancy_holds.db.js")]);
     await run(process.execPath, [path.join(ROOT,"tests/proofs/leasing_occupancy_retirement.db.js")]);
     await run(process.execPath, [path.join(ROOT,"tests/proofs/retained_source_authority_observation.db.js")]);

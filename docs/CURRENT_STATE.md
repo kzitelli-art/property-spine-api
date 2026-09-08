@@ -1,5 +1,13 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**2026-09-07 Management reconciled zero:** the app preserves explicit zero in
+six existing count selections. Owned HTTP import/read10 passed; unchanged parent
+browser showed100% despite source occupied0. Successor Management visibly showed
+0 of2 and the nonzero control1 of2. Full July/Skyline lineage/restart, mixed Add All,
+and all eight browser phases passed, actual-source confirmations0, owned cleanup
+complete. API product unchanged; source-versus-contractual measure provenance is
+still separate. See [zero receipt](handoffs/desktop-qb-20260906/management-zero/RECEIPT.md).
+
 **2026-09-07 canonical occupancy under holds:** the current rent-roll fraction
 now counts occupied positions within the same non-down, non-contested population
 as its denominator, excluding overlaps once. Full tenancy and rent totals remain

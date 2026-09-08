@@ -1,0 +1,15 @@
+{
+  "proof_code": "ZERO_MANAGEMENT_DISCARDED_RECONCILED_COUNT",
+  "stage": "zero_0_fresh_management",
+  "observations": [
+    {
+      "source": "management_reconciled_counts",
+      "occupied": 0,
+      "inventory": 2,
+      "expected": "0%",
+      "observed": "100%",
+      "sub": "2 of 2 occupied",
+      "real_http": true
+    }
+  ]
+}
