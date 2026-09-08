@@ -173,6 +173,13 @@ confirmed vacancy supports an offer.
    `tests/proofs/availability_uncorroborated_claim.db.js` and is reduced to
    the governing condition, precedence and reason (10 lines).
 
+4. **CI wiring, observed.** Run 441 (8222c29) and run 442 (8c5d02c) both
+   failed at "source governance gates" before any proof ran:
+   `gate_current_state.js` requires contiguous defect-row numbering, and
+   this branch's row was numbered 71 after row 65 (rows 66–70 live on the
+   other Fable evidence branches). The row is renumbered 66 on this branch;
+   the third push carries the runner-order evidence.
+
 ## Strongest surviving counterexample
 
 That `occupied` overstates what Spine knows: the row hides in the Rent Roll
