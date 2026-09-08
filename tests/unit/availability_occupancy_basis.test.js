@@ -33,3 +33,27 @@ test("read failure, conflict, down and readiness guards preserve their independe
   assert.equal(marketingState({...vacant,triage:{pending_walk:true}},true).state,"readiness_unknown");
 });
 
+test("an accepted occupied opening claim with no operative lease is a claim, not an offer",()=>{
+  // The dated position classifies this shape as evidence_state 'uncorroborated'
+  // (source says occupied, Spine holds no lease). Before 2026-09-07 this read
+  // consumed none of that and fell through to marketable_now.
+  const uncorroborated={...vacant,basis_type:"opening_claim_occupied",evidence_state:"uncorroborated"};
+  const m=marketingState(uncorroborated,true);
+  assert.equal(m.state,"occupied");
+  assert.equal(m.reason,"opening_claim_occupied_uncorroborated");
+  const from=availableFrom(uncorroborated,m.state,"2026-07-31");
+  assert.equal(from.available_from,null);
+  assert.equal(from.blocking_fact,"opening_claim_occupied_uncorroborated");
+  // Uncorroborated and contradictory stay different facts.
+  assert.equal(marketingState({...vacant,evidence_state:"disagrees"},true).state,"evidence_disagrees");
+  // Stronger facts still win: a lease, a turn in progress, a down hold, a contest, an unknown basis.
+  assert.equal(marketingState({...uncorroborated,lease:{lease_id:"operative",end_date:"2027-12-31"}},true).reason,"spanning_lease");
+  assert.equal(marketingState({...uncorroborated,physical_readiness:"turning"},true).state,"turnover_required");
+  assert.equal(marketingState({...uncorroborated,is_down:true},true).state,"down");
+  assert.equal(marketingState({...uncorroborated,conflict_state:"conflicted"},true).state,"contested");
+  assert.equal(marketingState({...uncorroborated,basis_state:"not_established"},true).state,"occupancy_unknown");
+  // The triage overlay does not turn an occupied claim into readiness_unknown.
+  assert.equal(marketingState({...uncorroborated,triage:{pending_walk:true}},true).state,"occupied");
+  // Positive control: a confirmed vacancy is still marketable.
+  assert.equal(marketingState(vacant,true).state,"marketable_now");
+});

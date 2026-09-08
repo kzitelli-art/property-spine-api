@@ -176,6 +176,36 @@ function marketingState(p, liveOk) {
     return { state: "evidence_unreconciled", reason: "opening_position_unreconciled" };
 
   // ══════════════════════════════════════════════════════════════════
+  //  AN ACCEPTED OPENING CLAIM THAT SAYS OCCUPIED, WITH NO OPERATIVE LEASE.
+  //
+  //  The dated position already classifies this: evidence_state is
+  //  `uncorroborated` (dated_positions.evidenceState — the source says
+  //  occupied, Spine holds no lease), the Rent Roll buckets it `occupied`
+  //  (rentRollBucketOf, basis_type opening_claim_occupied) and standing
+  //  counts it occupied. This read consumed none of that and fell through
+  //  to marketable_now, so the application selector offered a bed the
+  //  Rent Roll called occupied (observed 2026-09-07,
+  //  tests/proofs/occupancy_measures_under_holds.db.js).
+  //
+  //  UNCORROBORATED IS NOT CONTRADICTORY. `disagrees` (a lease Spine holds
+  //  against a vacant claim) keeps its own state above. This is the other
+  //  direction: an accepted claim that nothing in Spine confirms or denies.
+  //  What that knowledge supports is the CLAIM — the position is treated
+  //  as occupied because the accepted opening truth says so — and never an
+  //  OFFER, which needs a lease end or a governed vacancy. So the state is
+  //  the existing `occupied`, the reason names the basis, and availableFrom
+  //  carries the same reason as the blocking fact. No tenancy state is
+  //  invented here; the canonical rent roll keeps calling the position
+  //  `unresolved` on its contractual axis, which is a different question.
+  //
+  //  Deliberately BELOW the lease, commitment, possession and turnover
+  //  guards (those are stronger facts) and ABOVE the triage overlay (an
+  //  occupied bed does not read as readiness_unknown).
+  // ══════════════════════════════════════════════════════════════════
+  if (p.evidence_state === "uncorroborated")
+    return { state: "occupied", reason: "opening_claim_occupied_uncorroborated" };
+
+  // ══════════════════════════════════════════════════════════════════
   //  BUILD 1 TRIAGE OVERLAY — SCOPED TO TRIAGE EVIDENCE, NOTHING ELSE
   //
   //  THIS PROTECTS THE NEW SLICE. IT DOES NOT REPAIR THE HISTORICAL
@@ -335,7 +365,8 @@ function availableFrom(p, state, asOf) {
     return {
       available_from: null,   // an expiration is not an availability date
       availability_confidence: "incomplete",
-      blocking_fact: d ? "lease_runs_to_" + d : "no_lease_end_date",
+      blocking_fact: d ? "lease_runs_to_" + d
+        : (p.evidence_state === "uncorroborated" ? "opening_claim_occupied_uncorroborated" : "no_lease_end_date"),
     };
   }
   return { available_from: null, availability_confidence: "incomplete", blocking_fact: "position_not_available" };

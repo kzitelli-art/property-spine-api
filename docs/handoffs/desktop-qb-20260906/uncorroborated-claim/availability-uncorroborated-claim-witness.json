@@ -1,0 +1,192 @@
+{
+  "mode": "positive_defect_witness",
+  "calls": [
+    {
+      "name": "activation ingest/confirm/establish (writer classification)",
+      "how": "service"
+    },
+    {
+      "name": "units/:id/down",
+      "how": "HTTP"
+    },
+    {
+      "name": "availability-canonical",
+      "how": "HTTP"
+    },
+    {
+      "name": "leaseable-units",
+      "how": "HTTP"
+    },
+    {
+      "name": "availability-canonical (maintenance-only seat)",
+      "how": "HTTP"
+    },
+    {
+      "name": "resolveApplicationTarget",
+      "how": "service"
+    },
+    {
+      "name": "readTenancyStanding",
+      "how": "service"
+    },
+    {
+      "name": "unitRentRoll",
+      "how": "service"
+    },
+    {
+      "name": "currentRentRoll",
+      "how": "service"
+    }
+  ],
+  "writer": {
+    "confirmed": {
+      "lease_id": "<uuid>"
+    },
+    "leases": 1,
+    "evidence_state": "confirmed",
+    "tenancy_state": "contractually_occupied"
+  },
+  "rows": {
+    "301|Room1": {
+      "state": "occupied",
+      "reason": "spanning_lease",
+      "evidence": "confirmed",
+      "tenancy": "contractually_occupied",
+      "basis_type": "operative_lease",
+      "available_from": null,
+      "blocking_fact": "lease_runs_to_2027-12-31"
+    },
+    "301|Room2": {
+      "state": "marketable_now",
+      "reason": null,
+      "evidence": "confirmed",
+      "tenancy": "vacant",
+      "basis_type": "opening_claim_vacant",
+      "available_from": "2026-07-31",
+      "blocking_fact": null
+    },
+    "302|Room1": {
+      "state": "down",
+      "reason": "out_of_service",
+      "evidence": "uncorroborated",
+      "tenancy": "unresolved",
+      "basis_type": "opening_claim_occupied",
+      "available_from": null,
+      "blocking_fact": "position_not_available"
+    },
+    "303|Room1": {
+      "state": "contested",
+      "reason": "overlapping_lease_claims",
+      "evidence": "confirmed",
+      "tenancy": "contested",
+      "basis_type": "contested_rights",
+      "available_from": null,
+      "blocking_fact": "position_not_available"
+    },
+    "303|Room2": {
+      "state": "marketable_now",
+      "reason": null,
+      "evidence": "uncorroborated",
+      "tenancy": "unresolved",
+      "basis_type": "opening_claim_occupied",
+      "available_from": "2026-07-31",
+      "blocking_fact": null
+    },
+    "304|Room1": {
+      "state": "marketable_now",
+      "reason": null,
+      "evidence": "confirmed",
+      "tenancy": "vacant",
+      "basis_type": "opening_claim_vacant",
+      "available_from": "2026-07-31",
+      "blocking_fact": null
+    },
+    "304|Room2": {
+      "state": "successor_pending",
+      "reason": "future_commitment_native_proof_or_funding_incomplete",
+      "evidence": "confirmed",
+      "tenancy": "vacant",
+      "basis_type": "opening_claim_vacant",
+      "available_from": null,
+      "blocking_fact": "position_not_available"
+    },
+    "305|Room2": {
+      "state": "occupancy_unknown",
+      "reason": "no_established_occupancy_basis",
+      "evidence": "inconclusive",
+      "tenancy": "unresolved",
+      "basis_type": null,
+      "available_from": null,
+      "blocking_fact": "occupancy_basis_not_established"
+    },
+    "306|Room1": {
+      "state": "readiness_unknown",
+      "reason": "initial_inspection_pending",
+      "evidence": "uncorroborated",
+      "tenancy": "unresolved",
+      "basis_type": "opening_claim_occupied",
+      "available_from": null,
+      "blocking_fact": "initial_walk_not_completed"
+    },
+    "306|Room2": {
+      "state": "readiness_unknown",
+      "reason": "initial_inspection_pending",
+      "evidence": "confirmed",
+      "tenancy": "vacant",
+      "basis_type": "opening_claim_vacant",
+      "available_from": null,
+      "blocking_fact": "initial_walk_not_completed"
+    }
+  },
+  "targets": [
+    "301|Room2",
+    "303|Room2",
+    "304|Room1",
+    "305|Room1"
+  ],
+  "target_303_room2": {
+    "offerable": true,
+    "refusal_code": null,
+    "refusal_reason": null
+  },
+  "standing": {
+    "occupied": 4,
+    "open": 6,
+    "needs_review": 1,
+    "rentable_positions": 12
+  },
+  "rent_roll_bucket_303_room2": "occupied",
+  "canonical_303_room2": {
+    "tenancy_state": "unresolved",
+    "evidence_state": "uncorroborated"
+  },
+  "headline": {
+    "marketable_now": 4,
+    "expected_within_horizon": 0,
+    "blocked_by_evidence": 0,
+    "contested": 1,
+    "occupancy_unknown": 1,
+    "evidence_unreconciled": 0
+  },
+  "states": {
+    "marketable_now": 4,
+    "upcoming": 0,
+    "occupied": 1,
+    "successor_locked": 0,
+    "successor_pending": 1,
+    "turnover_required": 0,
+    "not_ready_confirmed": 0,
+    "readiness_unknown": 2,
+    "activation_pending": 0,
+    "not_ready": 0,
+    "down": 2,
+    "evidence_disagrees": 0,
+    "contested": 1,
+    "occupancy_unknown": 1,
+    "evidence_unreconciled": 0,
+    "use_not_configured": 0,
+    "not_marketable_use": 0
+  },
+  "down": 201,
+  "entitlement_refusal": 403
+}
