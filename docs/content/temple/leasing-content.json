@@ -1,0 +1,358 @@
+{
+  "schema": "temple-leasing-content/v1",
+  "prepared_at": "2026-09-10",
+  "purpose": "Reviewed-source content prepared for the existing agent-facts writer; not a runtime knowledge store.",
+  "publication": {
+    "loaded": false,
+    "reason": "Live build d55dae9 supports seven legacy keys only; canonical target identities remain unresolved. No production write performed.",
+    "source_verification_is_not_operator_confirmation": true
+  },
+  "sources": {
+    "s_amenities": {
+      "url": "https://www.templeskyline.com/amenities",
+      "checked_at": "2026-09-10",
+      "kind": "official_website"
+    },
+    "s_layouts": {
+      "url": "https://www.templeskyline.com/two-bedroom",
+      "checked_at": "2026-09-10",
+      "kind": "official_website"
+    },
+    "s_neighborhood": {
+      "url": "https://www.templeskyline.com/apartments-near-temple-university",
+      "checked_at": "2026-09-10",
+      "kind": "official_website"
+    },
+    "s_arrival": {
+      "url": "https://www.templeskyline.com/temple-university-international-students",
+      "checked_at": "2026-09-10",
+      "kind": "official_website"
+    },
+    "g_amenities": {
+      "url": "https://www.templegreenery.com/ameneties-near-temple",
+      "checked_at": "2026-09-10",
+      "kind": "official_website"
+    },
+    "g_studio": {
+      "url": "https://www.templegreenery.com/studio-apartment-near-temple",
+      "checked_at": "2026-09-10",
+      "kind": "official_website"
+    },
+    "g_one": {
+      "url": "https://www.templegreenery.com/one-bedroom-apartment-near-temple",
+      "checked_at": "2026-09-10",
+      "kind": "official_website"
+    },
+    "g_two": {
+      "url": "https://www.templegreenery.com/two-bedroom-apartment-near-temple",
+      "checked_at": "2026-09-10",
+      "kind": "official_website"
+    },
+    "g_neighborhood": {
+      "url": "https://www.templegreenery.com/temple-university-neighborhood",
+      "checked_at": "2026-09-10",
+      "kind": "official_website"
+    },
+    "g_arrival": {
+      "url": "https://www.templegreenery.com/temple-university-international-students",
+      "checked_at": "2026-09-10",
+      "kind": "official_website"
+    },
+    "coffee": {
+      "url": "https://www.saxbyscoffee.com/location/saxbys-temple-university/",
+      "checked_at": "2026-09-10",
+      "kind": "official_website"
+    },
+    "transit": {
+      "url": "https://plan.septa.org/",
+      "checked_at": "2026-09-10",
+      "kind": "official_website"
+    },
+    "campus": {
+      "url": "https://admissions.temple.edu/visit",
+      "checked_at": "2026-09-10",
+      "kind": "official_website"
+    },
+    "s_tours": {
+      "url": "https://amberstudent.com/places/skyline-apartments-philadelphia-2408065967836",
+      "checked_at": "2026-09-09",
+      "kind": "third_party_listing"
+    },
+    "g_tours": {
+      "url": "https://amberstudent.com/places/the-greenery-philadelphia-2408064848211",
+      "checked_at": "2026-09-09",
+      "kind": "third_party_listing"
+    }
+  },
+  "properties": [
+    {
+      "property_name": "Skyline",
+      "physical_address": "1417 North 15th Street, Philadelphia, PA",
+      "canonical_property_id": null,
+      "publication_status": "prepared_not_loaded",
+      "facts": [
+        {
+          "fact_key": "leasing_highlights",
+          "status": "source_attributed_draft",
+          "rendered_text": "Skyline's published features include furnished apartments, shared lounges and on-site laundry. These are useful starting points if you want less furniture to bring or shared spaces outside your apartment. Ask about your particular home before deciding which layout fits your needs.\n\nSources: https://www.templeskyline.com/amenities",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "s_amenities"
+          ],
+          "review_notes": [
+            "Roof-deck access is omitted because the website and lease-template review conflict."
+          ]
+        },
+        {
+          "fact_key": "amenities",
+          "status": "source_attributed_draft",
+          "rendered_text": "The property website lists shared laundry on floors 2–4, lounges, a fitness room, bike storage, garage parking and package handling. Furnished apartments are described with bedroom furniture and a furnished living room. Confirm current access arrangements and any charges with the team; this description does not establish hours, pricing or availability.\n\nSources: https://www.templeskyline.com/amenities",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "s_amenities"
+          ],
+          "review_notes": []
+        },
+        {
+          "fact_key": "layouts",
+          "status": "source_attributed_draft",
+          "rendered_text": "Skyline's two-bedroom page distinguishes model 02's kitchen bar, models 05/09/10/14's windowed dining area, and models 03/17's larger living room. These are website model labels, not confirmed assignments to an available apartment. Tell us whether dining space or living-room space matters more so the team can compare the actual options.\n\nSources: https://www.templeskyline.com/two-bedroom",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "s_layouts"
+          ],
+          "review_notes": [
+            "Do not promise accessibility from marketing copy; confirm specific requirements and actual home.",
+            "Three-bedroom bathroom counts remain unresolved."
+          ]
+        },
+        {
+          "fact_key": "dimensions",
+          "status": "measurement_gap",
+          "rendered_text": "Exact room measurements are not established in this content set. One recovered two-bedroom/one-bath Matterport is labeled 590 SF; that is a source label for the depicted model, not a verified measurement of your apartment. Ask for measurements of the specific room before deciding whether furniture fits.\n\nSources: https://amberstudent.com/places/skyline-apartments-philadelphia-2408065967836",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "s_tours"
+          ],
+          "review_notes": [
+            "Tour label checked 2026-09-09; no fresh full walkthrough or room measurement.",
+            "Keep this explicit unknown; do not promote 590 SF into canonical space dimensions."
+          ]
+        },
+        {
+          "fact_key": "photos",
+          "status": "source_attributed_draft",
+          "rendered_text": "Skyline's official two-bedroom gallery shows apartment interiors; its amenities page shows building features. Photos may depict representative spaces. They do not establish the condition, view or furniture package of the particular home offered to you.\n\nSources: https://www.templeskyline.com/two-bedroom\nhttps://www.templeskyline.com/amenities",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "s_layouts",
+            "s_amenities"
+          ],
+          "review_notes": []
+        },
+        {
+          "fact_key": "floor_plans",
+          "status": "source_attributed_draft",
+          "rendered_text": "Skyline's public two-bedroom page contains labeled layout diagrams for models 02, 05/09/10/14, 03/17 and 04/07/08/11/12/15. Use these to compare arrangements, then confirm which drawing belongs to the specific apartment. The website's accompanying prices are not a current quote.\n\nSources: https://www.templeskyline.com/two-bedroom",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "s_layouts"
+          ],
+          "review_notes": [
+            "Private architectural PDFs remain in the internal asset register; do not expose SharePoint links through public prospect facts."
+          ]
+        },
+        {
+          "fact_key": "virtual_tours",
+          "status": "source_attributed_draft",
+          "rendered_text": "Two tours were recovered from Skyline's public listing:\n2BR / 1BA: https://my.matterport.com/show/?m=M7Lgne1gA72\n2BR / 1BA, labeled 590 SF: https://my.matterport.com/show/?m=3bM9GESQ7o2\nThese are representative listing associations; the exact apartment/stack match is unconfirmed. They do not establish current availability or dimensions of a different home.\n\nSources: https://amberstudent.com/places/skyline-apartments-philadelphia-2408065967836",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "s_tours"
+          ],
+          "review_notes": [
+            "Listing association and model titles checked 2026-09-09; 2026-09-10 web tool could not re-open Matterport.",
+            "No Skyline 3BR tour recovered; absence is not proof none exists."
+          ]
+        },
+        {
+          "fact_key": "neighborhood",
+          "status": "source_attributed_draft",
+          "rendered_text": "Skyline is at 1417 North 15th Street. For a campus coffee option, Saxbys lists a location at 1902 Liacouras Walk. Use Temple's visitor page for campus orientation and SEPTA's planner for your exact destination and departure time. These are practical starting points, not a staff endorsement or a promised journey time. Which campus building or everyday destination matters to you?\n\nSources: https://www.templeskyline.com/apartments-near-temple-university\nhttps://www.saxbyscoffee.com/location/saxbys-temple-university/\nhttps://admissions.temple.edu/visit\nhttps://plan.septa.org/",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "s_neighborhood",
+            "coffee",
+            "campus",
+            "transit"
+          ],
+          "review_notes": []
+        },
+        {
+          "fact_key": "leasing_faq",
+          "status": "source_attributed_draft",
+          "rendered_text": "Do I need furniture? The website describes furnished apartments; confirm the package for your selected home.\nIs laundry inside the apartment? The published arrangement is shared laundry on floors 2–4.\nCan I see a layout before visiting? Public layout diagrams and representative virtual tours are available.\nWhat is available and what will I pay? That needs the current inventory and published terms for your exact selection.\n\nSources: https://www.templeskyline.com/amenities\nhttps://www.templeskyline.com/two-bedroom",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "s_amenities",
+            "s_layouts"
+          ],
+          "review_notes": [
+            "Do not repeat website utility-fee wording, deposit/guarantor conditions or insurance requirements as settled policy."
+          ]
+        },
+        {
+          "fact_key": "move_in_guidance",
+          "status": "source_attributed_draft",
+          "rendered_text": "If you are arranging a move from out of town, tell the team your intended arrival time and whether you need delivery or key-pickup arrangements. Skyline's arrival page describes assistance, but a particular arrangement must be confirmed before you book travel or ship belongings. Current lease and move-in instructions control.\n\nSources: https://www.templeskyline.com/temple-university-international-students",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "s_arrival"
+          ],
+          "review_notes": []
+        }
+      ]
+    },
+    {
+      "property_name": "The Greenery",
+      "physical_address": "1325 North 15th Street, Philadelphia, PA",
+      "canonical_property_id": null,
+      "publication_status": "prepared_not_loaded",
+      "facts": [
+        {
+          "fact_key": "leasing_highlights",
+          "status": "source_attributed_draft",
+          "rendered_text": "The Greenery's published options include studios, one-bedrooms and two-bedrooms, with in-unit laundry. Outdoor space differs by layout: the studio page identifies a balcony on the 05 layout. Useful choices to discuss are a separate bedroom, a balcony and bathroom privacy, based on what matters to you.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/ameneties-near-temple",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "g_studio",
+            "g_one",
+            "g_two",
+            "g_amenities"
+          ],
+          "review_notes": []
+        },
+        {
+          "fact_key": "amenities",
+          "status": "source_attributed_draft",
+          "rendered_text": "The website lists in-unit washer/dryers, dishwashers, Amazon Hub lockers, fob-controlled entrances and garage parking. Balcony availability depends on the layout. Confirm current parking terms and package procedures with the team. Cameras and access controls are building features, not a guarantee of safety or package security.\n\nSources: https://www.templegreenery.com/ameneties-near-temple\nhttps://www.templegreenery.com/studio-apartment-near-temple",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "g_amenities",
+            "g_studio"
+          ],
+          "review_notes": [
+            "Parking price, exact camera count and blanket balcony claim are excluded."
+          ]
+        },
+        {
+          "fact_key": "layouts",
+          "status": "source_attributed_draft",
+          "rendered_text": "The studio page distinguishes 05 with a balcony from 08 without one. The one-bedroom page describes 04 and 14 as courtyard-facing and 06 as a junior one-bedroom. The two-bedroom page describes en-suite bathrooms, street-facing 01 and two balconies on 12. These are source model labels; confirm the exact apartment association before making an offer.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "g_studio",
+            "g_one",
+            "g_two"
+          ],
+          "review_notes": [
+            "The 02/16 paragraph has inconsistent bedroom wording and is excluded."
+          ]
+        },
+        {
+          "fact_key": "dimensions",
+          "status": "measurement_gap",
+          "rendered_text": "Room-by-room dimensions are not established here. Recovered tour titles label the junior one-bedroom 700 SF and the two-bedroom/two-bath model 1,032 SF. The website gives different general area figures, so these labels must not be treated as exact measurements or applied to another home. Obtain the specific floor plan or measurements before confirming furniture fit.\n\nSources: https://amberstudent.com/places/the-greenery-philadelphia-2408064848211\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "g_tours",
+            "g_one",
+            "g_two"
+          ],
+          "review_notes": [
+            "Newly explicit area conflict: website one-bedrooms over 715 SF versus tour 700; two-bedrooms over 1,050 SF versus tour 1,032.",
+            "Do not resolve by selecting a larger or newer-looking number."
+          ]
+        },
+        {
+          "fact_key": "photos",
+          "status": "source_attributed_draft",
+          "rendered_text": "The official studio, one-bedroom and two-bedroom pages provide photographs or renderings of their published options. A rendering illustrates an arrangement; furniture shown does not mean it is included. Ask the team for current images of the specific home if its condition, view or furnishings are important to your decision.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "g_studio",
+            "g_one",
+            "g_two"
+          ],
+          "review_notes": []
+        },
+        {
+          "fact_key": "floor_plans",
+          "status": "source_attributed_draft",
+          "rendered_text": "The public studio page includes 05 and 08 layout diagrams. The one-bedroom page includes 04, 06 and 14, and the two-bedroom page includes several labeled arrangements. Confirm the drawing-to-apartment match before relying on it for a specific home. These illustrations do not establish room measurements.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "g_studio",
+            "g_one",
+            "g_two"
+          ],
+          "review_notes": [
+            "Fifteen private unit-group renderings and building maps remain internal; source filenames are not verified canonical mappings."
+          ]
+        },
+        {
+          "fact_key": "virtual_tours",
+          "status": "source_attributed_draft",
+          "rendered_text": "Two tours were recovered from The Greenery's public listing:\nJunior 1BR, labeled 700 SF: https://my.matterport.com/show/?m=H8eLkJVRrQT\n2BR / 2BA, labeled 1,032 SF: https://my.matterport.com/show/?m=D3SQQ8uqFix\nThese show listing-associated representative models. Exact apartment/stack associations are unconfirmed, and the area labels are not certified measurements.\n\nSources: https://amberstudent.com/places/the-greenery-philadelphia-2408064848211",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "g_tours"
+          ],
+          "review_notes": [
+            "Model titles checked 2026-09-09; fresh web-tool Matterport re-open failed 2026-09-10.",
+            "No studio Matterport recovered. Do not substitute a 1BR tour for a studio."
+          ]
+        },
+        {
+          "fact_key": "neighborhood",
+          "status": "source_attributed_draft",
+          "rendered_text": "The Greenery is at 1325 North 15th Street. Saxbys lists a campus coffee location at 1902 Liacouras Walk. Temple's visitor page helps with campus orientation; SEPTA's planner can check your actual destination and travel time. This is a starting suggestion, not a recorded staff favorite. Which destination should we help you plan around?\n\nSources: https://www.templegreenery.com/temple-university-neighborhood\nhttps://www.saxbyscoffee.com/location/saxbys-temple-university/\nhttps://admissions.temple.edu/visit\nhttps://plan.septa.org/",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "g_neighborhood",
+            "coffee",
+            "campus",
+            "transit"
+          ],
+          "review_notes": []
+        },
+        {
+          "fact_key": "leasing_faq",
+          "status": "source_attributed_draft",
+          "rendered_text": "Does every studio have a balcony? No: the studio page identifies 05 as its balcony layout.\nIs laundry in the apartment? The website lists in-unit washer/dryers.\nIs furniture included? The apartment pages describe furnishing as an option; confirm the selected package and current terms.\nCan I have my own bathroom? The two-bedroom page describes en-suite bathrooms; confirm the offered home's layout.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/ameneties-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "g_studio",
+            "g_amenities",
+            "g_two"
+          ],
+          "review_notes": [
+            "Do not import furnishing/parking dollar amounts or historical late-fee/trash rules."
+          ]
+        },
+        {
+          "fact_key": "move_in_guidance",
+          "status": "source_attributed_draft",
+          "rendered_text": "Coordinate your arrival time, key pickup and any setup questions with the team before moving. The Greenery's arrival material describes help getting settled; the older welcome packets are not current instructions. Wait for confirmation of your actual pickup and utility/internet arrangements before relying on them.\n\nSources: https://www.templegreenery.com/temple-university-international-students",
+          "source_type": "other_documented_source",
+          "source_refs": [
+            "g_arrival"
+          ],
+          "review_notes": [
+            "2020/2021 packets retained as historical sources only; old staff names, portal instructions and fees are excluded."
+          ]
+        }
+      ]
+    }
+  ]
+}
