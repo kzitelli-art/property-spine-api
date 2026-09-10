@@ -760,8 +760,21 @@ function makeStaffLeasingAction({
       for(const h of prior) values=staffApplicationTerms.mergeApplicationTerms(values,staffApplicationTerms.extract(h.body).values);
       values=staffApplicationTerms.mergeApplicationTerms(values,fields.values);
       const missing=staffApplicationTerms.missingTerms(values);
-      const targetMenu=await applicationTargetRead.leaseableApplicationTargets(pool,{property_id:propertyId});
-      const targetChoice=chooseTarget([...prior.map(h=>h.body),body].join(' '),targetMenu.eligible_targets,selected.unit_id||null);
+      const hasTerm=!!(values.lease_start_date && values.lease_end_date);
+      if(hasTerm && values.lease_end_date<=values.lease_start_date) {
+        return refuse('The lease end must be after the start. Your terms are retained; reply "Terms: ..." with corrected dates. Nothing was offered or sent.','application_terms_partial',object);
+      }
+      const targetMenu=await applicationTargetRead.leaseableApplicationTargets(pool,{
+        property_id:propertyId,
+        ...(hasTerm?{requested_start:values.lease_start_date,requested_end:values.lease_end_date}:{}),
+      });
+      // Recognize a named excluded bed too; exclusion must not silently select
+      // its eligible sibling or ask the operator to repeat an already-known bed.
+      const targetChoice=chooseTarget([...prior.map(h=>h.body),body].join(' '),
+        [...targetMenu.eligible_targets,...targetMenu.excluded_targets],selected.unit_id||null);
+      if(targetChoice.target?.offerable===false && hasTerm) {
+        return refuse(`${targetChoice.target.refusal_reason || 'That home is not offerable for these dates.'} Your terms are retained; reply "Terms: ..." with corrected terms. Nothing was offered or sent.`,'application_terms_partial',object);
+      }
       if(!targetChoice.target || missing.length) {
         const labels={security_deposit:'deposit',lease_start_date:'start date (YYYY-MM-DD)',lease_end_date:'end date (YYYY-MM-DD)',rent:'rent',fees:'fees (say none only if none apply)',concessions:'concessions (say none only if none apply)'};
         return refuse(`Kept your terms for ${selected.prospect_name}. Still need ${[...(!targetChoice.target?['exact unit and bed']:[]),...missing.map(k=>labels[k]||k)].join(', ')}. Reply "Terms: ..." with just those details. Nothing was offered or sent.`, 'application_terms_partial',object);
@@ -775,16 +788,24 @@ function makeStaffLeasingAction({
             where lc.id=$1 and lc.property_id=$2 and lc.status='active' and o.status='open' and o.assigned_user_id=$3 for update of lc`,
             [selected.conversion_id,propertyId,userId])).rows[0];
           if(!scoped) throw new ConversationalActionError(409,'application_terms_scope_changed','This application follow-up is no longer assigned to you. Nothing was offered or sent.');
-          return prepareApplicationOffer(client,{...values,
+          const prepared=await prepareApplicationOffer(client,{...values,
             actor:{id:userId,property_id:propertyId},person_id:selected.person_id,space_id:targetChoice.target.space_id,
             idempotency_key:`staff-terms:${recorded.inbound.id}`,create_only:true,
             source_comm_event_ids:[...prior.map(h=>h.id),recorded.inbound.id]});
+          const target=await applicationTargetAuthority.resolveApplicationTarget(client,{
+            property_id:propertyId,space_id:prepared.offer.space_id,
+            intended_move_in:prepared.application_terms.lease_start_date,
+            requested_end:prepared.application_terms.lease_end_date,
+          });
+          if(!target.ok) throw new ConversationalActionError(target.httpStatus||409,target.refusal_code,target.refusal_reason);
+          return prepared;
         });
       } catch(error) {
         const message=error.code==='APPLICATION_OFFER_ALREADY_EXISTS'
           ? 'An application offer already exists. Ask to send that offer, or review it before revising the terms.'
           : error.code==='NO_APPLICATION_OFFER_AUTHORITY'
           ? 'Your assignment cannot set application pricing. An authorized pricing owner must establish these terms.'
+          : error instanceof ConversationalActionError ? error.publicMessage
           : 'These terms could not be established. Review the amounts, dates and governed charges.';
         return refuse(`${message} Your text is retained; nothing was sent.`,'application_terms_refused',object);
       }

@@ -135,3 +135,6 @@ and owned disposable proof receipts. Update `CURRENT_STATE.md` and the board onl
 with evidence actually rerun. This document is a handoff aid; it does not claim
 that GitHub has been updated, a deployment occurred, or any external action is
 complete.
+# Latest continuation: phone terms and readiness
+
+The continuation after API19c8416 fixes phone-authored terms ignoring the prospect's dates when checking a future turn. The existing dated authority is reused; focused HTTP50 and full phone-origin journey162 pass, with54 source gates and owned cleanup verified. See ../desktop-qb-20260906/tenant-journey/PHONE_TERMS_DATES.md and the branch tip's CURRENT_STATE. Exact-space governed-price matching and Claude's prospective-turn investigation remain open. Earlier checkpoint hashes below are history; this is not a deployment.

@@ -658,9 +658,20 @@ async function waitForStaffReply(providerMessageId) {
     expect((await q("select count(*)::int n from lease_offers where person_id=(select person_id from leasing_conversions where id=$1)",[completed.conversion_id])).rows[0].n===before,'unauthorized terms create no offer');
     // Existing server-established pricing authority, not client role claims.
     await q('update property_team_assignments set can_manage_roles=true where user_id=$1 and property_id=$2',[mike.id,propertyId]);
+    // Synthetic recorded future readiness, only in this owned database. Planning
+    // is not exercised here: no move-out writer or possession fact is asserted.
+    const phoneTurn=(await q("insert into turnovers(property_id,unit_id,status,ready_date) values($1,$2,'in_progress',$3) returning id",[propertyId,unit.id,dates.start])).rows[0];
+    const tooEarly=new Date(Date.parse(dates.start+'T00:00:00Z')-86400000).toISOString().slice(0,10);
+    const earlySid=`SM_PHONE_TERMS_EARLY_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:earlySid,
+      body:`Terms for ${name}, Unit 3B Bed B: rent 1025; deposit 0; start ${tooEarly}; end ${dates.end}; fees none; concessions none`});
+    const early=await waitForStaffReply(earlySid);
+    expect((await q("select count(*)::int n from lease_offers where person_id=(select person_id from leasing_conversions where id=$1)",[completed.conversion_id])).rows[0].n===before,'phone terms before recorded readiness create no offer');
+    expect(/ready|readiness/i.test(early.body)&&!/Still need.*exact unit/.test(early.body),'phone explains readiness refusal instead of losing the named bed',early.body);
+    expect((await q('select count(*)::int n from application_invitations where conversion_id=$1',[completed.conversion_id])).rows[0].n===0,'refused dated terms create no invitation');
     const completeSid=`SM_PHONE_TERMS_COMPLETE_${suffix}`;
     await sendStaffSms({from:mikePhone,to:operationsLine,sid:completeSid,
-      body:`Terms: deposit 0; end ${dates.end}; fees none; concessions none`});
+      body:`Terms: deposit 0; start ${dates.start}; end ${dates.end}; fees none; concessions none`});
     const complete=await waitForStaffReply(completeSid);
     expect(/Offer prepared/.test(complete.body)&&/\$1,025.00/.test(complete.body)&&/\$0.00/.test(complete.body)
       && complete.body.includes(dates.start)&&complete.body.includes(dates.end),'phone continuation preserves prior rent/date and displays all complete terms',complete.body);
@@ -673,6 +684,7 @@ async function waitForStaffReply(providerMessageId) {
     expect((await q("select count(*)::int n from lease_offers where person_id=(select person_id from leasing_conversions where id=$1)",[completed.conversion_id])).rows[0].n===before+1,
       'another terms statement cannot silently create a competing draft');
     if(process.env.PROOF_PHONE_FULL==='1') {
+      await q('delete from turnovers where id=$1',[phoneTurn.id]);
       const rows=(await q("select id from lease_offers where person_id=(select person_id from leasing_conversions where id=$1) and source='application_proposal'",[completed.conversion_id])).rows;
       expect(rows.length===1,'one phone-authored offer enters the complete tenant journey');
       phoneOffer={application_offer_id:rows[0].id};
@@ -687,7 +699,8 @@ async function waitForStaffReply(providerMessageId) {
     const bound=(await q(`select inv.application_offer_id,lo.offered_terms_snapshot from application_invitations inv
       join lease_offers lo on lo.id=inv.application_offer_id where inv.conversion_id=$1`,[completed.conversion_id])).rows;
     expect(bound.length===1&&bound[0].offered_terms_snapshot.application_terms.rent==='1025.00'
-      &&bound[0].offered_terms_snapshot.application_terms.security_deposit==='0.00','invitation retains the exact phone-authored terms including zero');
+      &&bound[0].offered_terms_snapshot.application_terms.security_deposit==='0.00'
+      &&bound[0].offered_terms_snapshot.application_terms.target.space_id===bedB.id,'invitation retains the exact bed and phone-authored terms including zero');
     console.log('PHONE_TERMS_HTTP_PASSED');
     return;
     }
