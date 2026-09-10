@@ -208,6 +208,22 @@ const {gatherFacts} = require('../../src/agent/ask_spine_answer');
       required_work:[{work_text:'Wrong property work',scope_kind:'rentable_space',space_id:foreign.id}]});
     assert.equal(badScope.status,400,'shared target validation refuses cross-property detailed work');
     assert.equal((await one('select count(*)::int n from unit_turn_scopes where unit_id=$1',[unit.id])).n,scopeCount,'bad target does not create partial scope');
+    const otherTriage=await request(`/operator/units/${samePropertyUnit.id}/triage/confirm`,{...base,required_work:[]});
+    assert.equal(otherTriage.status,201);
+    const crossScope=await request(`/operator/units/${samePropertyUnit.id}/turn-scope/confirm`,{
+      triage_confirmation_id:otherTriage.body.confirmation.id,paint_level:'unknown',cleaning_level:'unknown',keys_status:'unknown',inspection_completeness:'partial',required_work:[],
+      supersedes_id:plannedWork.body.scope.id,correction_reason:'Must not supersede another unit work'});
+    assert.equal(crossScope.status,400,'detailed correction cannot supersede another unit scope');
+    assert.equal((await one('select status from unit_triage_required_work where id=$1',[plannedRow.id])).status,'required','refused correction cannot withdraw another unit work');
+    assert.equal((await one('select count(*)::int n from unit_turn_scopes where unit_id=$1',[samePropertyUnit.id])).n,0,'cross-unit correction creates no partial scope');
+    const correctedScope=await request(`/operator/units/${unit.id}/turn-scope/confirm`,{
+      triage_confirmation_id:correction.body.confirmation.id,paint_level:'unknown',cleaning_level:'unknown',keys_status:'unknown',inspection_completeness:'partial',
+      required_work:[{work_text:'Corrected carpet target',stage:'repair',scope_kind:'rentable_space',space_id:sibling.id}],
+      supersedes_id:plannedWork.body.scope.id,correction_reason:'Correct the recorded work location'});
+    assert.equal(correctedScope.status,201,'same-unit scope correction remains available');
+    assert.equal(correctedScope.body.scope.supersedes_id,plannedWork.body.scope.id);
+    assert.equal(correctedScope.body.required_work[0].space_id,sibling.id,'successor work records corrected target');
+    assert.deepEqual(await one('select status,space_id from unit_triage_required_work where id=$1',[plannedRow.id]),{status:'superseded',space_id:bed.id},'superseded work retains its original target');
     assert.deepEqual((await spacePosition(pool,{property_id:property.id})).positions.find(p=>p.space_id===sibling.id).current_possession,possessionBefore,'advance planning preserves sibling possession');
     console.log('TRIAGE_WORK_SCOPE_HTTP_PASSED');
   } finally { await pool.end(); }

@@ -209,6 +209,14 @@ function makeUnitTurnScopeService(deps) {
         { httpStatus: 403 });
     }
 
+    if (supersedes_id) {
+      if (typeof supersedes_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(supersedes_id))
+        throw bad('invalid correction predecessor');
+      const prior = (await client.query(
+        'select id from unit_turn_scopes where id=$1 and unit_id=$2 and property_id=$3',
+        [supersedes_id,unit_id,property_id])).rows[0];
+      if (!prior) throw bad('correction predecessor must belong to this unit and property');
+    }
     const workTargets = await validateWorkTargets(client,{required_work,unit_id});
 
     // 1) the scope

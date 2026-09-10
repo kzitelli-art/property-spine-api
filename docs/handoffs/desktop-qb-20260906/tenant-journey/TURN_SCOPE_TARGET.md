@@ -13,3 +13,11 @@ App turn_scope_identity_app.test.js runs real Chrome with controlled API replies
 No schema beyond the preceding migration194 was added. Expected-ready projection, incomplete inspection/access, changing commitments and exact-term leasing rights remain the next connection under investigation. Preserving the target does not make task deadlines readiness. Claude's independent readiness evidence remains a separate lane; give it the new source head before integrating recommendations. Desktop QB retains integration ownership; HP setup/review only.
 
 Final source verification: all54 source-governance gates passed after owned runtime cleanup; no product changes followed.
+
+## Adjacent correction repair
+
+Subsequent inspection at API18380e07ccdfd0938c5baa6ace9d089a3a858169 found that detailed-scope correction checked the new unit's triage but not the predecessor scope. Owned HTTP first red accepted another unit's scope with201. The canonical service now requires its correction predecessor to share the current unit/property before any scope or work write. No change to the existing correction lifecycle was needed.
+
+The successor owned HTTP proof passed: cross-unit correction refuses400 and creates no partial scope or withdrawal; an attributed same-unit correction creates new work with its corrected bed and supersedes the old work while retaining its original bed identity. Canonical sibling possession remains unchanged. Both owned runtimes were cleaned. The app is unchanged at bf86a7760ea5908a18fcf309ec4ef605c114a1c5; its earlier combined browser/HTTP proof is not claimed as a rerun of this backend correction guard. API18380e0 full CI34485833714 succeeded before this follow-up; the final successor CI must be checked separately.
+
+Final correction verification: all54 source-governance gates passed after successor cleanup.
