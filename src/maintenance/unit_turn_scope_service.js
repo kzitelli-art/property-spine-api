@@ -34,6 +34,7 @@ const {
   PAINT, CLEANING, KEYS, INSPECTION,
 } = require("./turn_scope_interpreter");
 const { computeTurnFlow, turnExceptions, STAGE_VALUES } = require("./turn_sequence");
+const { validateWorkTargets, workScopeLabel } = require('./unit_triage_service');
 
 const OBLIGATION_TYPES = Object.freeze({
   COMPLETE_SCOPE: "complete_turn_scope",
@@ -208,6 +209,8 @@ function makeUnitTurnScopeService(deps) {
         { httpStatus: 403 });
     }
 
+    const workTargets = await validateWorkTargets(client,{required_work,unit_id});
+
     // 1) the scope
     const scope = (await client.query(
       `insert into unit_turn_scopes
@@ -260,13 +263,16 @@ function makeUnitTurnScopeService(deps) {
       const row = (await client.query(
         `insert into unit_triage_required_work
            (finding_id, confirmation_id, turn_scope_id, property_id, unit_id, work_text, origin,
-            stage, disturbs_painted_surfaces)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
+            stage, disturbs_painted_surfaces, scope_kind, space_id)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,
         [linked, triage_confirmation_id, scope.id, property_id, unit_id,
          String(w.work_text).trim(), w.origin === "operator_added" ? "operator_added" : "proposed",
          w.stage || null,
-         w.disturbs_painted_surfaces === undefined ? null : w.disturbs_painted_surfaces]
+         w.disturbs_painted_surfaces === undefined ? null : w.disturbs_painted_surfaces,
+         w.scope_kind === undefined ? 'unspecified' : w.scope_kind, w.space_id || null]
       )).rows[0];
+      row.space_label = workTargets.get(row.space_id)?.space_label || null;
+      row.scope_label = workScopeLabel(row);
       workRows.push(row);
     }
 
@@ -412,8 +418,9 @@ function makeUnitTurnScopeService(deps) {
     //  confirmation authored them, and a flow that ignored them would be the
     //  seam this correction closes.
     const allOpen = (await client.query(
-      "select * from unit_triage_required_work where unit_id=$1 and status='required'",
+      "select w.*, s.space_label from unit_triage_required_work w left join spaces s on s.id=w.space_id where w.unit_id=$1 and w.status='required'",
       [unit_id])).rows;
+    allOpen.forEach(w=>{w.scope_label=workScopeLabel(w);});
     const flow = computeTurnFlow({ scope, work: allOpen });
 
     return {
@@ -434,16 +441,18 @@ function makeUnitTurnScopeService(deps) {
   //  work they were never shown.
   async function inheritedWork(db, { unit_id }) {
     const rows = (await db.query(
-      `select id, work_text, stage, status, stage_decision_required, stage_decision_note, created_at
-         from unit_triage_required_work
-        where unit_id = $1 and status = 'required'
-        order by created_at asc`, [unit_id])).rows;
+      `select w.id, w.work_text, w.stage, w.status, w.stage_decision_required, w.stage_decision_note, w.created_at,
+              w.scope_kind,w.space_id,s.space_label
+         from unit_triage_required_work w left join spaces s on s.id=w.space_id
+        where w.unit_id = $1 and w.status = 'required'
+        order by w.created_at asc`, [unit_id])).rows;
     const unplaced = rows.filter((r) => !r.stage);
     return {
       count: rows.length,
       needs_decision: unplaced.length,
       items: unplaced.map((r) => ({
         work_id: r.id, work_text: r.work_text,
+        scope_kind:r.scope_kind,space_id:r.space_id,scope_label:workScopeLabel(r),
         stage_decision_required: r.stage_decision_required,
         stage_decision_note: r.stage_decision_note,
       })),
@@ -480,8 +489,9 @@ function makeUnitTurnScopeService(deps) {
 
     // ALL work for the unit, including BUILD 1 unstaged rows. One work list.
     const work = (await db.query(
-      `select w.*, o.assigned_user_id as owner_user_id, usr.name as owner_name
+      `select w.*, s.space_label, o.assigned_user_id as owner_user_id, usr.name as owner_name
          from unit_triage_required_work w
+         left join spaces s on s.id=w.space_id
          left join lateral (
            select ob.assigned_user_id from obligations ob
             where ob.related_type in ('unit_turn_scope','unit_triage_confirmation')
@@ -500,6 +510,7 @@ function makeUnitTurnScopeService(deps) {
       ? (await db.query("select * from unit_triage_findings where turn_scope_id=$1 and withdrawn_at is null order by created_at asc", [scope.id])).rows
       : [];
 
+    work.forEach(w=>{w.scope_label=workScopeLabel(w);});
     const flow = computeTurnFlow({ scope, work });
 
     return {

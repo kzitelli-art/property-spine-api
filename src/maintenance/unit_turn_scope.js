@@ -141,6 +141,7 @@ module.exports = function unitTurnScope(deps) {
       res.json({
         unit: { id: u.id, unit_number: u.unit_number },
         you_reported: b.repairs_text || "",
+        work_targets: (await pool.query('select id as space_id,space_label from spaces where unit_id=$1 order by space_label,id',[u.id])).rows,
         proposal,
         next_move_in: nextMoveIn,
         proposal_is_not_truth:

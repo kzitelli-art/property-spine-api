@@ -136,6 +136,14 @@ const {gatherFacts} = require('../../src/agent/ask_spine_answer');
           }
           if(action==='walks') out=await request('/operator/unit-triage/open-walks');
           if(action==='risk') out=await request('/operator/unit-triage/risk');
+          if(action==='scopeContext') out=await request(`/operator/units/${args.unitId}/turn-scope/context`);
+          if(action==='scopePropose'||action==='scopeConfirm') {
+            const {unitId,...body}=args;
+            out=await request(`/operator/units/${unitId}/turn-scope/${action==='scopePropose'?'propose':'confirm'}`,body);
+            if(action==='scopeConfirm') captured=out;
+          }
+          if(action==='scopeFlow') out=await request(`/operator/units/${args.unitId}/turn-flow`);
+          if(action==='scopeExceptions') out=await request('/operator/turn-scope/exceptions');
           if(out.status>=400) throw new Error(JSON.stringify(out));
           return {data:out.body};
         });
@@ -158,9 +166,49 @@ const {gatherFacts} = require('../../src/agent/ask_spine_answer');
         assert.equal(browserWork.space_id,bed.id,'browser-selected bed reaches durable work');
         const persisted=await one('select space_id,scope_kind from unit_triage_required_work where id=$1',[browserWork.id]);
         assert.deepEqual(persisted,{space_id:bed.id,scope_kind:'rentable_space'});
+        await page.setContent('<main id="psTurnScopeCapture"></main><main id="psTurnFlow"></main>');
+        await page.evaluate(()=>{Object.assign(window.__psLive,{
+          turnScopeContext:a=>window.ownedTriageRequest('scopeContext',a),
+          proposeTurnScope:a=>window.ownedTriageRequest('scopePropose',a),
+          confirmTurnScope:a=>window.ownedTriageRequest('scopeConfirm',a),
+          unitTurnFlow:a=>window.ownedTriageRequest('scopeFlow',a),
+          turnScopeExceptions:()=>window.ownedTriageRequest('scopeExceptions')});});
+        await page.addScriptTag({path:path.join(process.env.PSPINE_APP_ROOT,'turn-scope-door.js')});
+        await page.locator('#tsUnit').fill(unit.id);await page.locator('#tsLoad').click();
+        await page.locator('#tsRepairs').fill('Bathroom faucet leaks');
+        await page.locator('#tsPropose').click();
+        await page.locator('.ut-work-scope').first().selectOption('space:'+bed.id);
+        await page.locator('#tsConfirm').click();
+        await page.waitForFunction(()=>window.__psTurnScope._state.receipt!==null);
+        assert.equal(captured.status,201,'detailed scope browser uses real writer');
+        assert.equal(captured.body.required_work[0].space_id,bed.id,'detailed scope browser retains target');
+        await page.waitForFunction(()=>document.querySelector('#psTurnFlow').textContent.includes('Bed A'));
+        console.log('TURN_SCOPE_BROWSER_HTTP_PASSED');
         console.log('TRIAGE_WORK_SCOPE_BROWSER_HTTP_PASSED');
       } finally {await browser.close();}
     }
+    const plannedWork = await request(`/operator/units/${unit.id}/turn-scope/confirm`,{
+      triage_confirmation_id:correction.body.confirmation.id,
+      original_text:'Partial advance inspection; only Bed A carpet is in this work item.',
+      paint_level:'unknown',cleaning_level:'unknown',keys_status:'unknown',inspection_completeness:'partial',
+      required_work:[{work_text:'Bed A carpet planning',stage:'repair',scope_kind:'rentable_space',space_id:bed.id}],
+    });
+    assert.equal(plannedWork.status,201,JSON.stringify(plannedWork));
+    const plannedRow = await one('select * from unit_triage_required_work where id=$1',[plannedWork.body.required_work[0].id]);
+    assert.equal(plannedRow.space_id,bed.id,'advance scope writer preserves explicit bed target');
+    assert.equal(plannedRow.scope_kind,'rentable_space');
+    const plannedFlow=await request(`/operator/units/${unit.id}/turn-flow`);
+    assert.equal(plannedFlow.status,200);
+    const flowWork=plannedFlow.body.flow.items.find(w=>w.work_id===plannedRow.id);
+    assert.equal(flowWork.space_id,bed.id,'sequence forwards work identity without reinterpreting it');
+    assert.equal(flowWork.scope_label,'Bed A');
+    const scopeCount=(await one('select count(*)::int n from unit_turn_scopes where unit_id=$1',[unit.id])).n;
+    const badScope=await request(`/operator/units/${unit.id}/turn-scope/confirm`,{
+      triage_confirmation_id:correction.body.confirmation.id,paint_level:'unknown',cleaning_level:'unknown',keys_status:'unknown',inspection_completeness:'partial',
+      required_work:[{work_text:'Wrong property work',scope_kind:'rentable_space',space_id:foreign.id}]});
+    assert.equal(badScope.status,400,'shared target validation refuses cross-property detailed work');
+    assert.equal((await one('select count(*)::int n from unit_turn_scopes where unit_id=$1',[unit.id])).n,scopeCount,'bad target does not create partial scope');
+    assert.deepEqual((await spacePosition(pool,{property_id:property.id})).positions.find(p=>p.space_id===sibling.id).current_possession,possessionBefore,'advance planning preserves sibling possession');
     console.log('TRIAGE_WORK_SCOPE_HTTP_PASSED');
   } finally { await pool.end(); }
 })().catch(error => { console.error(error); process.exitCode=1; });

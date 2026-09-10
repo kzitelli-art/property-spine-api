@@ -43,6 +43,30 @@ function workScopeLabel(work) {
   return 'Location not established';
 }
 
+// Shared by the existing triage and detailed-scope writers. Both have already
+// checked their unit against the authenticated property before this validation.
+async function validateWorkTargets(client, { required_work, unit_id }) {
+  const bad = message => Object.assign(new Error(message),{httpStatus:400});
+  const targets = new Map();
+  for (const w of required_work) {
+    if (!w || !w.work_text || !String(w.work_text).trim()) continue;
+    const kind = w.scope_kind === undefined ? 'unspecified' : w.scope_kind;
+    if (!['unspecified','unit_wide','rentable_space'].includes(kind)) throw bad('invalid work scope_kind');
+    if (kind !== 'rentable_space') {
+      if (w.space_id != null) throw bad('space_id requires rentable_space work scope');
+      continue;
+    }
+    if (typeof w.space_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(w.space_id))
+      throw bad('a valid space_id is required for rentable_space work');
+    const target = (await client.query(
+      'select id, space_label from spaces where id=$1 and unit_id=$2 for key share',
+      [w.space_id,unit_id])).rows[0];
+    if (!target) throw bad('work target is not a space in this unit');
+    targets.set(target.id,target);
+  }
+  return targets;
+}
+
 // ── READINESS VOCABULARY ────────────────────────────────────────────
 //  `ready` is deliberately ABSENT. A first walk cannot prove a unit is
 //  ready, so this service cannot express it. Final readiness confirmation is
@@ -303,23 +327,7 @@ function makeUnitTriageService(deps) {
 
     // Explicit target only. Resolve membership before any observation or work
     // write; the caller's transaction preserves all-or-nothing confirmation.
-    const workTargets = new Map();
-    for (const w of required_work) {
-      if (!w || !w.work_text || !String(w.work_text).trim()) continue;
-      const kind = w.scope_kind === undefined ? 'unspecified' : w.scope_kind;
-      if (!['unspecified','unit_wide','rentable_space'].includes(kind)) throw bad('invalid work scope_kind');
-      if (kind !== 'rentable_space') {
-        if (w.space_id != null) throw bad('space_id requires rentable_space work scope');
-        continue;
-      }
-      if (typeof w.space_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(w.space_id))
-        throw bad('a valid space_id is required for rentable_space work');
-      const target = (await client.query(
-        'select id, space_label from spaces where id=$1 and unit_id=$2 for key share',
-        [w.space_id,unit_id])).rows[0];
-      if (!target) throw bad('work target is not a space in this unit');
-      workTargets.set(target.id,target);
-    }
+    const workTargets = await validateWorkTargets(client,{required_work,unit_id});
 
     // 1) the attributed observation — verbatim, never edited
     const obs = (await client.query(
@@ -591,4 +599,4 @@ function makeUnitTriageService(deps) {
   };
 }
 
-module.exports = { makeUnitTriageService, deriveReadiness, workScopeLabel, READINESS, OBLIGATION_TYPES };
+module.exports = { makeUnitTriageService, deriveReadiness, workScopeLabel, validateWorkTargets, READINESS, OBLIGATION_TYPES };
