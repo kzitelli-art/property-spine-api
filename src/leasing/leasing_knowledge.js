@@ -10,6 +10,47 @@ const TOPICS = Object.freeze({
   neighborhood: "Neighborhood", leasing_faq: "Common questions",
   move_in_guidance: "Moving in",
 });
+// One reusable onboarding checklist over the existing canonical facts. These
+// prompts gather descriptive knowledge; they do not establish other domains.
+const CHECKLIST = Object.freeze([
+  { fact_key: "leasing_highlights", prompts: ["What are the strongest reasons to choose this building?", "What tradeoffs should prospects understand?"], owner_notice: "Record supported descriptions; avoid guarantees or unsupported comparisons." },
+  { fact_key: "amenities", prompts: ["Which amenities and furniture are included?", "What are their hours, access procedures and limitations?"], owner_notice: "Costs belong in governed charges. Operational instructions and exceptions belong in the existing policies and SOPs." },
+  { fact_key: "layouts", prompts: ["Which apartment and bedroom layouts exist?", "Which homes have different bathrooms, balconies or other features?"], owner_notice: "Physical inventory owns exact home identities. Describe distinctions without inferring an apartment-to-layout match." },
+  { fact_key: "dimensions", prompts: ["Which room, closet and bed measurements have been verified?", "Does each measurement describe a whole apartment or an individual room?"], owner_notice: "Keep unmeasured dimensions unknown; identify the measured home and source." },
+  { fact_key: "photos", prompts: ["Where are the approved public photos?", "Which homes do they show, and which are renderings or model photos?"], owner_notice: "Share public links only; representative photos do not prove a particular home's condition." },
+  { fact_key: "floor_plans", prompts: ["Where are the approved public floor plans?", "Which layout or actual home does each plan show?"], owner_notice: "Do not infer exact-home associations or measurements from a representative plan." },
+  { fact_key: "virtual_tours", prompts: ["Where are the Matterports or other virtual tours?", "Which actual homes or representative layouts do they show?"], owner_notice: "Virtual-tour media is separate from bookable appointments, which remain in the native tour schedule." },
+  { fact_key: "neighborhood", prompts: ["Which groceries, cafes, restaurants and transit options do staff recommend, and why?", "What practical directions or local tips are supported?"], owner_notice: "Attribute subjective recommendations; do not promise safety or make unsupported travel-time claims." },
+  { fact_key: "leasing_faq", prompts: ["What recurring descriptive questions do prospects ask?", "Which answers need a staff follow-up or supporting document?"], owner_notice: "Prices, availability, qualification rules and policy decisions remain with their existing canonical owners; do not restate them as competing FAQ authority." },
+  { fact_key: "move_in_guidance", prompts: ["Where should residents go for keys, unloading and the move-in inspection?", "What arrival instructions and contact details have been confirmed?"], owner_notice: "Lease deadlines, money due and policy exceptions come from the lease, governed charges and operating rules." },
+].map(item => Object.freeze({ ...item, title: TOPICS[item.fact_key], prompts: Object.freeze(item.prompts) })));
+
+function asTime(now) {
+  const time = new Date(now).getTime();
+  if (!Number.isFinite(time)) throw new Error("Knowledge coverage requires a valid as-of date.");
+  return time;
+}
+function selectCurrentFacts(facts, now = new Date()) {
+  const time = asTime(now);
+  return facts.filter(row => row.space_id == null && row.status === "active"
+    && (row.effective_until == null || new Date(row.effective_until).getTime() > time));
+}
+function buildCoverage(facts, now = new Date()) {
+  const time = asTime(now);
+  const currentRows = selectCurrentFacts(facts, time);
+  const items = CHECKLIST.map(topic => {
+    const rows = facts.filter(row => row.space_id == null && row.fact_key === topic.fact_key);
+    const current = currentRows.find(row => row.fact_key === topic.fact_key) || null;
+    const expired = rows.some(row => row.status === "active" && row.effective_until != null
+      && new Date(row.effective_until).getTime() <= time);
+    const state = current ? "current" : expired ? "expired" : rows.some(row => row.status === "retired") ? "retired" : "missing";
+    return { ...topic, state, current, history: rows.filter(row => row !== current) };
+  });
+  const counts = { total: items.length, current: 0, missing: 0, expired: 0, retired: 0 };
+  for (const item of items) counts[item.state]++;
+  return { contract_version: "leasing_knowledge_coverage_v1", as_of: new Date(time).toISOString(), counts, items,
+    note: "Coverage counts topics with current wording, not verified completeness. Confirmation and expiry dates do not establish a review schedule." };
+}
 const MATCHES = [
   ["leasing_highlights", /\b(highlights?|selling points?|what makes .+ special)\b/i],
   ["amenities", /\b(amenit(?:y|ies)|laundry|furnish(?:ed|ing|ings)|roof deck|courtyard|packages?|balcon(?:y|ies))\b/i],
@@ -76,4 +117,4 @@ async function answer(db, { property_id, allowed_modules, question }) {
     references: selected.flatMap(r => safeLinks(r.rendered_text).map(url => ({ kind: "leasing_knowledge_link", label: TOPICS[r.fact_key], url }))),
   };
 }
-module.exports = { TOPICS, topicsFor, isSelfRead, isKnowledgeRead, readActive, safeLinks, answer };
+module.exports = { TOPICS, CHECKLIST, selectCurrentFacts, buildCoverage, topicsFor, isSelfRead, isKnowledgeRead, readActive, safeLinks, answer };

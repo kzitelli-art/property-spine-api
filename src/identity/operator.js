@@ -483,14 +483,17 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     res.set("Cache-Control", "no-store");
     try {
       const rows = (await pool.query(
-        `select id, fact_key, category, rendered_text, source_type, source_record_id,
+        `select id, space_id, fact_key, category, rendered_text, source_type, source_record_id,
                 confirmed_at, effective_until, status, approved_by_user_id, created_at
            from agent_facts where property_id=$1
           order by status asc, fact_key asc, created_at desc`,
         [req.operator.property_id]
       )).rows;
+      const now = new Date();
       return res.json({ property_id: req.operator.property_id, facts: rows,
-        topics: leasingKnowledge.TOPICS, current: await leasingKnowledge.readActive(pool, req.operator.property_id) });
+        topics: leasingKnowledge.TOPICS, checklist: leasingKnowledge.CHECKLIST,
+        current: leasingKnowledge.selectCurrentFacts(rows, now),
+        coverage: leasingKnowledge.buildCoverage(rows, now) });
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
 
