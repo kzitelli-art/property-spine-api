@@ -22,8 +22,8 @@ At inspection, the named branches and their checked-out commit heads were:
 
 These are named branches, not detached worktrees. Do not infer acceptance from
 either inspected HEAD: the dirty working files are part of the current review.
-Root will create the final handoff branches `codex/new-hp-handoff-20260909` in
-both repositories. Final hashes belong in the forthcoming `CHECKPOINT.md`; do
+Root created the handoff branches `codex/new-hp-handoff-20260909` in
+both repositories. Final product hashes are in `CHECKPOINT.md`; do
 not copy the inspected heads into that role. Do not clean, reset, stash, rebase,
 merge, or overwrite the current dirty work.
 
@@ -90,8 +90,8 @@ deployment, broad language, structured fees/concessions, phone revisions,
 concurrent partial updates, hostile multi-application short confirmations, and
 production readiness remain unproved.
 
-The current work is newer than that receipt: root is repairing the existing
-`application_target_read` handling for excluded targets while also repairing app
+The exclusion repair is newer than that receipt: root repaired the existing
+`application_target_read` handling for excluded targets and app
 rendering. Preserve the existing canonical reader and authorization boundaries;
 do not add a parallel matcher, exclusion store, or browser-only truth. Reproduce
 the current first red before editing, then run the successor and adjacent
