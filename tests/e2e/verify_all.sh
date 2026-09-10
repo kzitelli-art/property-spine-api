@@ -242,6 +242,8 @@ else
   fi
   step "invite-to-guarantor lease"  env E2E_DISPOSABLE_DATABASE=true node tests/e2e/tour_application_lease.e2e.js
   step "turnover sibling occupancy" node tests/proofs/turnover_sibling_cache.db.js
+  step "required work standing" node tests/unit/required_work_standing.test.js
+  step "required work target" node tests/proofs/triage_work_scope.db.js
   step "legacy decision writes closed" node tests/e2e/legacy_decision_writes_disabled.e2e.js
   stop_owned_server || exit 1
 fi
