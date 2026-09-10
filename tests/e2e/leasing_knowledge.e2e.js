@@ -18,6 +18,9 @@ async function main(){
     let r=await api('POST','/operator/agent-facts',{fact_key:'virtual_tours',rendered_text:text,source_type:'verified_operator_confirmation'});assert.equal(r.status,200,JSON.stringify(r));const fact=r.data.fact.id;
     assert.equal(r.data.fact.approved_by_user_id,user);assert.equal(r.data.fact.property_id,props[0]);
     r=await api('GET','/operator/agent-facts');assert.equal(r.data.current.find(f=>f.id===fact).rendered_text,text);
+    assert.equal(r.data.coverage.counts.current,1);assert.equal(r.data.coverage.counts.missing,9);
+    assert.equal(r.data.coverage.items.find(i=>i.fact_key==='virtual_tours').current.id,fact);
+    r=await api('GET','/operator/agent-facts',null,tokens[1]);assert.equal(r.data.coverage.counts.missing,10);assert.equal(r.data.facts.length,0);
     r=await api('POST','/operator/ask-spine/message',{message:'send me Skyline Matterport'});assert.equal(r.data.outcome,'answered',JSON.stringify(r));assert.match(r.data.answer,/M7Lgne1gA72/);
     r=await api('POST','/operator/ask-spine/message',{message:'send me Matterport'},tokens[1]);assert.equal(r.data.outcome,'not_established');assert.doesNotMatch(r.data.answer,/M7Lgne1gA72/);
     r=await api('POST',`/operator/agent-facts/${fact}/replace`,{fact_key:'virtual_tours',rendered_text:'Wrong property',source_type:'verified_operator_confirmation'},tokens[1]);assert.equal(r.status,403);
@@ -33,11 +36,13 @@ async function main(){
     assert.ok(reply,'staff webhook must record a reply');assert.match(reply.body,/3bM9GESQ7o2/);assert.doesNotMatch(reply.body,/M7Lgne1gA72/);
     r=await api('POST','/operator/agent-facts',{fact_key:'amenities',rendered_text:'Expired amenity',source_type:'verified_operator_confirmation',effective_until:'2020-01-01T00:00:00Z'});assert.equal(r.status,200);
     r=await api('POST','/operator/ask-spine/message',{message:'does Skyline have laundry?'});assert.equal(r.data.outcome,'not_established');
+    r=await api('GET','/operator/agent-facts');assert.equal(r.data.coverage.items.find(i=>i.fact_key==='amenities').state,'expired');assert.equal(r.data.coverage.counts.current,1);
     await q("update property_team_assignments set allowed_modules=ARRAY['maintenance'] where user_id=$1 and property_id=$2",[user,props[1]]);
     r=await api('POST','/operator/ask-spine/message',{message:'show photos'},tokens[1]);assert.equal(r.data.outcome,'not_authorized');
     r=await api('GET','/operator/agent-facts',null,tokens[1]);assert.equal(r.status,403);
     r=await api('POST',`/operator/agent-facts/${replacement}/retire`,{});assert.equal(r.status,200);
     r=await api('POST','/operator/ask-spine/message',{message:'send me Matterport'});assert.equal(r.data.outcome,'not_established');
+    r=await api('GET','/operator/agent-facts');const tourCoverage=r.data.coverage.items.find(i=>i.fact_key==='virtual_tours');assert.equal(tourCoverage.state,'retired');assert.equal(tourCoverage.history.length,2);assert.equal(r.data.coverage.counts.current,0);
     // Local-only handoff to the browser proof. Never print bearer tokens.
     fs.writeFileSync(path.join(path.dirname(process.env.E2E_PROOF_MANIFEST),'knowledge-browser-session.json'),JSON.stringify({token:tokens[0],user_id:user,property_id:props[0],base}),{mode:0o600});
     console.log('PASS full server HTTP writer/read, prospect context, staff SMS webhook/reply, cross-property refusal, live entitlement, expiry, replacement and retirement');

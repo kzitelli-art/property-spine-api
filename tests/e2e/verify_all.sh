@@ -83,6 +83,7 @@ step "proof boundary refusal checks" node tests/e2e/proof_boundary.test.js
 step "source governance gates"   node tests/verify_source_governance.js
 step "next-action oracle"        node src/shared/proof_next_action_resolver.js
 step "application review actions" node tests/unit/application_review_action_contract.test.js
+step "leasing knowledge coverage" node tests/unit/leasing_knowledge_coverage.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
 step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js
 step "availability occupancy basis" node --test tests/unit/availability_occupancy_basis.test.js
