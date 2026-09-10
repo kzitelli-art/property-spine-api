@@ -3,6 +3,8 @@
 
 "use strict";
 
+const { spacePosition } = require('../tenancy/space_position');
+
 const GATES = Object.freeze(["moveout_photos", "deposit_review"]);
 
 const serviceError = (httpStatus, code, message, extra = {}) =>
@@ -201,10 +203,15 @@ function makeTurnoverService(deps) {
       moveOutNote = "No outgoing_lease_id - turn only; no possession-end event.";
     }
 
-    // Compatibility cache only. The unit event above remains possession truth.
+    // A bed's move-out cannot vacate a sibling whose possession remains live.
+    // Reuse the canonical as-of reader, including its correction/date handling;
+    // this compatibility label does not establish rentable-space availability.
+    const positions = await spacePosition(client, { property_id: unit.property_id });
+    const stillPossessed = positions.positions.some(position =>
+      String(position.unit_id) === String(unit_id) && position.current_possession);
     await client.query(
-      "update units set occupancy_status='vacant', updated_at=now() where id=$1",
-      [unit_id]
+      "update units set occupancy_status=$2, updated_at=now() where id=$1",
+      [unit_id, stillPossessed ? 'occupied' : 'vacant']
     );
     const updatedUnit = (await client.query(
       "select id, unit_number, occupancy_status, operating_use, is_down from units where id=$1",
