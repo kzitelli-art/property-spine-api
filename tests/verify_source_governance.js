@@ -127,6 +127,8 @@ const GATES = [
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery
   //  receipt cannot be collapsed into one claim.
+  { file: "unit/prospect_vitals_failure.test.js",
+    what: "prospect preferences: failed lookup is not empty or legacy fallback" },
   { file: "unit/conversation_intent_extraction.test.js",
     what: "intent seam: one implementation, transport-independent, behaviour pinned" },
   { file: "unit/conversation_clarification_and_receipt.test.js",
@@ -146,6 +148,9 @@ const GATES = [
     what: "Ask Spine attention: one canonical obligations reader, scoped ranking, no conversational SQL copy" },
   { file: "unit/staff_sms_router.test.js",
     what: "staff SMS: governed reads converge on Ask Spine while actions and one-work-order turns remain operational" },
+  { file: "unit/staff_sms_preferences_failure.test.js", name: "Staff SMS preference failure receipt" },
+  { file: "unit/staff_sms_prompt_reply.test.js", name: "Staff SMS bare outcome subject boundary" },
+  { file: "unit/staff_sms_preferences.test.js", name: "Staff SMS explicit preference excerpts" },
   { file: "unit/staff_sms_leasing_action.test.js",
     what: "staff SMS leasing: explicit standing, exact target, canonical capture/send services, honest receipts" },
   { file: "unit/operations_line_transfer.test.js",

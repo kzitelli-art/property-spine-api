@@ -1,0 +1,26 @@
+[
+  {
+    "file": "src/leasing/tour_outcome_prompts.js",
+    "sha256": "dd421446f0266b0156d0993b6fd44fd83152f3ea8c9bdc4cd0d93a10acfab19c"
+  },
+  {
+    "file": "src/leasing/staff_sms_action.js",
+    "sha256": "cd8e9700943269583f448d15abb23b5f51751a6802c70493aedd8aaac2e6f2a4"
+  },
+  {
+    "file": "src/leasing/staff_sms_intent.js",
+    "sha256": "5e096a3aea155d4c05deadbf237373ba79ab5fd3a9c014cfc503952047ba8cc3"
+  },
+  {
+    "file": "tests/e2e/staff_sms_partial_capture.js",
+    "sha256": "e798582ba09391e034974db5b6dd9c74f5af5cc9b627a286d26eb1d40f909756"
+  },
+  {
+    "file": "tests/unit/staff_sms_prompt_reply.test.js",
+    "sha256": "ce22f6408616108745627a80ac54c23f46c1d999fd0357869bff7ea2115596fe"
+  },
+  {
+    "file": "tests/verify_source_governance.js",
+    "sha256": "943f3ac12ece92345b62f6764528e09af6b9edadd08cebdadc5ac5baeb162b15"
+  }
+]

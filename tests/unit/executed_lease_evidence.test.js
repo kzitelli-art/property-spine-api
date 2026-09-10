@@ -26,7 +26,9 @@ function stubClient(overrides = {}) {
   return { query: async (sql, params) => {
     const s = String(sql);
     if (/from lease_applications where id=\$1/.test(s))
-      return { rows: [{ id: APP, property_id: PROP, unit_id: o.appUnit, person_id: "per-1", applicant_name: "Marlow Reyes" }] };
+      return { rows: [{ id: APP, property_id: PROP, unit_id: o.appUnit, space_id: o.appSpace || null, status: store.appStatus, executed_lease_record_id: store.appPointer, person_id: "per-1", applicant_name: "Marlow Reyes" }] };
+    if (/from obligations where id=\$1/.test(s))
+      return { rows: store.obligations.filter(r => r.id === params[0]) };
     if (/from spaces s join units u/.test(s))
       return { rows: params[0] === SPACE ? [{ id: SPACE, unit_id: o.spaceUnit, property_id: o.spaceProp }] : [] };
     if (/from executed_lease_records[\s\S]*idempotency_key=\$2/.test(s))
@@ -55,7 +57,7 @@ function stubClient(overrides = {}) {
       if (r) { r.admission_status = params[0]; r.admission_blockers = params[1]; }
       return { rows: [] };
     }
-    if (/update lease_applications[\s\S]*accepted_term_required/.test(s)) { store.appStatus = "accepted_term_required"; return { rows: [] }; }
+    if (/update lease_applications[\s\S]*accepted_term_required/.test(s)) { store.appStatus = "accepted_term_required"; return { rows: [{ id: APP, status: store.appStatus }] }; }
     if (/insert into executed_lease_admission_evaluations/.test(s)) {
       store.evaluations.push({ record_id: params[0], application_id: params[1], result: params[2],
         blockers: JSON.parse(params[3]), sources_compared: JSON.parse(params[4]),
@@ -122,6 +124,25 @@ ACK.payload_hash = normalizeAndHash({ rent: 1850, security_deposit: 1850,
   store.records = []; store.appPointer = null;
 
   console.log("\n3. Document identity (tightening B)");
+  const siblingClient = stubClient({ appSpace: "sibling-bed" });
+  const sibling = await svc.verifyExecutedLease(siblingClient, base(), DEPS);
+  ok("sibling-bed evidence is retained", !!sibling.record_id);
+  ok("sibling-bed mismatch is surfaced with both exact spaces",
+    sibling.premises_conflict?.application_space_id === "sibling-bed" &&
+    sibling.premises_conflict?.executed_space_id === SPACE);
+  ok("sibling-bed mismatch blocks activation",
+    sibling.activation_status === "blocked" && sibling.blockers.some(b => b.code === "premises_conflict"));
+  ok("admission evidence retains the application's exact space",
+    store.evaluations.at(-1)?.sources_compared.application_space_id === "sibling-bed");
+  store.records = []; store.appPointer = null;
+  const matching = await svc.verifyExecutedLease(stubClient({ appSpace: SPACE }), base(), DEPS);
+  ok("matching exact bed remains admissible", matching.activation_status === "admitted" && !matching.premises_conflict);
+  const changed = await svc.computeAdmissionBlockers(siblingClient, { application_id: APP });
+  ok("fresh evaluation catches a changed application bed despite prior admission",
+    changed.blockers.some(b => b.code === "premises_conflict" && b.application_space_id === "sibling-bed"));
+  const corrected = await svc.computeAdmissionBlockers(stubClient({ appSpace: SPACE }), { application_id: APP });
+  ok("fresh evaluation clears a resolved premises disagreement", corrected.blockers.length === 0);
+  store.records = []; store.appPointer = null;
   e = await grab(() => svc.verifyExecutedLease(stubClient(), { ...base(), document_sha256: null, document_reference: "/sites/solo/leases/marlow.pdf" }));
   ok("mutable path alone → refused", e && e.code === "document_identity_required");
   e = await grab(() => svc.verifyExecutedLease(stubClient(), { ...base(), document_sha256: null, provider_document_id: "doc-9" }));

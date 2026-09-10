@@ -1,0 +1,20 @@
+{
+  "state": "local_uncommitted_not_deployed",
+  "api_head": "9f2acff97af311e6ebdcd5e2219f8cf873894748",
+  "app_head": "c05ae68f6f8bc49ca4b5bd752adc928e1f4e0d88",
+  "api_sha256": {
+    "tests/e2e/application_target_dates_browser.js": "6bcbc977825886c8ab2a2db43ee622027405b625e3477b94a25367ddfe4bd6f0",
+    "tests/proofs/application_turn_window.db.js": "713c3dd9fbb8aaf8b368e39b3e048812384985e96b49ff92c9da55189c053365"
+  },
+  "app_sha256": {
+    "index.html": "05956a984a4aeddcb3222967bfea26bf2da91a35adb912ae24d29d2955094872",
+    "followups-door.js": "37db94b53717d5c1637cfe0f0554419679306b4e89f93e7c59aedada3f4c9f9a",
+    "application-offer-review.js": "511e1db6c21d1907463276715e1c5b1cdbbc48c3e9bf507ef1915ddb3791be99",
+    "shared_application_review.test.js": "5e1e1f35255cbccbd25c420ec1f3b41194c703967e50cfe01ea18e266831a5af",
+    "application_send_retry.test.js": "803b596b951c39c270d26fa38b597eb62515d8328edd0a27d25d493c9d904d0a",
+    "application_offer_review_dom.test.js": "c2dd5228f34b24b7bb59593f059f3734efae171a6c356672f0e460caba89c359",
+    "application_target_dates_dom.test.js": "2fa176e0049b60921beabd8ebe2614308e8eaf9e29ccc2beef4d98b64718c9de",
+    "application_target_app.test.js": "1a576d8f8183c74596e67007b32a58c6219d7ab678a061d7d46c77bd4f839fa1",
+    "application_offer_review_app.test.js": "87084623d48c33fe8940a5e052610d141e0fe645e6a63c6a11201f58efe853a2"
+  }
+}

@@ -2131,6 +2131,8 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           actual_tour_host_name_claim: actualHostNameClaim,    // #3: free-text only, never dereferenced
           recorded_by_user_id: recordedByUserId,               // #4: SERVER-DERIVED from the session
           outcome: v2outcome,
+          // Notes belong to this capture even when no legacy v2 fields were supplied.
+          notes: fb.notes || null,
           // ── v3 standing, recorded on the immutable event ──────────────
           //  The event is the record; conversions and the board are
           //  projections of it. When the standing could NOT be resolved the

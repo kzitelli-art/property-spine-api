@@ -1,0 +1,21 @@
+# Shared application review
+
+## Shared application review checkpoint — 2026-09-08, local only
+
+Inspected API 9f2acff97af311e6ebdcd5e2219f8cf873894748 and app c05ae68f6f8bc49ca4b5bd752adc928e1f4e0d88, with uncommitted changes (see SHARED_REVIEW_CODE_CUSTODY.json). Root owns integration; tour_handoff_gap independently inspected retry identity, no worker edits. Philosophy previously read in full, unchanged candidate. No deployment/provider action.
+
+Operating question: after a successful tour, choose a home for the actual requested dates and review complete terms before sending. The existing conversation review was the owner; the post-tour door still used an undated picker/direct send. Smallest missing piece: extract that review into application-offer-review.js and mount it from both doors. Removed the duplicate conversation body and post-tour picker. Forbidden second path: a second terms, availability or turn writer. Existing canonical target read, offer action and composite send remain authoritative.
+
+Falsification and successors:
+- Actual post-tour controller DOM first red: date fields absent (0 versus1). Successor reaches the shared date-first picker, complete terms and exact composite send. Stub adapters, Chromium390x844; later successor also loads all actual index.html inline styles.
+- Cancel while createApplicationOffer is pending first red: one send occurred after closing. Successor zero sends. Active controller cancellation and connected-host guard prevent dispatch from a closed review; an already-established draft is not erased.
+- Back while offer preparation is pending first red: late response attempted to update a replaced review (null disabled TypeError). Successor checks current review-element identity and records no page errors or sends. No claim that an already-dispatched send can be cancelled.
+- Both entry points reused a conversion-only send key after a changed offer: executable first reds. Successors retain identity for retry of the same offer and choose a new identity for a changed offer. Server intent/delivery reconciliation remains unchanged; no new server fingerprint enforcement claimed.
+
+Owned evidence: spine-onboarding-proof-2295156e13c04af6a2f3032b473a0cba passed real Postgres/HTTP date controls and actual post-tour controller -> shared picker -> real canonical HTTP -> same dates in terms and Back, read-only synthetic navigation context. It did not create a tour, send, or navigate the full app shell. Owned DB dropped, cluster stopped and data removed. Earlier run 0efb7614ae9941eb813623f663abee77 timed out on button visibility, cleaned up; diagnostic rerun passed without a product change addressing that timeout. A separate DOM run also had a visibility timeout; do not call reliability settled from a successful rerun.
+
+Commands/results: shared_application_review.test.js PASS; application_send_retry.test.js PASS both doors; application_offer_review_dom.test.js PASS zero/frozen retry; application_target_dates_dom.test.js PASS stale request; application_target_app.test.js30 PASS; application_offer_review_app.test.js15 PASS; node syntax checks and45 inline scripts PASS. Source-governance50 passed sequentially after owned proof, before the last conversation-only retry-key change (covered by its executable test). Full163 tenant journey remains the earlier API proof, not rerun on this UI extraction. No production claim.
+
+Preserved boundaries (§§1,6–8,12,29,31–34,40–41): exact bed/date/offer identity reaches existing writer; zero remains zero; missing terms stay blank; stale reads/responses do not authorize a send; provider success remains required; no new inventory, price, turn or Ask truth store. Product component Class1; test fixtures Class3.
+
+Next: investigate the visibility flake with the complete operator shell; prove real offer/write refusals for a changed future term through the integrated door. Then govern preference-based home ranking and prospective maintenance planning through existing canonical owners. Do not promote an unsigned application into a move-in commitment or call startTurn merely to plan a future turn. Automatic preference/NOI optimization and automatic future-turn creation remain unbuilt/unproven. Live legacy submitted application remains held for complete terms and lease review.

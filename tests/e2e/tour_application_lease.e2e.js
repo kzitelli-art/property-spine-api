@@ -63,6 +63,10 @@ async function completeLeaseSigner({ token, name, initials, sessionId }) {
     `${name} lease packet read`);
   const requiredFields = ((packet.packet && packet.packet.fields) || [])
     .filter((field) => field.required);
+  if (process.env.PROOF_TENANT_BROWSER === "1") {
+    const submissionResult = await require("./tenant_journey_browser").signLease(BASE,token,name,requiredFields);
+    return {packet,requiredFields,submitted:submissionResult.body,submissionResult};
+  }
   for (const field of requiredFields) {
     requireOk(await api("POST", `/t/lease/${token}/fields/${field.id}/complete`, {
       key: false,
@@ -81,7 +85,7 @@ async function completeLeaseSigner({ token, name, initials, sessionId }) {
 }
 function futureLeaseDates() {
   const start = new Date();
-  start.setUTCDate(start.getUTCDate() + 30);
+  start.setUTCDate(start.getUTCDate() + (process.env.PROOF_TENANT_MOVE_IN === "1" ? 0 : 30));
   const end = new Date(start);
   end.setUTCFullYear(end.getUTCFullYear() + 1);
   end.setUTCDate(end.getUTCDate() - 1);
@@ -532,6 +536,18 @@ async function waitForStaffReply(providerMessageId) {
     key: true, body: { actor_id: mike.id },
   }), "tour check-in");
 
+  // Class 3 focused mode: reuse the canonical intake, staff and booked-tour
+  // fixture above, then stop before the independent full lease journey.
+  if (process.env.PROOF_STAFF_SMS_PARTIAL === '1') {
+    await require('./staff_sms_partial_capture').runStaffSmsPartialCapture({
+      q, sendStaffSms, waitForStaffReply, propertyId, tourId:booked.tour_id,
+      personId:intake.person_id, mikePhone, operationsLine, suffix,
+      readPersonCard: () => api('GET', `/operator/leasing/person-card?person_id=${intake.person_id}`, {token:staffToken}),
+    });
+    console.log('STAFF_SMS_PARTIAL_HTTP_PASSED');
+    return;
+  }
+
   const vagueSid = `SM_E2E_VAGUE_${suffix}`;
   const vagueAck = await sendStaffSms({
     from: mikePhone,
@@ -563,11 +579,10 @@ async function waitForStaffReply(providerMessageId) {
   expect(captureReply.reply_reason === "execution_receipt"
       && /Recorded .* tour as Ready to Apply/.test(captureReply.body),
     "Mike's ordinary post-tour wording records the explicit Ready to Apply standing");
-  const capturedConfirmation = String(captureReply.body).match(/Confirm (sca1\.[A-Za-z0-9_.-]+)/);
   expect(/Unit 3B, Bed B/.test(captureReply.body)
       && /Nothing was sent/.test(captureReply.body)
-      && !!capturedConfirmation,
-    "Spine resolves Bed B inside the toured unit and issues an opaque explicit-confirmation receipt");
+      && /offer|terms/i.test(captureReply.body) && !/Confirm sca1\./.test(captureReply.body),
+    "Spine retains the tour receipt and requests complete terms before send confirmation");
   const capturedInbound = (await q(
     `select body,actor_user_id,communication_line_id,needs_human,classification
        from comm_events where sms_sid=$1`, [captureSid]
@@ -607,6 +622,140 @@ async function waitForStaffReply(providerMessageId) {
   )).rows[0];
   expect(!!completed && !!completed.conversion_id,
     "the staff text opened the canonical application conversion");
+  const dates = futureLeaseDates();
+  const beforeTermsSend = await api("POST", `/operator/leasing/conversions/${completed.conversion_id}/send-application`, {
+    token: staffToken, body: { unit_id:unit.id, space_id:bedB.id, idempotency_key:`missing-terms-${suffix}` },
+  });
+  expect(beforeTermsSend.status === 409 && beforeTermsSend.body.error === "APPLICATION_TERMS_REQUIRED",
+    "a new application cannot be dispatched before complete terms exist", JSON.stringify(beforeTermsSend.body));
+  expect((await q("select count(*)::int as n from application_invitations where conversion_id=$1",[completed.conversion_id])).rows[0].n === 0,
+    "missing terms create no invitation");
+  const unbridgedOffer = await api("POST", `/operator/leasing/conversions/${completed.conversion_id}/application-offer`, {
+    token: companyToken, body: { space_id:bedB.id, rent:1025, security_deposit:1025,
+      lease_start_date:dates.start, lease_end_date:dates.end, fees:[], concessions:{status:"none"}, idempotency_key:`unbridged-${suffix}` },
+  });
+  expect(unbridgedOffer.status === 403 && unbridgedOffer.body.error === "ACTOR_IDENTITY_UNRESOLVED",
+    "even a manager session cannot author terms without its canonical staff identity");
+  // Explicit disposable fixture identity, not a name-based bridge or product fallback.
+  const offerAuthor = (await q("insert into persons(name,source) values ('Synthetic offer author','terms_first_fixture') returning id")).rows[0];
+  await q("update users set person_id=$2, account_kind='human_staff' where id=$1", [companySigner.id,offerAuthor.id]);
+  await q("insert into assignments(person_id,property_id,role,provenance) values($1,$2,'owner',$3)",
+    [offerAuthor.id,propertyId,JSON.stringify({source:"synthetic_terms_first_fixture",user_id:companySigner.id})]);
+  let phoneOffer=null;
+  if(process.env.PROOF_PHONE_TERMS==='1') {
+    const before=(await q("select count(*)::int n from lease_offers where person_id=(select person_id from leasing_conversions where id=$1)",[completed.conversion_id])).rows[0].n;
+    const partialSid=`SM_PHONE_TERMS_PARTIAL_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:partialSid,
+      body:`Terms for ${name}, Unit 3B Bed B: rent 1025; start ${dates.start}`});
+    const partial=await waitForStaffReply(partialSid);
+    expect(/Still need/.test(partial.body)&&/deposit/.test(partial.body),'partial terms ask only for missing values',partial.body);
+    expect((await q("select count(*)::int n from lease_offers where person_id=(select person_id from leasing_conversions where id=$1)",[completed.conversion_id])).rows[0].n===before,'partial SMS creates no incomplete offer');
+    const deniedSid=`SM_PHONE_TERMS_DENIED_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:deniedSid,
+      body:`Terms: deposit 0; end ${dates.end}; fees none; concessions none`});
+    const denied=await waitForStaffReply(deniedSid);
+    expect(/cannot set application pricing/.test(denied.body),'complete text does not grant pricing authority',denied.body);
+    expect((await q("select count(*)::int n from lease_offers where person_id=(select person_id from leasing_conversions where id=$1)",[completed.conversion_id])).rows[0].n===before,'unauthorized terms create no offer');
+    // Existing server-established pricing authority, not client role claims.
+    await q('update property_team_assignments set can_manage_roles=true where user_id=$1 and property_id=$2',[mike.id,propertyId]);
+    const completeSid=`SM_PHONE_TERMS_COMPLETE_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:completeSid,
+      body:`Terms: deposit 0; end ${dates.end}; fees none; concessions none`});
+    const complete=await waitForStaffReply(completeSid);
+    expect(/Offer prepared/.test(complete.body)&&/\$1,025.00/.test(complete.body)&&/\$0.00/.test(complete.body)
+      && complete.body.includes(dates.start)&&complete.body.includes(dates.end),'phone continuation preserves prior rent/date and displays all complete terms',complete.body);
+    const token=complete.body.match(/Confirm (sca1\.[A-Za-z0-9_.-]+)/)?.[1];
+    expect(!!token,'phone-prepared offer reaches bound confirmation');
+    const repeatedSid=`SM_PHONE_TERMS_REPEAT_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:repeatedSid,
+      body:`Terms for ${name}, Unit 3B Bed B: rent 2500; deposit 0; start ${dates.start}; end ${dates.end}; fees none; concessions none`});
+    await waitForStaffReply(repeatedSid);
+    expect((await q("select count(*)::int n from lease_offers where person_id=(select person_id from leasing_conversions where id=$1)",[completed.conversion_id])).rows[0].n===before+1,
+      'another terms statement cannot silently create a competing draft');
+    if(process.env.PROOF_PHONE_FULL==='1') {
+      const rows=(await q("select id from lease_offers where person_id=(select person_id from leasing_conversions where id=$1) and source='application_proposal'",[completed.conversion_id])).rows;
+      expect(rows.length===1,'one phone-authored offer enters the complete tenant journey');
+      phoneOffer={application_offer_id:rows[0].id};
+      // The remaining full-path control expects a leasing-only actor. Pricing
+      // management was granted solely for the preceding owned authoring step.
+      await q('update property_team_assignments set can_manage_roles=false where user_id=$1 and property_id=$2',[mike.id,propertyId]);
+    } else {
+    const confirmationSid=`SM_PHONE_TERMS_CONFIRM_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:confirmationSid,body:'Confirm application'});
+    const sent=await waitForStaffReply(confirmationSid);
+    expect(/Application sent/.test(sent.body),'phone-authored terms can advance to application send',sent.body);
+    const bound=(await q(`select inv.application_offer_id,lo.offered_terms_snapshot from application_invitations inv
+      join lease_offers lo on lo.id=inv.application_offer_id where inv.conversion_id=$1`,[completed.conversion_id])).rows;
+    expect(bound.length===1&&bound[0].offered_terms_snapshot.application_terms.rent==='1025.00'
+      &&bound[0].offered_terms_snapshot.application_terms.security_deposit==='0.00','invitation retains the exact phone-authored terms including zero');
+    console.log('PHONE_TERMS_HTTP_PASSED');
+    return;
+    }
+  }
+  let applicationOffer = phoneOffer || requireOk(await api("POST", `/operator/leasing/conversions/${completed.conversion_id}/application-offer`, {
+    token: companyToken, body: { space_id: bedB.id, rent: 1025, security_deposit: 1025,
+      lease_start_date: dates.start, lease_end_date: dates.end, fees: [],
+      concessions: { status: "none" }, idempotency_key: `journey-offer-${suffix}` },
+  }), "authorized complete offer before application");
+  expect(!!applicationOffer.application_offer_id, "staff prepares a retained offer before invitation dispatch");
+  if(!phoneOffer) {
+  const offerReplay = requireOk(await api("POST", `/operator/leasing/conversions/${completed.conversion_id}/application-offer`, {
+    token:companyToken,body:{space_id:bedB.id,rent:1025,security_deposit:1025,
+      lease_start_date:dates.start,lease_end_date:dates.end,fees:[],concessions:{status:"none"},idempotency_key:`journey-offer-${suffix}`},
+  }), "offer retry after JSONB round-trip");
+  expect(offerReplay.idempotent && offerReplay.application_offer_id === applicationOffer.application_offer_id,
+    "an identical offer retry survives database JSON key ordering and returns the same offer");
+  }
+
+  if (process.env.PROOF_SMS_OFFER_REFUSAL === '1') {
+    // Fable's ambiguity reproduction, using this owned runner and assertions
+    // instead of another bootstrap or diagnostic-only copy of the journey.
+    const proposal = requireOk(await api('POST','/operator/ask-spine/message', {
+      token:staffToken,body:{message:`Send ${name} the application for Unit 3B, Bed B.`},
+    }), 'proposal before competing offer');
+    expect(!!proposal.confirmation?.token,'one complete offer permits a confirmation proposal');
+    const replaced = process.env.PROOF_SMS_OFFER_REPLACED === '1';
+    let competingOffer;
+    if (replaced) {
+      // Pre-invitation supersession is reachable at the canonical service, not
+      // the operator revision route (which requires an existing invitation).
+      const client=await pool.connect();
+      try {
+        await client.query('begin');
+        const person=(await client.query('select person_id from leasing_conversions where id=$1',[completed.conversion_id])).rows[0];
+        const made=await require('../../src/money/application_offer_terms').prepareApplicationOffer(client,{
+          actor:{id:companySigner.id,property_id:propertyId},person_id:person.person_id,space_id:bedB.id,
+          rent:2500,security_deposit:2500,lease_start_date:dates.start,lease_end_date:dates.end,
+          fees:[],concessions:{status:'none'},idempotency_key:`replaced-offer-${suffix}`,
+          supersedes_application_offer_id:applicationOffer.application_offer_id,
+        });
+        competingOffer={application_offer_id:made.offer.id};
+        await client.query('commit');
+      } catch(error) {await client.query('rollback');throw error;} finally {client.release();}
+    } else competingOffer = requireOk(await api('POST',`/operator/leasing/conversions/${completed.conversion_id}/application-offer`, {
+      token:companyToken,body:{space_id:bedB.id,rent:2500,security_deposit:2500,
+        lease_start_date:dates.start,lease_end_date:dates.end,fees:[],concessions:{status:'none'},
+        idempotency_key:`competing-offer-${suffix}`},
+    }), 'competing current offer');
+    const before = await q(`select id,status,offered_terms_snapshot from lease_offers
+      where id in ($1,$2) order by id`,[applicationOffer.application_offer_id,competingOffer.application_offer_id]);
+    expect(before.rows.length===2,'both retained offers exist for the changed-terms control');
+    const sid=`SM_OFFER_REFUSAL_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid,body:`Confirm ${proposal.confirmation.token}`});
+    const reply=await waitForStaffReply(sid);
+    expect(reply.classification===(replaced?'leasing_APPLICATION_TERMS_REVIEW_REQUIRED':'leasing_APPLICATION_TERMS_REQUIRED')
+      && /terms|offer/i.test(reply.body) && /Nothing was sent/.test(reply.body),
+      'changed or ambiguous terms at redemption require a fresh review, not a send',reply.body);
+    const state=(await q(`select
+      (select count(*)::int from application_invitations where conversion_id=$1) invitations,
+      (select count(*)::int from application_intents where conversion_id=$1) intents`,[completed.conversion_id])).rows[0];
+    expect(state.invitations===0 && state.intents===0,'refused redemption rolls back invitation and intent');
+    const after=await q(`select id,status,offered_terms_snapshot from lease_offers
+      where id in ($1,$2) order by id`,[applicationOffer.application_offer_id,competingOffer.application_offer_id]);
+    expect(JSON.stringify(before.rows)===JSON.stringify(after.rows),'refusal preserves original offer terms and status');
+    console.log('STAFF_SMS_OFFER_REFUSAL_HTTP_PASSED');
+    return;
+  }
   const captureEvent = (await q(
     `select metadata from tour_events where tour_id=$1 and event_type='completed' order by event_at desc limit 1`,
     [booked.tour_id]
@@ -750,13 +899,23 @@ async function waitForStaffReply(providerMessageId) {
   expect(JSON.stringify(await applicationActionState()) === JSON.stringify(actionBefore),
     "ordinary and unsupported message prose create no application writes");
 
+  const unusedProposal = requireOk(await api('POST','/operator/ask-spine/message', {
+    token:staffToken, body:{message:`Send ${name} the application for Unit 3B, Bed B.`},
+  }), 'unused complete-offer proposal for expiry control');
   const proposal = requireOk(await api(
     "POST", "/operator/ask-spine/message", {
       token: staffToken,
       body: { message: `Send ${name} the application for Unit 3B, Bed B.` },
     }
   ), "single-door dashboard application-send proposal");
-  const confirmation = proposal.confirmation && proposal.confirmation.token;
+  let confirmation = proposal.confirmation && proposal.confirmation.token;
+  if(phoneOffer) {
+    const phoneAskSid=`SM_PHONE_FULL_ASK_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:phoneAskSid,body:`Send ${name} the application for Unit 3B, Bed B.`});
+    const phoneProposal=await waitForStaffReply(phoneAskSid);
+    confirmation=phoneProposal.body.match(/Confirm (sca1\.[A-Za-z0-9_.-]+)/)?.[1];
+    expect(!!confirmation&&phoneProposal.body.includes('$1,025.00'),'actual send confirmation comes from phone offer review');
+  }
   expect(proposal.kind === "application_send_proposal"
       && proposal.outcome === "application_send_proposed"
       && proposal.action_code === "send_application_after_tour"
@@ -785,7 +944,7 @@ async function waitForStaffReply(providerMessageId) {
     from: mikePhone,
     to: operationsLine,
     sid: targetSid,
-    body: `Confirm ${confirmation}`,
+    body: phoneOffer ? 'Confirm application' : `Confirm ${confirmation}`,
   });
   const targetReply = await waitForStaffReply(targetSid);
   expect(targetReply.reply_reason === "execution_receipt"
@@ -908,7 +1067,7 @@ async function waitForStaffReply(providerMessageId) {
   const expiryWait = Math.max(0, expiresAt - Date.now() + 1100);
   if (expiryWait) await new Promise((resolve) => setTimeout(resolve, expiryWait));
   const expired = await api("POST", "/operator/ask-spine/application-send/confirm", {
-    token: staffToken, body: { confirmation: capturedConfirmation[1] },
+    token: staffToken, body: { confirmation: unusedProposal.confirmation.token },
   });
   expect(expired.status === 410 && expired.body.outcome === "confirmation_expired",
     "an unused expired confirmation refuses without a write");
@@ -924,6 +1083,10 @@ async function waitForStaffReply(providerMessageId) {
   }), "public application context");
   expect(context.state === "open" && /Bed B/.test(context.unit_label || ""),
     "the tenant sees the exact home attached to the invitation");
+  expect(context.terms_required && context.application_terms.rent === "1025.00"
+      && context.application_terms.lease_start_date === dates.start,
+    "public application begins with server-owned complete commercial terms");
+  let acceptedTerms = { application_terms_hash: context.application_terms.terms_hash, application_terms_acknowledged: true };
   const guarantorName = `Skyline Guarantor ${suffix}`;
   const guarantorPhone = "+1412" + suffix;
   const captured = {
@@ -949,6 +1112,7 @@ async function waitForStaffReply(providerMessageId) {
     key: false,
     body: {
       token: applicationToken,
+      ...acceptedTerms,
       applicant_name: name,
       guarantor_name: `Wrong Guarantor ${suffix}`,
       captured,
@@ -957,20 +1121,51 @@ async function waitForStaffReply(providerMessageId) {
   expect(conflictingGuarantor.status === 400
       && /conflicts with the guarantor contact/.test(
         String(conflictingGuarantor.body && conflictingGuarantor.body.receipt || "")),
-    "a contradictory V3 guarantor name is refused before application birth");
-  const submitted = requireOk(await api("POST", "/applications/submit-public", {
+    "a contradictory V3 guarantor name is refused before application birth", JSON.stringify(conflictingGuarantor));
+  for (const [label, change] of [
+    ["missing acknowledgement", { application_terms_acknowledged: false }],
+    ["wrong terms version", { application_terms_hash: "0".repeat(64) }],
+    ["applicant changed rent", { rent: "1.00" }],
+  ]) {
+    const refused = await api("POST", "/applications/submit-public", { key: false,
+      body: { token: applicationToken, applicant_name: name, captured, ...acceptedTerms, ...change } });
+    expect([400,409].includes(refused.status), `${label} refuses before application submission`);
+    const unchanged = requireOk(await api("GET", `/t/application/${applicationToken}/context`, { key:false }), "refused submission context");
+    expect(unchanged.state === "open", `${label} leaves invitation unconsumed`);
+  }
+  async function reviseOffer(rent,key){
+    applicationOffer = requireOk(await api("POST", `/operator/leasing/conversions/${completed.conversion_id}/application-offer`, {
+      token:companyToken, body:{space_id:bedB.id,rent,security_deposit:1025,lease_start_date:dates.start,
+        lease_end_date:dates.end,fees:[],concessions:{status:"none"},idempotency_key:key,
+        supersedes_application_offer_id:applicationOffer.application_offer_id},
+    }), "intentional successor offer");
+    const latest = requireOk(await api("GET",`/t/application/${applicationToken}/context`,{key:false}),"latest terms context");
+    acceptedTerms = {application_terms_hash:latest.application_terms.terms_hash,application_terms_acknowledged:true};
+    return latest;
+  }
+  const beforeSubmit = async()=>{
+    await reviseOffer(1030,`open-revision-${suffix}`);
+    expect(true,"staff can revise a sent but unsubmitted invitation without another application or message");
+  };
+  if(process.env.PROOF_TENANT_BROWSER !== "1") await beforeSubmit();
+  const submitted = process.env.PROOF_TENANT_BROWSER === "1"
+    ? await require("./tenant_journey_browser").submitApplication(BASE,applicationToken,name,captured,{beforeSubmit})
+    : requireOk(await api("POST", "/applications/submit-public", {
     key: false,
-    body: { token: applicationToken, applicant_name: name, captured },
+    body: { token: applicationToken, applicant_name: name, captured, ...acceptedTerms },
   }), "public application submit");
   const appId = submitted.application && submitted.application.id;
   const appRow = (await q(
-    "select id,conversion_id,unit_id,space_id,status from lease_applications where id=$1",
+    "select id,conversion_id,unit_id,space_id,status,application_offer_id,application_terms_hash,application_terms_acknowledged_at from lease_applications where id=$1",
     [appId]
   )).rows[0];
   expect(appRow && appRow.conversion_id === completed.conversion_id,
     "the tenant application remains attached to the post-tour conversion");
   expect(appRow.unit_id === unit.id && appRow.space_id === bedB.id,
     "the tenant application persists exact Bed B");
+  expect(appRow.application_offer_id === applicationOffer.application_offer_id
+      && appRow.application_terms_hash === acceptedTerms.application_terms_hash && !!appRow.application_terms_acknowledged_at,
+    "submission retains exact acknowledged offer and acknowledgement time");
   expect((await q("select guarantor_name from lease_applications where id=$1", [appId])).rows[0].guarantor_name
       === guarantorName,
     "the application derives the named guarantor from the validated V3 capture");
@@ -983,7 +1178,52 @@ async function waitForStaffReply(providerMessageId) {
   requireOk(await api("POST", `/operator/leasing/applications/${appId}/approve`, {
     token: companyToken, body: {},
   }), "authorized application approval");
-  const dates = futureLeaseDates();
+  const changedLeaseTerms = await api("POST", `/operator/leasing/applications/${appId}/proposed-terms`, {
+    token:companyToken, body:{rent:1026,security_deposit:1025,lease_start_date:dates.start,
+      lease_end_date:dates.end,concession_status:"none",idempotency_key:`changed-terms-${suffix}`},
+  });
+  expect(changedLeaseTerms.status === 409, "management cannot silently change applicant-acknowledged rent");
+  const beforeRevision = (await q("select captured,rent,status from lease_applications where id=$1",[appId])).rows[0];
+  const oldAck = (await q("select * from application_terms_acknowledgements where application_id=$1 order by acknowledged_at",[appId])).rows;
+  const reviewContext = await reviseOffer(1025,`submitted-revision-${suffix}`);
+  expect(reviewContext.state === "terms_review" && reviewContext.previous_application_terms.rent === "1030.00"
+      && reviewContext.application_terms.rent === "1025.00", "same submitted application link shows previous and replacement terms");
+  const pendingConfirm = await api("POST",`/operator/leasing/applications/${appId}/proposed-terms`,{
+    token:companyToken,body:{rent:1030,security_deposit:1025,lease_start_date:dates.start,
+      lease_end_date:dates.end,concession_status:"none",idempotency_key:`pending-confirm-${suffix}`},
+  });
+  expect(pendingConfirm.status === 409,"old acknowledged terms cannot pass confirmation while replacement review is pending");
+  expect((await q("select rent from lease_applications where id=$1",[appId])).rows[0].rent === "1030.00",
+    "proposing replacement terms does not rewrite the applicant's accepted rent");
+  const staleReaccept = await api("POST","/applications/submit-public",{key:false,
+    body:{token:applicationToken,application_terms_acknowledged:true,application_terms_hash:oldAck[0].terms_hash}});
+  expect(staleReaccept.status === 409,"a previously consumed token cannot accept replacement terms using the old acknowledgement hash");
+  const reaccepted = process.env.PROOF_TENANT_BROWSER === "1"
+    ? await require("./tenant_journey_browser").acceptRevisedTerms(BASE,applicationToken)
+    : requireOk(await api("POST","/applications/submit-public",{key:false,body:{token:applicationToken,...acceptedTerms}}),"revised terms acceptance");
+  expect(reaccepted.terms_reaccepted && reaccepted.application.id === appId,"re-acceptance updates the same application, not a replacement application");
+  const afterRevision = (await q("select captured,rent,status from lease_applications where id=$1",[appId])).rows[0];
+  expect(afterRevision.rent === "1025.00" && afterRevision.status === beforeRevision.status
+      && JSON.stringify(afterRevision.captured) === JSON.stringify(beforeRevision.captured),
+    "re-acceptance preserves the personal application and approval status");
+  const ackHistory = (await q("select * from application_terms_acknowledgements where application_id=$1 order by acknowledged_at",[appId])).rows;
+  expect(ackHistory.length === 2 && JSON.stringify(ackHistory[0]) === JSON.stringify(oldAck[0]),
+    "old acknowledgement remains byte-identical beside the new acceptance");
+  const replayAcceptance = requireOk(await api("POST","/applications/submit-public",{key:false,
+    body:{token:applicationToken,...acceptedTerms}}),"revised acceptance replay");
+  expect(replayAcceptance.idempotent && replayAcceptance.application.id === appId
+      && (await q("select count(*)::int as n from application_terms_acknowledgements where application_id=$1",[appId])).rows[0].n === 2,
+    "repeated revised acceptance creates neither another application nor another acknowledgement");
+  let immutableRefused = false;
+  try { await q("update application_terms_acknowledgements set terms_hash=$1 where id=$2",["0".repeat(64),oldAck[0].id]); }
+  catch(e) { immutableRefused = /immutable/.test(e.message); }
+  expect(immutableRefused,"database refuses rewriting an earlier acknowledgement");
+  // An application is not an inventory hold. Exercise the migration-shape
+  // applicant while this bed is still free, before the main journey executes
+  // a lease and takes possession. Running it after move-in offered an occupied
+  // bed to a second person and concealed a targeting defect.
+  await require("./legacy_application_terms")({q,api,requireOk,expect,propertyId,unitId:unit.id,spaceId:bedB.id,
+    conversionId:completed.conversion_id,token:companyToken,base:BASE,dates});
   requireOk(await api("POST", `/operator/leasing/applications/${appId}/proposed-terms`, {
     token: companyToken, body: {
       rent: 1025, security_deposit: 1025,
@@ -998,6 +1238,19 @@ async function waitForStaffReply(providerMessageId) {
   ), "lease packet generation");
   const packetId = generated.packet && generated.packet.id;
   expect(!!packetId, "governing lease packet was generated from confirmed terms");
+  const afterPacketRevision = await api("POST", `/operator/leasing/conversions/${completed.conversion_id}/application-offer`, {
+    token:companyToken, body:{space_id:bedB.id,rent:1026,security_deposit:1025,lease_start_date:dates.start,
+      lease_end_date:dates.end,fees:[],concessions:{status:"none"},idempotency_key:`packet-blocked-revision-${suffix}`,
+      supersedes_application_offer_id:applicationOffer.application_offer_id},
+  });
+  expect(afterPacketRevision.status === 409,"a prepared lease packet blocks further application-offer revision");
+  const packetLineage = (await q("select application_offer_id,application_terms_hash,terms_json,rendered_snapshot from lease_packets where id=$1",[packetId])).rows[0];
+  expect(packetLineage.application_offer_id === applicationOffer.application_offer_id
+      && packetLineage.application_terms_hash === acceptedTerms.application_terms_hash,
+    "lease packet retains the exact offer acknowledged before application");
+  expect(JSON.stringify(packetLineage.terms_json.fees) === "[]"
+      && JSON.stringify(packetLineage.rendered_snapshot.instrument.terms_schedule.economics.fees) === "[]",
+    "lease uses the acknowledged fee schedule rather than mutable property fees");
   const issued = requireOk(await api("POST", `/operator/leasing/lease-packets/${packetId}/send`, {
     token: companyToken, body: { idempotency_key: `journey-lease-${suffix}` },
   }), "resident and guarantor lease-link issue");
@@ -1243,6 +1496,9 @@ async function waitForStaffReply(providerMessageId) {
       && card.leasing_standing.tenancy.lease_id === leaseId,
     "the person card reads the same executed lease truth");
 
+  if(process.env.PROOF_TENANT_MOVE_IN === "1") await require("./tenant_journey_move_in")({
+    api,requireOk,expect,q,leaseId,propertyId,unitId:unit.id,spaceId:bedB.id,personId:intake.person_id,name,token:companyToken,
+  });
   console.log(`\n==== ${passed} full-path assertions passed; no real SMS sent ====\n`);
 })().catch((error) => {
   console.error("\nFIRST RED:", error.message);

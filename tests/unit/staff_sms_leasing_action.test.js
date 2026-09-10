@@ -9,7 +9,7 @@ const { routeStaffSmsTurn } = require("../../src/conversation/staff_sms_router")
 const { makeStaffLeasingAction } = require("../../src/leasing/staff_sms_action");
 const { operatingReceipt } = require("../../src/conversation/receipt");
 
-const EXPECTED = 55;
+const EXPECTED = 59;
 let passed = 0;
 let failed = 0;
 const ok = (label, condition, detail = "") => {
@@ -20,6 +20,12 @@ const ok = (label, condition, detail = "") => {
 receipt.begin(__filename, { expected: EXPECTED });
 const read = intentReader.readStaffLeasingIntent;
 const privateAction = makeStaffLeasingAction()._private;
+const ownerText = read('tour went great , they want a one bedroom high floor with a move in start of next month, send app');
+ok('owner shorthand retains the application request while standing needs clarification', ownerText.intent === 'clarify_tour_standing' && ownerText.sendApplication === true && ownerText.standing === null);
+ok('a bedroom preference is not an exact bed selection', ownerText.hasTarget === false);
+ok('send app shorthand follows the existing send action', read('Send Jane the app').intent === 'send_application');
+ok('opening the software app is not an application send request', read('Open the app').intent === 'unclear');
+
 
 console.log("\n-- STAFF LANGUAGE IS NARROW AND DETERMINISTIC ----------------");
 for (const [text, standing] of [

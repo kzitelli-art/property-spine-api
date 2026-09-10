@@ -1,0 +1,25 @@
+{
+  "api_base": "9f2acff97af311e6ebdcd5e2219f8cf873894748",
+  "app_base": "c05ae68f6f8bc49ca4b5bd752adc928e1f4e0d88",
+  "state": "local_uncommitted_163_path_assertions_and_50_source_gates_passed_sequential_final_run",
+  "files": {
+    "migrations/193_application_offer_lineage.sql": "7a094cc2367fda3aaa0e3d13bb3f8a786cf9443ca9faaa658fa8c25bf2abfdde",
+    "src/money/application_offer_terms.js": "c6277064dd9b061434f249df80e884709fbcb9df226da61f0a3a17f5cee90612",
+    "src/money/commitment_ledger.js": "fc63d934c2c08eca1985cb91d0b064162849f78e0fa107193a0d43a7902226d8",
+    "src/applications/application_submission.js": "1c87bc19f33357f2bc9f9a425278810474a09104723f7329dc3afefc8e3689c7",
+    "src/applications/application_send_command.js": "00e6cfa49d9128e8f05b628c8ca343666e79ed56aba268d1cd8882efc62921bf",
+    "src/applications/application_review.js": "42d03efb1161a883c563a8211af66d91f90188fd135bcc6b3c068bbb83c367e6",
+    "src/applications/proposed_terms_service.js": "31900e75d931eff13167904b7d78ce54eb0699618867a2fe10cf812fceb36aa4",
+    "src/applications/lease_packets.js": "d1add0e2e89766fa66ecdb5d70d2612ec00f816b56dcfc89972ca4d3535fbb00",
+    "src/identity/operator.js": "bab4cbb91f06d109aef6f2c41cbb201c22bdb6f3d1f502d1f3c3a4876f36c842",
+    "tests/e2e/tour_application_lease.e2e.js": "de5ffa6e14c31217f751dd50a79a7f8068738c346cdb0d2bcc6b9bf507ded280",
+    "tests/e2e/tenant_journey_browser.js": "c5d9cffca593bb05026b999714ac11c3c70cbf069514fc72cacc23eebe7c155d",
+    "tests/e2e/legacy_application_terms.js": "47d2d632d78c6aef38a852f23b6080983dcde2573b6a3b7588d42aa5e249dcf7",
+    "src/agent/ask_spine_answer.js": "7c0393f7b5e62f7d4943667c6da409225f9cde8c1780d17dafb7f0dbf651a22e",
+    "src/leasing/leasing_standing_read.js": "29479678a13db798fab6ac4dc78d55bb87117dcc733873a30640ba2de67728b6",
+    "tests/unit/application_terms_ask.test.js": "18f10721c73c1878fdc4abb9cfe52b1dc9a93bc6568a5718066fe22fb0a55998",
+    "tests/unit/leasing_standing_application_offer.test.js": "d20f95e4b7939b8771d30543a463810ab44b9ade23c390cf30e7670f46857b61"
+  },
+  "app_index_sha256": "642833fecaf87084e0aa07d9a6e5afea945512e527a6e1db38c4205d2d6a451e",
+  "app_revision_dom_sha256": "b10b7c74d1c5c8e117320ee4d9e7568fd06bd76e9748e9f5c3b317b482b4a442"
+}

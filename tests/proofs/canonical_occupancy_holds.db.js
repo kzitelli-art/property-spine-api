@@ -29,6 +29,8 @@ const root = path.resolve(process.env.PROOF_BUSINESS_ROOT || path.join(__dirname
 const sessions = require(path.join(root, "src/identity/staff_session_service.js"));
 const { currentRentRoll } = require(path.join(root, "src/surfaces/rent_roll_canonical.js"));
 const { institutionalRentRoll } = require(path.join(root, "src/surfaces/rent_roll_institutional.js"));
+const { readTenancyStanding } = require(path.join(root, "src/tenancy/tenancy_position_read.js"));
+const { gatherFacts } = require(path.join(root, "src/agent/ask_spine_answer.js"));
 const AS_OF = "2026-07-31";
 const api = String(process.env.E2E_API_BASE || "").replace(/\/+$/, "");
 const parent = process.env.PROOF_EXPECT_DEFECT === "1";
@@ -146,9 +148,18 @@ function holdExpectation(label) {
     ok("canonical scope is session-owned", spoof.status === 200 && spoof.body.property_id === property.id,
       JSON.stringify(spoof.body && spoof.body.property_id));
 
+    let baselineAskPosition = null;
     const read = async (label) => {
       const service = await currentRentRoll(pool, { property_id: property.id, as_of: AS_OF });
       const institutional = await institutionalRentRoll(pool, { property_id: property.id, as_of: AS_OF });
+      // Service rung only: this invokes the same fact gatherer used by Ask
+      // without a model client or a second HTTP server. Keep the direct
+      // standing beside it to verify the projection and its key counts.
+      const directStanding = await readTenancyStanding(pool, { property_id: property.id, as_of: AS_OF });
+      const askFacts = await gatherFacts(pool, {
+        property_id: property.id, allowed_modules: ["leasing"], subject: "tenancy",
+        question: "how many beds are occupied",
+      });
       const canonicalHttp = await http(`/operator/rent-roll/canonical?as_of=${AS_OF}`, token);
       const institutionalHttp = await http(`/operator/rent-roll/institutional?as_of=${AS_OF}`, token);
       const csvHttp = await http(`/operator/rent-roll/institutional?as_of=${AS_OF}&format=csv`, token);
@@ -179,7 +190,22 @@ function holdExpectation(label) {
         && canonicalHttp.body.evidence_summary.inconclusive === 8);
       ok(`${label}: contested claims retain both lease facts`, canonicalHttp.body.contested_claims.claims.length === 2
         && canonicalHttp.body.contested_claims.claims.every((claim) => claim.space_id === spaces["303|Room1"]));
-      return { canonical: canonicalHttp.body, service, institutional: institutionalHttp.body, csv: csvHttp.text };
+      const askTenancy = askFacts && askFacts.tenancy;
+      const askPosition = askTenancy && askTenancy.position;
+      if(label === "baseline") baselineAskPosition = JSON.stringify(askPosition);
+      ok(`${label}: physical holds and resolution preserve Ask tenancy position`, !!askPosition && JSON.stringify(askPosition) === baselineAskPosition);
+      ok(`${label}: Ask Spine gathers the entitled tenancy standing`, askTenancy && askTenancy.read_state === "OK"
+        && askTenancy.position && askTenancy.standing, String(askTenancy && askTenancy.read_state));
+      ok(`${label}: Ask Spine position matches its direct canonical standing`, askTenancy && directStanding.position
+        && askTenancy.position.occupied === directStanding.position.occupied
+        && askTenancy.position.open === directStanding.position.open
+        && askTenancy.position.needs_review === directStanding.position.needs_review
+        && askTenancy.position.not_established === directStanding.position.not_established
+        && askTenancy.position.rentable_positions === directStanding.position.rentable_positions);
+      ok(`${label}: Ask contractual occupancy stays aligned while holds change the Rent Roll denominator`, askTenancy
+        && askTenancy.position.occupied === canonicalHttp.body.tenancy_summary.contractually_occupied
+        && askTenancy.position.rentable_positions === canonicalHttp.body.inventory);
+      return { canonical: canonicalHttp.body, service, institutional: institutionalHttp.body, csv: csvHttp.text, ask: askTenancy, directStanding };
     };
 
     const baseline = await read("baseline");

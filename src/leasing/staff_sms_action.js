@@ -8,6 +8,10 @@ const applicationTargetAuthority = require("../applications/application_target_a
 const applicationSendCommand = require("../applications/application_send_command");
 const capability = require("../identity/capability");
 const staffLeasingIntent = require("./staff_sms_intent");
+const { recordPersonFact } = require("../identity/person_facts");
+const tourPrompts = require("./tour_outcome_prompts");
+const { resolveApplicationOffer, describeApplicationTerms, prepareApplicationOffer } = require("../money/application_offer_terms");
+const staffApplicationTerms = require('./staff_application_terms');
 
 const ACTION_CODE = "send_application_after_tour";
 const PROCESS_LOCAL_CONFIRMATION_KEY = crypto.randomBytes(32);
@@ -48,6 +52,8 @@ function makeConfirmationCodec({ secret = null, ttlSeconds = null, now = Date.no
       conversion_id: String(claims.conversion_id),
       unit_id: String(claims.unit_id),
       space_id: claims.space_id == null ? null : String(claims.space_id),
+      application_offer_id: claims.application_offer_id || null,
+      application_terms_hash: claims.application_terms_hash || null,
       intended_move_in: claims.intended_move_in == null
         ? null : String(claims.intended_move_in),
       nonce: crypto.randomBytes(16).toString("base64url"),
@@ -85,12 +91,13 @@ function makeConfirmationCodec({ secret = null, ttlSeconds = null, now = Date.no
         400, "confirmation_invalid", "That application confirmation is invalid. Nothing was sent."
       );
     }
-    const keys = ["action_code", "actor_user_id", "conversion_id", "expires_at",
+    const keys = ["action_code", "actor_user_id", "application_offer_id", "application_terms_hash", "conversion_id", "expires_at",
       "intended_move_in", "nonce", "property_id", "space_id", "unit_id", "version"];
     if (Object.keys(claims).sort().join(",") !== keys.sort().join(",") ||
         claims.version !== 1 || claims.action_code !== ACTION_CODE ||
         !claims.property_id || !claims.actor_user_id || !claims.conversion_id ||
-        !claims.unit_id || !claims.nonce || !Number.isInteger(claims.expires_at)) {
+        !claims.unit_id || !claims.application_offer_id || !/^[a-f0-9]{64}$/.test(claims.application_terms_hash || "") ||
+        !claims.nonce || !Number.isInteger(claims.expires_at)) {
       throw new ConversationalActionError(
         400, "confirmation_invalid", "That application confirmation is invalid. Nothing was sent."
       );
@@ -349,6 +356,15 @@ function makeStaffLeasingAction({
       );
     }
 
+    let applicationOffer;
+    try {
+      applicationOffer = await resolveApplicationOffer(pool, {property_id:propertyId,person_id:row.person_id,
+        space_id:targetState.resolved_space_id || target.space_id});
+    } catch (error) {
+      if (error.code !== 'APPLICATION_TERMS_REQUIRED') throw error;
+      throw new ConversationalActionError(409,error.code,
+        `For ${row.prospect_name}'s application for ${targetLabel(target)}, we need one complete offer before sending. Text "Terms for ${row.prospect_name}, ${targetLabel(target)}: rent [amount]; deposit [amount]; start YYYY-MM-DD; end YYYY-MM-DD; fees none; concessions none". You can send the details in parts. Use none only when accurate. Nothing was sent.`);
+    }
     const minted = confirmationCodec.mint({
       property_id: propertyId,
       actor_user_id: userId,
@@ -356,6 +372,8 @@ function makeStaffLeasingAction({
       unit_id: target.unit_id,
       space_id: target.space_id,
       intended_move_in: target.intended_move_in,
+      application_offer_id: applicationOffer.offer_id,
+      application_terms_hash: applicationOffer.terms_hash,
     });
     const label = targetLabel(target);
     return Object.freeze({
@@ -365,8 +383,8 @@ function makeStaffLeasingAction({
       expires_at: minted.expires_at,
       prospect_name: row.prospect_name,
       target_label: label,
-      sms_prompt: `Nothing was sent. Reply "Confirm ${minted.token}" to send ${row.prospect_name} the application for ${label}.`,
-      receipt: `Ready to send ${row.prospect_name} the application for ${label}. Nothing was sent; explicit confirmation is required.`,
+      sms_prompt: `${row.prospect_name} — ${label}. Proposed terms: ${describeApplicationTerms(applicationOffer.application_terms)} Nothing was sent. Reply "Confirm application" to send. Confirmation reference: Confirm ${minted.token}`,
+      receipt: `${row.prospect_name} — ${label}. Proposed terms: ${describeApplicationTerms(applicationOffer.application_terms)} Nothing was sent; explicit confirmation is required.`,
       _conversion_id: row.id,
     });
   }
@@ -505,6 +523,13 @@ function makeStaffLeasingAction({
         );
       }
 
+      const currentOffer = await resolveApplicationOffer(client, {
+        property_id:propertyId,person_id:locked.person_id,space_id:claims.space_id,
+      });
+      if (currentOffer.offer_id !== claims.application_offer_id || currentOffer.terms_hash !== claims.application_terms_hash) {
+        throw new ConversationalActionError(409,"APPLICATION_TERMS_REVIEW_REQUIRED",
+          "The application terms changed. Review the current offer and ask again. Nothing was sent.");
+      }
       staged = await applicationSendCommand.stageApplicationSend(
         client,
         { conversionService, applicationInvitations },
@@ -514,6 +539,7 @@ function makeStaffLeasingAction({
           unitId: claims.unit_id,
           spaceId: claims.space_id,
           intendedMoveIn: claims.intended_move_in,
+          applicationOfferId: claims.application_offer_id,
           idempotencyKey,
           unitOfferable: async (q, { property_id, unit_id, space_id, intended_move_in }) =>
             applicationTargetAuthority.resolveApplicationTarget(q, {
@@ -528,6 +554,10 @@ function makeStaffLeasingAction({
       await client.query("commit");
     } catch (error) {
       await client.query("rollback").catch(() => {});
+      if (error.code === "APPLICATION_TERMS_REQUIRED" && error.httpStatus === 409) {
+        throw new ConversationalActionError(409, error.code,
+          "We need one complete offer before sending this application. Review the current terms and ask again. Nothing was sent.");
+      }
       throw error;
     } finally {
       client.release();
@@ -570,6 +600,7 @@ function makeStaffLeasingAction({
     const actionRequestId = providerMessageId ||
       (recorded && recorded.inbound && recorded.inbound.id) || crypto.randomUUID();
 
+    let promptTourId = null;
     async function finish(outcome, result, classification, createdObject = null, extra = null) {
       const operating = operatingReceipt({ outcome, result });
       if (operating.text === null) {
@@ -593,7 +624,8 @@ function makeStaffLeasingAction({
           replayed: detail.replayed === true,
         };
       }
-      const outbound = await staffThread.inTransaction(pool, (client) => staffThread.recordReply(client, {
+      const outbound = await staffThread.inTransaction(pool, async (client) => {
+        const reply = await staffThread.recordReply(client, {
         threadId: recorded.threadId,
         inboundId: recorded.inbound.id,
         userId,
@@ -603,7 +635,13 @@ function makeStaffLeasingAction({
         replyReason: outcome === "leasing_clarification" ? "clarification" : "execution_receipt",
         classification,
         createdObject: createdObject || operating.object,
-      }));
+        });
+        if (promptTourId) await tourPrompts.recordPrompt(client, {
+          tourId:promptTourId,propertyId:propertyContext.propertyId,userId,
+          threadId:recorded.threadId,promptEventId:reply.id,
+        });
+        return reply;
+      });
       return {
         inbound: recorded.inbound,
         outbound,
@@ -654,9 +692,112 @@ function makeStaffLeasingAction({
     }
 
     const propertyId = propertyContext.propertyId;
-    const parsed = intent || staffLeasingIntent.readStaffLeasingIntent(body);
+    let parsed = intent || staffLeasingIntent.readStaffLeasingIntent(body);
     let capture = null;
     let conversion = null;
+
+    if (parsed.intent==='confirm_application_context') {
+      const followups=await openApplicationFollowups(pool,{propertyId,userId});
+      let candidates=followups;
+      if (/\bfor\b/i.test(body)) {
+        const chosen=chooseNamedCandidate(body,followups);
+        candidates=chosen.candidate&&chosen.reason!=='only_open'?[chosen.candidate]:[];
+      }
+      const replies=recorded?(await pool.query(`select distinct on (created_object_id) created_object_id,body
+        from comm_events where staff_thread_id=$1 and to_user_id=$2 and communication_line_id=$3
+          and direction='outbound' and created_object_type='leasing_conversion'
+          and created_object_id=any($4::uuid[]) and body like '%Confirm sca1.%'
+        order by created_object_id,occurred_at desc,id desc`,
+        [recorded.threadId,userId,lineId,candidates.map(c=>c.conversion_id)])).rows:[];
+      const tokens=[];
+      for(const reply of replies) {
+        const token=reply.body.match(/Confirm (sca1\.[A-Za-z0-9_.-]+)/)?.[1];
+        try {const claims=confirmationCodec.open(token);
+          if(claims.property_id===String(propertyId)&&claims.actor_user_id===String(userId)
+            &&claims.conversion_id===String(reply.created_object_id)) tokens.push(token);
+        }catch(error){if(!(error instanceof ConversationalActionError))throw error;}
+      }
+      if(tokens.length!==1) return finish('leasing_clarification',{
+        answer:tokens.length?'More than one application is awaiting confirmation. Reply "Confirm application for [prospect name]".'
+          :'There is no current application confirmation in this text conversation. Ask to send the application for a fresh review.',
+        reasonCode:'application_confirmation_context_required',isQuestion:false},'leasing_application_confirmation_context_required');
+      parsed={...parsed,intent:'confirm_application',confirmation:tokens[0]};
+    }
+
+    if (parsed.intent === 'application_terms') {
+      const refuse = (answer, code='application_terms_clarification', object=null) => finish('leasing_clarification',
+        {answer,reasonCode:code,isQuestion:false},`leasing_${code}`,object);
+      if (!recorded) return refuse('Send application terms in the staff text conversation, or use the existing application review.');
+      const fields=staffApplicationTerms.extract(body);
+      if (fields.errors.length) return refuse(`I could not use those terms: ${fields.errors.join('; ')}. Nothing was offered or sent.`);
+      const followups=await openApplicationFollowups(pool,{propertyId,userId});
+      // Only already-scoped, attributed partial inputs may supply context.
+      // Completed offers terminate collection; complete domain terms never live here.
+      const history=(await pool.query(`select id,body,created_object_id,classification from comm_events
+        where staff_thread_id=$1 and actor_user_id=$2 and communication_line_id=$3
+          and direction='inbound' and created_object_type='leasing_conversion'
+          and classification in ('leasing_application_terms_partial','leasing_application_terms_prepared')
+          and created_object_id=any($4::uuid[])
+        order by occurred_at desc,id desc limit 100`,
+        [recorded.threadId,userId,lineId,followups.map(f=>f.conversion_id)])).rows;
+      let choice=chooseNamedCandidate(body,followups);
+      if (!/^terms\s+for\s+/i.test(body)) {
+        const latest=new Map();
+        for(const h of history) if(!latest.has(h.created_object_id)) latest.set(h.created_object_id,h);
+        const pending=followups.filter(f=>latest.get(f.conversion_id)?.classification==='leasing_application_terms_partial');
+        choice={candidate:pending.length===1?pending[0]:null};
+      } else if (choice.reason==='only_open') choice.candidate=null;
+      if(!choice.candidate) return refuse('Whose application terms? Start with "Terms for [prospect name]:" so I can keep the right application together.');
+      const selected=choice.candidate;
+      const object={type:'leasing_conversion',id:selected.conversion_id};
+      const prior=[];
+      for(const h of history.filter(h=>String(h.created_object_id)===String(selected.conversion_id))) {
+        if(h.classification==='leasing_application_terms_prepared') break;
+        prior.unshift(h);
+      }
+      if(history.length===100) return refuse('This terms conversation needs an explicit fresh review before I can continue. Nothing was sent.');
+      let values={};
+      for(const h of prior) values=staffApplicationTerms.mergeApplicationTerms(values,staffApplicationTerms.extract(h.body).values);
+      values=staffApplicationTerms.mergeApplicationTerms(values,fields.values);
+      const missing=staffApplicationTerms.missingTerms(values);
+      const targetMenu=await applicationTargetRead.leaseableApplicationTargets(pool,{property_id:propertyId});
+      const targetChoice=chooseTarget([...prior.map(h=>h.body),body].join(' '),targetMenu.eligible_targets,selected.unit_id||null);
+      if(!targetChoice.target || missing.length) {
+        const labels={security_deposit:'deposit',lease_start_date:'start date (YYYY-MM-DD)',lease_end_date:'end date (YYYY-MM-DD)',rent:'rent',fees:'fees (say none only if none apply)',concessions:'concessions (say none only if none apply)'};
+        return refuse(`Kept your terms for ${selected.prospect_name}. Still need ${[...(!targetChoice.target?['exact unit and bed']:[]),...missing.map(k=>labels[k]||k)].join(', ')}. Reply "Terms: ..." with just those details. Nothing was offered or sent.`, 'application_terms_partial',object);
+      }
+      let made;
+      try {
+        made=await staffThread.inTransaction(pool,async client=>{
+          const scoped=(await client.query(`select lc.id from leasing_conversions lc
+            join leasing_conversion_obligations lco on lco.conversion_id=lc.id and lco.rung='tour_followup'
+            join obligations o on o.id=lco.obligation_id
+            where lc.id=$1 and lc.property_id=$2 and lc.status='active' and o.status='open' and o.assigned_user_id=$3 for update of lc`,
+            [selected.conversion_id,propertyId,userId])).rows[0];
+          if(!scoped) throw new ConversationalActionError(409,'application_terms_scope_changed','This application follow-up is no longer assigned to you. Nothing was offered or sent.');
+          return prepareApplicationOffer(client,{...values,
+            actor:{id:userId,property_id:propertyId},person_id:selected.person_id,space_id:targetChoice.target.space_id,
+            idempotency_key:`staff-terms:${recorded.inbound.id}`,create_only:true,
+            source_comm_event_ids:[...prior.map(h=>h.id),recorded.inbound.id]});
+        });
+      } catch(error) {
+        const message=error.code==='APPLICATION_OFFER_ALREADY_EXISTS'
+          ? 'An application offer already exists. Ask to send that offer, or review it before revising the terms.'
+          : error.code==='NO_APPLICATION_OFFER_AUTHORITY'
+          ? 'Your assignment cannot set application pricing. An authorized pricing owner must establish these terms.'
+          : 'These terms could not be established. Review the amounts, dates and governed charges.';
+        return refuse(`${message} Your text is retained; nothing was sent.`,'application_terms_refused',object);
+      }
+      // Preparation is already committed. Report it honestly even if the later
+      // proposal read fails; never describe a saved offer as unsaved.
+      try {
+        const proposal=await issueApplicationProposal(pool,{propertyId,userId,conversionId:selected.conversion_id,target:targetChoice.target});
+        return finish('leasing_clarification',{answer:`Offer prepared. ${proposal.sms_prompt}`,reasonCode:'application_terms_prepared',isQuestion:false},
+          'leasing_application_terms_prepared',object,proposal);
+      } catch(error) {
+        return refuse('Offer prepared, but I could not prepare its send confirmation. Ask to send the application again; nothing was sent.','application_terms_prepared',object);
+      }
+    }
 
     if (parsed.intent === "confirm_application") {
       try {
@@ -712,8 +853,18 @@ function makeStaffLeasingAction({
     }
 
     if (["capture_tour", "clarify_tour_standing"].includes(parsed.intent)) {
-      const tours = await openToursForStaff(pool, { propertyId, userId });
+      const pending = recorded && parsed.standing ? await tourPrompts.pendingPrompts(pool, {
+        propertyId,userId,threadId:recorded.threadId,
+      }) : [];
+      const bare = parsed.standing && staffLeasingIntent._private.isBareStandingReply(body,parsed.standing);
+      const tours = bare && pending.length ? pending : await openToursForStaff(pool, { propertyId, userId });
       const choice = chooseNamedCandidate(body, tours);
+      if (recorded && bare && pending.length!==1) {
+        choice.candidate=null;
+        choice.reason=pending.length?'ambiguous_open':'subject_required';
+        choice.candidates=tours;
+      }
+      const matchedPrompt = choice.candidate && pending.find(p=>String(p.tour_id)===String(choice.candidate.tour_id));
       if (transport === "dashboard" && choice.reason === "only_open") {
         choice.candidate = null;
         choice.reason = "subject_required";
@@ -727,9 +878,41 @@ function makeStaffLeasingAction({
         }, `leasing_tour_${choice.reason}`);
       }
 
+      // Capture what staff actually supplied before asking for missing judgment.
+      // Same person-fact writer as app tour essentials; SMS supplies its own
+      // typed source and actor rather than posing as prospect conversation.
+      let preferenceReceipt = '';
+      if (recorded) {
+        const essentials = staffLeasingIntent.readStaffTourEssentials(body);
+        if (Object.keys(essentials).length) {
+          try {
+            await staffThread.inTransaction(pool, async (client) => {
+            const source = (await client.query('select occurred_at from comm_events where id=$1', [recorded.inbound.id])).rows[0];
+            for (const [attrKey, attrValue] of Object.entries(essentials)) {
+              await recordPersonFact(client, {
+                personId: choice.candidate.person_id, propertyId,
+                attrKey, attrValue, source: 'human', sourceRecordType: 'comm_event',
+                sourceRecordId: recorded.inbound.id, occurredAt: source && source.occurred_at,
+                occurredAtBasis: source && source.occurred_at ? 'source_record' : null,
+                actorType: 'operator', actorUserId: userId, claimStrength: 'asserted', verb: 'captured',
+                idempotencyKey: 'staff-tour:' + recorded.inbound.id + ':' + attrKey,
+              });
+            }
+          });
+          } catch (_) {
+            return finish('leasing_clarification', {
+              answer: "I saved your message, but couldn't save its preferences. Please retry the text. Nothing was sent.",
+              reasonCode: 'preference_capture_unavailable', isQuestion: false,
+            }, 'leasing_preference_capture_unavailable');
+          }
+          preferenceReceipt = 'Recorded the preferences: ' + Object.values(essentials).join('; ') + '. '
+        }
+      }
+
       if (parsed.intent === "clarify_tour_standing" || !parsed.standing) {
+        promptTourId = recorded ? choice.candidate.tour_id : null;
         return finish("leasing_clarification", {
-          answer: `Where did ${choice.candidate.prospect_name} land: Ready to Apply, Hot Lead, Possible, or Not Moving Forward? Reply like "${choice.candidate.prospect_name}'s tour: Ready to Apply."`,
+          answer: `${preferenceReceipt}Where did ${choice.candidate.prospect_name} land: Ready to Apply, Hot Lead, Possible, or Not Moving Forward? Reply like "${choice.candidate.prospect_name}'s tour: Ready to Apply."`,
           reasonCode: "standing_required",
           isQuestion: true,
         }, "leasing_tour_standing_required");
@@ -739,7 +922,13 @@ function makeStaffLeasingAction({
       if (!tourService || typeof tourService.completeTour !== "function") {
         throw new Error("canonical tour completion service is unavailable");
       }
-      const completed = await staffThread.inTransaction(pool, (client) => tourService.completeTour(client, {
+      let completed;
+      try {
+        completed = await staffThread.inTransaction(pool, async (client) => {
+          if (matchedPrompt) await tourPrompts.lockPrompt(client, {
+            propertyId,userId,threadId:recorded.threadId,promptId:matchedPrompt.prompt_id,
+          });
+          const result = await tourService.completeTour(client, {
         tourId: choice.candidate.tour_id,
         recordedByUserId: userId,
         enforcePropertyId: propertyId,
@@ -750,9 +939,23 @@ function makeStaffLeasingAction({
           feedback: {
             tour_given: true,
             standing: parsed.standing,
+            notes: matchedPrompt ? matchedPrompt.original_body : body,
           },
         },
-      }));
+          });
+          if (matchedPrompt) await tourPrompts.answerPrompt(client, {
+            promptId:matchedPrompt.prompt_id,propertyId,tourId:matchedPrompt.tour_id,userId,threadId:recorded.threadId,responseEventId:recorded.inbound.id,
+          });
+          return result;
+        });
+      } catch (error) {
+        if (error.code !== 'TOUR_PROMPT_STALE') throw error;
+        return finish('leasing_clarification', {answer:error.message,reasonCode:error.code,isQuestion:false}, 'leasing_tour_prompt_stale');
+      }
+      if (matchedPrompt && parsed.standing==='ready_to_apply'
+          && staffLeasingIntent.readStaffLeasingIntent(matchedPrompt.original_body).sendApplication) {
+        parsed = {...parsed,sendApplication:true};
+      }
       capture = {
         tourId: completed.tour_id,
         conversionId: completed.conversion_id,
@@ -865,6 +1068,10 @@ function makeStaffLeasingAction({
         conversionId: conversion.conversion_id,
         target: targetChoice.target,
       });
+      if (capture) return finish('tour_outcome_recorded', {
+        tourId:capture.tourId,conversionId:capture.conversionId,prospectName:capture.prospectName,
+        standingLabel:capture.standingLabel,nextPrompt:proposal.sms_prompt,
+      }, 'leasing_tour_outcome_recorded', null, {...proposal,outcome:'tour_outcome_recorded',sent:false,replayed:false});
       return finish("leasing_clarification", {
         answer: proposal.sms_prompt,
         reasonCode: "application_confirmation_required",
@@ -880,6 +1087,10 @@ function makeStaffLeasingAction({
       });
     } catch (error) {
       if (!(error instanceof ConversationalActionError)) throw error;
+      if (capture) return finish('tour_outcome_recorded', {
+        tourId:capture.tourId,conversionId:capture.conversionId,prospectName:capture.prospectName,
+        standingLabel:capture.standingLabel,nextPrompt:error.publicMessage,
+      }, 'leasing_tour_recorded_terms_required');
       return finish("leasing_clarification", {
         answer: error.publicMessage,
         reasonCode: error.code,

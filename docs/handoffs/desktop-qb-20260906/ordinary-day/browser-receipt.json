@@ -1,0 +1,39 @@
+{
+  "proof": "canonical_onboarding_review",
+  "phase": "claim",
+  "mode": "server_interpreted_retained_source",
+  "app_source": "successor_index_html",
+  "api_origin": "literal_loopback",
+  "external_requests_blocked_before_egress": 0,
+  "confirmations_attempted": 0,
+  "sources": [
+    {
+      "source": "occupied_opening_claim",
+      "not_marketable": true,
+      "vacant_control_visible": true,
+      "lease_end_not_invented": true
+    },
+    {
+      "source": "occupied_claim_detail",
+      "server_reason": "The opening position at 2026-07-31 accepted this bed as occupied and nothing contradicts that. Spine holds no lease for it, so the rent, term and legal right governing the occupancy are not established.",
+      "visible_detail": "UNIT303ROOMRoom2RESIDENTNot established\nHOW THIS IS KNOWNThe opening position at 2026-07-31 accepted this bed as occupied and nothing contradicts that. Spine holds no lease for it, so the rent, term and legal right governing the occupancy are not established.SOURCEclaims.csvUSEresidential"
+    },
+    {
+      "source": "day_tour_capture",
+      "person_card_opened": true,
+      "walkin_recorded": true,
+      "failed_save_preserved_answers": true,
+      "retry_saved": true,
+      "canonical_conversion_returned": true,
+      "picker_handoff_visible": true
+    },
+    {
+      "source": "leasing_work_application_picker",
+      "canonical_conversion": true,
+      "occupied_claim_excluded": true,
+      "vacant_control_visible": true,
+      "exact_targets_match": true,
+      "application_sent": false
+    }
+  ]
+}

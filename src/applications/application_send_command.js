@@ -104,6 +104,7 @@ async function stageApplicationSend(client, deps, input) {
     expires_at: (input && input.expiresAt) || null,
     actor_user_id: actorUserId,
     unitOfferable: input && input.unitOfferable,
+    application_offer_id: input && input.applicationOfferId,
   });
 
   if (!prepared || !prepared.invitation_id || !prepared.token) {

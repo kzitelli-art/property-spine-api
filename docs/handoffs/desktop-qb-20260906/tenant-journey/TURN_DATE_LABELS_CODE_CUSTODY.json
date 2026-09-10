@@ -1,0 +1,13 @@
+{
+  "api_head": "9f2acff97af311e6ebdcd5e2219f8cf873894748",
+  "app_head": "c05ae68f6f8bc49ca4b5bd752adc928e1f4e0d88",
+  "state": "local_uncommitted",
+  "sha256": {
+    "src/applications/application_target_read.js": "e982accce3a4aa5f05326648d0556624a09d42cfeacece58bad231986e1c18b2",
+    "tests/proofs/application_turn_window.db.js": "52f136748e0af9f10847cf979888d09072065f46368f6e252b1de33e035acfcd",
+    "tests/e2e/application_turn_offer_http.js": "235552985949086dae503be5516adb5b5e0f6b746de2654b2227a90ddfbb1da1",
+    "tests/e2e/application_target_dates_browser.js": "b34cd7026f3185077714453d8b69f65a659e153a4f74afc6f13d8a508223016b",
+    "../app-fable-review-20260907/application-offer-review.js": "86decfbc3afd0ed3f202541572bc03d3dab947f152859b44211757bb68c9f8fd",
+    "../app-fable-review-20260907/application_target_dates_dom.test.js": "2f7f5d619f06e6120a8cad5a26316370e185e8afaa46142440a7535e3fd81b0d"
+  }
+}

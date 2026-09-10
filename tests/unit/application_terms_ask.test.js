@@ -1,0 +1,36 @@
+"use strict";
+const assert=require("assert/strict");
+const ask=require("../../src/agent/ask_spine_answer");
+const NO_DB={query(){throw Error("Unexpected database read in injected-reader proof");}};
+const accepted={rent:"1025.00",security_deposit:"0.00",lease_start_date:"2026-10-01",lease_end_date:"2027-09-30",fees:[],concessions:{status:"none"}};
+let reads=0;
+let standing={application:{id:"private-application-id",selection:{basis:"latest_created",candidate_count:1},terms_review:{acknowledged:accepted,acknowledged_at:"2026-09-08T20:00:00Z",pending:{...accepted,rent:"1030.00"}}},target:{unit_label:"3B",space_label:"Bed B"},uncertainty:[]};
+let resolution={resolved:true,person:{id:"private-person-id",name:"Jordan Test"}};
+const leasingReader={resolveLeasingSubject:async()=>{reads++;return resolution;},readLeasingStanding:async()=>{reads++;return standing;}};
+async function answer(modules=["leasing"],question="What are Jordan Test's application terms?"){return ask.answer(NO_DB,null,{property_id:"private-property-id",allowed_modules:modules,question,leasingReader});}
+(async()=>{
+  const out=await answer();
+  assert.equal(out.outcome,"answered","application terms must be retrievable from canonical reads without a model");
+  assert.match(out.answer,/1025|1,025/);assert.match(out.answer,/1030|1,030/);
+  assert.match(out.answer,/pending|awaiting/i);assert.match(out.answer,/\$0(?:\.00)?/);
+  assert.equal(out.grounded_on.application_terms.acknowledged.rent,"1025.00");
+  assert.equal(out.grounded_on.application_terms.pending.rent,"1030.00");
+  assert(!JSON.stringify(out).includes("private-"),"database identifiers never leak into terms prose or grounding");
+  standing.application.selection.candidate_count=2;
+  assert.equal((await answer()).outcome,"clarification","multiple applications cannot silently resolve to newest");
+  const latest=await answer(["leasing"],"What are Jordan Test's latest application terms?");
+  assert.equal(latest.outcome,"answered");assert.match(latest.answer,/latest application/i);
+  standing.application.selection.candidate_count=1;
+  reads=0;const denied=await answer([]);assert.equal(denied.outcome,"not_authorized");assert.equal(reads,0);
+  standing={...standing,application:{selection:{basis:"latest_created",candidate_count:1},terms_review:{acknowledged:null,acknowledged_at:null,pending:accepted}}};
+  const first=await answer();assert.equal(first.grounded_on.application_terms.acknowledged,null);assert.match(first.answer,/not.*acknowledged|no.*accepted/i);
+  standing={...standing,application:{selection:{basis:"latest_created",candidate_count:1},terms_review:null}};
+  const missing=await answer();assert.equal(missing.grounded_on.application_terms_state,"NOT_ESTABLISHED");
+  standing={...standing,uncertainty:[{kind:"read_failed",subject:"application_offer",read_state:"READ_TIMED_OUT"}]};
+  const failed=await answer();assert.equal(failed.outcome,"unavailable");assert.equal(failed.grounded_on.application_terms_state,"READ_TIMED_OUT");
+  resolution={resolved:false,reason:"ambiguous",candidates:[{name:"Jordan One"},{name:"Jordan Two"}]};
+  const ambiguous=await answer();assert.equal(ambiguous.outcome,"clarification");
+  assert.equal(ask.questionSubject("What is the application fee?"),"economics","generic fees keep their existing pricing owner");
+  assert.equal(ask.questionSubject("What are Jordan's application terms and the security deposit?"),"composition_unavailable","application terms cannot silently become generic property pricing");
+  console.log("application_terms_ask: PASS (accepted/pending/zero/legacy/failure/identity/entitlement)");
+})().catch(e=>{console.error(e);process.exit(1);});

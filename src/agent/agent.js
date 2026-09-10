@@ -1341,7 +1341,7 @@ Reply with ONLY the message text.`;
               built.system += `\n\nTOUR SCHEDULING: booking is enabled. Below are the real open tour times you MAY present (property local timezone). To offer times, FIRST call offer_tour_slots with ONLY the slot_ids you will actually state, THEN state those exact times to the prospect. When the prospect confirms one you presented, call book_tour with that slot_id. Never state or book a time not in this list:\n` +
                 offerableSlots.map(s => `  - ${s.label}  [slot_id: ${s.slot_id}]`).join("\n");
             } else {
-              built.system += `\n\nTOUR SCHEDULING: booking is enabled but there are NO open tour slots right now. If the prospect asks to tour, say you'll have someone follow up with times — do NOT invent a time and do NOT call any tour tool.`;
+              built.system += `\n\nTOUR SCHEDULING: booking is enabled but there are NO open tour slots right now. If the prospect asks to tour, explain that no open tour times are available and that the requested time is not booked. Do not promise staff follow-up unless a durable handoff was actually recorded. Do not invent a time and do not call any tour tool.`;
             }
           }
 

@@ -1,8 +1,8 @@
 "use strict";
 
 const TOUR_RX = /\b(tour|showing|showed|walk[- ]?through)\b/i;
-const SEND_APPLICATION_RX = /\b(send|text|share|give)\b[^.!?]{0,48}\bapplication\b|\bapplication\b[^.!?]{0,48}\b(send|text|share)\b/i;
-const TARGET_REPLY_RX = /\b(unit|bed|space|room)\s*[#-]?\s*[a-z0-9][a-z0-9-]*\b/i;
+const SEND_APPLICATION_RX = /\b(send|text|share|give)\b[^.!?]{0,48}\b(?:application|app)\b|\b(?:application|app)\b[^.!?]{0,48}\b(send|text|share)\b/i;
+const TARGET_REPLY_RX = /\b(unit|bed|space|room)\b\s*[#-]?\s*[a-z0-9][a-z0-9-]*\b/i;
 const CONFIRM_APPLICATION_RX = /^\s*confirm\s+(sca1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)\s*[.!]?\s*$/i;
 const QUESTION_RX = /\?\s*$|^\s*(who|what|where|when|why|how|is|are|do|does|did|can|could|would|should)\b/i;
 
@@ -34,6 +34,26 @@ function isBareStandingReply(text, standing) {
   return !!standing && (allowed[standing] || []).includes(normalized);
 }
 
+// Explicit staff-reported excerpts only. These remain asserted text, not
+// inventory constraints, normalized dates or proof of the prospect's identity.
+// Unrecognized wording stays in the source message; never fill missing slots.
+function readStaffTourEssentials(text) {
+  const raw = String(text || '').trim();
+  if (QUESTION_RX.test(raw) || /\b(if|maybe|might|perhaps|not|never|no|don't|doesn't|cannot|can't)\b/i.test(raw)) return {};
+  const out = {};
+  const home = raw.match(/\b(?:they|she|he|prospect)\s+(?:wants?|would like|is looking for|are looking for)\s+(?:an?\s+)?([^,.!?;]+?)(?=\s+with\s+(?:a\s+)?move[- ]?in|\s+and\s+(?:send|text|share|move|budget)\b|[,\.!?;]|$)/i);
+  if (home && /\b(?:studio|bedrooms?|\d+br|room)\b/i.test(home[1])) {
+    out.unit_type = home[1].trim();
+  }
+  const move = raw.match(/\bmove[- ]?in(?:\s+date)?\s+(?:(?:is|of|on|at|around|from)\s+)?([^,.!?;]+?)(?=\s+and\s+(?:send|text|share|budget)\b|[,\.!?;]|$)/i);
+  if (move && /\b(?:month|january|february|march|april|may|june|july|august|september|october|november|december|flexible)\b|\d{4}-\d{2}/i.test(move[1])
+      && !/\b(?:not|don't|doesn't|cannot|can't)\b/i.test(raw)) {
+    out.move_month = move[1].trim();
+  }
+  for (const key of Object.keys(out)) if (out[key].length > 120) delete out[key];
+  return out;
+}
+
 function readStaffLeasingIntent(text) {
   const raw = String(text || "").trim();
   const hasTour = TOUR_RX.test(raw);
@@ -42,6 +62,13 @@ function readStaffLeasingIntent(text) {
   const hasTarget = TARGET_REPLY_RX.test(raw);
   const isQuestion = QUESTION_RX.test(raw);
   const confirmation = raw.match(CONFIRM_APPLICATION_RX);
+  if (/^confirm\s+(?:the\s+)?application(?:\s+for\s+[^?!]+)?[.!]?$/i.test(raw)) {
+    return Object.freeze({intent:'confirm_application_context',standing:null,sendApplication:true,hasTarget:false,text:raw});
+  }
+
+  if (/^terms(?:\s+for\b|\s*:)/i.test(raw)) {
+    return Object.freeze({intent:'application_terms',standing:null,sendApplication:false,hasTarget,text:raw});
+  }
 
   if (confirmation) {
     return Object.freeze({
@@ -108,8 +135,10 @@ function readStaffLeasingIntent(text) {
 
 module.exports = {
   readStaffLeasingIntent,
+  readStaffTourEssentials,
   _private: {
     standingFrom,
+    isBareStandingReply,
     isBareStandingReply,
     TOUR_RX,
     SEND_APPLICATION_RX,

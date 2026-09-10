@@ -282,6 +282,19 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
       }
       ok("picker fixture records opted-in consent through canonical QA enrollment", !!consent && !consent.error, consent && consent.error ? "enrollment failed" : "enrolled");
 
+      if (process.env.PROOF_DAY_JOURNEY === "1") {
+        const beforeRoster = await http("day host before assignment", P.token, "/operator/property/eligible-staff");
+        ok("team access alone does not establish a tour host", beforeRoster.status === 200
+          && !beforeRoster.body.eligible_staff.some(s => s.id === operator.id));
+        await pool.query(`insert into assignments(person_id,property_id,role,is_active)
+          select person_id,$2,'leasing',true from users where id=$1`, [operator.id, P.id]);
+        const roster = await http("day assigned host roster", P.token, "/operator/property/eligible-staff");
+        ok("assigned synthetic host appears in the canonical roster", roster.status === 200
+          && roster.body.eligible_staff.some(s => s.id === operator.id && s.name === "Synthetic Claim Operator"));
+        // This journey leaves the tour uncaptured so the real screen owns it.
+        pickerState = { person_id: intake.body.person_id, conversation_id: intake.body.conversation_id,
+          intake_model_attempts: 1, tour_capture_pending: true };
+      } else {
       const walk = intake.body && intake.body.lead_id ? await http("picker canonical walk-in tour", P.token, "/operator/leasing/walk-in-tour", {
         method: "POST",
         body: {
@@ -321,6 +334,7 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
           desk_key: deskRow.desk_key,
           intake_model_attempts: 1,
         };
+      }
       }
     }
 

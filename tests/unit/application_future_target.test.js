@@ -49,7 +49,7 @@ const submission = fs.readFileSync(path.join(
   __dirname, "..", "..", "src", "applications", "application_submission.js"), "utf8");
 const migration = fs.readFileSync(path.join(
   __dirname, "..", "..", "migrations", "190_application_move_in_lineage.sql"), "utf8");
-ok(/resolveSubmissionTarget\(client,\s*\{[\s\S]*?intended_move_in:\s*inv\.intended_move_in\s*\}/
+ok(/resolveSubmissionTarget\(client,\s*\{[\s\S]*?intended_move_in:\s*inv\.intended_move_in[\s\S]*?requested_end:\s*agreedTerms \? agreedTerms\.lease_end_date : null\s*\}/
     .test(submission),
   "tenant submission rechecks the persisted invitation date");
 ok(/application_invitations[\s\S]*?intended_move_in date/.test(migration)

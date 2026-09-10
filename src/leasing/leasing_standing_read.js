@@ -46,12 +46,15 @@
 
 const { resolveRelationshipStage } = require("../shared/relationship_stage");
 const { resolveSpaceEconomics } = require("../money/effective_pricing");
+const { readBoundApplicationOffer } = require("../applications/proposed_terms_service");
+const { normalizeStanding } = require("./tour_outcome");
 
 //  A source that could not be read is reported, never silently emptied.
 async function attempt(label, fn, notes) {
   try { return await fn(); }
   catch (e) {
-    notes.push({ kind: "read_failed", subject: label, detail: e.message });
+    notes.push({ kind: "read_failed", subject: label, detail: e.message,
+      ...(e.code === "READ_TIMED_OUT" ? {read_state:"READ_TIMED_OUT"} : {}) });
     return null;
   }
 }
@@ -81,16 +84,66 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
   const stageOut = await attempt("relationship_stage",
     () => resolveRelationshipStage(db, { personId: person_id, propertyId: property_id, asOf: as_of }), notes);
 
+  // Recorded history, not a current recommendation. Keep corrections as
+  // separate events and never infer today's standing from an earlier tour.
+  // Only published tour events are read here, never private staff threads.
+  const tourEvents = await attempt("tour_history", async () => (await db.query(
+    `select te.id, te.tour_id, te.event_type, te.event_at, te.actor_id,
+            te.metadata, u.name as actor_name, count(*) over() as total_events
+       from tour_events te
+       join leasing_tours t on t.id=te.tour_id
+       join leasing_leads l on l.id=t.lead_id
+       left join users u on u.id=te.actor_id
+      where t.property_id=$2 and l.property_id=$2 and l.person_id=$1
+        and te.event_type in ('completed','no_show','outcome_corrected')
+      order by te.event_at desc, te.id desc limit 5`, [person_id, property_id])).rows, notes);
+  const tourHistory = tourEvents === null ? {
+    read_state: notes.find(n => n.subject === "tour_history")?.read_state || "READ_FAILED", events: null,
+  } : {
+    read_state: "OK", interpretation: "Historical captures, not current readiness or application delivery.",
+    truncated: tourEvents.length > 0 && Number(tourEvents[0].total_events) > tourEvents.length,
+    events: tourEvents.map(e => {
+      const md=e.metadata || {};
+      const legacy=e.event_type === "outcome_corrected" ? (md.revised || {}) : (md.outcome || {});
+      const normalized=normalizeStanding(Object.prototype.hasOwnProperty.call(md,"standing")
+        ? {standing:md.standing} : {...legacy,interest_level:md.tour_outcome || null});
+      return { source_event_id:e.id, tour_id:e.tour_id, event_type:e.event_type,
+        recorded_at:e.event_at, recorded_by_user_id:e.actor_id, recorded_by_name:e.actor_name || null,
+        standing:normalized.standing,
+        standing_unresolved_reason:md.standing_unresolved_reason || normalized.reason || null,
+        notes:md.notes ?? legacy.note ?? null,
+        correction:e.event_type === "outcome_corrected"
+          ? {corrects_event_id:md.corrects_event || null,reason:md.reason || null} : null };
+    }),
+  };
+
   // ── THE OPPORTUNITY AND ITS TARGET ────────────────────────────────
   const app = await attempt("application", async () => (await db.query(
     `select a.id, a.status, a.unit_id, a.space_id, a.applicant_name,
+            count(*) over() as application_count,
+            a.property_id, a.person_id,
+            a.application_offer_id, a.application_terms_hash,
+            a.application_terms_acknowledged_at,
             a.terms_review_obligation_id, a.executed_lease_record_id, a.created_at,
             u.unit_number, s.space_label
        from lease_applications a
        left join units  u on u.id = a.unit_id
        left join spaces s on s.id = a.space_id
       where a.person_id=$1 and a.property_id=$2
-      order by a.created_at desc limit 1`, [person_id, property_id])).rows[0] || null, notes);
+       order by a.created_at desc limit 1`, [person_id, property_id])).rows[0] || null, notes);
+
+  // The application-offer service owns immutable accepted terms and the exact
+  // invitation-linked pending offer. Standing only projects that result; it
+  // never reconstructs terms from legacy application columns or asking rent.
+  const termsReview = app ? await attempt("application_offer", async () => {
+    const state = await readBoundApplicationOffer(db, app, { allowHistorical: true });
+    if (!state) return null;
+    return {
+      acknowledged_at: state.id ? (app.application_terms_acknowledged_at || null) : null,
+      acknowledged: state.id ? state.terms : null,
+      pending: state.pending_review ? state.pending_review.terms : null,
+    };
+  }, notes) : null;
 
   const conversion = await attempt("opportunity", async () => (await db.query(
     `select id, current_stage from leasing_conversions
@@ -306,6 +359,7 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
     as_of: asOf,
     person: person ? { id: person.id, name: person.name } : null,
     property_id,
+    tour_history: tourHistory,
     opportunity: conversion ? { id: conversion.id, current_stage: conversion.current_stage } : null,
     target: app ? {
       property_id,
@@ -324,7 +378,11 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
       executed: lease ? { rent: lease.rent, security_deposit: lease.security_deposit,
                           lease_start_date: lease.start_date, lease_end_date: lease.end_date } : null,
     },
-    application: app ? { id: app.id, status: app.status, applied_at: app.created_at } : null,
+    application: app ? {
+      id: app.id, status: app.status, applied_at: app.created_at,
+      selection: {basis:"latest_created", candidate_count:Number(app.application_count)},
+      terms_review: termsReview,
+    } : null,
     lease: leaseBand,
     tenancy: lease
       ? { state: lease.lease_status, lease_id: lease.id, space_id: lease.space_id }

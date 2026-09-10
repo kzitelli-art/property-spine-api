@@ -66,6 +66,48 @@ async function stopServer() {
   try { await run("C:\\Program Files\\Git\\bin\\bash.exe", ["tests/e2e/apply_migrations.sh"], { stdio: ["ignore", migrationLog, migrationLog] }); }
   finally { fs.closeSync(migrationLog); }
   console.log("REAL_MIGRATION_CHAIN_APPLIED");
+  // Local Windows entry to the existing CI tenant journey. This separate
+  // synthetic run does not alter the workbook rehearsal's zero-call contract.
+  if (process.env.PROOF_TENANT_JOURNEY === "1") {
+    await boundary.assertDatabase();
+    for (const fixture of ["property_fixture.sql", "fixtures.sql"]) {
+      await run("psql", [owned.url, "-q", "-v", "ON_ERROR_STOP=1", "-f", path.join(__dirname, fixture)]);
+    }
+    await run(process.execPath, [path.join(__dirname, "instrument_fixture.js")]);
+    const { Pool } = require("pg");
+    pool = new Pool({ connectionString: owned.url, ssl: false });
+    const property = (await pool.query("select id from properties where name='Skyline E2E'")).rows;
+    assert.equal(property.length, 1);
+    const propertyId = property[0].id;
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], {cwd:ROOT,encoding:"utf8",windowsHide:true}).trim();
+    await boundary.portFree(Number(process.env.PORT));
+    server = spawn(process.execPath, ["--require", path.join(__dirname,"proof_fence_preload.js"),
+      "--require", path.join(__dirname,"fake_sms_preload.js"),
+      "--require", path.join(__dirname,"fake_anthropic_preload.js"), path.join(ROOT,"server.js")], {
+      cwd:ROOT, windowsHide:true, stdio:["ignore","pipe","pipe"],
+      env:boundary.serverEnvironment({OPERATOR_KEY:"e2e-key",PORT:process.env.PORT,E2E_SERVER_ROOT:ROOT,
+        RENDER_GIT_COMMIT:sha,OPERATOR_APP_ORIGIN:"http://localhost:5173",APP_BASE_URL:process.env.E2E_API_BASE,
+        PUBLIC_APPLY_BASE_URL:process.env.E2E_API_BASE,SMS_SEND_MODE:"customer_care",
+        EXECUTED_LEASE_INTAKE_ENABLED:"true",EXECUTED_LEASE_PROPERTY_IDS:propertyId,
+        COMMITMENT_LEDGER_MODE:"enabled",ACTIVATION_PROPERTY_IDS:propertyId,
+        APPLICATION_INTENT_PREPARE_ENABLED:"true",APPLICATION_INTENT_PROPERTY_IDS:propertyId,
+        CONVERSATIONAL_ACTION_TTL_SECONDS:"5",READ_AI_CONNECTION_ID:"11111111-2222-4333-8444-555555555555",
+        LEASING_INTAKE_SECRET:"e2e-intake",LEASING_INTAKE_PROPERTY_IDS:propertyId}),
+    });
+    server.stdout.on("data", chunk => fs.writeSync(childLog, chunk));
+    server.stderr.on("data", chunk => fs.writeSync(childLog, chunk));
+    for (let attempt=1;;attempt++) {
+      try { await boundary.waitServer(process.env.E2E_API_BASE,()=>server.exitCode===null&&server.signalCode===null); break; }
+      catch(error) { if(error.message!=="Owned server readiness was not proven"||attempt===4) throw error; }
+    }
+    console.log(`TENANT_JOURNEY_OWNED_API_READY=${sha}`);
+    await run(process.execPath,[path.join(__dirname,"tour_application_lease.e2e.js")],{
+      env:{...process.env,E2E_DISPOSABLE_DATABASE:"true",E2E_BASE_URL:process.env.E2E_API_BASE},
+    });
+    assert.equal(fs.statSync(process.env.E2E_EGRESS_LOG).size,0,"Tenant journey cannot reach external providers");
+    console.log("TENANT_JOURNEY_EXISTING_HTTP_PROOF_PASSED; model calls locally refused; SMS locally captured");
+    return;
+  }
   const parentRoot = path.resolve(process.env.ONBOARDING_PARENT_ROOT || path.join(ROOT, "../qb-proof-checkpoint"));
   if (process.env.ONBOARDING_SPACE_PROOF_ONLY !== "1") {
   await run(process.execPath, [path.join(ROOT, "tests/proofs/canonical_onboarding_source.db.js")], {
@@ -194,6 +236,10 @@ async function stopServer() {
   const focusedProof = process.env.PROOF_FOCUSED_NAME || (process.env.PROOF_SOURCE_AUTH_OBSERVATION === "1" ? "retained_source_authority_observation" : null);
   if (!baselineMode && !spaceParentMode && focusedProof) {
     assert.match(focusedProof, /^[a-z0-9_]+$/);
+    if(process.env.PROOF_DAY_JOURNEY === "1") {
+      assert.equal(process.env.PROOF_PICKER_BROWSER,"1");
+      await run(process.execPath,[path.join(ROOT,"tests/proofs/canonical_occupancy_holds.db.js")]);
+    }
     await run(process.execPath, [path.join(ROOT,`tests/proofs/${focusedProof}.db.js`)], {
       env: {...process.env, PROOF_BUSINESS_ROOT:businessRoot},
     });

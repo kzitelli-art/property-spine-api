@@ -39,6 +39,9 @@
 
 const express = require("express");
 const crypto = require("crypto");
+const { readApplicationOffer, assertCurrentApplicationOffer, resolveApplicationOffer } = require("../money/application_offer_terms");
+const dateOnly = value => value == null ? null
+  : value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
 // The canonical lifecycle authority. Status and its milestone are authored
 // together in one insert — migration 125 refuses a row that reaches submission
 // without submitted_at, so insert-then-update is rejected by the database.
@@ -380,6 +383,7 @@ module.exports = function applicationSubmissionModule(deps) {
   async function createPreparedInvitation(client, {
     conversion_id = null, person_id = null, property_id, unit_id = null,
     space_id = null, intended_move_in = null, expires_at = null, created_by_user_id = null,
+    application_offer_id = null,
   }) {
     if (!property_id) throw httpErr(400, "property_id is required.");
     const prop = (await client.query("select id from properties where id=$1", [property_id])).rows[0];
@@ -397,19 +401,33 @@ module.exports = function applicationSubmissionModule(deps) {
     let target = null;
     if (unit_id || space_id) {
       target = await applicationTarget.resolveApplicationTarget(client, {
-        property_id, unit_id, space_id, intended_move_in, require_offerable: true,
+        property_id, unit_id, space_id, intended_move_in, require_offerable: false,
       });
       if (!target.ok) {
         throw httpErr(target.httpStatus || 409, target.refusal_reason || "That unit cannot be used for an application.",
           target.refusal_code);
       }
     }
+    const offer = await resolveApplicationOffer(client, {
+      offer_id: application_offer_id, property_id, person_id,
+      space_id: target && target.resolved_space_id,
+    });
+    application_offer_id = offer.offer_id;
+    if (intended_move_in && dateOnly(intended_move_in) !== offer.lease_start_date) {
+      throw httpErr(409, "The target date differs from the application terms.", "APPLICATION_TERMS_TARGET_MISMATCH");
+    }
+    target = await applicationTarget.resolveApplicationTarget(client, {
+      property_id, unit_id: target.unit_id, space_id: target.resolved_space_id,
+      intended_move_in: offer.lease_start_date, require_offerable: true,
+      requested_end: offer.lease_end_date,
+    });
+    if (!target.ok) throw httpErr(target.httpStatus || 409, target.refusal_reason, target.refusal_code);
     const rawToken = crypto.randomBytes(24).toString("base64url");
     const tokenDigest = digestToken(rawToken);
     const inv = (await client.query(
        `insert into application_invitations
-         (token_digest, conversion_id, person_id, property_id, unit_id, space_id, intended_move_in, status, expires_at, created_by_user_id)
-       values ($1,$2,$3,$4,$5,$6,$7,'prepared',$8,$9) returning *`,
+         (token_digest, conversion_id, person_id, property_id, unit_id, space_id, intended_move_in, status, expires_at, created_by_user_id, application_offer_id)
+       values ($1,$2,$3,$4,$5,$6,$7,'prepared',$8,$9,$10) returning *`,
       //  THE RESOLVED BED IS WHAT IS WRITTEN (182) — not the caller's request.
       //  A single-space unit therefore persists the derived space with no
       //  behaviour change; a chosen bed persists the one availability was
@@ -417,8 +435,8 @@ module.exports = function applicationSubmissionModule(deps) {
       [tokenDigest, conversion_id, person_id, property_id,
        target ? target.unit_id : unit_id,
        target ? target.resolved_space_id : null,
-       target ? target.intended_move_in : intended_move_in,
-       expires_at, created_by_user_id]
+       offer.lease_start_date,
+       expires_at, created_by_user_id, application_offer_id]
     )).rows[0];
     return {
       receipt: "Invitation prepared. Send it through the real channel, then call /mark-sent to attest the send.",
@@ -545,32 +563,12 @@ module.exports = function applicationSubmissionModule(deps) {
       if (!prop) throw httpErr(404, "No property with that id.");
       const per = (await client.query("select id, phone from persons where id=$1", [person_id])).rows[0];
       if (!per) throw httpErr(404, "No person with that id.");
-      // ── TARGET RESOLUTION BEFORE ANY SIDE EFFECT ────────────────────
-      //  Provider dispatch must not bypass resolution just because it holds a
-      //  unit_id. The refusal lands BEFORE the invitation insert, before the
-      //  comm_event insert, and therefore before any wire attempt. The prior
-      //  check was a property wall only.
-      let dispatchTarget = null;
-      if (unit_id || space_id) {
-        dispatchTarget = await applicationTarget.resolveApplicationTarget(client, {
-          property_id, unit_id, space_id, intended_move_in, require_offerable: true });
-        if (!dispatchTarget.ok) {
-          throw httpErr(dispatchTarget.httpStatus || 409,
-            dispatchTarget.refusal_reason || "That unit cannot be used for an application.",
-            dispatchTarget.refusal_code);
-        }
-      }
-      const rawToken = crypto.randomBytes(24).toString("base64url");
-      const inv = (await client.query(
-       `insert into application_invitations
-           (token_digest, conversion_id, person_id, property_id, unit_id, space_id, intended_move_in, status, expires_at, created_by_user_id)
-         values ($1,$2,$3,$4,$5,$6,$7,'prepared',$8,$9) returning *`,
-        [digestToken(rawToken), conversion_id, person_id, property_id,
-         dispatchTarget ? dispatchTarget.unit_id : unit_id,
-         dispatchTarget ? dispatchTarget.resolved_space_id : null,
-         dispatchTarget ? dispatchTarget.intended_move_in : intended_move_in,
-         expires_at, created_by_user_id]
-      )).rows[0];
+      const prepared = await createPreparedInvitation(client, {
+        property_id, person_id, unit_id, space_id, intended_move_in,
+        conversion_id, expires_at, created_by_user_id,
+      });
+      const rawToken = prepared.token;
+      const inv = (await client.query("select * from application_invitations where id=$1", [prepared.invitation_id])).rows[0];
       const url = `${base}/t/application/${rawToken}`;
       const body = `${message_prefix ? message_prefix + " " : ""}Here's your secure application link: ${url}`;
       const evt = (await client.query(
@@ -862,7 +860,7 @@ module.exports = function applicationSubmissionModule(deps) {
     }
 
     if (!validDate(captured.desired_move_in)) fail("Preferred move-in date is invalid.");
-    if (intended_move_in && String(captured.desired_move_in) < String(intended_move_in).slice(0, 10)) {
+    if (intended_move_in && String(captured.desired_move_in) < dateOnly(intended_move_in)) {
       fail("Preferred move-in date cannot be before the targeted move-in date.");
     }
     oneOf(captured.move_flexibility, ["exact", "plus_minus_7", "plus_minus_30", "flexible"], "Move-in flexibility");
@@ -922,6 +920,32 @@ module.exports = function applicationSubmissionModule(deps) {
     return capturedName;
   }
 
+  async function acceptApplicationTerms(client, inv, offer, applicationId) {
+    await assertCurrentApplicationOffer(client, offer.offer_id);
+    const target = await applicationTarget.resolveSubmissionTarget(client, {
+      property_id: inv.property_id, unit_id: inv.unit_id, space_id: inv.space_id,
+      intended_move_in: offer.lease_start_date, requested_end: offer.lease_end_date,
+    });
+    if (!target.ok) throw httpErr(target.httpStatus || 409, target.refusal_reason, target.refusal_code);
+    const ack = (await client.query(`insert into application_terms_acknowledgements
+      (application_id,invitation_id,offer_id,terms_hash) values($1,$2,$3,$4)
+      on conflict(application_id,offer_id) do nothing returning acknowledged_at`,
+      [applicationId,inv.id,offer.offer_id,offer.terms_hash])).rows[0]
+      || (await client.query("select acknowledged_at from application_terms_acknowledgements where application_id=$1 and offer_id=$2",
+        [applicationId,offer.offer_id])).rows[0];
+    return (await client.query(`update lease_applications set application_offer_id=$1,
+      application_terms_hash=$2,application_terms_acknowledged_at=$3,
+      rent=$4,deposit=$5,lease_start_date=$6,lease_end_date=$7,concession_status=$8,
+      intended_move_in=$6 where id=$9 returning *`,
+      [offer.offer_id,offer.terms_hash,ack.acknowledged_at,offer.rent,offer.security_deposit,
+        offer.lease_start_date,offer.lease_end_date,offer.concessions.status,applicationId])).rows[0];
+  }
+
+  function requireTermsAcknowledgement(body, offer) {
+    if (body.application_terms_acknowledged !== true || body.application_terms_hash !== offer.terms_hash)
+      throw httpErr(409, "Review and acknowledge the current application terms before submitting.", "APPLICATION_TERMS_REVIEW_REQUIRED");
+  }
+
   // 3) PUBLIC SUBMIT — invitation-bound. The applicant submits against a live
   //    valid token. Resolves identity/conversion FROM the token, runs the
   //    shared submission service, marks the invitation consumed. Idempotent:
@@ -947,12 +971,37 @@ module.exports = function applicationSubmissionModule(deps) {
     if (inv.status === "prepared") throw httpErr(409, "This link was never sent; it cannot be used to submit.");
     // idempotency: already consumed → return the existing application
     if (inv.status === "consumed" && inv.lease_application_id) {
-      const ex = (await client.query("select * from lease_applications where id=$1", [inv.lease_application_id])).rows[0];
+      const ex = (await client.query("select * from lease_applications where id=$1 for update", [inv.lease_application_id])).rows[0];
+      if (!ex || ex.property_id !== inv.property_id || ex.person_id !== inv.person_id)
+        throw httpErr(409,"This invitation no longer resolves to its original application.");
+      if (inv.application_offer_id && inv.application_offer_id !== ex.application_offer_id) {
+        if (!['submitted','approved','lease_ready'].includes(ex.status)) throw httpErr(409,"This application is not open for revised terms.");
+        if ((await client.query("select id from lease_packets where application_id=$1 limit 1",[ex.id])).rows.length)
+          throw httpErr(409,"A lease packet already exists; revised terms cannot be accepted here.");
+        const revised = await readApplicationOffer(client,{offer_id:inv.application_offer_id,
+          property_id:inv.property_id,person_id:inv.person_id,space_id:inv.space_id});
+        requireTermsAcknowledgement(req.body,revised);
+        const accepted = await acceptApplicationTerms(client,inv,revised,ex.id);
+        return {receipt:"Revised terms accepted. Your existing application is unchanged apart from these agreed terms.",application:accepted,terms_reaccepted:true};
+      }
       return { receipt: "Application already submitted.", application: ex, idempotent: true };
     }
     // valid live token = it has been SENT (manually_sent | provider_dispatched)
     if (!["manually_sent", "provider_dispatched"].includes(inv.status)) {
       throw httpErr(409, `Invitation is '${inv.status}' — not in a submittable state.`);
+    }
+    let agreedTerms = null;
+    if (inv.application_offer_id) {
+      agreedTerms = await readApplicationOffer(client, {
+        offer_id: inv.application_offer_id, property_id: inv.property_id,
+        person_id: inv.person_id, space_id: inv.space_id,
+      });
+      await assertCurrentApplicationOffer(client,agreedTerms.offer_id);
+      requireTermsAcknowledgement(req.body,agreedTerms);
+      if ((rent != null && String(rent) !== agreedTerms.rent) ||
+          (deposit != null && String(deposit) !== agreedTerms.security_deposit)) {
+        throw httpErr(400, "Application terms are set by the offer, not by the submitted form.", "APPLICATION_TERMS_TAMPERED");
+      }
     }
     const validationProperty = (await client.query(
       "select lease_config from properties where id=$1", [inv.property_id]
@@ -995,7 +1044,8 @@ module.exports = function applicationSubmissionModule(deps) {
     if (inv.unit_id || inv.space_id) {
       const still = await applicationTarget.resolveSubmissionTarget(client, {
         property_id: inv.property_id, unit_id: inv.unit_id, space_id: inv.space_id,
-        intended_move_in: inv.intended_move_in });
+        intended_move_in: inv.intended_move_in,
+        requested_end: agreedTerms ? agreedTerms.lease_end_date : null });
       if (!still.ok) {
         throw httpErr(still.httpStatus || 409,
           still.refusal_reason || "This application link can no longer be used.",
@@ -1029,13 +1079,18 @@ module.exports = function applicationSubmissionModule(deps) {
       //  gap this build exists to close.
       space_id: inv.space_id,
       intended_move_in: inv.intended_move_in,
-      applicant_name: name, rent, deposit, guarantor_name: canonicalGuarantorName, captured,
+      applicant_name: name, rent: agreedTerms ? agreedTerms.rent : rent,
+      deposit: agreedTerms ? agreedTerms.security_deposit : deposit,
+      guarantor_name: canonicalGuarantorName, captured,
       source: "applicant",
       conversion_id: inv.conversion_id,
       progress_obligation_id: inv.progress_obligation_id,
     });
 
     // link the consumed invitation to the application it produced
+    if (agreedTerms) {
+      out.application = await acceptApplicationTerms(client, inv, agreedTerms, out.application.id);
+    }
     await client.query(
       `update application_invitations set lease_application_id=$1, updated_at=now() where id=$2`,
       [out.application.id, inv.id]
@@ -1165,8 +1220,15 @@ module.exports = function applicationSubmissionModule(deps) {
       return { state: "expired", receipt: "This application link has expired. Contact the leasing office for a new one." };
     }
     if (inv.status === "prepared") return { state: "not_sent", receipt: "This link is not active yet." };
-    if (inv.status === "consumed") return { state: "already_submitted", receipt: "This application has already been submitted. The leasing team has it." };
-    if (!["manually_sent", "provider_dispatched"].includes(inv.status)) {
+    let submittedApplication = null;
+    if (inv.status === "consumed") {
+      submittedApplication = (await client.query("select * from lease_applications where id=$1",[inv.lease_application_id])).rows[0];
+      if (submittedApplication && (submittedApplication.property_id !== inv.property_id || submittedApplication.person_id !== inv.person_id))
+        return {state:"unavailable",receipt:"This link no longer resolves to its original application."};
+      if (!submittedApplication || !inv.application_offer_id || inv.application_offer_id === submittedApplication.application_offer_id)
+        return { state: "already_submitted", receipt: "This application has already been submitted. The leasing team has it." };
+    }
+    if (!["manually_sent", "provider_dispatched", "consumed"].includes(inv.status)) {
       return { state: "unavailable", receipt: `This link is not currently open (${inv.status}).` };
     }
 
@@ -1212,9 +1274,18 @@ module.exports = function applicationSubmissionModule(deps) {
       ? [inv.intended_move_in.getFullYear(),
          String(inv.intended_move_in.getMonth() + 1).padStart(2, "0"),
          String(inv.intended_move_in.getDate()).padStart(2, "0")].join("-")
-      : (inv.intended_move_in ? String(inv.intended_move_in).slice(0, 10) : null);
+      : dateOnly(inv.intended_move_in);
     return {
-      state: "open",
+      state: submittedApplication ? "terms_review" : "open",
+      terms_required: !!inv.application_offer_id,
+      application_terms: inv.application_offer_id ? await readApplicationOffer(client, {
+        offer_id: inv.application_offer_id, property_id: inv.property_id,
+        person_id: inv.person_id, space_id: inv.space_id,
+      }) : null,
+      previous_terms_acknowledged: !!(submittedApplication && submittedApplication.application_terms_acknowledged_at),
+      previous_application_terms: submittedApplication && submittedApplication.application_offer_id
+        ? await readApplicationOffer(client,{offer_id:submittedApplication.application_offer_id,
+          property_id:inv.property_id,person_id:inv.person_id,space_id:inv.space_id}) : null,
       property_name: prop ? prop.name : null,
       property_address: prop ? prop.address : null,
       unit_label: unitLabel,
@@ -1285,6 +1356,7 @@ module.exports = function applicationSubmissionModule(deps) {
     .property-card p{margin:0;color:#c9c4b9;font-size:14px;line-height:1.55}
     .target-summary{margin-top:22px;border-top:1px solid rgba(255,255,255,.18);border-bottom:1px solid rgba(255,255,255,.18)}
     .target-row{display:grid;grid-template-columns:88px minmax(0,1fr);gap:12px;padding:11px 0;border-top:1px solid rgba(255,255,255,.1);font-size:13px}
+    .target-row[hidden]{display:none}
     .target-row:first-child{border-top:0}
     .target-row span{color:#9ea8a2}
     .target-row strong{color:#fff;font-weight:700;overflow-wrap:anywhere}
@@ -1369,6 +1441,14 @@ module.exports = function applicationSubmissionModule(deps) {
     .attest{display:flex;align-items:flex-start;gap:10px;margin-top:20px;padding:15px 16px;border:1px solid var(--line);border-radius:8px}
     .attest input{width:18px;height:18px;margin:1px 0 0}
     .attest label{margin:0;font-size:13px;font-weight:600;line-height:1.5}
+    .terms-card{margin:0 0 26px;border:1px solid var(--line);border-radius:8px;background:#fff}
+    .terms-card h3{margin:0;padding:15px 16px;border-bottom:1px solid var(--line);font-size:14px}
+    .terms-body{padding:6px 16px}
+    .terms-body .review-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+    .terms-fee{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-top:1px solid #ece8df;font-size:13px}
+    .terms-fee:first-child{border-top:0}
+    .terms-missing{border-left:5px solid var(--red);background:#fff2f0}
+    .terms-missing h3{color:var(--red)}
     .privacy{margin-top:14px;color:var(--muted);font-size:12px;line-height:1.55}
     .message{max-width:620px;margin:0 auto;padding:90px 30px;text-align:center}
     .message-mark{display:grid;width:58px;height:58px;margin:0 auto 20px;place-items:center;border-radius:50%;background:#e8f1ec;color:var(--green);font-size:28px}
@@ -1406,7 +1486,7 @@ module.exports = function applicationSubmissionModule(deps) {
          <div class="target-row"><span>Home</span><strong id="unitPill">Application</strong></div>
          <div class="target-row" id="targetMoveRow" hidden><span>Target date</span><strong id="targetMoveIn"></strong></div>
        </div>
-       <p class="unit-note">This application stays tied to this exact home. Final rent, deposit, and lease terms are reviewed before lease preparation.</p>
+       <p class="unit-note">These terms stay with your application and are used to prepare your lease.</p>
     </div>
     <div class="rail-note">
       <strong>Private by design</strong>
@@ -1429,23 +1509,17 @@ module.exports = function applicationSubmissionModule(deps) {
     </div>
 
     <section class="screen on" data-step="0">
-       <h2>Apply in a few minutes.</h2>
-       <p class="lede">This form is already connected to the exact home selected with the leasing team. Answer only what applies, then review everything before submitting.</p>
-      <div class="info-card">
-        <h3>What you will need</h3>
-        <ul>
-          <li>Your current address and approximate move-in date</li>
-          <li>Income information from any lawful sources you want considered</li>
-          <li>The names of everyone who will live in the home</li>
-        </ul>
-      </div>
-      <div class="intro-grid">
-        <div class="intro-tile"><strong>No fee in this step</strong><span>You will see any future fee or screening request before agreeing to it.</span></div>
-         <div class="intro-tile"><strong>About 5 minutes</strong><span>Your progress stays on this device until you submit.</span></div>
-         <div class="intro-tile"><strong>Exact home</strong><span>The unit or bed shown here travels with the application and lease.</span></div>
-        <div class="intro-tile"><strong>Human review</strong><span>Submitting is not an approval or a lease. The leasing team reviews it next.</span></div>
-      </div>
-      <div class="actions"><span></span><button class="primary" type="button" data-next>Start application</button></div>
+       <h2 id="termsHeading">Review the home and terms first.</h2>
+       <p class="lede" id="termsIntro">Before you share your personal information, review the exact home and the commercial terms the leasing team has prepared for this application.</p>
+       <div id="applicationTerms" class="terms-card" aria-live="polite"></div>
+       <div class="attest" id="termsAttestation">
+         <input id="termsAcknowledgement" type="checkbox"/>
+         <label id="termsAcknowledgementLabel" for="termsAcknowledgement">I have reviewed these terms for this exact home and want to continue with this application.</label>
+       </div>
+       <div id="termsError" class="server-error" role="alert"></div>
+      <p class="privacy">About 5 minutes. Have your current address, income information, and household details ready. Your progress stays on this device until you submit.</p>
+      <p class="privacy">Submitting is not an approval or a lease. Any screening request is shown separately before you agree to it.</p>
+      <div class="actions"><span></span><button id="termsNextButton" class="primary" type="button" data-next>Continue to application</button></div>
     </section>
 
     <section class="screen" data-step="1">
@@ -1728,6 +1802,7 @@ module.exports = function applicationSubmissionModule(deps) {
       <h2>Review your application</h2>
       <p class="lede">Nothing is submitted until you select the confirmation and press Submit application.</p>
       <div id="review"></div>
+      <div id="reviewTerms"></div>
       <div class="attest">
         <input id="certify" type="checkbox"/>
         <label for="certify">I certify that the information in this application is complete and accurate to the best of my knowledge.</label>
@@ -1751,6 +1826,7 @@ module.exports = function applicationSubmissionModule(deps) {
   var step = 0;
   var stepNames = ["Before you begin","Your information","Residence","Income","Household","Review"];
   var state = {
+    terms_ack_hash:"",
     legal_name:"",dob_input:"",email:"",phone:"",lead_source:"",
     address_line1:"",address_line2:"",city:"",state_code:"",postal_code:"",
     current_since:"",housing_status:"",housing_payment:"",landlord_contact:"",
@@ -1783,6 +1859,44 @@ module.exports = function applicationSubmissionModule(deps) {
   }
   function persistDraft(){
     try{sessionStorage.setItem(STORAGE_KEY,JSON.stringify(state));}catch(_){}
+  }
+  function terms(){ return CTX && CTX.application_terms && typeof CTX.application_terms === "object" ? CTX.application_terms : null; }
+  function termsHash(){ var t=terms(); return t && t.terms_hash ? String(t.terms_hash) : ""; }
+  function cadenceLabel(cadence){ return ({monthly:"per month",one_time:"one time",per_applicant:"per applicant",annual:"per year",weekly:"per week",biweekly:"every two weeks"})[cadence] || cadence || ""; }
+  function termMoney(v){ var n=normalizeMoney(v); return n==null ? "Unknown" : "$"+n.toLocaleString(); }
+  function renderTerms(targetId){
+    var host=byId(targetId), t=terms(); if(!host) return;
+    if(!t){ host.className="terms-card terms-missing"; host.innerHTML='<h3>Terms are not available yet</h3><div class="terms-body"><p class="privacy">The leasing team has not established the rent, deposit, dates, and applicable fees for this exact home. You cannot continue until those terms are available.</p></div>'; return; }
+    var fees=Array.isArray(t.fees)?t.fees:[], concessions=t.concessions||{};
+    var feeHtml=fees.length?fees.map(function(f){ return '<div class="terms-fee"><span>'+esc(f.label||f.code||"Fee")+' <span style="color:var(--muted)">'+esc(cadenceLabel(f.cadence))+'</span></span><b>'+termMoney(f.amount)+'</b></div>'; }).join(""):'<b>None</b>';
+    var concessionText=concessions.status==="none"?"None":(concessions.label||concessions.description||"Structured concession");
+    if(concessions.status==="structured" && concessions.amount!=null) concessionText += " · "+termMoney(concessions.amount)+(concessions.cadence?" "+cadenceLabel(concessions.cadence):"");
+    host.className="terms-card";
+    host.innerHTML='<h3>Commercial terms for '+display(CTX.unit_label,"this exact home")+'</h3><div class="terms-body">'+
+      row("Rent",termMoney(t.rent)+" per month")+row("Security deposit",termMoney(t.security_deposit))+row("Lease starts",dateDisplay(t.lease_start_date))+row("Lease ends",dateDisplay(t.lease_end_date))+
+      '<div class="review-row"><span>Applicable fees</span><div>'+feeHtml+'</div></div>'+row("Concessions",concessionText)+
+      '<p class="privacy">These are the current terms for this application. If they change, you will review and acknowledge the new terms.</p></div>';
+    var previous=CTX.previous_application_terms;
+    if(previous && typeof previous==="object" && CTX.previous_terms_acknowledged===true){
+      var changed=[];
+      [["Rent",previous.rent,t.rent,"money"],["Security deposit",previous.security_deposit,t.security_deposit,"money"],["Lease starts",previous.lease_start_date,t.lease_start_date,"date"],["Lease ends",previous.lease_end_date,t.lease_end_date,"date"]].forEach(function(item){
+        var oldValue=String(item[1]==null?"":item[1]), newValue=String(item[2]==null?"":item[2]);
+        if(oldValue!==newValue) changed.push(row(item[0],item[3]==="money"?termMoney(item[1])+" → "+termMoney(item[2]):dateDisplay(item[1])+" → "+dateDisplay(item[2])));
+      });
+      if(JSON.stringify(previous.fees||[])!==JSON.stringify(t.fees||[])) changed.push(row("Applicable fees","Changed"));
+      if(JSON.stringify(previous.concessions||{})!==JSON.stringify(t.concessions||{})) changed.push(row("Concessions","Changed"));
+      host.innerHTML+='<div class="terms-body" style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px"><h4>Previously reviewed</h4><p class="privacy">These were acknowledged earlier for this application. They are shown for comparison only and are not accepted on your behalf.</p>'+(changed.length?'<div class="review-row"><span>Changed terms</span><div>'+changed.join("")+'</div></div>':'<p class="privacy">The leasing team is asking you to review the current terms again.</p>')+'</div>';
+    }
+  }
+  function termsReady(){
+    var t=terms(); return !!(t && termsHash() && t.rent!=null && t.security_deposit!=null && t.lease_start_date && t.lease_end_date && Array.isArray(t.fees) && t.concessions && (t.concessions.status==="none" || t.concessions.status==="structured"));
+  }
+  function acknowledgeTerms(){
+    if(!termsReady()) return false;
+    var checkbox=byId("termsAcknowledgement");
+    if(!checkbox || !checkbox.checked){ var e=byId("termsError"); if(e){e.textContent="Review and acknowledge the established terms before continuing.";e.classList.add("on");} return false; }
+    byId("termsError").classList.remove("on");
+    state.terms_ack_hash=termsHash(); persistDraft(); return true;
   }
   function clearDraft(){
     try{sessionStorage.removeItem(STORAGE_KEY);}catch(_){}
@@ -2022,6 +2136,8 @@ module.exports = function applicationSubmissionModule(deps) {
     var guarantor=state.guarantor_needed==="yes" ? (state.guarantor_name || "Yes") : (state.guarantor_needed==="unsure" ? "Not sure" : "No");
     var options=(CTX&&CTX.application_options)||{};
     var html="";
+    renderTerms("reviewTerms");
+    html+=section("Terms acknowledged",0,row("Exact home",CTX&&CTX.unit_label?CTX.unit_label:"This exact home")+row("Acknowledged",state.terms_ack_hash===termsHash()?"Yes":"No"));
     html+=section("Applicant",1,
       row("Legal name",state.legal_name)+row("Date of birth",dateDisplay(dob))+row("Email",state.email)+row("Phone",state.phone)+
       row("How you heard",choiceDisplay(state.lead_source,{referral:"Friend or current resident",search:"Web search",listing:"Rental listing site",social:"Social media",sign:"Sign or walked by",school:"School or campus resource",other:"Other"})));
@@ -2111,6 +2227,31 @@ module.exports = function applicationSubmissionModule(deps) {
     capture();
     var error=byId("serverError");
     error.classList.remove("on");
+    // Re-read the server-owned terms immediately before submission. A changed
+    // offer keeps the personal draft but clears acknowledgement and returns the
+    // applicant to the terms screen for a fresh review.
+    try{
+      var latestResponse=await fetch("/t/application/"+encodeURIComponent(TOKEN)+"/context",{cache:"no-store"});
+      var latest=await latestResponse.json();
+      if(latest && (latest.state==="open" || latest.state==="terms_review") && latest.terms_required && String((latest.application_terms&&latest.application_terms.terms_hash)||"")!==termsHash()){
+        CTX=latest; state.terms_ack_hash=""; renderTerms("applicationTerms"); byId("termsAcknowledgement").checked=false; showStep(0);
+        var termsError=byId("termsError"); termsError.textContent="The application terms changed. Review the current terms before submitting."; termsError.classList.add("on");
+        return;
+      }
+    }catch(_){ /* submission remains server-authoritative if the refresh is unavailable */ }
+    if(!termsReady() || state.terms_ack_hash!==termsHash()){
+      var missingTermsError=byId("termsError"); missingTermsError.textContent="Review and acknowledge the established terms before submitting."; missingTermsError.classList.add("on"); showStep(0); return;
+    }
+    if(CTX.state==="terms_review"){
+      var revisionButton=byId("termsNextButton"); revisionButton.disabled=true; revisionButton.textContent="Accepting revised terms…";
+      try{
+        var revisionResponse=await fetch("/applications/submit-public",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:TOKEN,application_terms_hash:termsHash(),application_terms_acknowledged:true})});
+        var revisionOut=await revisionResponse.json().catch(function(){return null;});
+        if(!revisionResponse.ok) throw new Error((revisionOut&&revisionOut.receipt)||"The revised terms could not be accepted. Please try again.");
+        clearDraft(); byId("main").innerHTML='<div class="message"><div class="message-mark">✓</div><h2>Revised terms accepted</h2><p>Your acceptance was added to the existing application. No new application was created.</p></div>';
+      }catch(e){ revisionButton.disabled=false; revisionButton.textContent="Accept revised terms"; var revisionError=byId("termsError"); revisionError.textContent=(e&&e.message)||"Please check your connection and try again."; revisionError.classList.add("on"); }
+      return;
+    }
     if(!byId("certify").checked){
       error.textContent="Confirm that the information is complete and accurate before submitting.";
       error.classList.add("on");
@@ -2129,13 +2270,17 @@ module.exports = function applicationSubmissionModule(deps) {
       var response=await fetch("/applications/submit-public",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
+          body:JSON.stringify({
           token:TOKEN,
           applicant_name:state.legal_name||null,
           guarantor_name:state.guarantor_needed==="yes" ? (state.guarantor_name||null) : null,
+          application_terms_hash:termsHash(),
+          application_terms_acknowledged:true,
           captured:Object.assign(capturedPayload(),{
             applicant_accuracy_certified:true,
-            electronic_delivery_consent:true
+            electronic_delivery_consent:true,
+            application_terms_hash:termsHash(),
+            application_terms_acknowledged:true
           })
         })
       });
@@ -2162,7 +2307,7 @@ module.exports = function applicationSubmissionModule(deps) {
       byId("main").innerHTML='<div class="message"><h2>Could not open the application</h2><p>Please try again or contact the leasing office.</p></div>';
       return;
     }
-    if(!CTX || CTX.state!=="open"){
+    if(!CTX || (CTX.state!=="open" && CTX.state!=="terms_review")){
       var messages={
         invalid:["This link is not valid",CTX&&CTX.receipt],
         revoked:["This link was revoked",CTX&&CTX.receipt],
@@ -2177,6 +2322,19 @@ module.exports = function applicationSubmissionModule(deps) {
     }
     byId("propertyName").textContent=CTX.property_name||"Rental application";
     byId("unitPill").textContent=CTX.unit_label ? "Unit "+CTX.unit_label : "Rental application";
+    if(CTX.state==="terms_review"){
+      byId("termsHeading").textContent="Review the revised terms first.";
+      byId("termsIntro").textContent="The leasing team changed the commercial terms for this application. Review the current terms and the comparison below before accepting them.";
+      byId("termsAcknowledgementLabel").textContent="I have reviewed these revised terms for this exact home and accept them for my existing application.";
+      byId("termsNextButton").textContent="Accept revised terms";
+    }
+    renderTerms("applicationTerms");
+    if(CTX.terms_required && !termsReady()){
+      byId("main").innerHTML='<div class="message"><div class="message-mark">!</div><h2>Terms are not ready</h2><p>The leasing team has not established complete terms for this exact home yet. Please return when the rent, deposit, dates, and applicable fees are ready.</p></div>';
+      return;
+    }
+    if(state.terms_ack_hash && state.terms_ack_hash!==termsHash()) state.terms_ack_hash="";
+    byId("termsAcknowledgement").checked=state.terms_ack_hash===termsHash();
     if(CTX.intended_move_in){
       byId("targetMoveRow").hidden=false;
       byId("targetMoveIn").textContent=dateDisplay(CTX.intended_move_in);
@@ -2217,6 +2375,8 @@ module.exports = function applicationSubmissionModule(deps) {
     var next=event.target.closest("[data-next]");
     if(next){
       capture();
+      if(step===0 && !acknowledgeTerms()) return;
+      if(step===0 && CTX && CTX.state==="terms_review"){submit(); return;}
       if(step>0 && step<5 && !validateStep(step)) return;
       showStep(step+1);
       return;
@@ -2370,7 +2530,7 @@ module.exports = function applicationSubmissionModule(deps) {
   //  stage NOT advanced.
   async function prepareApplicationLinkForObligation(client, {
     prepare_obligation_id, unit_id = null, space_id = null, intended_move_in = null, expires_at = null,
-    actor_user_id, unitOfferable = null,
+    actor_user_id, unitOfferable = null, application_offer_id = null,
   }) {
     if (!prepare_obligation_id) throw httpErr(400, "prepare_obligation_id is required.");
     if (!actor_user_id) throw httpErr(400, "actor_user_id is required.");
@@ -2437,6 +2597,7 @@ module.exports = function applicationSubmissionModule(deps) {
       made = await createPreparedInvitation(client, {
         conversion_id, person_id: conv.person_id, property_id: conv.property_id,
         unit_id, space_id, intended_move_in, expires_at, created_by_user_id: actor_user_id,
+        application_offer_id,
       });
     } catch (e) {
       if (e && e.code === "23505") {
@@ -2557,6 +2718,12 @@ module.exports = function applicationSubmissionModule(deps) {
         [provider_message_id, actor_user_id, note, invitation_id]);
     }
 
+    if (inv.application_offer_id) {
+      await client.query(`update lease_offers set status='sent',communicated_at=now(),
+        evidence_type='dispatched_message',evidence_ref=$1,updated_at=now()
+        where id=$2 and status='draft'`,
+        [String(inv.dispatch_comm_event_id || invitation_id),inv.application_offer_id]);
+    }
     // structured proof + reserved-input satisfaction + child completion
     await requireInputAuthority().satisfyApplicationInput(client, {
       obligation_id: send_obligation_id,
@@ -2631,6 +2798,7 @@ module.exports = function applicationSubmissionModule(deps) {
       property_id: inv.property_id, unit_id: inv.unit_id, space_id: inv.space_id,
       intended_move_in: inv.intended_move_in,
       expires_at: inv.expires_at, created_by_user_id: actor_user_id,
+      application_offer_id: inv.application_offer_id,
     });
     await client.query(
       "update application_invitations set superseded_by_invitation_id=$1, updated_at=now() where id=$2",
@@ -2800,6 +2968,10 @@ module.exports = function applicationSubmissionModule(deps) {
       if (inv.dispatch_comm_event_id) throw httpErr(409, "A dispatch attempt is already bound to this link — reconcile it; no second attempt will be made automatically.");
       const child = await openSendChild(client, invitation_id, { for_update: true });
       if (!child) throw httpErr(409, "No open send commitment for this invitation — dispatch does not apply.");
+      if (inv.application_offer_id) await readApplicationOffer(client, {
+        offer_id:inv.application_offer_id,property_id:inv.property_id,
+        person_id:inv.person_id,space_id:inv.space_id,
+      });
       const per = (await client.query("select id, phone from persons where id=$1", [inv.person_id])).rows[0];
       const url = `${base}/t/application/${raw_token}`;
       const body = `${message_prefix ? message_prefix + " " : ""}Here's your secure application link: ${url}`;

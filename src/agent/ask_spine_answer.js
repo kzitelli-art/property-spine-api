@@ -396,6 +396,12 @@ function isApplicationSendStateQuestion(question) {
   return APPLICATION_SEND_STATE_TERMS.some((pattern) => pattern.test(text));
 }
 
+// An explicit detail request within the existing person-leasing domain.
+// Generic property application fees keep their Economics routing.
+function isApplicationTermsQuestion(question) {
+  return /\bapplication (?:terms|offer)\b/i.test(String(question || ""));
+}
+
 function isPersonalAttentionQuestion(question) {
   const text = String(question || "").trim();
   return PERSONAL_ATTENTION_TERMS.some((pattern) => pattern.test(text));
@@ -444,7 +450,7 @@ function questionSubject(question) {
   const leasingSignal = LEASING_PERSON_STRONG.test(text)
     || (LEASING_PERSON_WEAK.test(text) && !EXPLICIT_WORK_TERMS.test(text));
   const leasingPerson = leasingSignal && !tourSchedule && !contractedService && !equity && !debt
-    && !(economics && !LEASING_PERSON_DETAIL_TERMS.test(text));
+    && !(economics && !LEASING_PERSON_DETAIL_TERMS.test(text) && !isApplicationTermsQuestion(text));
   const tenancy = tenancyThing && !tourSchedule && !contractedService && !equity && !leasingPerson
     && !(economics && !TENANCY_STANDING_TERMS.test(text));
   const work = EXPLICIT_WORK_TERMS.test(text)
@@ -1459,6 +1465,52 @@ function applicationSendStateResponse(facts) {
   };
 }
 
+function applicationTermsResponse(facts, {latestRequested=false}={}) {
+  const person = facts && facts.leasing_person;
+  const unavailable = (state) => ({ outcome: "unavailable",
+    answer: state === "READ_TIMED_OUT"
+      ? "Reading those application terms timed out. Try again in a moment."
+      : "I couldn't read those application terms. Try again in a moment.",
+    grounded_on: { application_terms_state: state }, references: [] });
+  if (!person) return unavailable("READ_FAILED");
+  if (["NO_SUBJECT", "AMBIGUOUS_SUBJECT"].includes(person.read_state))
+    return applicationSendStateResponse(facts);
+  if (person.read_state === "NOT_AUTHORIZED") return { outcome: "not_authorized",
+    answer: "Application terms are not available in your current access for this property.",
+    grounded_on: null, references: [] };
+  if (person.read_state !== "OK") return unavailable(person.read_state);
+  const failed = (person.uncertainty || []).find(item => item.kind === "read_failed"
+    && ["application", "application_offer"].includes(item.subject));
+  if (failed) return unavailable(failed.read_state === "READ_TIMED_OUT" ? "READ_TIMED_OUT" : "READ_FAILED");
+  const selection = person.application && person.application.selection;
+  if (person.application && (!selection || selection.basis !== "latest_created"
+      || !Number.isInteger(selection.candidate_count) || selection.candidate_count < 1)) return unavailable("READ_FAILED");
+  if (selection && selection.candidate_count > 1 && !latestRequested) return {
+    outcome:"clarification",
+    answer:`${person.subject_name || "This person"} has ${selection.candidate_count} recorded applications. Ask for the latest application terms, or open the specific application record you want to review.`,
+    grounded_on:{application_terms_state:"AMBIGUOUS_APPLICATION",application_count:selection.candidate_count},references:[],
+  };
+  const terms = person.application && person.application.terms_review;
+  const name = person.subject_name || "This person";
+  if (!terms || (!terms.acknowledged && !terms.pending)) return {
+    outcome: "answered", answer: `No acknowledged application terms or pending application offer are recorded for ${name}.`,
+    grounded_on: { application_terms_state: "NOT_ESTABLISHED", application_terms: null }, references: [] };
+  if (terms.acknowledged && !terms.acknowledged_at) return unavailable("READ_FAILED");
+  const describe = require('../money/application_offer_terms').describeApplicationTerms;
+  const target = person.target || {};
+  const home = [target.unit_label, target.space_label].filter(Boolean).join(" · ");
+  const parts = [`${name}'s latest application${home ? " — " + home : ""}.`];
+  parts.push(terms.acknowledged
+    ? `Accepted on ${String(terms.acknowledged_at).slice(0,10)}: ${describe(terms.acknowledged)}`
+    : "No application terms have been acknowledged yet.");
+  if (terms.pending) parts.push(`Awaiting acceptance: ${describe(terms.pending)} These proposed terms have not been accepted.`);
+  return {outcome:"answered",answer:parts.join("\n"),grounded_on:{
+    application_terms_state:terms.pending ? "AWAITING_ACCEPTANCE" : "ACKNOWLEDGED",
+    application_terms:withoutDatabaseIds(terms),
+    application_selection:selection,
+  },references:[]};
+}
+
 /**
  * Answer a typed question about one property.
  *
@@ -1613,6 +1665,14 @@ async function answer(db, anthropic, {
       leasingReader, applicationReviewReader, applicationsService,
     });
     return applicationSendStateResponse(facts);
+  }
+
+  if (subject === "leasing_person" && isApplicationTermsQuestion(q)) {
+    const facts = await gatherFacts(db, {
+      property_id, allowed_modules: modules, subject, question: q,
+      leasingReader, applicationReviewReader, applicationsService,
+    });
+    return applicationTermsResponse(facts,{latestRequested:/\blatest application (?:terms|offer)\b/i.test(q)});
   }
 
   //  NO KEY IS NOT AN EMPTY ANSWER. Without this the operator would ask a
@@ -1843,7 +1903,7 @@ async function answer(db, anthropic, {
 
 module.exports = {
   answer, gatherFacts, questionSubject, isPersonalAttentionQuestion,
-  isPropertyWideSignerQuestion, isApplicationSendStateQuestion,
-  personalAttentionResponse, propertySigningResponse, applicationSendStateResponse,
+  isPropertyWideSignerQuestion, isApplicationSendStateQuestion, isApplicationTermsQuestion,
+  personalAttentionResponse, propertySigningResponse, applicationSendStateResponse, applicationTermsResponse,
   systemPrompt, MODEL, SUPPORTED_SCOPE, OUT_OF_SCOPE_ANSWER,
 };

@@ -1,0 +1,15 @@
+{
+  "api_head": "9f2acff97af311e6ebdcd5e2219f8cf873894748",
+  "app_head": "c05ae68f6f8bc49ca4b5bd752adc928e1f4e0d88",
+  "state": "local_uncommitted",
+  "sha256": {
+    "tests/proofs/application_turn_window.db.js": "1a102cfeccb9b25bcd5f86ab368d4d1bfffb8dd708b20b6d216e9fd4cf3d9e86",
+    "tests/e2e/application_turn_offer_http.js": "235552985949086dae503be5516adb5b5e0f6b746de2654b2227a90ddfbb1da1",
+    "tests/e2e/application_target_dates_browser.js": "6bcbc977825886c8ab2a2db43ee622027405b625e3477b94a25367ddfe4bd6f0",
+    "src/applications/application_target_authority.js": "bb734abd2b23b3b0a2ae9fe0a8b9d2e28a71d37db66ff9c9c4db250b93986559",
+    "src/applications/application_target_read.js": "03c8166af4d654c2e8c44ee1031c84e0b078cbe41dac872cdcfc9ba2516898f7",
+    "src/identity/operator.js": "4b5062476d421eb5ca0ceca741b343a034d93ded963c37fc50f26574489c5d7c",
+    "src/money/application_offer_terms.js": "c6277064dd9b061434f249df80e884709fbcb9df226da61f0a3a17f5cee90612",
+    "src/maintenance/turn_priority.js": "d8fb0d5ce857be2c3f3498529d4b45bb6371b29136afacd1ad7db4f557289809"
+  }
+}

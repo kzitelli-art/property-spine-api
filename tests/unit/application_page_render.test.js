@@ -96,7 +96,10 @@ const found = banned.filter((b) => html.includes(b));
 ok("no hardcoded rent, availability, sq ft, floor plans, or specials", found.length === 0, found.join(", "));
 ok("property name comes from the invitation record", /CTX\.property_name/.test(html));
 ok("unit label comes from the invitation record", /CTX\.unit_label/.test(html));
-ok("final economics remain a governed review step", html.includes("Final rent, deposit, and lease terms are reviewed before lease preparation."));
+ok("terms review and acknowledgement precede personal questions",
+  html.indexOf('id="applicationTerms"') < html.indexOf('id="legal_name"')
+  && html.includes('id="termsAcknowledgement"')
+  && html.includes("These terms stay with your application and are used to prepare your lease."));
 ok("the target home stays visible throughout the application", /id="unitPill"/.test(html) && /id="targetMoveIn"/.test(html));
 ok("the form states its realistic completion time", html.includes("About 5 minutes"));
 ok("SSN is not collected into the broad application record", !/social security|\bssn\b/i.test(html));

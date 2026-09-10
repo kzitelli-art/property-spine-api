@@ -48,6 +48,7 @@ const mammoth = require("mammoth");
 const pdfParse = require("pdf-parse");
 const sourceArtifacts = require("../onboarding/source_artifact_service");
 const { normalizeE164 } = require("../identity/phone_identity");
+const { readBoundApplicationOffer } = require("./proposed_terms_service");
 
 module.exports = function leasePacketsModule(deps) {
   const { pool, satisfyObligation, completeObligation } = deps;
@@ -242,14 +243,17 @@ module.exports = function leasePacketsModule(deps) {
   // Fail-closed validation. Returns { ok, cfg, source } or { ok:false, missing }.
   // Also treats blank/placeholder application terms (rent, deposit, dates) as
   // missing — the demo summary must not display an economics blank.
-  function requireLeaseConfig(property, terms) {
+  function requireLeaseConfig(property, terms, { offerBound = false } = {}) {
     const resolved = leaseConfigFor(property);
     const missing = [];
     if (!resolved) {
       return { ok: false, missing: ["(no lease configuration for this property)"] , cfg: null };
     }
     const cfg = resolved.cfg;
-    for (const k of REQUIRED_CONFIG_KEYS) {
+    const configKeys = offerBound
+      ? REQUIRED_CONFIG_KEYS.filter((k) => !["application_fee", "amenity_fee"].includes(k))
+      : REQUIRED_CONFIG_KEYS;
+    for (const k of configKeys) {
       const v = cfg[k];
       if (v == null || String(v).trim() === "") missing.push("config:" + k);
     }
@@ -301,10 +305,19 @@ module.exports = function leasePacketsModule(deps) {
       : "$" + String(v).trim();
   };
 
+  function applicationFeeLines(fees) {
+    if (!Array.isArray(fees)) return null;
+    return fees.map((fee) => {
+      const cadence = fee.cadence ? ` (${fee.cadence})` : "";
+      return `${fee.label}: ${money(fee.amount)}${cadence}.`;
+    });
+  }
+
   // Property Spine's OWN plain-language sections. No NAA language/structure.
   // Every displayed economic value comes from validated application terms or
   // the canonical config (both already checked by requireLeaseConfig).
   function demoSummarySections(terms, cfg) {
+    const offerFeeLines = applicationFeeLines(terms.fees);
     return [
       { key: "parties", title: "Parties & Unit", ack: false, body: [
         `Owner: ${cfg.landlord_entity}.`,
@@ -326,16 +339,19 @@ module.exports = function leasePacketsModule(deps) {
       { key: "rent", title: "Monthly Rent", ack: true, body: [
         `Rent: ${money(terms.monthly_rent)} per month, due in advance on the 1st.`,
         `Payable at ${cfg.rent_payment_location || "the location stated on the lease"}.`,
-        money(cfg.late_fee) ? `Late fee if rent is not paid on time: ${money(cfg.late_fee)}.` : null,
+        Array.isArray(terms.fees) ? null
+          : (money(cfg.late_fee) ? `Late fee if rent is not paid on time: ${money(cfg.late_fee)}.` : null),
       ].filter(Boolean) },
       { key: "deposit", title: "Security Deposit", ack: true, body: [
         `Security deposit: ${money(terms.security_deposit)}, due on or before signing the lease.`,
         "If Pennsylvania's security-deposit disposition timeline applies, an itemized accounting and any refund follow after move-out. The exact handling is governed by the lease and applicable law.",
       ] },
       { key: "fees", title: "Move-in Fees", ack: false, body: [
-        money(cfg.application_fee) ? `Application fee (new residents): ${money(cfg.application_fee)}, non-refundable.` : null,
-        money(cfg.amenity_fee) ? `Amenity fee at move-in: ${money(cfg.amenity_fee)}${money(cfg.amenity_fee_renewal) ? ` (${money(cfg.amenity_fee_renewal)} at renewal)` : ""}, non-refundable.` : null,
-        money(cfg.telecom_fee) ? `Telecom / account set-up fee: ${money(cfg.telecom_fee)} at move-in.` : null,
+        ...(offerFeeLines || [
+          money(cfg.application_fee) ? `Application fee (new residents): ${money(cfg.application_fee)}, non-refundable.` : null,
+          money(cfg.amenity_fee) ? `Amenity fee at move-in: ${money(cfg.amenity_fee)}${money(cfg.amenity_fee_renewal) ? ` (${money(cfg.amenity_fee_renewal)} at renewal)` : ""}, non-refundable.` : null,
+          money(cfg.telecom_fee) ? `Telecom / account set-up fee: ${money(cfg.telecom_fee)} at move-in.` : null,
+        ]),
       ].filter(Boolean) },
       { key: "utilities", title: "Utilities", ack: false, body: [
         cfg.utility_responsibility,
@@ -399,6 +415,7 @@ module.exports = function leasePacketsModule(deps) {
   }
 
   function leaseTermsSchedule(terms, cfg) {
+    const boundFees = Array.isArray(terms.fees);
     return {
       schema_version: 1,
       parties: {
@@ -422,15 +439,16 @@ module.exports = function leasePacketsModule(deps) {
         monthly_rent: terms.monthly_rent,
         security_deposit: terms.security_deposit,
         concession_status: terms.concession_status,
-        application_fee: cfg.application_fee,
-        amenity_fee: cfg.amenity_fee,
-        utility_fee_total: cfg.utility_fee_total == null ? null : cfg.utility_fee_total,
+        fees: boundFees ? terms.fees : null,
+        application_fee: boundFees ? null : cfg.application_fee,
+        amenity_fee: boundFees ? null : cfg.amenity_fee,
+        utility_fee_total: boundFees ? null : (cfg.utility_fee_total == null ? null : cfg.utility_fee_total),
         utility_fee_payment_preference: terms.utility_payment_preference || null,
       },
       operations: {
         rent_payment_location: cfg.rent_payment_location || null,
         utility_responsibility: cfg.utility_responsibility,
-        late_fee: cfg.late_fee,
+        late_fee: boundFees ? null : cfg.late_fee,
         notice_requirement: cfg.notice_requirement,
         parking_interest: terms.parking_interest || null,
       },
@@ -575,6 +593,7 @@ module.exports = function leasePacketsModule(deps) {
     const p = schedule.premises;
     const e = schedule.economics;
     const o = schedule.operations;
+    const feeLines = Array.isArray(e.fees) ? applicationFeeLines(e.fees) : null;
     const unit = p.space_label
       ? `${p.unit_label}, ${p.space_label}`
       : p.unit_label;
@@ -592,12 +611,14 @@ module.exports = function leasePacketsModule(deps) {
       { key: "rent", title: "Rent", ack: true, body: [
         `Monthly rent: ${money(e.monthly_rent)}.`,
         o.rent_payment_location ? `Payment location: ${punctuate(o.rent_payment_location)}` : null,
-        `Late fee: ${money(o.late_fee)} if rent is not paid on time.`,
+        o.late_fee != null ? `Late fee: ${money(o.late_fee)} if rent is not paid on time.` : null,
       ].filter(Boolean) },
       { key: "deposit", title: "Deposit & Property Charges", ack: true, body: [
         `Security deposit: ${money(e.security_deposit)}.`,
-        e.application_fee != null ? `Application fee: ${money(e.application_fee)}.` : null,
-        e.amenity_fee != null ? `Amenity fee: ${money(e.amenity_fee)}.` : null,
+        ...(feeLines || [
+          e.application_fee != null ? `Application fee: ${money(e.application_fee)}.` : null,
+          e.amenity_fee != null ? `Amenity fee: ${money(e.amenity_fee)}.` : null,
+        ]),
         e.utility_fee_total != null ? `Lease-term utility fee: ${money(e.utility_fee_total)}.` : null,
         e.utility_fee_payment_preference ? `Resident payment preference: ${e.utility_fee_payment_preference}.` : null,
       ].filter(Boolean) },
@@ -686,6 +707,8 @@ module.exports = function leasePacketsModule(deps) {
       version: packet.version,
       status: packet.status,
       proposed_terms_confirmation_id: packet.proposed_terms_confirmation_id || null,
+      application_offer_id: packet.application_offer_id || null,
+      application_terms_hash: packet.application_terms_hash || null,
       sent_at: packet.sent_at || null,
       tenant_token_expires_at: packet.tenant_token_expires_at || null,
       is_placeholder: packet.is_placeholder,
@@ -1013,7 +1036,8 @@ module.exports = function leasePacketsModule(deps) {
     }
     const confirmation = (await client.query(
       `select id, source, rent, security_deposit, lease_start_date, lease_end_date,
-              concession_status, actor_user_id, created_at
+              concession_status, actor_user_id, created_at,
+              application_offer_id, application_terms_hash
          from application_proposed_terms_confirmations
         where id=$1`,
       [confirmationId]
@@ -1024,6 +1048,39 @@ module.exports = function leasePacketsModule(deps) {
         "no_current_proposed_terms_confirmation",
         "The application's current proposed-terms confirmation is missing."
       );
+    }
+
+    // An offer-bound application carries the applicant's exact acknowledged
+    // commercial version.  Read that owner once and refuse any confirmation
+    // or packet lineage that points elsewhere; legacy applications remain on
+    // their existing unbound path.
+    const boundOffer = await readBoundApplicationOffer(client, app);
+    if (boundOffer) {
+      const offered = boundOffer.terms;
+      if (!Array.isArray(offered.fees) ||
+          !offered.concessions || offered.concessions.status !== "none" ||
+          !offered.rent || !offered.lease_start_date || !offered.lease_end_date) {
+        throw packetError(409, "application_offer_terms_unusable",
+          "The acknowledged application offer is incomplete, so no lease package was generated.");
+      }
+      const sameMoney = (a, b) => Number(a) === Number(b);
+      const sameDate = (a, b) => dateOnly(a) === dateOnly(b);
+      if (String(confirmation.application_offer_id || "") !== String(boundOffer.id) ||
+          String(confirmation.application_terms_hash || "") !== String(boundOffer.hash) ||
+          !sameMoney(confirmation.rent, offered.rent) ||
+          !sameMoney(confirmation.security_deposit, offered.security_deposit) ||
+          !sameDate(confirmation.lease_start_date, offered.lease_start_date) ||
+          !sameDate(confirmation.lease_end_date, offered.lease_end_date) ||
+          String(confirmation.concession_status || "") !== String(offered.concessions.status)) {
+        throw packetError(409, "application_terms_lineage_conflict",
+          "The acknowledged application terms do not match the current proposed-terms confirmation.");
+      }
+      if (existingPacket &&
+          (String(existingPacket.application_offer_id || "") !== String(boundOffer.id) ||
+           String(existingPacket.application_terms_hash || "") !== String(boundOffer.hash))) {
+        throw packetError(409, "packet_terms_lineage_conflict",
+          "The existing packet does not carry the applicant's acknowledged application terms.");
+      }
     }
 
     const prop = (await client.query(
@@ -1073,18 +1130,19 @@ module.exports = function leasePacketsModule(deps) {
       space_label: spaceLabel,
       unit_label: unitLabel,
       unit_number: unitLabel,
-      monthly_rent: confirmation.rent != null ? confirmation.rent : "",
-      security_deposit: confirmation.security_deposit != null ? confirmation.security_deposit : "",
-      lease_start_date: confirmation.lease_start_date || "",
-      lease_end_date: confirmation.lease_end_date || "",
-      concession_status: confirmation.concession_status || "unknown",
+      monthly_rent: boundOffer ? boundOffer.terms.rent : (confirmation.rent != null ? confirmation.rent : ""),
+      security_deposit: boundOffer ? boundOffer.terms.security_deposit : (confirmation.security_deposit != null ? confirmation.security_deposit : ""),
+      lease_start_date: boundOffer ? boundOffer.terms.lease_start_date : (confirmation.lease_start_date || ""),
+      lease_end_date: boundOffer ? boundOffer.terms.lease_end_date : (confirmation.lease_end_date || ""),
+      concession_status: boundOffer ? boundOffer.terms.concessions.status : (confirmation.concession_status || "unknown"),
+      fees: boundOffer ? boundOffer.terms.fees : null,
       guarantor_required: !!app.guarantor_name,
       guarantor_name: app.guarantor_name || null,
       utility_payment_preference: captured.utility_payment_preference || null,
       parking_interest: captured.parking_interest || null,
     };
 
-    const check = requireLeaseConfig(prop, terms);
+    const check = requireLeaseConfig(prop, terms, { offerBound: !!boundOffer });
     if (!check.ok) {
       throw packetError(
         409,
@@ -1118,17 +1176,19 @@ module.exports = function leasePacketsModule(deps) {
         `update lease_packets
             set terms_json=$2, rendered_snapshot=$3, rendered_snapshot_hash=$4,
                 proposed_terms_confirmation_id=$5,
-                instrument_form_code=$6, instrument_form_version=$7,
-                 instrument_body_sha256=$8,
-                 instrument_source_artifact_id=$9,
-                 instrument_terms_sha256=$10,
-                 instrument_package_sha256=$11,
-                 instrument_manifest=$12,
-                 instrument_text_snapshot=$13,
-                 instrument_established_at = case when $9::uuid is null then null else now() end,
-                 is_placeholder=false, updated_at=now()
+                application_offer_id=$6, application_terms_hash=$7,
+                instrument_form_code=$8, instrument_form_version=$9,
+                 instrument_body_sha256=$10,
+                 instrument_source_artifact_id=$11,
+                 instrument_terms_sha256=$12,
+                 instrument_package_sha256=$13,
+                 instrument_manifest=$14,
+                 instrument_text_snapshot=$15,
+                 instrument_established_at = case when $11::uuid is null then null else now() end,
+                is_placeholder=false, updated_at=now()
           where id=$1 returning *`,
         [current.id, terms, rendered, renderedHash, confirmation.id,
+         boundOffer ? boundOffer.id : null, boundOffer ? boundOffer.hash : null,
          instrument ? instrument.form_code : null,
          instrument ? instrument.form_version : null,
          instrument ? instrument.body_sha256 : null,
@@ -1153,17 +1213,19 @@ module.exports = function leasePacketsModule(deps) {
            (property_id, application_id, unit_id, version, status, terms_json,
             rendered_snapshot, rendered_snapshot_hash, is_placeholder,
              supersedes_packet_id, proposed_terms_confirmation_id,
+             application_offer_id, application_terms_hash,
              instrument_form_code, instrument_form_version, instrument_body_sha256,
              instrument_source_artifact_id, instrument_terms_sha256,
              instrument_package_sha256, instrument_manifest, instrument_text_snapshot,
              instrument_established_at)
-         values ($1,$2,$3,$4,'draft',$5,$6,$7,false,$8,$9,$10,$11,$12,
-                  $13,$14,$15,$16,$17,
-                  case when $13::uuid is null then null else now() end)
+         values ($1,$2,$3,$4,'draft',$5,$6,$7,false,$8,$9,$10,$11,$12,$13,$14,
+                  $15,$16,$17,$18,$19,
+                  case when $15::uuid is null then null else now() end)
          returning *`,
         [
           app.property_id, app.id, terms.unit_id, newVersion, terms,
           rendered, renderedHash, supersedes, confirmation.id,
+          boundOffer ? boundOffer.id : null, boundOffer ? boundOffer.hash : null,
           instrument ? instrument.form_code : null,
           instrument ? instrument.form_version : null,
           instrument ? instrument.body_sha256 : null,

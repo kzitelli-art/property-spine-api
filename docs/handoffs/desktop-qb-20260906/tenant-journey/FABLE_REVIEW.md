@@ -1,0 +1,17 @@
+# Fable independent review — return to QB
+
+Review the leasing-to-turn connection. No product edits. Return evidence and the smallest justified repair to QB task01a076e5-512c-70c3-a237-e8ca01c528f0.
+
+Owner question: after a good tour, can Spine select the right exact home/bed for the prospect's needs and dates, carry the agreed terms into application/lease, and make the same future leasing facts guide maintenance?
+
+Read CURRENT_STATE then the complete PHILOSOPHY. Inspect API api-fable-review-20260907 at9f2acff97af311e6ebdcd5e2219f8cf873894748 and app app-fable-review-20260907 atc05ae68f6f8bc49ca4b5bd752adc928e1f4e0d88 PLUS current working changes. They are uncommitted and undeployed: a review of Git heads alone is stale. If you cannot access the working candidate, identify the missing files before claiming review. Latest navigation: SHARED_REVIEW.md, COMPETING_HOMES.md, TURN_DATE_LABELS.md, PROSPECT_VITALS_FAILURE.md, PROSPECT_CONTEXT.md and their custody JSONs in this directory. Receipts are claims; source/runtime outrank them.
+
+Three bounded questions, in order:
+
+1. Challenge the current application target/offer chain. Find any home whose lease dates appear permitted in the menu but are refused or wrongly accepted at offer, invitation, acceptance or lease generation. Include exact sibling beds, a changed outgoing lease/ready date after selection, and lost-response retry. Separate availability evidence from actual vacated possession. Audit the existing proofs for false greens; do not merely rerun happy paths.
+2. Challenge the maintenance connection. Follow the same exact space through pending lease, executed/funded commitment and actual move-out into existing turn_priority, unit_move_in_read and turnover_service callers. Is work prioritized and its deadline explained correctly? Identify the precise gap between planning a future turn and starting physical work. Do not propose calling startTurn early: it records move-out and possession consequences. An application/offer cannot hold inventory or create a committed move-in.
+3. Give a pre-build ruling for automatic home choice. Which recorded preferences and inventory attributes can support a recommendation now? Which require explicit policy or missing evidence? Test two competing homes: one currently vacant, another upcoming with a tight turn. Name what would justify choosing either; do not invent a floor from a unit number, normalize vague budget/date text silently, or manufacture NOI weights.
+
+Deliver findings by severity with exact file/line/hash, observed versus inferred status, reproducible counterexample, smallest repair, preserved owner and strongest surviving alternative explanation. Say explicitly if no defect is found. Include a short plain-English answer: what works today, what prevents a trustworthy recommendation, and the single next change you recommend. QB owns integration. Recorded prospect context is now locally implemented in shared selection; challenge its meaning and identity boundaries but do not duplicate those edits.
+
+Proofs may be authored only in an isolated review location. Owned disposable DB/HTTP work only, through existing fencing/cleanup. No production/provider actions, real sends, actual-source confirmations, migrations on shared/live DBs, merge/rebase or edits to QB's dirty candidate. Do not run source-governance falsifiers concurrently with QB source edits or servers: they temporarily rewrite source. Return results here; do not self-approve integration.

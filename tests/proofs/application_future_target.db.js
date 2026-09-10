@@ -60,6 +60,15 @@ function ok(condition, message) {
     ok(tooEarly.refusal_code === REFUSAL.MOVE_IN_BEFORE_READY,
       "the application cannot target a date before the turn plan");
 
+    const overlap = await resolveApplicationTarget(client, {
+      property_id: propertyId, unit_id: target.unit_id, intended_move_in: readyDate,
+    });
+    ok(overlap.refusal_code === REFUSAL.TERM_NOT_FREE,
+      "an early notice and a turn estimate do not release the outgoing contractual rights");
+    // Explicit synthetic contractual correction: the positive control must
+    // actually end before the incoming term, not merely carry an early notice.
+    await client.query("update leases set end_date=$2 where id=$1", [seeded.ids.upcoming_lease, dayBefore]);
+
     const prepared = await resolveApplicationTarget(client, {
       property_id: propertyId,
       unit_id: target.unit_id,

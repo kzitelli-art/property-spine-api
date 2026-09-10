@@ -36,6 +36,7 @@ const staffSessions = require("./staff_session_service.js");
 const { resolveDemoProperty } = require("../shared/demo_property_identity.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const proposedTerms = require("../applications/proposed_terms_service"); // Part 3: governed proposed-terms confirmation (Part 2 service)
+const applicationOffers = require("../money/application_offer_terms");
 // Slice 9: the canonical application READ authority. One definition of
 // "did this ever reach approval", shared with the leasing desk.
 const lifecycleRead = require("../applications/application_lifecycle_read");
@@ -637,8 +638,8 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       if (v === "flexible" || (typeof v === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(v))) out.move_month = v;
     } catch (_) { /* honest null beats a bad parse */ }
     // 2) The REAL store (migration 061): typed, sourced person_attributes OVERLAY the
-    //    fallback — the newest confirmed capture wins. Fail-soft if the table is not
-    //    migrated yet: vitals degrade to the form fallback, never a 500.
+    //    fallback. A failed read is unavailable, never proof that the older form
+    //    value is current or that no preference was recorded.
     try {
       const attrs = (await client.query(
         `select attr_key, attr_value from person_attributes
@@ -646,7 +647,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         [personId, propertyId]
       )).rows;
       for (const a of attrs) if (a.attr_key in out && a.attr_value != null) out[a.attr_key] = a.attr_value;
-    } catch (_) { /* table may not exist yet — degrade to fallback */ }
+    } catch (cause) {
+      throw Object.assign(new Error('Prospect preferences could not be read. Retry before relying on them.', {cause}), {httpStatus:503});
+    }
     return out;
   }
 
@@ -2634,7 +2637,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         // completed/no-show truth from tour_events (occurred = when it happened,
         // recorded = when the event row was written)
         const evs = (await client.query(
-          `select event_type, actor_id, event_at, metadata
+          `select id, event_type, actor_id, event_at, metadata
              from tour_events where tour_id=$1 and event_type in ('completed','no_show','outcome_corrected')
              order by event_at asc`, [t.id])).rows;
         for (const ev of evs) {
@@ -2666,7 +2669,27 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
               detail: { tour_id: t.id }, supersedes: null,
             });
             // the outcome capture itself — recorded by whoever wrote it
-            if (md.outcome) {
+            if (Object.prototype.hasOwnProperty.call(md, "standing")) {
+              const outcomeOwner = require("../leasing/tour_outcome");
+              const normalized = outcomeOwner.normalizeStanding({ standing: md.standing });
+              const recId = md.recorded_by_user_id || ev.actor_id || null;
+              const recName = (await userName(recId)) || "staff";
+              const label = normalized.standing
+                ? outcomeOwner.STANDING_LABEL[normalized.standing] : "standing not established";
+              entries.push({
+                occurred_at: ev.event_at, recorded_at: ev.event_at,
+                source: "outcome", verb: "recorded",
+                actor: { id: recId, name: recName, kind: "user" },
+                summary: `${recName} recorded the tour outcome — ${label}`,
+                claim_strength: "asserted",
+                detail: { ...(md.outcome || {}), tour_id: t.id, source_event_id: ev.id,
+                  standing: normalized.standing,
+                  standing_unresolved_reason: md.standing_unresolved_reason || normalized.reason || null,
+                  judged_by: md.judged_by || null,
+                  notes: md.notes ?? (md.outcome && md.outcome.note) ?? null },
+                supersedes: null,
+              });
+            } else if (md.outcome) {
               const recId = md.recorded_by_user_id || ev.actor_id || null;
               const recName = (await userName(recId)) || "staff";
               entries.push({
@@ -3968,6 +3991,72 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   });
 
   // 2) PREPARE (birth) — against the EXACT prepare commitment. Raw token once.
+  router.post("/operator/leasing/conversions/:conversionId/application-offer", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const conv = (await client.query("select person_id,property_id,status from leasing_conversions where id=$1", [req.params.conversionId])).rows[0];
+      if (!conv || conv.property_id !== req.operator.property_id) {
+        await client.query("rollback"); return res.status(404).json({receipt:"No application case in this property."});
+      }
+      if (conv.status !== "active") { await client.query("rollback"); return res.status(409).json({receipt:"This application case is closed."}); }
+      const b = req.body || {};
+      let invitation = null, application = null;
+      if (b.supersedes_application_offer_id || b.application_id) {
+        const invitations = (await client.query(`select * from application_invitations
+          where conversion_id=$1 and status in ('prepared','manually_sent','provider_dispatched','consumed')
+          order by created_at desc for update`, [req.params.conversionId])).rows;
+        if (invitations.length !== 1) throw Object.assign(new Error("One current invitation is required to revise these terms."),{httpStatus:409});
+        invitation = invitations[0];
+        if (invitation.property_id !== conv.property_id || invitation.person_id !== conv.person_id ||
+            invitation.space_id !== b.space_id)
+          throw Object.assign(new Error("The offer must retain this invitation's exact applicant and home."),{httpStatus:409});
+        if (invitation.expires_at && new Date(invitation.expires_at) <= new Date())
+          throw Object.assign(new Error("This application link has expired; resolve the link before revising terms."),{httpStatus:409});
+        if (invitation.lease_application_id) {
+          application = (await client.query("select * from lease_applications where id=$1 for update", [invitation.lease_application_id])).rows[0];
+          if (!application || !['submitted','approved','lease_ready'].includes(application.status))
+            throw Object.assign(new Error("This application is not open for revised terms."),{httpStatus:409});
+          if (application.conversion_id !== req.params.conversionId || application.property_id !== conv.property_id ||
+              application.person_id !== conv.person_id || application.space_id !== invitation.space_id)
+            throw Object.assign(new Error("This invitation does not resolve to its original application and home."),{httpStatus:409});
+          if ((await client.query("select id from lease_packets where application_id=$1 limit 1",[application.id])).rows.length)
+            throw Object.assign(new Error("A lease packet already exists. Resolve it before changing agreed terms."),{httpStatus:409});
+        }
+        if (b.application_id && (!application || application.id !== b.application_id))
+          throw Object.assign(new Error("The requested application does not belong to this invitation."),{httpStatus:409});
+        if (b.application_id && !b.supersedes_application_offer_id && application.application_offer_id)
+          throw Object.assign(new Error("Review the existing offer before proposing revised terms."),{httpStatus:409});
+      }
+      const made = await applicationOffers.prepareApplicationOffer(client, {
+        actor:{...req.operator,user_id:req.operator.id}, person_id:conv.person_id,
+        space_id:b.space_id, lease_start_date:b.lease_start_date, lease_end_date:b.lease_end_date,
+        rent:b.rent, security_deposit:b.security_deposit, fees:b.fees,
+        concessions:b.concessions, idempotency_key:b.idempotency_key,
+        supersedes_application_offer_id:b.supersedes_application_offer_id || null,
+        application_id:application ? application.id : null,
+      });
+      const target = await applicationTargetAuthority.resolveApplicationTarget(client, {
+        property_id:req.operator.property_id, space_id:made.offer.space_id,
+        intended_move_in:made.application_terms.lease_start_date,
+        requested_end:made.application_terms.lease_end_date,
+      });
+      if (!target.ok) throw Object.assign(new Error(target.refusal_reason), {httpStatus:target.httpStatus || 409,code:target.refusal_code});
+      if (invitation) {
+        if (![b.supersedes_application_offer_id || null,made.offer.id].includes(invitation.application_offer_id))
+          throw Object.assign(new Error("The application terms changed again. Reload the current offer before revising it."),{httpStatus:409});
+        await client.query("update application_invitations set application_offer_id=$1,intended_move_in=$2,updated_at=now() where id=$3",
+          [made.offer.id,made.application_terms.lease_start_date,invitation.id]);
+      }
+      await client.query("commit");
+      return res.json({application_offer_id:made.offer.id,application_terms:made.application_terms,idempotent:made.idempotent,
+        applicant_review_required:!!invitation, receipt:invitation ? "Revised terms are ready in the existing application link. Applicant review is required; no message was sent." : "Application offer prepared."});
+    } catch(e) {
+      await client.query("rollback").catch(()=>{});
+      return res.status(e.httpStatus||500).json({error:e.code,receipt:e.message});
+    } finally { client.release(); }
+  });
+
   router.post("/operator/leasing/application-invitations", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     if (!svcGuard(res, "prepareApplicationLinkForObligation")) return;
@@ -3996,6 +4085,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       if (!gate.ok) { await client.query("rollback"); return res.status(gate.status).json(gate); }
       const out = await applicationInvitations.prepareApplicationLinkForObligation(client, {
         prepare_obligation_id, unit_id, space_id, intended_move_in, expires_at,
+        application_offer_id:req.body.application_offer_id,
         actor_user_id: req.operator.id,
         unitOfferable: async (c, { property_id, unit_id, space_id, intended_move_in }) =>
           unitOfferableState(property_id, unit_id, c, space_id, intended_move_in),
@@ -4031,6 +4121,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       if (!gate.ok) { await client.query("rollback"); return res.status(gate.status).json(gate); }
       prepared = await applicationInvitations.prepareApplicationLinkForObligation(client, {
         prepare_obligation_id, unit_id, space_id, intended_move_in, expires_at,
+        application_offer_id:req.body.application_offer_id,
         actor_user_id: req.operator.id,
         unitOfferable: async (c, { property_id, unit_id, space_id, intended_move_in }) =>
           unitOfferableState(property_id, unit_id, c, space_id, intended_move_in),
@@ -4148,6 +4239,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
             unitId: unit_id,
             spaceId: space_id,
             intendedMoveIn: intended_move_in,
+            applicationOfferId: req.body.application_offer_id,
             idempotencyKey: idempotency_key,
             expiresAt: expires_at,
             unitOfferable: async (c, {
@@ -4363,7 +4455,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const property_id = req.operator.property_id;         // SERVER-DERIVED, never the query string
       return res.json(await applicationTargetRead.leaseableApplicationTargets(
         pool,
-        { property_id }
+        { property_id, requested_start:req.query.requested_start ?? null, requested_end:req.query.requested_end ?? null }
       ));
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.message || "leaseable-units read failed" });

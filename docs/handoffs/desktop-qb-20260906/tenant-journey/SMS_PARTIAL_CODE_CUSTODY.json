@@ -1,0 +1,34 @@
+[
+  {
+    "file": "src/leasing/staff_sms_intent.js",
+    "sha256": "97b65d1f82f1922cbc2cb565f0f951d1206e77e2111c4f84a0065d94cc982219"
+  },
+  {
+    "file": "src/leasing/staff_sms_action.js",
+    "sha256": "b1b19dc85529eff5aab21df0bf8d7c1d9a33555325b2d9dbf1550b50cd3c0021"
+  },
+  {
+    "file": "tests/unit/staff_sms_leasing_action.test.js",
+    "sha256": "e1da8d42965131a10a6341e7e27e06c1f598cacef72662360e4bda5d2306cffd"
+  },
+  {
+    "file": "tests/unit/staff_sms_preferences.test.js",
+    "sha256": "a40d323a8f601271418124a4c503ac6862a4a30a70ff53bce9670f882f4bc3a0"
+  },
+  {
+    "file": "tests/unit/staff_sms_preferences_failure.test.js",
+    "sha256": "fb1ed267539e28163eac238307b1f569de586d2cfd349111d56a4a243160d35e"
+  },
+  {
+    "file": "tests/e2e/staff_sms_partial_capture.js",
+    "sha256": "3809063c3d177a062c8ffc54548e2d5d0352fbda75193cefece1db711b6bd4e6"
+  },
+  {
+    "file": "tests/e2e/tour_application_lease.e2e.js",
+    "sha256": "feb4c19d79eeccc80ef304e4a020594fed3b238e4070a54205b05468fa0a7504"
+  },
+  {
+    "file": "tests/verify_source_governance.js",
+    "sha256": "c184354e767f39708b892f8159e9c99081b56403a9d1a27e817f383c8a51fb83"
+  }
+]

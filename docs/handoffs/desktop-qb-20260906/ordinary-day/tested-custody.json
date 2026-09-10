@@ -1,0 +1,20 @@
+{
+  "api": {
+    "head": "9f2acff97af311e6ebdcd5e2219f8cf873894748",
+    "tracked_diff_sha256": "b6804ce70fad8677eee25c7f53d1c252222a869d1c2380db7a5938a7ddcf1872",
+    "working_tree_clean": false,
+    "changed_file_sha256": {
+      "tests/e2e/onboarding_review_local.js": "075af723412b1695a7aab3491167085906a1057922dbcc2f0fb82b7e9b807672",
+      "tests/proofs/availability_uncorroborated_claim.db.js": "f7031176994a5e4532175eb9132b9b3a88e2b7a89792c46ef73c5d8abd5bb048",
+      "tests/proofs/canonical_occupancy_holds.db.js": "995e175c6e747d44db9c3cca720ee6e1e6f5be096ed33723958cda9054055008"
+    }
+  },
+  "app": {
+    "head": "c05ae68f6f8bc49ca4b5bd752adc928e1f4e0d88",
+    "tracked_diff_sha256": "0159ddd1a9254f4e712c23cf238b1e2ed0b3b44a064e55261dca65b4eebe6300",
+    "working_tree_clean": false,
+    "changed_file_sha256": {
+      "canonical_onboarding_review.browser.js": "f1f6118e6148489a73b081fa73186ffa5fdd38303caf059319265a641c2f4d78"
+    }
+  }
+}

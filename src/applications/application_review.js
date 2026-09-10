@@ -28,6 +28,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 const { applicationTermsComplete, structuredTerms } = require("./application_terms");
+const { readBoundApplicationOffer } = require("./proposed_terms_service");
 
 // Pure compute functions — operator.js owns the two thin session-scoped routes
 // and calls these (same pattern as turn_priority.js). Keeps operator.js session
@@ -382,6 +383,15 @@ function executionPrimaryAction(app, exec, leaseId, packet) {
 async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
   const { app } = await loadScopedApp(client, applicationId, propertyId);
   if (!app) return { notInScope: true };
+  //  The property wall above is the boundary for every downstream read. For
+  //  offer-bound applications, use the same immutable, hash-checked reader
+  //  that confirmation and packet generation use. Do not reconstruct an
+  //  offer from lease_applications, and do not turn a missing/corrupt offer
+  //  into a legacy-looking review. Applications without an offer preserve
+  //  the historic review shape with a null application_offer.
+  const offerState = await readBoundApplicationOffer(client, app, { allowHistorical: true });
+  const boundOffer = offerState && offerState.id ? offerState : null;
+  const pendingOffer = offerState && offerState.pending_review ? offerState.pending_review : null;
   const verdict = await applicationTermsComplete(app, client);
   const terms = structuredTerms(app);
   const packet = await latestPacket(client, app.id);
@@ -453,8 +463,23 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
       next_action = null;
     }
   }
+  const application_offer = boundOffer ? {
+    id: boundOffer.id,
+    terms_hash: boundOffer.hash,
+    acknowledged_at: app.application_terms_acknowledged_at || null,
+    terms: boundOffer.terms,
+  } : pendingOffer ? {
+    id: null,
+    terms_hash: null,
+    acknowledged_at: null,
+    terms: null,
+  } : null;
+  if (application_offer && pendingOffer) {
+    application_offer.pending_review = pendingOffer;
+  }
   return {
     application_id: app.id,
+    conversion_id: app.conversion_id || null,
     applicant: { name: app.applicant_name || null, person_id: app.person_id || null },
     unit: { unit_id: app.unit_id || null,
             unit_label: app.unit_label || app.inventory_unit_label || null },
@@ -479,6 +504,7 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
       term_source: terms.term_source || null, terms_completed_at: terms.terms_completed_at || null,
     },
     completeness: { complete: verdict.complete, missing: verdict.missing },
+    application_offer,
     concession,
     proposed_terms_confirmation: confirmation ? {
       id: confirmation.id,

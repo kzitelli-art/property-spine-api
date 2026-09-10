@@ -70,6 +70,7 @@
 "use strict";
 
 const { availabilityRead } = require("../surfaces/availability_read");
+const { intervalPropertyPositions } = require("../tenancy/dated_positions");
 
 // ── THE OFFERABILITY POLICY — ONE STATE, BOTH BOUNDARIES ─────────────
 //  A targeted invitation is supported when the canonical position is
@@ -135,6 +136,7 @@ const REFUSAL = {
   MOVE_IN_DATE_INVALID:   "application_move_in_date_invalid",
   MOVE_IN_BEFORE_READY:   "application_move_in_before_expected_ready",
   READY_DATE_NOT_GOVERNED:"application_ready_date_not_governed",
+  TERM_NOT_FREE:          "application_term_not_free",
   // Submission-time only. Distinct from MULTI_SPACE: the unit CHANGED under an
   // open invitation rather than having been an unsupported shape all along.
   BECAME_AMBIGUOUS:       "application_target_became_ambiguous",
@@ -144,6 +146,7 @@ const REFUSAL = {
 // Operator-facing sentences. No internal codes in operator copy; the code
 // travels beside the sentence for the client to branch on.
 const REFUSAL_TEXT = {
+  [REFUSAL.TERM_NOT_FREE]: "That home's recorded lease rights do not leave these dates free. Review the outgoing lease or choose another home.",
   [REFUSAL.NOT_AT_PROPERTY]:      "That unit is not at this property.",
   [REFUSAL.UNCONFIGURED]:         "This unit has no rentable space configured, so an application cannot be aimed at it yet.",
   [REFUSAL.MULTI_SPACE]:          "Individual-space application links are not supported for this unit yet.",
@@ -283,6 +286,7 @@ async function resolveApplicationTarget(q, {
   unit_id = null,
   space_id: chosen_space_id = null,
   intended_move_in = null,
+  requested_end = null,
   require_offerable = true,
 } = {}) {
   if (!property_id) throw new Error("resolveApplicationTarget requires a server-derived property_id");
@@ -291,6 +295,9 @@ async function resolveApplicationTarget(q, {
     return refuse(REFUSAL.MOVE_IN_DATE_INVALID, {
       property_id, unit_id, resolved_space_id: null, httpStatus: 400,
     });
+  }
+  if (requested_end != null && (!normalizedIntendedMoveIn || !isValidYmd(ymd(requested_end)) || ymd(requested_end) < normalizedIntendedMoveIn)) {
+    return refuse(REFUSAL.MOVE_IN_DATE_INVALID, { property_id, unit_id, httpStatus: 400 });
   }
 
   // ── A BED IMPLIES ITS UNIT (182) ──────────────────────────────────
@@ -399,7 +406,9 @@ async function resolveApplicationTarget(q, {
     turnover: row.turnover || null,
   };
 
-  const verdict = evaluateOfferability(row, { intended_move_in: normalizedIntendedMoveIn });
+  const verdict = await evaluateDatedOfferability(q, row, {
+    property_id, intended_move_in: normalizedIntendedMoveIn, requested_end,
+  });
 
   if (!verdict.offerable && require_offerable) {
     return {
@@ -452,6 +461,26 @@ function evaluateOfferability(row, { intended_move_in = null } = {}) {
   return { offerable: false, refusal_code: REFUSAL.NOT_OFFERABLE };
 }
 
+// Class 1 composition in the existing target owner. A physical turn estimate
+// cannot release contractual rights. With only a move-in date, check that day;
+// with complete offer terms, check the entire interval. No reservation is made.
+async function evaluateDatedOfferability(q, row, {
+  property_id, intended_move_in = null, requested_end = null, interval_cache = null,
+} = {}) {
+  const physical = evaluateOfferability(row, { intended_move_in });
+  if (!physical.offerable || !intended_move_in) return physical;
+  const start = ymd(intended_move_in), end = ymd(requested_end) || start;
+  const key = `${start}/${end}`;
+  let interval = interval_cache && interval_cache.get(key);
+  if (!interval) {
+    interval = await intervalPropertyPositions(q, { property_id, requested_start: start, requested_end: end });
+    if (interval_cache) interval_cache.set(key, interval);
+  }
+  const position = interval.positions.find(p => String(p.space_id) === String(row.space_id));
+  return position && position.interval_state === "contractually_free"
+    ? physical : { offerable: false, refusal_code: REFUSAL.TERM_NOT_FREE };
+}
+
 // ── SUBMISSION-TIME REVALIDATION ─────────────────────────────────────
 //  THE SAME AUTHORITY, THE SAME RULE. Preparation and first submission now
 //  reach an identical verdict from durable facts alone, with no request-time
@@ -477,10 +506,10 @@ function evaluateOfferability(row, { intended_move_in = null } = {}) {
 //  The refusal is RETAINED for invitations with no bed on them: those are
 //  genuinely ambiguous, and the pre-182 reasoning applies to them unchanged.
 async function resolveSubmissionTarget(q, {
-  property_id, unit_id, space_id = null, intended_move_in = null,
+  property_id, unit_id, space_id = null, intended_move_in = null, requested_end = null,
 } = {}) {
   const target = await resolveApplicationTarget(q, {
-    property_id, unit_id, space_id, intended_move_in, require_offerable: false,
+    property_id, unit_id, space_id, intended_move_in, requested_end, require_offerable: false,
   });
 
   if (!target.ok) {
@@ -501,6 +530,7 @@ async function resolveSubmissionTarget(q, {
   }
 
   if (!target.targeted) return target;   // untargeted invitation: nothing to revalidate
+  if (target.refusal_code === REFUSAL.TERM_NOT_FREE) return { ...target, ok: false, httpStatus: 409 };
 
   const verdict = evaluateOfferability(target, { intended_move_in });
   if (!verdict.offerable) {
@@ -534,6 +564,8 @@ module.exports = {
   resolveGrain,
   resolveSubmissionTarget,
   evaluateOfferability,
+  evaluateDatedOfferability,
+  isValidYmd,
   REFUSAL,
   REFUSAL_TEXT,
   OFFERABLE_NOW,

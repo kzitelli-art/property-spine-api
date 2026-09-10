@@ -1,5 +1,125 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**New HP handoff preparation, 2026-09-09:** excluded application homes now retain canonical dated refusal reasons in the API and shared picker. Unit and owned DB first reds reproduced; successor DB/HTTP/post-tour picker browser path passed and cleaned. See tenant-journey/EXCLUDED_TARGETS.md and docs/handoffs/new-hp/README.md. Matching, prospective turn planning and production acceptance remain open. GitHub checkpoint custody will be recorded separately; earlier entries are historical.
+
+
+
+**Combined phone-origin integration:** owned57230e9d passes159 assertions from phone-authored terms and phone confirmation through tenant application, approval/signing, exact-bed tenancy and reads. Owned cleanup verified. This advances the prior separate47/151 evidence; scope/fixture correction in tenant-journey/PHONE_TERMS.md. Local only; browser/provider/release acceptance and documented text limitations remain open.
+
+**Local phone terms checkpoint:** explicit terms can arrive in parts, show complete economics and advance via Confirm application. Existing canonical owners reused;47 owned HTTP checks plus separate151 full-path control and54 source gates pass, cleanup verified. See tenant-journey/PHONE_TERMS.md for exact custody, first red and limits. Structured fees/concessions and revisions by text, broad language and production acceptance remain open. Working changes only, not deployed; automatic heartbeat remains paused.
+
+**Desktop local checkpoint2026-09-09:** confirmation now binds the selected application offer identity/hash. Root firstred1f1816e7 demonstrated a send after service-established replacement; successora8f699f2 rejects it through staff SMS. Full successor4a37c305 passes151 assertions through exact-bed tenancy,54 source gates pass, owned cleanup verified. Includes the earlier ambiguous-offer refusal receipt repair. These are working changes above9f2acff, not deployed. Phone-only complete terms review/authoring, browser acceptance and release remain open. See docs/handoffs/desktop-qb-20260906/tenant-journey/SMS_OFFER_BINDING.md. Automatic tenant-phone heartbeat is PAUSED; older entries below are dated history.
+
+**Shared Leasing standing now reads recorded tour history:** exact SMS notes/standing/actor survive into the canonical reader Ask uses; history explicitly distinguished from current readiness. Owned9d90c376 first red, successor20508189 passes with property separation and failed/timed-out controls;54 source gates pass. Both runtimes cleaned. Ask HTTP/model answer and broader correction history remain OPEN. See tenant-journey/SMS_LEASING_STANDING.md. No deployment/live sends.
+
+**Person Card mobile history now displays recorded outcome notes:** actual pcLiveHistoryHtml browser first red missing notes; successor passes at390x844 with escaping, wrapping and absent-note controls. Existing signal tests24/24 pass. Separate owned HTTP proof already passed; combined full-shell browser/HTTP and Ask remain OPEN. See tenant-journey/SMS_PERSON_CARD.md. No deployment/live sends.
+
+**SMS outcome now reaches Person Card HTTP:** exact original notes, explicit standing and staff actor reconcile from immutable event into one existing history entry. First red2d5b2b13; successord3cc9d92 passes and both runtimes cleaned;54 source gates pass after final source change. Existing tour_outcome vocabulary reused, no new store. Browser and Ask still OPEN. See tenant-journey/SMS_PERSON_CARD.md. No deployment/live sends.
+
+**SMS immutable outcome notes proven through owned HTTP:** existing completeTour now records notes independently of legacy v2 outcome fields. First red39f34645; successorf7dcb69a preserves exact text, explicit standing and staff actor on one completed event;54 source gates pass. Both proof runtimes cleaned. Person Card/Ask v3 readers remain OPEN; worker sms_reader_trace finished. See tenant-journey/SMS_OUTCOME_NOTES.md. No deployment/live sends.
+
+**Fable notice repairs integrated locally and independently HTTP-proven:** root reproduced sibling failure on current candidate, applied both hash-matched patches, then grain37/37 and challenge18/18 passed through owned Postgres/HTTP with full migration preconditions (087/110 applied). Source gates54 pass; both runs cleaned. API board labels preserved, browser and shared-key property authorization remain OPEN. See tenant-journey/NOTICE_QB_ACCEPTANCE.md. No deployment/push.
+
+**SMS original feedback preserved through clarification, owned HTTP proven:** completeTour now receives the original prompt-linked body through its existing feedback.notes input. Conversion notes first red41053307, successor1f083a03 passed and cleaned;54 source gates pass. No live sends/deployment. Partial pre-standing visibility and full phone application/terms remain OPEN. See tenant-journey/SMS_OUTCOME_NOTES.md.
+
+**Fable F1 bounded repair, local service proof:** executed-lease recording and admission now detect sibling-bed disagreement and retain application_space_id. First red 76/79; successor81/81, overlap8/8, source gates54 pass. Existing recording-versus-activation separation preserved. Owned DB/HTTP and browser picker proof remain OPEN. See tenant-journey/EXECUTED_PREMISES.md. No deployment or push.
+
+**Overnight SMS continuation proven locally:** same outcome prompt now retains original send-app request through the standing reply. Real owned7b778bbb run passed;54 source gates pass. Exact actor/property/thread scope, replay, preferences and no-invitation gates preserved. Bare unbound replies no longer complete a different tour. Partial tour/app/Ask visibility, freeform notes and full terms/matching/phone confirmation remain OPEN. See tenant-journey/SMS_PROMPT_CONTINUATION.md. No live send/deployment; heartbeat stays active.
+
+**Overnight SMS preference seam proven through owned HTTP.** Exact owner wording now saves asserted home/timing preferences before clarification; later outcome reply preserves them. Real preference-write failure returns an honest retry receipt and recovery passes. Final owned9924aa39 run passed/cleaned;53 source gates pass. Full original-send-intent continuation and partial tour outcome/Ask reconciliation remain OPEN. Existing tour_outcome_prompts is the next reuse candidate; worker idle. See tenant-journey/SMS_PARTIAL.md. No live sends/deployment.
+
+**Overnight SMS first repair, local only:** owner text now retains send-app intent and bedroom no longer counts as an exact bed target. Three first-red cases repaired; action59/router40 checks pass. Partial facts/intent carry-forward is STILL OPEN. Lower-cost sms_partial_trace owns proof-only helper tests/e2e/staff_sms_partial_capture.js; root owns implementation. See tenant-journey/SMS_PARTIAL.md.
+
+**Fable review received; contributor omission repaired locally.** Fable verified the frozen1056-file source package. Live Turn priority now exposes canonical bed/space contributors with lease state and known/unknown start dates. Browser component red/green passed; backend unchanged. Legacy renderer fallback reachability remains under review. See tenant-journey/FABLE_CONTRIBUTORS.md. No deployment.
+
+**Review access repaired; prospective planning remains scoped.** Frozen API/app working-source ZIP in Downloads contains1056 hash-verified source files for Fable. Not sent externally. Existing maintenance deadlines are connected; source review finds no reachable pre-move-out expected-completion writer. No lifecycle build accepted until exact-bed/sibling and correction boundaries are proved. See tenant-journey/PRE_MOVEOUT_REVIEW.md.
+
+**Latest local checkpoint: recorded prospect context and mobile review.** Both shared selection entries reuse Person Card preferences, preserving zero, raw text and failed-versus-empty reads. Populated mobile review exposed an off-screen Cancel; existing sheet now scrolls. Focused owned DB/HTTP/mobile browser chain passed and cleaned up. See tenant-journey/PROSPECT_CONTEXT.md. No automatic recommendation or deployment claim.
+
+**Latest local repair: prospect-needs read failure.** Existing prospectVitals returns503 on failed attribute lookup instead of healthy fallback/nulls. Canonical capture/correction, conversation/Card reconciliation and failure/recovery proven through owned HTTP;51 source gates pass. Next: attributed context in shared home selection. See tenant-journey/PROSPECT_VITALS_FAILURE.md. No deployment.
+
+**Latest local repair: turn-date meaning.** Removed inferred vacancy-window arithmetic; both shared picker doors display canonical lease-end/expected-ready dates. Red/green DOM, owned HTTP/browser and source gates50 passed. Next: existing prospectVitals swallows read failures; preserve failure and provenance before using it for recommendations. See tenant-journey/TURN_DATE_LABELS.md.
+
+**Latest proof: competing homes and maintenance, local only.** Real offer HTTP rejects overlapping outgoing rights/unknown evidence and accepts a feasible competing home; refusals roll back. Existing maintenance HTTP ranks committed > pending > offer-only, with no deadline from an application offer. See tenant-journey/COMPETING_HOMES.md. Product source unchanged this checkpoint; no deployment.
+
+**Latest checkpoint: shared application review, local only.** Conversation and post-tour now mount one existing date-first/complete-terms component. Cancel/Back late-response and changed-offer retry defects have red/green controls. Owned post-tour HTTP/browser read passed; full-shell visibility reliability remains open. See `handoffs/desktop-qb-20260906/tenant-journey/SHARED_REVIEW.md`. Older dated entries below are history, not the current post-tour gap. No deployment.
+
+**2026-09-08 date-first conversation picker, local only:** requested start/end now
+reach the existing leaseable-units API and canonical full-term check. The conversation
+picker asks dates before homes, carries them into review and preserves them on Back.
+First red admitted a home ready after the requested date; unit successor7 and owned
+Postgres/HTTP/Chromium picker-function proof passed. This is actual extracted app
+functions on the owned API, not full-shell navigation or a send. Post-tour
+followups-door.js still has the older picker/direct-send path; consolidation onto
+existing terms review remains. See TURN_SELECTION.md for proof limits/custody.
+
+**2026-09-08 forward selection / turn-window first repair, local only:**
+Owner requires home choice and maintenance planning to account for future turns.
+Owned Postgres reproduced a conflicting answer: an early turn-ready estimate made
+an application target offerable while the canonical contractual interval was blocked
+by the outgoing active lease. Existing application target authority now composes
+the exact-space interval read with physical readiness; complete offer dates are
+checked before invitation/acceptance and at the staff offer door. Seven focused DB
+assertions and the full163 mobile tenant journey passed; source governance50 passed
+sequentially. New authenticated HTTP menu challenge passed11 assertions on a fresh
+owned database. No automatic preference optimizer,
+turn creation or production deployment is claimed. See
+docs/handoffs/desktop-qb-20260906/tenant-journey/TURN_SELECTION.md.
+
+**2026-09-08 terms-first owner ruling and local candidate (supersedes trial notes below):**
+Owner completed staff sign-in, explicitly authorized closing the old test case and
+a labelled simulated tour, received a new Demo whole-unit application, and submitted
+it. Owner then identified missing lease terms and required agreement FIRST.
+Live application remains unchanged; lease approval/generation/delivery is held.
+API9f2acff and appc05ae68 plus local changes now bind prepared application proposals
+in existing lease_offers to invitations, applicant acknowledgement, management
+confirmation and lease packet. Migration193 is owned-disposable only, not deployed.
+Mobile submission, mismatch refusals, offer-bound lease generation, both resident
+signers, company execution, move-in and rent roll passed 163 full-path assertions
+through owned real HTTP/Postgres and Chromium. Providers were fenced; owned DB
+and cluster data were removed. This is a synthetic by-bed fixture. See
+docs/handoffs/desktop-qb-20260906/tenant-journey/TERMS_FIRST.md for current limits.
+Successor offers now use the same invitation and application. An append-only
+acknowledgement history preserves prior acceptance; new terms require explicit
+review both before and after submission. Stale acceptance, duplicate acceptance,
+acknowledgement rewrites and revisions after a packet exists are tested refusals.
+Already-submitted applications without an offer now enter the same terms review
+through an explicitly selected application, without invented prior agreement or
+another application. The 163 checks include legacy migration-shape and Ask reconciliation checks;
+local mobile acceptance preserves answers, zero deposit and one first acceptance.
+All50 source-governance gates pass, followed by an isolated163-check journey.
+Application terms/fees now reach Ask through canonical Leasing standing. Both
+Ask HTTP doors agree with application detail on missing, pending and accepted
+terms. More than one application requires clarification unless latest is explicit.
+Older-application selection and causal explanations are not claimed. Conditional/unit-assessed
+catalog charges and structured concessions refuse rather than inventing terms.
+This is not whole-product acceptance or a production deployment.
+
+**2026-09-08 bounded live tenant trial:** owner authorized texts to his own phone
+and subsequently application and test-lease delivery. Live health identifies
+d55dae9. Existing Demo intake through the authenticated door and inbound SMS
+conversation worked; exact outgoing messages were independently carrier-delivered.
+Public website intake remains403 with DEMO_MODE=false. Requested3pm tour did not
+book: no future open slots, no tour, and no takeover-queue row for this trial.
+AI promised human follow-up despite that absent queue evidence. Provider delivery
+was not reflected in comm_events.provider_status on the observed reads.
+Owner's existing active staff account has Demo access. Canonical sign-in code
+sent; verification pending. Prior invitations are consumed/revoked. No fresh
+application or lease has been sent; no tour outcome or approval fabricated.
+Local scheduler-response repair is under review, not deployed. The scheduled QB
+follow-up is test coordination, not a replacement product workflow. See the
+tenant journey receipt and QB_OPERATING_BOARD for current custody.
+
+**2026-09-08 local tenant journey:** existing lead/tour/outcome/application/signing
+proof passed106; extension using real mobile application and separate signer
+pages, then charges, activation, readiness, keys and canonical rent roll passed118.
+Rent roll names the same Person, executed lease and Bed B, with rent counted once.
+One local CSS repair hides an empty unknown Target date row; browser red/green,
+render24/24 and source gates50 passed. Final repaired journey118/118, owned cleanup
+complete. Not deployed. Model calls refused and SMS captured locally: live AI,
+carrier delivery and personal tenant trial remain unproved. See
+[tenant journey receipt](handoffs/desktop-qb-20260906/tenant-journey/RECEIPT.md).
+
 **2026-09-07 application picker:** the existing Leasing Work route is now browser
 verified through canonical intake, walk-in tour, conversion and explicit next
 action.25 assertions passed; exact server target identities matched the visible

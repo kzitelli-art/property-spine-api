@@ -150,19 +150,6 @@ module.exports = function notice(deps) {
       if (uQ.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "unit not found" }); }
       const unit = uQ.rows[0];
 
-      // guard: don't stack two open notices on the same unit
-      const dup = await client.query(
-        `select id from unit_events where unit_id=$1 and event_type='notice_given' and status='scheduled' limit 1`,
-        [unit_id]);
-      if (dup.rows.length) {
-        await client.query("rollback");
-        return res.status(409).json({
-          error: "this unit already has an open notice",
-          unit_event_id: dup.rows[0].id,
-          hint: "cancel or supersede the existing notice instead of stacking a second one",
-        });
-      }
-
       // RESOLVE THE TENANCY FROM SERVER STATE (the authority)
       const t = await resolveActiveTenancy(client, unit_id, space_id);
       if (t.error === "no_space") {
@@ -186,6 +173,41 @@ module.exports = function notice(deps) {
         return res.status(409).json({
           error: "no active lease on this unit — there is no tenancy to give notice on",
           hint: "a vacant or not-yet-leased unit does not receive notice; it is already (future) supply via turnover/availability",
+        });
+      }
+
+      //  ONE OPEN NOTICE PER BED, NOT PER UNIT.
+      //  A notice is given on a TENANCY, and on a by-bed unit each bed holds
+      //  its own. This guard was unit-grained while every other statement in
+      //  this module is space-grained: the resolver above refuses an
+      //  ambiguous unit, and the insert below writes space_id as a column
+      //  precisely so availability can find the notice per bed. Scoped to the
+      //  unit, bed A's notice refused bed B's resident outright, and the
+      //  refusal advised cancelling A's notice to record B's — destroying a
+      //  true fact to record another one.
+      //
+      //  It runs AFTER resolution because the space is what it scopes to, and
+      //  only the resolver may say which space this request means. That also
+      //  puts the honest refusals first: an unnamed bed on a by-bed unit is
+      //  now "name which space", not "this unit already has an open notice".
+      //
+      //  The row lock serializes concurrent notices on the SAME bed, which the
+      //  unscoped select never did — two simultaneous requests both read no
+      //  notice and both inserted. Same `for update` pattern the turnover
+      //  service already uses on units, one grain down.
+      await client.query("select id from spaces where id=$1 for update", [t.space_id]);
+      const dup = await client.query(
+        `select id from unit_events
+          where space_id=$1 and event_type='notice_given' and status='scheduled'
+          limit 1`,
+        [t.space_id]);
+      if (dup.rows.length) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "this space already has an open notice",
+          unit_event_id: dup.rows[0].id,
+          space_id: t.space_id,
+          hint: "cancel or supersede the existing notice on this space instead of stacking a second one",
         });
       }
 
@@ -299,22 +321,41 @@ module.exports = function notice(deps) {
       if (uQ.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "unit not found" }); }
       const unit = uQ.rows[0];
 
-      // the current open notice (there is at most one, by the give-notice guard)
-      const priorQ = await client.query(
-        `select * from unit_events where unit_id=$1 and event_type='notice_given' and status='scheduled' for update`,
-        [unit_id]);
+      //  The open notice being corrected. This lookup was unit-grained and
+      //  its comment — "there is at most one, by the give-notice guard" —
+      //  was true only because that guard was also unit-grained. Now that a
+      //  by-bed unit may legitimately hold one open notice per bed, an
+      //  unscoped lookup would find several and refuse every supersession on
+      //  the unit. A supplied space_id selects which bed's notice is being
+      //  corrected; the identity assertion below still refuses to retarget.
+      //  Absent a space on a unit holding several, ambiguity is named rather
+      //  than guessed — the same answer give-notice gives.
+      const priorQ = space_id
+        ? await client.query(
+            `select * from unit_events
+              where unit_id=$1 and space_id=$2
+                and event_type='notice_given' and status='scheduled' for update`,
+            [unit_id, space_id])
+        : await client.query(
+            `select * from unit_events
+              where unit_id=$1 and event_type='notice_given' and status='scheduled' for update`,
+            [unit_id]);
       if (priorQ.rows.length === 0) {
         await client.query("rollback");
         return res.status(409).json({
-          error: "no open notice on this unit to supersede",
+          error: space_id
+            ? "no open notice on this space to supersede"
+            : "no open notice on this unit to supersede",
           hint: "use POST /units/:id/notice to give a first notice",
         });
       }
       if (priorQ.rows.length !== 1) {
         await client.query("rollback");
         return res.status(409).json({
-          error: "multiple open notices exist on this unit — supersession cannot choose one safely",
+          error: "this unit has open notices on more than one space — supersession must name which space",
           detail: "multiple_open_notices",
+          spaces: priorQ.rows.map((r) => r.space_id),
+          hint: "resend with space_id set to the bed whose notice is being corrected",
         });
       }
       const prior = priorQ.rows[0];
@@ -408,12 +449,16 @@ module.exports = function notice(deps) {
       if (property_id) { vals.push(property_id); where.push(`ue.property_id = $${vals.length}`); }
       if (status && status !== "all") { vals.push(status); where.push(`ue.status = $${vals.length}`); }
 
+      //  space_label joins because a by-bed unit can now hold one open
+      //  notice per bed, and unit_number alone renders both as "4125" —
+      //  two residents, two vacate dates, one indistinguishable label.
       const r = await pool.query(
-        `select ue.*, u.unit_number
+        `select ue.*, u.unit_number, s.space_label
            from unit_events ue
            join units u on u.id = ue.unit_id
+           left join spaces s on s.id = ue.space_id
           where ${where.join(" and ")}
-          order by ue.effective_date asc`,
+          order by ue.effective_date asc, s.space_label asc`,
         vals);
 
       const notices = r.rows.map(ue => ({
@@ -423,8 +468,13 @@ module.exports = function notice(deps) {
         property_id: ue.property_id,
         move_out_date: ue.effective_date,
         status: ue.status,
-        lease_id: ue.payload ? ue.payload.lease_id : null,
-        space_id: ue.payload ? ue.payload.space_id : null,
+        //  COLUMN FIRST, snapshot only as fallback. This read took space_id
+        //  from the payload alone — the exact failure this module's insert
+        //  comment warns about, one surface further on. Older rows may carry
+        //  the identity in only one of the two, so neither side is dropped.
+        lease_id: (ue.lease_id || (ue.payload ? ue.payload.lease_id : null)) || null,
+        space_id: (ue.space_id || (ue.payload ? ue.payload.space_id : null)) || null,
+        space_label: ue.space_label || null,
         tenant_name: ue.payload ? ue.payload.tenant_name : null,
         lease_end_date: ue.payload ? ue.payload.lease_end_date : null,
         notice_date: ue.payload ? ue.payload.notice_date : null,
