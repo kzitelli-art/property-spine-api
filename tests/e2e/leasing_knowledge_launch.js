@@ -5,7 +5,7 @@ const boundary=require('./proof_boundary');
 (async()=>{
   await boundary.assertDatabase(); const m=boundary.manifest();await boundary.portFree(m.port);
   const dir=path.dirname(process.env.E2E_PROOF_MANIFEST);
-  const env=boundary.serverEnvironment({PORT:String(m.port),SMS_SEND_MODE:'customer_care',
+  const env=boundary.serverEnvironment({PORT:String(m.port),SMS_SEND_MODE:'customer_care',OPERATOR_KEY:'e2e-key',
     OPERATOR_APP_ORIGIN:'http://127.0.0.1:5179',APP_BASE_URL:`http://127.0.0.1:${m.port}`,
     E2E_SMS_LOG:path.join(dir,'knowledge-sms.log'),E2E_ANTHROPIC_LOG:path.join(dir,'knowledge-anthropic.log'),
     E2E_EGRESS_LOG:path.join(dir,'knowledge-egress.log'),E2E_SESSION_LOG:path.join(dir,'knowledge-sessions.log'),
