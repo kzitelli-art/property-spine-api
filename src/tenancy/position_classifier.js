@@ -332,6 +332,11 @@ function classifyPosition(row, { asOf, personNames } = {}) {
       source: lastIn.source || null,
       details: lastIn.payload || {},
     } : null,
+    last_possession_end: !possessed && lastOut ? {
+      event_id: lastOut.id || null,
+      lease_id: lastOut.lease_id || null,
+      effective_date: lastOut.effective_date,
+    } : null,
     economic_tenancy_state: current ? "active" : activationPending ? "activation_pending" : future ? "forward" : "none",
     possession_state: possessed ? "delivered" : "pending",
     physical_readiness: turning ? "turning" : "ready",

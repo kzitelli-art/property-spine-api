@@ -11,7 +11,7 @@ const {recordEffectivePossession,spacePosition}=require('../../src/tenancy/space
   try {
     const one=async(sql,args)=>(await pool.query(sql,args)).rows[0];
     const property=await one("insert into properties(name) values('Owned sibling turnover proof') returning id");
-    for(const scenario of ['live','future_arrival','future_departure','last_bed']) {
+    for(const scenario of ['live','lease_only','future_arrival','future_departure','last_bed']) {
     const unit=await one("insert into units(property_id,unit_number,occupancy_status) values($1,$2,'occupied') returning id",[property.id,scenario]);
     await pool.query('delete from spaces where unit_id=$1',[unit.id]);
     const beds=[];
@@ -21,7 +21,9 @@ const {recordEffectivePossession,spacePosition}=require('../../src/tenancy/space
       const space=await one("insert into spaces(unit_id,space_label,use_type) values($1,$2,'residential') returning id",[unit.id,label]);
       const arrival=label==='Bed B' && scenario==='future_arrival' ? end : start;
       const lease=await one("insert into leases(property_id,space_id,start_date,end_date,lease_status) values($1,$2,$3,$4,'active') returning id",[property.id,space.id,arrival,end]);
-      await recordEffectivePossession(pool,{kind:'move_in',lease_id:lease.id,unit_id:unit.id,property_id:property.id,effective_date:arrival,actor:null,source:'owned_fixture'});
+      if(!(label==='Bed B' && scenario==='lease_only')) {
+        await recordEffectivePossession(pool,{kind:'move_in',lease_id:lease.id,unit_id:unit.id,property_id:property.id,effective_date:arrival,actor:null,source:'owned_fixture'});
+      }
       if(label==='Bed B' && ['future_departure','last_bed'].includes(scenario)) {
         await recordEffectivePossession(pool,{kind:'move_out',lease_id:lease.id,unit_id:unit.id,property_id:property.id,
           effective_date:scenario==='future_departure'?end:new Date(Date.now()-86400000).toISOString().slice(0,10),actor:null,source:'owned_fixture'});
@@ -43,7 +45,8 @@ const {recordEffectivePossession,spacePosition}=require('../../src/tenancy/space
     const after=await spacePosition(pool,{property_id:property.id});
     assert.equal(!!after.positions.find(p=>p.space_id===beds[1].space.id).current_possession,siblingHeld,`${scenario}: sibling dated possession preserved`);
     assert.equal((await one('select lease_status from leases where id=$1',[beds[1].lease.id])).lease_status,'active');
-    assert.equal((await one('select occupancy_status from units where id=$1',[unit.id])).occupancy_status,siblingHeld?'occupied':'vacant',`${scenario}: unit cache follows effective possession`);
+    const expectedCache=siblingHeld?'occupied':scenario==='last_bed'?'vacant':'unknown';
+    assert.equal((await one('select occupancy_status from units where id=$1',[unit.id])).occupancy_status,expectedCache,`${scenario}: absence of recorded sibling possession is not proof of vacancy`);
     }
     console.log('TURNOVER_SIBLING_CACHE_HTTP_PASSED');
   } finally {await pool.end();}

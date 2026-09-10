@@ -9,4 +9,7 @@ assert.equal(read([event('move_in','2026-09-01'),event('move_out','2026-09-10')]
 assert.ok(read([event('move_in','2026-09-10')]).current_possession,'effective arrival is current');
 assert.ok(read([event('move_out','2026-09-10','01:00:00Z'),event('move_in','2026-09-10','02:00:00Z')]).current_possession,'same-day later arrival preserves event ordering');
 assert.equal(read([event('move_in','2026-09-11')],'2026-09-11').current_possession.since,'2026-09-11','the same retained future fact becomes effective on its date');
-console.log('POSSESSION_AS_OF_PASSED (6 assertions)');
+assert.equal(read([event('move_in','2026-09-01'),event('move_out','2026-09-11')]).last_possession_end,null,'future departure is not a recorded current end');
+assert.deepEqual(read([event('move_in','2026-09-01'),{...event('move_out','2026-09-10'),id:'end-event',lease_id:'lease'}]).last_possession_end,
+  {event_id:'end-event',lease_id:'lease',effective_date:'2026-09-10'},'ended possession carries its exact event and lease identity');
+console.log('POSSESSION_AS_OF_PASSED (8 assertions)');

@@ -241,6 +241,7 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
              on er.lease_id = l.id and er.record_state = 'verified'
           where l.space_id=s.id) as leases,
         (select json_agg(json_build_object(
+            'id', ue.id, 'lease_id', ue.lease_id,
             'event_type', ue.event_type, 'effective_date', ue.effective_date,
             'created_at', ue.created_at, 'status', ue.status,
             'payload', ue.payload, 'source', ue.source)
