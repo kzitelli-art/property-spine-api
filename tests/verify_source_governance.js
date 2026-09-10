@@ -146,6 +146,7 @@ const GATES = [
     what: "Skyline Ask Spine: dashboard and SMS share routing, entitlement, signer, and identifier-firewall behavior" },
   { file: "proofs/ask_spine_contract_proof.js",
     what: "Ask Spine attention: one canonical obligations reader, scoped ranking, no conversational SQL copy" },
+  { file: "unit/leasing_knowledge.test.js", what: "Leasing knowledge shared reads, staff routing and authority" },
   { file: "unit/staff_sms_router.test.js",
     what: "staff SMS: governed reads converge on Ask Spine while actions and one-work-order turns remain operational" },
   { file: "unit/staff_sms_preferences_failure.test.js", name: "Staff SMS preference failure receipt" },

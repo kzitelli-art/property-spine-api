@@ -301,13 +301,7 @@ module.exports = function agentModule(deps) {
     // exactly the dated things. A fact is quotable only while it is still true.
     // No live fact sets effective_until today, so this changes nothing now and
     // guards everything later.
-    const facts = (await client.query(
-      `select fact_key, category, rendered_text, source_type, source_record_id, confirmed_at
-         from agent_facts
-        where property_id=$1 and status='active' and (space_id is null)
-          and (effective_until is null or effective_until > now())`,
-      [property_id]
-    )).rows.map(r => ({
+    const facts = (await require("../leasing/leasing_knowledge").readActive(client, property_id)).map(r => ({
       fact_key: r.fact_key, category: r.category, rendered_text: r.rendered_text,
       source: r.source_type, confirmed_at: r.confirmed_at,
     }));

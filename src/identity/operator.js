@@ -277,7 +277,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   }
   // verify a fact belongs to the session's property; returns it or throws.
   async function scopedFact(client, factId, propertyId) {
-    const f = (await client.query("select * from agent_facts where id=$1", [factId])).rows[0];
+    const f = (await client.query("select * from agent_facts where id=$1 for update", [factId])).rows[0];
     if (!f) throw httpErr(404, "Fact not found.");
     if (f.property_id !== propertyId) throw httpErr(403, "Not in your property scope.");
     return f;
@@ -287,8 +287,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   //  VERIFIED FACTS — property-scoped to the session. approved_by from session.
   //  NO free :propertyId route — the property is INFERRED from req.operator.
   // ════════════════════════════════════════════════════════════════════
-  const FACT_KEYS = ["pet_policy","parking_rules","tour_window","fee_policy","required_documents","office_contact","communication_instructions"];
+  const leasingKnowledge = require("../leasing/leasing_knowledge");
+  const FACT_KEYS = ["pet_policy","parking_rules","tour_window","fee_policy","required_documents","office_contact","communication_instructions", ...Object.keys(leasingKnowledge.TOPICS)];
   const CATEGORY_FOR = {
+    ...Object.fromEntries(Object.keys(leasingKnowledge.TOPICS).map(key => [key, "leasing_knowledge"])),
     pet_policy:"pets", parking_rules:"parking", tour_window:"tours", fee_policy:"fees",
     required_documents:"documents", office_contact:"routing", communication_instructions:"routing",
   };
@@ -487,7 +489,8 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           order by status asc, fact_key asc, created_at desc`,
         [req.operator.property_id]
       )).rows;
-      return res.json({ property_id: req.operator.property_id, facts: rows });
+      return res.json({ property_id: req.operator.property_id, facts: rows,
+        topics: leasingKnowledge.TOPICS, current: await leasingKnowledge.readActive(pool, req.operator.property_id) });
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
 
@@ -497,10 +500,12 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     if (!FACT_KEYS.includes(fact_key)) throw httpErr(400, `fact_key must be one of: ${FACT_KEYS.join(", ")}`);
     const rendered_text = (b && b.rendered_text || "").trim();
     if (!rendered_text) throw httpErr(400, "rendered_text (the approved wording) is required.");
+    if (rendered_text.length > 8000) throw httpErr(400, "Keep each topic under 8,000 characters.");
     const source_type = (b && b.source_type || "").trim();
     if (!SOURCE_TYPES.includes(source_type)) throw httpErr(400, `source_type must be one of: ${SOURCE_TYPES.join(", ")}`);
     const confirmed_at = (b && b.confirmed_at) ? new Date(b.confirmed_at) : new Date();
     const effective_until = (b && b.effective_until) ? new Date(b.effective_until) : null;
+    if (!Number.isFinite(confirmed_at.getTime()) || (effective_until && !Number.isFinite(effective_until.getTime()))) throw httpErr(400, "Use valid confirmation and expiry dates.");
     return { fact_key, category: CATEGORY_FOR[fact_key], rendered_text, source_type, confirmed_at, effective_until };
   }
 

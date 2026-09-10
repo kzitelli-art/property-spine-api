@@ -7,6 +7,7 @@
    ==================================================================== */
 "use strict";
 
+const leasingKnowledge = require("../leasing/leasing_knowledge");
 const technicianIntent = require("./technician_intent");
 const askSpineAnswer = require("../agent/ask_spine_answer");
 const staffLeasingIntent = require("../leasing/staff_sms_intent");
@@ -45,6 +46,10 @@ function routeStaffSmsTurn({ text, attachments = [] } = {}) {
   // cannot be misread as a maintenance dispatch.
   if (technicianIntent.hasAttachments(attachments)) {
     return Object.freeze({ destination: "technician", technician, leasing, subject: null });
+  }
+
+  if (askSpineAnswer.questionSubject(text) === "leasing_knowledge") {
+    return Object.freeze({ destination: "ask_spine", technician, leasing, subject: "leasing_knowledge" });
   }
 
   if (leasing.intent !== "unclear") {
