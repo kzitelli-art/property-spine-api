@@ -1,3 +1,4 @@
+const leasingKnowledge = require("../leasing/leasing_knowledge");
 //  ════════════════════════════════════════════════════════════════════
 //  ask_spine_answer.js — ASK SPINE, SLICE 2: ANSWER A TYPED QUESTION
 //
@@ -412,6 +413,7 @@ function canReadEconomics(modules) {
 }
 
 function questionSubject(question) {
+  if (leasingKnowledge.isKnowledgeRead(question)) return "leasing_knowledge";
   const text = String(question || "");
   const tenancyThing = TENANCY_TERMS.test(text);
   const contractedService = CONTRACTED_SERVICE_TERMS.test(text);
@@ -1553,6 +1555,9 @@ async function answer(db, anthropic, {
       grounded_on: null,
       references: [],
     };
+  }
+  if (subject === "leasing_knowledge") {
+    return leasingKnowledge.answer(db, { property_id, allowed_modules, question: q });
   }
   const modules = Array.isArray(allowed_modules) ? allowed_modules.map(String) : [];
   //  ENTITLEMENT PRECEDES INTELLIGENCE (§40.8). Refused HERE, before any
