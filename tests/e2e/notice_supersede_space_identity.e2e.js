@@ -238,8 +238,10 @@ function assertPosition(reads, ids, expected, label) {
     process.exit(0);
   }
 
-  check("cross-bed supersede is rejected with the identity mismatch receipt",
-    cross.status === 409 && cross.body && cross.body.detail === "space_identity_mismatch",
+  // space_id selects the bed's existing notice after the sibling-notice
+  // repair. Bed B has no notice; Bed A must not be chosen as its predecessor.
+  check("supersede names a bed with no notice and refuses without selecting its sibling",
+    cross.status === 409 && cross.body && cross.body.error === "no open notice on this space to supersede",
     `${cross.status} ${json(cross.body)}`);
   check("cross-bed refusal makes zero notice mutation", json(await noticeRows(unit.id)) === beforeCross,
     json(await noticeRows(unit.id)));

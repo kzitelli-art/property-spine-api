@@ -9,6 +9,11 @@ const path = require('node:path');
   const owned = boundary.manifest(false);
   if (!process.env.E2E_API_BASE) throw Error('Owned API base required');
   let failed = false;
+  const identity = spawnSync(process.execPath, [path.join(__dirname, '../e2e/notice_supersede_space_identity.e2e.js')], {
+    stdio: 'inherit', windowsHide: true, env: { ...process.env, E2E_OPERATOR_KEY: 'e2e-key' },
+  });
+  if (identity.error) throw identity.error;
+  if (identity.status !== 0) failed = true;
   for (const name of ['notice_space_grain_http', 'notice_concurrency_challenge']) {
     const result = spawnSync(process.execPath, [path.join(__dirname, `${name}.db.js`)], {
       stdio: 'inherit', windowsHide: true,

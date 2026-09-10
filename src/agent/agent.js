@@ -39,7 +39,7 @@ const aiLeasingStrategy = require("../leasing/ai_leasing_strategy");
 const aiLeasingStrategyRuntime = require("../leasing/ai_leasing_strategy_runtime");
 const aiLeasingOperatingContext = require("../leasing/ai_leasing_operating_context"); // GOVERNED OPERATING CONTEXT LEASING v1
 
-const PROMPT_REVISION = "stage-a-v10"; // v10: clear linked-unit rent questions answer directly from governed pricing; the model cannot skip or replace the canonical quote/menu/refusal.
+const PROMPT_REVISION = "stage-a-v11"; // v11: inventory tool carries explicit lease dates and distinguishes informational results. v10: linked-unit rent uses governed pricing.
 // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
 const POLICY_REVISION = "stage-a-v1";
 
@@ -1254,13 +1254,15 @@ Reply with ONLY the message text.`;
           // criteria, never the property.
           const INVENTORY_TOOL = {
             name: "find_available_units",
-            description: "Search THIS property's real available units (vacant, not out of service) when the prospect asks what's available or states preferences (bedrooms, budget). Returns real units only. If the result is empty, say so honestly — NEVER invent or imply a unit that is not in the result.",
+            description: "Check THIS property's inventory for the prospect's stated lease dates and preferences. Pass exact dates only when stated; never invent a year, end date or default term. Missing or invalid dates require clarification, not a claim that nothing is available. Follow the returned qualification and may_promise: contractual dates alone do not establish physical readiness. Never invent a home or promise an informational result.",
             input_schema: {
               type: "object",
               properties: {
                 bedrooms: { type: "integer", description: "exact bedroom count if stated" },
                 bathrooms: { type: "number", description: "minimum bathrooms if stated" },
                 max_rent: { type: "number", description: "budget ceiling in dollars if stated" },
+                requested_start: { type: "string", description: "Prospect's explicitly stated lease start, YYYY-MM-DD; omit if unknown." },
+                requested_end: { type: "string", description: "Prospect's explicitly stated lease end, YYYY-MM-DD; omit if unknown." },
               },
             },
           };
@@ -1402,6 +1404,8 @@ Reply with ONLY the message text.`;
                 bedrooms: invUse.input && invUse.input.bedrooms,
                 bathrooms: invUse.input && invUse.input.bathrooms,
                 max_rent: invUse.input && invUse.input.max_rent,
+                requested_start: invUse.input && invUse.input.requested_start,
+                requested_end: invUse.input && invUse.input.requested_end,
               }, qc);
             } finally { qc.release(); }
             //  ── THE SECOND LEAK, AND THE WORSE ONE ──────────────────
@@ -1443,6 +1447,9 @@ Reply with ONLY the message text.`;
               offeredUnits.push({
                 id: u.id, unit_number: u.unit_number, bedrooms: u.bedrooms,
                 bathrooms: u.bathrooms, square_feet: u.square_feet,
+                // An informational date check must not become a selectable
+                // offer when the prospect subsequently says yes.
+                selection_eligible: found.may_promise === true,
                 //  Governed rent or an explicit refusal. Never the legacy column.
                 rent: q && q.quotable ? q.rent : null,
                 lease_term_months: q && q.quotable ? q.lease_term_months : null,

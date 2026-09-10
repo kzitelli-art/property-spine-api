@@ -2,6 +2,11 @@
 //  LEASING INVENTORY — leasing_inventory.js
 //  Class 1 permanent primitive: grounded available-unit discovery and
 //  governed unit attachment.
+//  2026-09-09: the agent now supplies explicit dates. This legacy unit
+//  projection still does not compose the exact-space application target
+//  authority or published space pricing. Its results remain informational;
+//  the historical limitations below describe this reader, not missing domain
+//  primitives elsewhere in Spine. See PROSPECT_INVENTORY_CUTOVER.md.
 //
 //  THE DISTINCTIONS THIS MODULE EXISTS TO KEEP (the product):
 //    available ≠ merely believed-available — availability here means the
@@ -82,6 +87,16 @@ module.exports = function leasingInventoryModule({ pool }) {
       };
     }
 
+    const { isValidYmd } = require("../applications/application_target_authority");
+    if (typeof requested_start !== "string" || typeof requested_end !== "string"
+        || !isValidYmd(requested_start) || !isValidYmd(requested_end)
+        || requested_end <= requested_start) {
+      return {
+        units: [], qualification: "invalid_term", may_promise: false,
+        note: "Ask for valid lease start and end dates, with the end after the start. These dates could not be checked; this is not an answer about availability.",
+      };
+    }
+
     const params = [property_id];
     // RESIDENTIAL SHAPE GUARD (owner decision, 2026-07-27). `units` carries
     // non-apartment rows — the property's commercial space is one (7,391 sq ft,
@@ -147,7 +162,7 @@ module.exports = function leasingInventoryModule({ pool }) {
     const { intervalPropertyPositions } = require("../tenancy/dated_positions");
     let iv;
     try {
-      iv = await intervalPropertyPositions(pool, {
+      iv = await intervalPropertyPositions(q, {
         property_id, requested_start, requested_end,
       });
     } catch (e) {
@@ -253,7 +268,7 @@ module.exports = function leasingInventoryModule({ pool }) {
   //      rather than the system guessing.
   function matchConfirmationToOffer(inboundText, offeredUnits) {
     const text = String(inboundText || "").toLowerCase();
-    const offers = Array.isArray(offeredUnits) ? offeredUnits : [];
+    const offers = Array.isArray(offeredUnits) ? offeredUnits.filter(u => u.selection_eligible !== false) : [];
     if (!text || offers.length === 0) return null;
     // explicit unit-number citation
     for (const u of offers) {

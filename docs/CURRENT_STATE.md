@@ -1,5 +1,9 @@
 # CURRENT STATE — what exists, and at what proof level
 
+**Prospect inventory date connection, 2026-09-09:** the existing agent tool now carries explicitly stated start/end dates to its existing inventory reader; invalid dates are distinct from missing dates. Real agent-service/Postgres first red and successor passed with a scripted local model; informational results cannot become selected through yes. No provider/HTTP/deployment or complete matching claim. All54 source gates passed. HP CI's notice response mismatch reproduced and test corrected; combined notice54/37/18 passed. See tenant-journey/PROSPECT_INVENTORY_DATES.md. Exact-space published-price matching remains the next cutover.
+
+
+
 **New HP handoff preparation, 2026-09-09:** excluded application homes now retain canonical dated refusal reasons in the API and shared picker. Unit and owned DB first reds reproduced; successor DB/HTTP/post-tour picker browser path passed and cleaned. See tenant-journey/EXCLUDED_TARGETS.md and docs/handoffs/new-hp/README.md. Matching, prospective turn planning and production acceptance remain open. GitHub checkpoint custody will be recorded separately; earlier entries are historical.
 
 

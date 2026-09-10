@@ -1,0 +1,19 @@
+# Prospect inventory date connection — local receipt
+
+2026-09-09. API base ed2922c64387ba52ebeef4d54ea33840b945e90e; paired app f2eda58544b1650f123735f4105c750a47eba081. CURRENT_STATE reviewed; governing PHILOSOPHY unchanged from full read. Working changes, not a deployment.
+
+Intent: a prospect who already states lease dates should get those dates checked, not be asked for them again. Existing agent find_available_units tool calls leasing_inventory.availableUnits. The inventory reader requires requested_start and requested_end; neither was in the model tool schema nor forwarded at the call site. docs/archive/PROSPECT_INVENTORY_CUTOVER.md already identifies this connection. Preserve the reader, canonical interval service, pricing adapter, offer history and selection writer; no new matching workflow or schema.
+
+First red: owned1168b429ead54cd2a395d1d876142be8 drove the actual agent processInbound service with a local scripted model. Its tool supplied both dates; tool_result.term was null. The assertion failed. The owned DB and cluster data were removed.
+
+Successor: owned514c0106452d41acab25b01d62e8a3b6 passed the actual agent-service path with real Postgres and scripted local model. Exact dates survive, the tool advertises both inputs, missing dates return term_required, invalid dates return invalid_term, and may_promise remains false. A nonempty informational inventory result is durably marked selection_eligible:false and the real matcher refuses yes against it. No invitation, lease offer or outbound communication was written. Owned DB and cluster data removed.
+
+Unit first red rejected the old behavior that queried inventory with an impossible date. Successor covers impossible/equal/reversed/non-string dates, partial term and informational selection refusal. The existing canonical YMD validator is reused. The interval read now uses the caller's query client instead of silently switching back to the pool.
+
+Reproduction: existing onboarding_review_local.ps1 with PROOF_FOCUSED_NAME=prospect_inventory_dates, ONBOARDING_SPACE_PROOF_ONLY=1 and the owned wrapper's explicit local paths. Provider calls are replaced with a scripted in-process model. This is real agent service + DB proof, not SMS webhook/HTTP proof, provider-language evaluation, browser verification or deployment.
+
+The existing inventory SQL still filters at unit grain using market_rent and the blanket lease exclusion, then checks intervals. It does not yet use exact-space published economics plus application target authority. That is the next cutover, not evidence that matching is now complete. The model supplies criteria as asserted inputs; this work does not establish free-language date normalization, typed preference confirmation, automatic exact-bed selection or prospective turn planning. Informational results cannot become selectable through the new path; historical offered sets without the new flag retain existing behavior.
+
+The date-boundary unit test and actual agent-service DB proof are registered in tests/e2e/verify_all.sh so the new connection is checked on subsequent CI runs. Prompt revision advances to stage-a-v11 to identify the changed tool contract; this metadata-only revision and explanatory comments followed the service successor. Final source gates are recorded below after runtime cleanup.
+
+Final verification: all 54 source-governance gates passed after owned runtimes stopped. No product changes followed. The HP CI failure was independently reproduced as an obsolete notice refusal expectation, not a product write failure: owned33ed570d identity53/1, siblings37/37, concurrency18/18; after asserting the exact current no-open-notice-on-this-space response, owned7df02781 identity54/54, siblings37/37, concurrency18/18. Both runtimes cleaned. No notice product code changed. The owned notice driver now includes the original identity proof alongside the received challenges to prevent this coverage gap recurring.
