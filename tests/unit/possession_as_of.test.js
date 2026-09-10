@@ -1,0 +1,12 @@
+"use strict";
+const assert=require('node:assert/strict');
+const {classifyPosition}=require('../../src/tenancy/position_classifier');
+const event=(kind,date,time='00:00:00Z')=>({event_type:kind,effective_date:date,created_at:date+'T'+time});
+const read=(events,asOf='2026-09-10')=>classifyPosition({space_id:'bed',unit_id:'unit',leases:[],possession_events:events},{asOf,personNames:new Map()});
+assert.equal(read([event('move_in','2026-09-11')]).current_possession,null,'future possession must not become current');
+assert.ok(read([event('move_in','2026-09-01'),event('move_out','2026-09-11')]).current_possession,'future departure cannot erase current possession');
+assert.equal(read([event('move_in','2026-09-01'),event('move_out','2026-09-10')]).current_possession,null,'effective departure ends possession on its date');
+assert.ok(read([event('move_in','2026-09-10')]).current_possession,'effective arrival is current');
+assert.ok(read([event('move_out','2026-09-10','01:00:00Z'),event('move_in','2026-09-10','02:00:00Z')]).current_possession,'same-day later arrival preserves event ordering');
+assert.equal(read([event('move_in','2026-09-11')],'2026-09-11').current_possession.since,'2026-09-11','the same retained future fact becomes effective on its date');
+console.log('POSSESSION_AS_OF_PASSED (6 assertions)');

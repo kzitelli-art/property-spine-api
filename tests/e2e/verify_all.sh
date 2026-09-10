@@ -224,6 +224,7 @@ else
   step "governed pricing publication" node tests/e2e/skyline_pricing_publication.e2e.js
   step "agent pricing wall"          node tests/e2e/agent_pricing_wall.e2e.js
   step "inventory date boundaries"   node tests/unit/prospect_inventory_dates.test.js
+  step "possession effective dates"   node tests/unit/possession_as_of.test.js
   step "agent inventory dates"       node tests/proofs/prospect_inventory_dates.db.js
   step "leasing clean path"          node tests/e2e/leasing_path.e2e.js
   step "hostile falsifications"      node tests/e2e/leasing_hostile.e2e.js

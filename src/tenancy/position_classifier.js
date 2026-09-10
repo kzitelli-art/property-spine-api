@@ -185,7 +185,9 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     && !CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease))
     && !ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease)));
 
-  const events = row.possession_events || [];
+  // Loading retains history and future facts. Possession at this date must
+  // consider only events effective by this date, just as leases do above.
+  const events = (row.possession_events || []).filter(e => e.effective_date && e.effective_date <= asOf);
   const ins = events.filter((e) => e.event_type === "move_in");
   const outs = events.filter((e) => e.event_type === "move_out");
   const lastIn = ins.length ? ins[ins.length - 1] : null;

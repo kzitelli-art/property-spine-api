@@ -1,0 +1,13 @@
+# Possession respects the date being read
+
+2026-09-10. API base af497ada2940dd9aba9cb1342e88aa87ac960aea; paired app f2eda58544b1650f123735f4105c750a47eba081. CURRENT_STATE and workspace operating instructions inspected. Governing philosophy unchanged SHA256977B30A4C41B0F8C1511DA3521D030E031AB13B9D1897EEA5970F011F487FC28, retained from the complete read in the preceding overnight run. The base's full GitHub CI34434387334 succeeded.
+
+Intention: tomorrow's arrival must not occupy a bed today; tomorrow's departure must not erase today's possession. While extending the sibling-cache proof, inspection found that the canonical spacePosition read's classifier applied asOf to leases but not possession events. This also contradicted the prior receipt's assumption that the existing as-of reader handled possession dates.
+
+First red: `node tests/unit/possession_as_of.test.js` returned current_possession for an arrival effective tomorrow and failed its null assertion. Smallest correction: filter the already-loaded possession history by the requested asOf inside the existing pure position classifier. The loader still retains history and future facts. No new writer, cache, classification vocabulary or parallel date logic in turnover_service. This is a correction within the permanent canonical reader (philosophy4–6/29/41).
+
+Successor: six explicit date assertions pass, including future arrival, future departure, effective arrival/departure, same-day ordering and reading the retained future event on its effective date. The adjacent interval-position hostile suite passed38/38. The date test is registered in verify_all.sh.
+
+Owned DB/HTTP successor extends turnover_sibling_cache.db.js across four independently seeded units: live sibling; future sibling arrival; future sibling departure; and last remaining bed after the sibling's earlier departure. Canonical move-in/out setup uses the DB writer; each outgoing-bed move-out uses the real HTTP door. Assertions cover current possession before/after, exact outgoing lease/space event, no additional sibling event, unchanged sibling lease status and correct unit compatibility label. All four pass. The owned migration chain, database drop and cluster-data removal were verified. All54 source-governance gates passed after runtime cleanup; no product edits followed.
+
+Limits: no provider, browser, deployment, historical-data backfill or HTTP possession-scheduling claim. The broader imported-lease-only/unknown-sibling cache case and concurrent activation remain open. Work scope identity and accountable expected readiness remain separate; a work deadline is not promoted to home readiness. This change does not add a projection from prospective work.
