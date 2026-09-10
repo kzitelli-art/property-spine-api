@@ -2,28 +2,17 @@
 //  LEASING INVENTORY — leasing_inventory.js
 //  Class 1 permanent primitive: grounded available-unit discovery and
 //  governed unit attachment.
-//  2026-09-09: the agent now supplies explicit dates. This legacy unit
-//  projection still does not compose the exact-space application target
-//  authority or published space pricing. Its results remain informational;
-//  the historical limitations below describe this reader, not missing domain
-//  primitives elsewhere in Spine. See PROSPECT_INVENTORY_CUTOVER.md.
+//  2026-09-10: exact_spaces mode is the prospect path. It composes the
+//  existing application target and space-economics readers, then projects
+//  preferences and budget. Results are informational, never selections.
+//  legacy_units remains the compatibility default for historical direct
+//  callers/tests. Class 2: remove that predicate when those callers have
+//  migrated and the containment proof is replaced at the release checkpoint.
+//  There is no fallback from exact-space failure into legacy inventory.
 //
-//  THE DISTINCTIONS THIS MODULE EXISTS TO KEEP (the product):
-//    available ≠ merely believed-available — availability here means the
-//      canonical columns say vacant AND not down. If richer states exist
-//      later (holds, pending applications, readiness), they join HERE.
-//    offered   ≠ selected — this module never attaches a unit because the
-//      agent mentioned it; attachment requires the prospect's own
-//      confirming words matched against the durable offered set.
-//    Demo-shaped ≠ Solo history — property scope is server-derived on
-//      every query; no cross-property read or write can pass the wall.
-//
-//  CURRENT AVAILABILITY SEMANTICS (named, not overstated):
-//    offerable_now = occupancy_status='vacant' AND is_down=false.
-//    Reservation / hold / pending-application / readiness exclusions are
-//    NOT yet modeled in the canonical schema — callers and receipts must
-//    say "vacant and not down," never imply more. When those states gain
-//    canonical columns, THIS function is where they are enforced.
+//  Offered != selected. Server-derived property scope applies to every read.
+//  Exact selection is a separate correction to the existing attachment owner;
+//  it is not enabled by returning an informational exact-space candidate.
 // ════════════════════════════════════════════════════════════════════
 
 module.exports = function leasingInventoryModule({ pool }) {
@@ -33,14 +22,16 @@ module.exports = function leasingInventoryModule({ pool }) {
   //  property) — never model output, never client input.
   async function availableUnits({
     property_id, bedrooms = null, max_rent = null, bathrooms = null, limit = 5,
-    requested_start = null, requested_end = null,
+    requested_start = null, requested_end = null, lease_term_months = null,
+    discovery_mode = "legacy_units",
   }, clientArg = null) {
     const q = clientArg || pool;
     if (!property_id) return { units: [], qualification: "no_property" };
 
     /*  ══ CONTAINMENT — FAIL CLOSED WITHOUT A TERM ═══════════════════
      *
-     *  This is the PROSPECT-FACING path: what comes back is offered to a
+     *  HISTORICAL LEGACY CONTAINMENT (exact_spaces branches below):
+     *  This was the prospect-facing path: what came back was offered to a
      *  real person by the leasing agent. The predicate below is
      *  date-blind — it asks whether a unit is flagged vacant and carries
      *  no live lease at all — and a date-blind answer cannot know whether
@@ -95,6 +86,72 @@ module.exports = function leasingInventoryModule({ pool }) {
         units: [], qualification: "invalid_term", may_promise: false,
         note: "Ask for valid lease start and end dates, with the end after the start. These dates could not be checked; this is not an answer about availability.",
       };
+    }
+
+    if (discovery_mode === "exact_spaces") {
+      const term = { requested_start, requested_end };
+      const refused = (qualification, note) => ({ units: [], term, may_promise: false, qualification, note });
+      if (lease_term_months == null) return refused("pricing_term_required",
+        "The dates are recorded. Ask which published pricing term in months the prospect wants; do not infer it by rounding the dates or describe this as no homes matching.");
+      if (typeof lease_term_months !== "number" || !Number.isInteger(lease_term_months) || lease_term_months <= 0) {
+        return refused("invalid_pricing_term", "Ask for a valid pricing term in whole months. This is not an answer about inventory.");
+      }
+      for (const [value, whole] of [[bedrooms,true],[bathrooms,false],[max_rent,false]]) {
+        if (value != null && (typeof value !== "number" || !Number.isFinite(value) || value < 0 || (whole && !Number.isInteger(value)))) {
+          return refused("invalid_preferences", "Clarify the bedroom count, bathroom count or monthly budget before matching homes.");
+        }
+      }
+      // Existing application target owner composes contractual rights and
+      // governed readiness. This projection owns no availability policy.
+      let targets, shapes;
+      try {
+        targets = await require("../applications/application_target_read").leaseableApplicationTargets(q, { property_id, ...term });
+        shapes = (await q.query(`select u.id, u.bedrooms, u.bathrooms, u.square_feet, s.id as space_id
+          from units u join spaces s on s.unit_id=u.id
+          where u.property_id=$1 and s.use_type='residential'`, [property_id])).rows;
+      } catch (_) {
+        return refused("term_check_unavailable", "Spine could not read the homes and check those dates. Confirm the inventory before discussing matches; this is not an empty inventory result.");
+      }
+      const bySpace = new Map(shapes.map(s => [String(s.space_id),s]));
+      const matches = [], unresolved = [];
+      for (const target of targets.eligible_targets) {
+        const shape = bySpace.get(String(target.space_id));
+        if (!shape) continue;
+        if (bedrooms != null && (shape.bedrooms == null || Number(shape.bedrooms) !== bedrooms)) continue;
+        if (bathrooms != null && (shape.bathrooms == null || Number(shape.bathrooms) < bathrooms)) continue;
+        let economics;
+        try {
+          economics = await require("../money/effective_pricing").resolveSpaceEconomics(q, {
+            property_id, space_id: target.space_id, lease_term_months,
+          });
+        } catch (_) {
+          // No partial result may turn a failed pricing read into a claim that
+          // all eligible homes were compared successfully.
+          return refused("pricing_read_unavailable", "Spine could not read the published prices. Confirm pricing before quoting or claiming that nothing fits the budget.");
+        }
+        if (!economics.resolved) {
+          unresolved.push({unit_number:target.unit_number,space_label:target.space_label,
+            position_kind:target.position_kind,reason:economics.reason,published_terms:economics.published_terms || []});
+          continue;
+        }
+        const rent = economics.rent.new_lease_rent;
+        if (max_rent != null && rent > max_rent) continue;
+        matches.push({id:target.unit_id,space_id:target.space_id,unit_number:target.unit_number,
+          space_label:target.space_label,position_kind:target.position_kind,
+          bedrooms:shape.bedrooms,bathrooms:shape.bathrooms,square_feet:shape.square_feet,
+          dimensions_basis:"whole_unit",rent,rent_basis:target.position_kind === "bed" ? "per_bed_monthly" : "per_unit_monthly",
+          pricing_intent:"new_lease",lease_term_months,authority:economics.authority,
+          pricing_as_of:economics.as_of,pricing_status:"governed_published_pricing",
+          marketing_state:target.marketing_state,availability_confidence:target.availability_confidence,
+          available_from:target.available_from,requested_start,requested_end,selection_eligible:false});
+      }
+      matches.sort((a,b)=>a.rent-b.rent || String(a.unit_number).localeCompare(String(b.unit_number)) || String(a.space_label).localeCompare(String(b.space_label)));
+      return {units:matches.slice(0,Math.min(Math.max(Number(limit)||5,1),10)),term,may_promise:false,
+        qualification:unresolved.length ? "matching_incomplete_pricing_unresolved" : "exact_space_matches_informational",
+        pricing_unresolved:unresolved,
+        note:(unresolved.length ? "Some eligible homes lack resolved pricing for this term; this is an incomplete budget comparison. " : "")
+          + (matches.length ? "These exact homes meet the recorded dates and monthly base-rent budget. Bed rent is per bed, not the whole apartment; bedroom count and dimensions describe the containing unit. " : "No priced home matched these criteria. ")
+          + "These are informational options, not reservations or selections. Do not promise, hold or attach a home; staff must confirm the exact choice. Fees and concessions are not included in the base-rent budget comparison."};
     }
 
     const params = [property_id];

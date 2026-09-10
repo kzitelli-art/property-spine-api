@@ -59,3 +59,40 @@ observed first red. At authoring, only `node --check` passed; no DB run occurred
 Next action: QB executes in the fenced owned runtime, records the first actual
 failure, and corrects fixture defects before assigning product work. This
 intentionally red test is not registered in CI until the successor exists.
+
+## Successor — 2026-09-10
+
+QB executed the baseline in its fenced owned runtime: FIXTURE GREEN, then six
+product assertions failed (`tmp/qb-matching-first-red.log`). Worker did not run a
+database. QB then executed the successor: all matching checks passed, exit0
+(`tmp/qb-matching-successor.log`), and the actual agent date proof passed, exit0
+(`tmp/qb-matching-dates.log`). These are real-agent-service plus real-owned-Postgres
+proofs with a scripted in-process model; not HTTP, SMS, provider-language, browser
+or production proof. QB owns cleanup of the still-shared runtime.
+
+The correction stays inside `leasing_inventory.availableUnits`: explicit
+`exact_spaces` mode reuses canonical target eligibility and exact published
+new-lease economics, applies criteria then budget/sort/limit, and distinguishes
+pricing unresolved from reader failure. Legacy direct mode stays the default for
+compatibility; the agent always requests exact mode and never falls back.
+The tool carries pricing months explicitly. Exact space IDs and pricing authority
+remain in durable offered history, outside model context. Bed rent is labelled
+per bed, dimensions and bedroom count describe the containing apartment. Fees
+and concessions are outside the base-rent budget comparison.
+
+`prospect_inventory_dates.db.js` now expects the date-carrying response to request
+the unchosen pricing term instead of producing options from legacy vacancy only.
+Its no-date, invalid-date and no-write controls remain. The new DB matching proof
+carries the nonempty informational-result control. Unit seam tests cover explicit
+term, invalid preferences, scope forwarding, price-before-limit, budget,
+unknown pricing, reader failure, rent basis and selection refusal, and are
+registered in normal source governance. `node tests/verify_source_governance.js`
+passed all56 checks; source syntax and `git diff --check` passed. Only explanatory
+comments and this documentation changed after the DB successor/source-gate run.
+
+Not complete: exact prospect selection, reservation/commitment, provider-generated
+bed/price language validation, deployment, production content/custody. The current
+post-generation guard still checks unit citations, not exact bed/price fidelity.
+This receipt proves structured tool/durable evidence, not free-language accuracy.
+Next action: QB integrates and owns the exact-selection follow-through; do not
+set selection_eligible true against the old unit-only attachment writer.
