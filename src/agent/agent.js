@@ -39,7 +39,7 @@ const aiLeasingStrategy = require("../leasing/ai_leasing_strategy");
 const aiLeasingStrategyRuntime = require("../leasing/ai_leasing_strategy_runtime");
 const aiLeasingOperatingContext = require("../leasing/ai_leasing_operating_context"); // GOVERNED OPERATING CONTEXT LEASING v1
 
-const PROMPT_REVISION = "stage-a-v11"; // v11: inventory tool carries explicit lease dates and distinguishes informational results. v10: linked-unit rent uses governed pricing.
+const PROMPT_REVISION = "stage-a-v12"; // v12: exact-space informational matching with published pricing and explicit pricing term. v10: linked-unit rent uses governed pricing.
 // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
 const POLICY_REVISION = "stage-a-v1";
 
@@ -1255,6 +1255,7 @@ Reply with ONLY the message text.`;
                 bedrooms: { type: "integer", description: "exact bedroom count if stated" },
                 bathrooms: { type: "number", description: "minimum bathrooms if stated" },
                 max_rent: { type: "number", description: "budget ceiling in dollars if stated" },
+                lease_term_months: { type: "integer", description: "Explicitly chosen published pricing term in months; omit if unknown. Never round lease dates into a pricing term." },
                 requested_start: { type: "string", description: "Prospect's explicitly stated lease start, YYYY-MM-DD; omit if unknown." },
                 requested_end: { type: "string", description: "Prospect's explicitly stated lease end, YYYY-MM-DD; omit if unknown." },
               },
@@ -1395,6 +1396,8 @@ Reply with ONLY the message text.`;
             try {
               found = await inventory.availableUnits({
                 property_id: tx1.property_id,
+                discovery_mode: "exact_spaces",
+                lease_term_months: invUse.input && invUse.input.lease_term_months,
                 bedrooms: invUse.input && invUse.input.bedrooms,
                 bathrooms: invUse.input && invUse.input.bathrooms,
                 max_rent: invUse.input && invUse.input.max_rent,
@@ -1402,74 +1405,16 @@ Reply with ONLY the message text.`;
                 requested_end: invUse.input && invUse.input.requested_end,
               }, qc);
             } finally { qc.release(); }
-            //  ── THE SECOND LEAK, AND THE WORSE ONE ──────────────────
-            //  This carried market_rent per unit into the tool result at the
-            //  `units:` line below, which strips only `id` — so a LIST of
-            //  legacy rents reached the model. Same defect as the unit line,
-            //  multiplied by however many units matched.
-            //
-            //  The governed picture is loaded ONCE and passed to the adapter
-            //  via opts.picture — the seam the adapter exposes for exactly
-            //  this, so one refusal path serves both callers rather than a
-            //  copy of it per caller.
-            let picture = null;
-            try { picture = await effectivePropertyPricing(pool, { property_id: tx1.property_id }); }
-            catch (e) { console.error("[agent] pricing picture failed", e && e.message); }
-            const typeByUnit = new Map();
-            if (found.units.length) {
-              const qt = await pool.connect();
-              try {
-                const rows = (await qt.query(
-                  "select id, unit_type_id from units where id = any($1)",
-                  [found.units.map((u) => u.id)])).rows;
-                for (const r of rows) typeByUnit.set(String(r.id), r.unit_type_id);
-              } finally { qt.release(); }
-            }
-            offeredUnits = [];
-            for (const u of found.units) {
-              let q = null;
-              try {
-                q = await quotablePricing(pool, {
-                  property_id: tx1.property_id,
-                  unit_type_id: typeByUnit.get(String(u.id)) || null,
-                  //  Said out loud rather than left to the adapter's default:
-                  //  new-lease and renewal are different prices and this list
-                  //  goes to a prospect.
-                  intent: "new_lease",
-                }, picture ? { picture } : {});
-              } catch (e) { console.error("[agent] quotablePricing (inventory) failed", e && e.message); }
-              offeredUnits.push({
-                id: u.id, unit_number: u.unit_number, bedrooms: u.bedrooms,
-                bathrooms: u.bathrooms, square_feet: u.square_feet,
-                // An informational date check must not become a selectable
-                // offer when the prospect subsequently says yes.
-                selection_eligible: found.may_promise === true,
-                //  Governed rent or an explicit refusal. Never the legacy column.
-                rent: q && q.quotable ? q.rent : null,
-                lease_term_months: q && q.quotable ? q.lease_term_months : null,
-                pricing_status: q && q.quotable ? "governed_published_pricing"
-                                                : `not_quotable:${(q && q.reason) || "pricing_read_failed"}`,
-              });
-            }
-            /*  ⚠ "NO UNITS MATCH" IS AN ANSWER ABOUT INVENTORY. A refusal
-             *  is not. This hardcoded an inventory answer for every empty
-             *  result, so the containment in leasing_inventory — which
-             *  fails closed when the prospect has given no dates, and when
-             *  the term check itself could not run — would have been
-             *  reported to a real person as "nothing is available." Those
-             *  are different facts and conflating them is the exact
-             *  failure this path exists to prevent.
-             *
-             *  The inventory door now says what it means. The agent
-             *  carries its sentence rather than inventing one, and
-             *  may_promise travels so the model is told, in the facts,
-             *  that it may not describe a unit as available — readiness by
-             *  a future date is not governed anywhere in Spine yet.  */
+            // Exact-space and pricing authority are resolved by the existing
+            // inventory projection. Keep durable IDs/provenance out of model
+            // context; labels and declared rent basis are the public projection.
+            offeredUnits = found.units.map(u => ({ ...u, selection_eligible: false }));
             const toolResultText = JSON.stringify({
               qualification: found.qualification,
               term: found.term || null,
               may_promise: found.may_promise === true,
-              units: offeredUnits.map(({ id, ...pub }) => pub),
+              units: offeredUnits.map(({ id, space_id, authority, ...pub }) => pub),
+              pricing_unresolved: found.pricing_unresolved || [],
               note: found.note
                 || (offeredUnits.length ? undefined
                     : "No units match. Tell the prospect honestly; offer to note their preferences."),
