@@ -2030,6 +2030,16 @@ Reply with ONLY the message text.`;
       if (!conv) return { exists: false, messages: [], draft: null, mode: null };
 
       const state = (await client.query("select * from agent_thread_state where conversation_id=$1", [conv.id])).rows[0] || null;
+      const humanOwner = state && state.mode === "human_takeover" && state.current_review_obligation_id
+        ? (await client.query(
+          `select o.id as obligation_id, o.assigned_user_id as user_id, u.name, o.status,
+                  o.label, o.type, o.due_at
+             from obligations o left join users u on u.id=o.assigned_user_id
+            where o.id=$1 and o.property_id=$2 and o.status in ('open','in_progress','blocked','escalated')
+              and (o.person_id is null or o.person_id=$3)
+              and (o.related_id is null or (o.related_type='conversation' and o.related_id=$4))`,
+          [state.current_review_obligation_id, conv.property_id, conv.person_id, conv.id])).rows[0] || null
+        : null;
       const messages = (await client.query(
         `select id, direction, body, sender_role, ai_drafted_at, sent_by_user_id, occurred_at,
                 provider_status, provider_status_updated_at
@@ -2092,6 +2102,7 @@ Reply with ONLY the message text.`;
         property_id: conv.property_id || null,
         unit_id: conv.unit_id || null,
         mode: state ? state.mode : "ai_active",
+        human_owner: humanOwner,
         thread_version: state ? Number(state.thread_version) : 0,
         messages, draft,
       };
@@ -2140,6 +2151,7 @@ Reply with ONLY the message text.`;
 
       const run = (await client.query("select * from agent_runs where id=$1", [d.agent_run_id])).rows[0];
       const state = await loadThreadState(client, run.conversation_id, true); // FOR UPDATE
+      if (state.mode === "human_takeover") await assertHumanWorkOwner(client, state, actorUserId);
 
       // ── STALENESS IS DERIVED, NOT STORED (ruling, 2026-07-28) ─────
       // Both freshness guards below compare durable facts that already exist:
@@ -2303,6 +2315,24 @@ Reply with ONLY the message text.`;
   // ── SHARED ACTION SERVICE: takeOverConversation ──────────────────────────
   // thread → human_takeover; discards ready draft; redirects obligation. AI stops.
   // Caller resolves+authorizes the conversation; actor supplied server-side.
+  async function assertHumanWorkOwner(client, state, actorUserId) {
+    if (!state.current_review_obligation_id) return null;
+    const work = (await client.query(
+      `select o.*, c.property_id as thread_property_id, c.person_id as thread_person_id
+         from obligations o join conversations c on c.id=$2
+        where o.id=$1 for update of o`,
+      [state.current_review_obligation_id, state.conversation_id])).rows[0];
+    if (work && (work.property_id !== work.thread_property_id
+      || (work.person_id && work.person_id !== work.thread_person_id)
+      || (work.related_id && (work.related_type !== 'conversation' || work.related_id !== state.conversation_id)))) {
+      throw httpErr(409, "The linked work does not belong to this conversation.");
+    }
+    if (work && work.status !== 'complete' && work.assigned_user_id && String(work.assigned_user_id) !== String(actorUserId)) {
+      throw httpErr(409, "This conversation is assigned to another staff member.");
+    }
+    return work;
+  }
+
   async function takeOverConversationService({ conversationId, actorUserId }) {
     if (!actorUserId) throw httpErr(400, "actorUserId is required (server-derived).");
     return tx(async (client) => {
@@ -2310,19 +2340,29 @@ Reply with ONLY the message text.`;
       if (!conv) throw httpErr(404, "No conversation.");
       const state = await loadThreadState(client, conv.id, true);
       const mgrId = actorUserId;
+      let work = await assertHumanWorkOwner(client, state, mgrId);
+      if (!work || work.status === 'complete') {
+        if (!spawnObligationFromEvent) throw httpErr(503, "Conversation work is unavailable.");
+        work = await spawnObligationFromEvent(client, {
+          property_id: conv.property_id, person_id: conv.person_id, unit_id: conv.unit_id,
+          module: "leasing", type: "human_thread_reply", label: "Respond to prospect inquiry",
+          owner_type: "human", assigned_user_id: mgrId, status: "in_progress",
+          related_type: "conversation", related_id: conv.id,
+        });
+      } else {
+        // Same self-claim rule as the operator obligation door: never steal.
+        work = (await client.query(
+          `update obligations set assigned_user_id=$2, module='leasing',
+             status=case when status='open' then 'in_progress' else status end, updated_at=now()
+            where id=$1 returning *`, [work.id, mgrId])).rows[0];
+      }
 
       await client.query(
         `update agent_drafts d set status='discarded', discarded_at=now(), updated_at=now()
            from agent_runs r where d.agent_run_id=r.id and r.conversation_id=$1 and d.status='ready'`,
         [conv.id]
       );
-      if (state.current_review_obligation_id) {
-        await client.query(
-          "update obligations set label='Human takeover — leasing manager owns this thread', updated_at=now() where id=$1",
-          [state.current_review_obligation_id]
-        ).catch(() => {});
-      }
-      await client.query("update agent_thread_state set mode='human_takeover', updated_at=now() where conversation_id=$1", [conv.id]);
+      await client.query("update agent_thread_state set mode='human_takeover', current_review_obligation_id=$2, updated_at=now() where conversation_id=$1", [conv.id, work.id]);
       return { ok: true, mode: "human_takeover", by: mgrId };
     });
   }
@@ -2342,6 +2382,7 @@ Reply with ONLY the message text.`;
       const state = await loadThreadState(client, conv.id, true);
       if (state.mode !== "human_takeover") throw httpErr(409, "Thread is '" + state.mode + "', not in human takeover.");
       const mgrId = actorUserId;
+      await assertHumanWorkOwner(client, state, mgrId);
       if (state.current_review_obligation_id && completeObligation) {
         await completeObligation(client, { obligation_id: state.current_review_obligation_id, completed_by: mgrId })
           .catch(e => { if (e.code !== "ALREADY_COMPLETE") throw e; });

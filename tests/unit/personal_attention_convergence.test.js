@@ -8,7 +8,7 @@ const receipt = require("../_run_receipt");
 const askSpineAnswer = require("../../src/agent/ask_spine_answer");
 const obligationRead = require("../../src/obligations/operator_obligations_service");
 
-const EXPECTED = 28;
+const EXPECTED = 29;
 let passed = 0;
 let failed = 0;
 function ok(label, condition, detail = "") {
@@ -42,12 +42,14 @@ receipt.begin(__filename, { expected: EXPECTED });
       ok("the canonical query keeps the property and module walls",
         /o\.property_id = \$1/.test(sql) && /o\.module = any\(\$2::text\[\]\)/.test(sql));
       ok("personal scope is direct assignment, escalation, or unassigned primary work",
-        /o\.assigned_user_id = \$4/.test(sql)
-          && /o\.escalates_to_user_id = \$4/.test(sql)
-          && /o\.assigned_user_id is null and o\.module = any\(\$5::text\[\]\)/.test(sql));
+        /o\.assigned_user_id = \$3/.test(sql)
+          && /o\.escalates_to_user_id = \$3/.test(sql)
+          && /o\.assigned_user_id is null and o\.module = any\(\$4::text\[\]\)/.test(sql));
+      ok("claiming and escalation do not hide active attention work",
+        /o\.status in \('open','in_progress','blocked','escalated'\)/.test(sql));
       ok("identity and module ownership are server inputs",
         JSON.stringify(params) === JSON.stringify([
-          "property-1", ["leasing", "management"], "open", "user-1", ["leasing"],
+          "property-1", ["leasing", "management"], "user-1", ["leasing"],
         ]), JSON.stringify(params));
       return { rows: [
         {

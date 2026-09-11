@@ -66,7 +66,11 @@ async function scopedRead(db, {
   const wantStatus = normalizeStatus(status);
   const vals = [property_id, modules];
   let statusPredicate = "";
-  if (wantStatus) { vals.push(wantStatus); statusPredicate = ` and o.status = $${vals.length}`; }
+  if (attention) {
+    // Claiming or escalating work does not finish it. Attention follows the
+    // existing active lifecycle; an explicit collection status stays exact.
+    statusPredicate = " and o.status in ('open','in_progress','blocked','escalated')";
+  } else if (wantStatus) { vals.push(wantStatus); statusPredicate = ` and o.status = $${vals.length}`; }
 
   let personalProjection = "";
   let personalPredicate = "";
@@ -101,9 +105,11 @@ async function scopedRead(db, {
 
   const sql = `
     select ${FIELDS.split(", ").map((f) => "o." + f).join(", ")},
+           owner.name as assigned_user_name,
            (o.due_at is not null and o.due_at < now()) as is_overdue,
            count(*) over()::int as total_open${personalProjection}
       from obligations o
+      left join users owner on owner.id = o.assigned_user_id
      where o.property_id = $1
        and o.module = any($2::text[])${statusPredicate}${personalPredicate}
      order by ${order}${attention ? `\n     limit ${ATTENTION_LIMIT}` : ""}`;

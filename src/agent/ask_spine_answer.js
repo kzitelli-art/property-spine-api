@@ -661,8 +661,9 @@ async function gatherFacts(db, {
         total_open: a.total_open,
         scope_note: a.scope_note,
         items: (a.items || []).map((i) => ({
-          label: i.label, module: i.module, type: i.type,
+          label: i.label, module: i.module, type: i.type, status: i.status,
           due_at: i.due_at, is_overdue: i.is_overdue, is_unassigned: i.is_unassigned,
+          assigned_user_name: i.assigned_user_name || null,
         })),
       };
     /*  ── WHAT THE ANSWER REFERS TO, AS RECORDS ──────────────────────
