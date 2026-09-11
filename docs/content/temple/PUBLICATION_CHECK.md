@@ -1,3 +1,9 @@
+# Publication continuation — September 11, 2026
+
+The legacy-topic deployment blocker below is superseded: API24f4482/appb00cf49 are deployed with the maintained ten-topic knowledge workspace. Production schema was verified at194,182 entries. See docs/handoffs/new-hp/COMBINED_RELEASE_20260911.md for exact deployment and runtime evidence.
+
+No fresh property-custody query or content write is claimed in this update. The six-row identity/count observations below remain dated September10 evidence, not current measurements. Prepared content remains unapproved/unloaded. Next: establish the intended existing property and current actor authority, then review source-backed answers through the canonical writer. A missing canonical key alone does not prove a property is synthetic or establish which duplicate to use. Do not create replacements or infer custody by name.
+
 # Read-only publication check — 2026-09-10
 
 API health at 10:13 UTC: `d55dae9`, started 2026-09-01. Inspected source at that exact local commit: the fact writer allows only seven original keys. New leasing topics exist in candidate `a9e3420`, not this deployed source. No authenticated live writer request was attempted.

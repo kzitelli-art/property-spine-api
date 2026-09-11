@@ -4,7 +4,7 @@
   "purpose": "Reviewed-source content prepared for the existing agent-facts writer; not a runtime knowledge store.",
   "publication": {
     "loaded": false,
-    "reason": "Live build d55dae9 supports seven legacy keys only; canonical target identities remain unresolved. No production write performed.",
+    "reason": "Ten-topic writer/workspace deployed September11 at API24f4482/appb00cf49. Canonical target identity/custody and operator confirmation remain unresolved; content remains prepared, not loaded. September10 source checks are dated evidence.",
     "source_verification_is_not_operator_confirmation": true
   },
   "sources": {
