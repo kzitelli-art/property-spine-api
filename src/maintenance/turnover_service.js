@@ -214,6 +214,7 @@ function makeTurnoverService(deps) {
     // position needs its own recorded end before this cache can say vacant.
     const allEnded = unitPositions.length > 0 && unitPositions.every(position =>
       position.last_possession_end?.event_id && position.last_possession_end?.lease_id
+      && position.conflict_state === 'clear'
       && !position.activation_pending_lease_position
       && !(position.other_spanning_lease_positions || []).length
       && (!position.current_lease_position

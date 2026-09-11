@@ -47,6 +47,7 @@ const leasingKnowledge = require("../leasing/leasing_knowledge");
 
 const askSpineService = require("./ask_spine_service");
 const workOrderRead = require("../surfaces/work_order_status_read");
+const maintenanceReader = require('../maintenance/work_acceptance_service');
 const complianceRead = require("../asset/compliance_read");
 const utilityAskRead = require("../asset/utility_ask_detail.js");
 const contractedServiceAskRead = require("../asset/contracted_service_ask_detail.js");
@@ -616,6 +617,7 @@ async function gatherFacts(db, {
   applicationReviewReader = applicationReviewRead,
   economicReader = economicPicture,
   tourScheduleReader = readTourScheduleStanding,
+  requiredWorkReader = maintenanceReader,
   //  The canonical application lifecycle service. Accepted as a value OR a
   //  thunk: ask_spine mounts in server.js ABOVE the applications module, so
   //  a value captured at mount time would be undefined forever.
@@ -641,6 +643,18 @@ async function gatherFacts(db, {
   }
 
   if (subject === "work") {
+    if ((allowed_modules || []).some(m => m === 'maintenance' || m === 'management')) {
+      try {
+        const standing = await requiredWorkReader.readRequiredWorkStanding(db,{property_id});
+        facts.maintenance = { ...standing, items:standing.items.map(w=>({
+          work:w.work_text, unit:w.unit_number, scope_kind:w.scope_kind,
+          location:w.scope_label,
+        })) };
+      } catch(e) {
+        facts.maintenance = failedRead(e);
+        failures.push(silenceFor(e)==='READ_TIMED_OUT'?'maintenance_timed_out':'maintenance');
+      }
+    }
     try {
       const a = await askSpineService.attention(db, { property_id, allowed_modules });
       facts.attention = {
@@ -1800,6 +1814,9 @@ async function answer(db, anthropic, {
     grounded_on: {
       open_items: facts.attention ? facts.attention.total_open : null,
       work_orders: facts.work_orders ? facts.work_orders.count : null,
+      required_work_read_state: facts.maintenance ? facts.maintenance.read_state : null,
+      required_work_count: facts.maintenance && facts.maintenance.read_state === 'OK'
+        ? facts.maintenance.required_work_count : null,
       //  ⚠ These two dereference an ARRAY, so `facts.X ? …` is not enough
       //  a guard: it tests that the KEY exists, and a failed read now
       //  produces a key with a read_state and no payload. Before Build 3

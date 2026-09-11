@@ -153,6 +153,11 @@ function domainsFromFilenames(filenames) {
  *  is enforced by the composer rather than used to block single-domain reads.
  *  A green gate reports this split; it does not erase it.  */
 const REGISTRY = {
+  maintenance: {
+    state: 'registered',
+    capability_classes: readerCapabilities.retrievalOnly('required work and its explicitly recorded location; no readiness assertion'),
+    composition_authorization: 'unsolved_cross_domain',
+  },
   compliance: {
     state: "registered",
     capability_classes: readerCapabilities.retrievalOnly(
@@ -371,6 +376,10 @@ for (const dir of STANDING_READ_DIRS) {
   }
   discovered.push(...domainsFromFilenames(fs.readdirSync(abs)));
 }
+// This owner exposes its standing read from an existing service rather than
+// inventing a second *_read module just to satisfy filename discovery.
+const maintenanceOwner = readIf('src/maintenance/work_acceptance_service.js') || '';
+if (/module\.exports\s*=\s*\{[^}]*\breadRequiredWorkStanding\b/.test(stripComments(maintenanceOwner))) discovered.push('maintenance');
 const domains = [...new Set(discovered)].sort();
 console.log(`        ${domains.length} domain(s) with a canonical standing read: ` +
             (domains.join(", ") || "none"));

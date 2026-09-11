@@ -140,9 +140,11 @@ module.exports = function unitTriage(deps) {
 
       const proposal = unitTriageService.proposeTriage({ text });
       const moveIn = await unitTriageService.nextCommittedMoveIn(pool, { unit_id });
+      const targets = (await pool.query('select id as space_id, space_label from spaces where unit_id=$1 order by space_label,id',[unit_id])).rows;
 
       res.json({
         unit: { id: u.id, unit_number: u.unit_number },
+        work_targets: targets,
         // Echoed back so the confirmation card can show the operator their own
         // words above the interpretation, exactly as the contract requires.
         you_reported: text,

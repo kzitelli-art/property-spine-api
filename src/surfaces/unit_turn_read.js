@@ -268,6 +268,7 @@ function makeUnitTurnRead(deps) {
         const needsPlacement = !!(fi && fi.requires_scope_decision);
         return {
           work_id: s.work.id, work_text: s.work.work_text, stage: s.work.stage,
+          scope_kind: s.work.scope_kind, space_id: s.work.space_id, scope_label: s.work.scope_label,
           status: s.status, accepted: s.accepted,
           owner_user_id: s.owner_user_id, owner: s.owner_user_id ? "assigned" : "UNASSIGNED",
           due_at: s.due_at,
