@@ -1,0 +1,63 @@
+"use strict";
+// Class 3: current whole-unit certification path, not prospective bed-only scope.
+const assert=require('node:assert/strict');
+const boundary=require('../e2e/proof_boundary');
+require('../e2e/proof_fence_preload');
+const {Pool}=require('pg');
+const sessions=require('../../src/identity/staff_session_service');
+const {recordEffectivePossession,spacePosition}=require('../../src/tenancy/space_position');
+(async()=>{
+  await boundary.assertDatabase();assert.ok(process.env.E2E_API_BASE);
+  const db=new Pool({connectionString:boundary.manifest().url,ssl:false});
+  const one=async(sql,args=[])=>(await db.query(sql,args)).rows[0];
+  try{
+    const p=await one("select id from properties where name='Skyline E2E' order by created_at desc limit 1");
+    assert.ok(p,'owned Skyline-shaped fixture required');
+    const number='Shared-'+require('crypto').randomUUID().slice(0,8);
+    const u=await one("insert into units(property_id,unit_number,occupancy_status) values($1,$2,'occupied') returning id",[p.id,number]);
+    await db.query('delete from spaces where unit_id=$1',[u.id]);
+    const a=await one("insert into spaces(unit_id,space_label,use_type,position_kind) values($1,'Bed A','residential','bed') returning id",[u.id]);
+    const b=await one("insert into spaces(unit_id,space_label,use_type,position_kind) values($1,'Bed B','residential','bed') returning id",[u.id]);
+    const today=new Date().toISOString().slice(0,10);
+    const day=n=>new Date(Date.now()+n*86400000).toISOString().slice(0,10);
+    const lease=async(space,start,end)=>one("insert into leases(property_id,space_id,start_date,end_date,lease_status) values($1,$2,$3,$4,'active') returning id",[p.id,space.id,start,end]);
+    const la=await lease(a,day(-50),day(300)),lb=await lease(b,day(-100),day(-10));
+    for(const [l,kind,date] of [[la,'move_in',day(-50)],[lb,'move_in',day(-100)],[lb,'move_out',day(-10)]])
+      await recordEffectivePossession(db,{kind,lease_id:l.id,unit_id:u.id,property_id:p.id,effective_date:date,source:'owned_fixture',actor:null});
+    const before=(await spacePosition(db,{property_id:p.id})).positions;
+    assert.ok(before.find(r=>r.space_id===a.id).current_possession,'sibling possession established');
+    const turn=await one("insert into turnovers(property_id,unit_id,outgoing_lease_id,status) values($1,$2,$3,'in_progress') returning id",[p.id,u.id,lb.id]);
+    const user=await one("insert into users(name,status,is_active) values('Owned readiness manager','active',true) returning id");
+    await db.query("insert into property_team_assignments(property_id,user_id,role_title,allowed_modules,active) values($1,$2,'Property Manager',array['maintenance','management','leasing'],true)",[p.id,user.id]);
+    const s=await sessions.issueStaffSession(db,{userId:user.id,propertyId:p.id,purpose:'bootstrap_invite'});
+    const request=async(path,body)=>{const r=await fetch(process.env.E2E_API_BASE+path,{method:body?'POST':'GET',headers:{'content-type':'application/json','x-staff-session':s.session_token},...(body?{body:JSON.stringify(body)}:{})});return {status:r.status,body:await r.json()};};
+    const triage=await request(`/operator/units/${u.id}/triage/confirm`,{text:'Synthetic: Bed A remains occupied, inspected apartment needs no work.',vacancy_observation:'occupied_or_someone_remains',initial_condition:'normal_turn',inspection_completeness:'initial_triage',findings:[],required_work:[]});
+    assert.equal(triage.status,201,JSON.stringify(triage));
+    const partial=await request(`/operator/units/${u.id}/readiness`);
+    assert.equal(partial.body.gate.actionable,false,'no scope cannot certify');
+    const scope=await request(`/operator/units/${u.id}/turn-scope/confirm`,{triage_confirmation_id:triage.body.confirmation.id,original_text:'Synthetic complete apartment inspection; no physical work required.',paint_level:'none',cleaning_level:'none',keys_status:'accounted_for',inspection_completeness:'complete_turn_scope',appliances:[],findings:[],required_work:[]});
+    assert.equal(scope.status,201,JSON.stringify(scope));
+    const gate=await request(`/operator/units/${u.id}/readiness`);
+    assert.equal(gate.body.gate.actionable,true,'complete scope allows a human walk, not automatic readiness');
+    const confirmations=Object.fromEntries(gate.body.confirmation_areas.map(a=>[a.key,true]));
+    const certified=await request(`/operator/units/${u.id}/readiness/walk`,{outcome:'ready',confirmations,note:'Synthetic authorized whole-apartment physical acceptance; occupied Bed A rights unchanged.'});
+    assert.equal(certified.status,201,JSON.stringify(certified));
+    assert.equal(certified.body.certified,true);
+    assert.equal((await one('select status from turnovers where id=$1',[turn.id])).status,'ready');
+    const after=(await spacePosition(db,{property_id:p.id})).positions;
+    assert.deepEqual(after.find(r=>r.space_id===a.id).current_possession,before.find(r=>r.space_id===a.id).current_possession,'certification does not end sibling possession');
+    assert.equal((await one('select occupancy_status from units where id=$1',[u.id])).occupancy_status,'occupied');
+    let available=await request('/operator/leasing/availability-canonical');
+    let ar=available.body.rows.find(r=>r.space_id===a.id),br=available.body.rows.find(r=>r.space_id===b.id);
+    assert.equal(ar.marketing_state,'occupied');
+    assert.equal(br.marketing_state,'occupancy_unknown','physical certification never supplies absent vacancy evidence');
+    const baseline=await one("select * from opening_tenancy_positions where property_id=$1 and status='established' order by established_at desc limit 1",[p.id]);
+    const source=await one("insert into import_source_rows(import_batch_id,row_index,raw,parse_note,produced_unit_id,produced_space_id) values($1,$2,$3,'owned fixture vacant Bed B',$4,$5) returning id",[baseline.import_batch_id,Math.floor(Math.random()*1000000000),JSON.stringify({unit_number:number,space_label:'Bed B',is_vacant:true}),u.id,b.id]);
+    await db.query("insert into proposed_records(activation_id,property_id,module,target_type,natural_key,normalized_json,status,status_reason,import_source_row_id,confirmed_at) values($1,$2,'leasing','lease',$3,$4,'promoted','owned fixture confirmed vacancy',$5,now())",[baseline.activation_id,p.id,number+'|Bed B',JSON.stringify({section:'current',unit_number:number,space_label:'Bed B',is_vacant:true}),source.id]);
+    available=await request('/operator/leasing/availability-canonical');
+    br=available.body.rows.find(r=>r.space_id===b.id);
+    assert.equal(br.marketing_state,'marketable_now',JSON.stringify(br));
+    assert.equal(br.physical_readiness,'ready');assert.equal(br.readiness_basis,'certification');
+    console.log('SHARED_UNIT_READINESS_HTTP_PASS: whole-unit certification closes turn, free bed marketable, occupied sibling possession unchanged');
+  }finally{await db.end();}
+})().catch(e=>{console.error(e);process.exitCode=1;});
