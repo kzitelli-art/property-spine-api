@@ -1,0 +1,853 @@
+{
+ "server": "932c9afafccd31f75385b1a7fc17c41deda48b32",
+ "summary": {
+  "passed": 51,
+  "failed": 0,
+  "observations": 20,
+  "sections": [
+   "shape-as-found",
+   "as-found-reads",
+   "adopt",
+   "staff",
+   "deal",
+   "opening-position",
+   "lines-and-sms",
+   "lease-configuration",
+   "pricing-gates-knowledge"
+  ]
+ },
+ "results": [
+  {
+   "section": "shape-as-found",
+   "label": "the rehearsal property reproduces the production read's shape (raw counts, no organization, unknown basis)",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "units": 171,
+    "spaces": 171,
+    "leases": 0,
+    "team": 0,
+    "aliases": 3,
+    "activations": 1
+   }
+  },
+  {
+   "section": "shape-as-found",
+   "label": "rehearsal property exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "as-found-reads",
+   "label": "canonical availability holds every one of the 171 placeholder positions as occupancy not established: raw spaces are not rentable inventory",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "occupancy_unknown": 171
+   }
+  },
+  {
+   "section": "as-found-reads",
+   "label": "occupancy by basis is honestly unavailable while the basis is unknown",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "reason": "leasing_basis_unsupported"
+   }
+  },
+  {
+   "section": "as-found-reads",
+   "label": "Mike cannot hold a session at Greenery: no active assignment there",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "refused": "No active access to this property."
+   }
+  },
+  {
+   "section": "as-found-reads",
+   "label": "a member account cannot create the deal container; that is an organization-level action",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "refused": "insufficient_platform_role"
+   }
+  },
+  {
+   "section": "as-found-reads",
+   "label": "an organization admin cannot adopt the unowned property: adoption is platform repair",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "refused": "adoption_requires_platform_repair_authority"
+   }
+  },
+  {
+   "section": "as-found-reads",
+   "label": "finding candidate: an org admin can add the still-unowned property to their own deal before adoption (deal membership does not require ownership)",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "added": "allowed"
+   }
+  },
+  {
+   "section": "as-found-reads",
+   "label": "the legacy activation carries no deal and stays open; Deal Setup will not see or close it",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": "open",
+    "deal_id": null
+   }
+  },
+  {
+   "section": "adopt",
+   "label": "super admin adoption places the property with the organization without changing its id",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "ok": true,
+     "property_id": "<uuid>",
+     "organization_id": "<uuid>",
+     "already": false,
+     "receipt": "Greenery now belongs to this organization."
+    }
+   }
+  },
+  {
+   "section": "adopt",
+   "label": "adoption is idempotent",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "adopt",
+   "label": "an adopted property cannot be moved to another client (reparenting refused)",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "reason": "property_already_has_an_organization"
+   }
+  },
+  {
+   "section": "adopt",
+   "label": "the durable property row now carries the organization",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "staff",
+   "label": "finding: a phone-only invite through the admin door fails with 500 \u2014 its ON CONFLICT (phone) has no matching unique constraint (users has a normalized partial index)",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 500,
+    "error": "there is no unique or exclusion constraint matching the ON CONFLICT specification"
+   }
+  },
+  {
+   "section": "staff",
+   "label": "finding: an invite naming an existing phone with a different email fails with 500 \u2014 the email upsert tries to insert a second user with the same phone",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 500,
+    "error": "duplicate key value violates unique constraint \"uq_users_phone_normalized\"",
+    "user_existed": true
+   }
+  },
+  {
+   "section": "staff",
+   "label": "the admin invite door attaches the existing Mike account (matched by his exact email) to Greenery without creating a second user",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": {
+     "ok": true,
+     "user": {
+      "id": "<uuid>",
+      "name": "Mike (rehearsal) <nonce>",
+      "email": "<email>",
+      "phone": "<phone>"
+     },
+     "organization_id": "<uuid>",
+     "property_id": "<uuid>",
+     "role_key": "property_admin",
+     "platform_role": "member",
+     "note": "User provisioned. They can now log in via phone OTP at the operator app."
+    }
+   }
+  },
+  {
+   "section": "staff",
+   "label": "Mike holds an active Greenery assignment with leasing and management",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "role_key": "property_admin",
+    "can_manage_roles": true,
+    "allowed_modules": [
+     "management",
+     "leasing",
+     "maintenance",
+     "reporting",
+     "asset_management"
+    ]
+   }
+  },
+  {
+   "section": "staff",
+   "label": "passing the current platform role keeps Mike's account unchanged",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "platform_role": "member",
+    "organization_id": "<uuid>"
+   }
+  },
+  {
+   "section": "staff",
+   "label": "finding: the admin invite door upserts by phone and rewrites platform_role to its default when omitted (org_admin becomes member)",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 201,
+    "before": "org_admin",
+    "after": "member"
+   }
+  },
+  {
+   "section": "staff",
+   "label": "finding: the admin invite writes the team assignment but no person-level assignment, so Mike's staff identity at Greenery is not resolved for tour hosting or offer authorship",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "state": "not_assigned_here",
+    "basis": "no_assignment_at_property"
+   }
+  },
+  {
+   "section": "staff",
+   "label": "before the property has a text line, a governed invite is created link-only and its code cannot be texted",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200,
+    "delivery": "link_only"
+   }
+  },
+  {
+   "section": "staff",
+   "label": "the Greenery text line is recorded through the operator route (this projects properties.sms_number; the column itself refuses direct writes)",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Greenery text line set to <phone>. Invites, replies, and OTP codes now go out as real texts from this number.",
+     "property": {
+      "id": "<uuid>",
+      "name": "Greenery",
+      "sms_number": "<phone>"
+     },
+     "sms_transport": "configured"
+    }
+   }
+  },
+  {
+   "section": "staff",
+   "label": "finding: the operator route creates the property line with outbound disabled and no door enables it, so the invite text fails (sms_failed) until the line's outbound policy is changed outside the product",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "line": {
+     "outbound_enabled": false,
+     "outbound_policy": "disabled"
+    },
+    "delivery": "sms_failed"
+   }
+  },
+  {
+   "section": "staff",
+   "label": "repair-class write used to continue: outbound enabled on the Greenery line",
+   "ok": true,
+   "kind": "observe",
+   "detail": null
+  },
+  {
+   "section": "staff",
+   "label": "Mike's Greenery session can invite a leasing agent through the governed door",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Text invite sent.",
+     "invite_id": "<uuid>",
+     "status": "pending",
+     "delivery": "sms_sent",
+     "link": "<owned-server>/auth/join/<token>",
+     "sms_text": "You've been added to The Greenery on Property Spine. Tap to set up your access: <owned-server>/auth/join/<token>",
+     "expires_at": "2026-09-14T22:28:34.317Z",
+     "granted_by_user_id": "<uuid>",
+     "authority_basis": "assignment:can_manage_roles",
+     "person_id": "<uuid>",
+     "role_key": "leasing_agent"
+    }
+   }
+  },
+  {
+   "section": "staff",
+   "label": "with an outbound-enabled line the invite is texted through the fake transport",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "delivery": "sms_sent"
+   }
+  },
+  {
+   "section": "staff",
+   "label": "invite OTP start",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Code sent by text.",
+     "masked_phone": "<masked-phone>",
+     "delivery": "sms_sent",
+     "flow": "invite_accept",
+     "expires_in_minutes": 10
+    }
+   }
+  },
+  {
+   "section": "staff",
+   "label": "the OTP reached the fake transport only",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "staff",
+   "label": "the agent accepts and receives a Greenery session",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "staff",
+   "label": "the governed invite leaves the new teammate with a resolved staff identity at Greenery (bridge, human_staff, person assignment, team authority)",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "state": "resolved",
+    "basis": "bridge_plus_active_assignment_plus_authority"
+   }
+  },
+  {
+   "section": "staff",
+   "label": "Mike's plain phone login starts",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Code sent by text.",
+     "masked_phone": "<masked-phone>",
+     "delivery": "sms_sent",
+     "flow": "relogin",
+     "expires_in_minutes": 10,
+     "token": "<token>"
+    }
+   }
+  },
+  {
+   "section": "staff",
+   "label": "Mike's login code reached the fake transport only",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "staff",
+   "label": "Mike's login completes",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Welcome back. You're in.",
+     "flow": "relogin",
+     "session_token": "<token>",
+     "user": {
+      "id": "<uuid>",
+      "name": "Mike (rehearsal) <nonce>",
+      "phone_number": "<phone>"
+     },
+     "property": {
+      "id": "<uuid>",
+      "name": "Greenery"
+     },
+     "role_title": "Property Admin",
+     "allowed_modules": [
+      "management",
+      "leasing",
+      "maintenance",
+      "reporting",
+      "asset_management"
+     ],
+     "can_manage_roles": true,
+     "landing_module": "management",
+     "platform_role": "member"
+    }
+   }
+  },
+  {
+   "section": "staff",
+   "label": "with two assignments, login lands on one property chosen by sms-ready then role-managing order; there is no picker at login",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "landed_on": "Greenery"
+   }
+  },
+  {
+   "section": "staff",
+   "label": "Mike can switch between his two properties through the property selector after login",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "switched_to": "Skyline (rehearsal)",
+    "keys": [
+     "ok",
+     "session_token",
+     "expires_at",
+     "expires_in_hours",
+     "user",
+     "property",
+     "role_title",
+     "allowed_modules",
+     "previous_property_id"
+    ]
+   }
+  },
+  {
+   "section": "deal",
+   "label": "the organization admin creates the deal container",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": {
+     "deal": {
+      "id": "<uuid>",
+      "deal_name": "The Greenery",
+      "onboarding_type": "existing_asset",
+      "status": "created",
+      "organization_id": "<uuid>",
+      "organization_absent_reason": null,
+      "created_at": "2026-09-11T22:28:34.364Z",
+      "authority_basis": "platform_role:org_admin"
+     },
+     "receipt": "Deal \"The Greenery\" created."
+    }
+   }
+  },
+  {
+   "section": "deal",
+   "label": "the existing Greenery property joins the deal (no replacement property)",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "receipt": "Greenery is now part of \"The Greenery\"."
+   }
+  },
+  {
+   "section": "deal",
+   "label": "Mike (member) still cannot create deals; he operates the setup inside one",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403,
+    "reason": "insufficient_platform_role"
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "deal exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "opening-position",
+   "label": "Mike uploads the rent roll; Spine retains the bytes",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": {
+     "artifact": {
+      "id": "<uuid>",
+      "filename": "greenery-rehearsal-rent-roll.csv",
+      "byte_size": 2170,
+      "uploaded_at": "2026-09-11T22:28:34.388Z"
+     },
+     "receipt": "greenery-rehearsal-rent-roll.csv is on file. Spine keeps it so it can always show what this position came from."
+    }
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "a governed setup opens for the property inside the deal",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "the retained source is read with the leasing basis stated as bed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": "Read 40 rows from greenery-rehearsal-rent-roll.csv, dated 2026-09-01. 40 ready, 0 need a look, 0 unassigned or blocked, 0 conflicting. Nothing is live yet."
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "the leasing basis is now recorded on the property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "leasing_basis": "bed"
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "staging materialised the named beds on the sourced units",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "units_with_beds": 20,
+    "beds": 40
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "the untouched units keep their placeholder position and remain outside the source",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "placeholders_remaining": 151,
+    "sourced_units": 20
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "one proposal per source row awaits a human confirmation",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "staged": 40,
+    "rows": 40
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "every row confirms against the established beds",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "confirmed": 40,
+    "refused": []
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "the opening lease and occupancy position is established",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "receipt": "Lease & occupancy established as of 2026-09-01: 40 units, nothing outstanding."
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "finding: beds born by Deal Setup carry no governed use type, so every vacant bed reads use_not_configured and the selector offers nothing; no operator or service door sets spaces.use_type",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "marketing": {
+     "occupied": 27,
+     "use_not_configured": 13,
+     "occupancy_unknown": 151
+    },
+    "eligible": 0
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "repair-class write used to continue: use_type=residential on the sourced beds",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "rows": 40
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "with use configured, canonical availability distinguishes vacant beds, leased beds and the still-unestablished units",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "occupied": 27,
+    "marketable_now": 13,
+    "occupancy_unknown": 151
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "the application selector offers exactly the established vacant beds",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "eligible": 13
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "the legacy activation is untouched by the governed setup",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": "open"
+   }
+  },
+  {
+   "section": "opening-position",
+   "label": "occupancy by basis reads once the basis and position exist",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "keys": [
+     "status",
+     "basis",
+     "unit_noun",
+     "occupied_count",
+     "rentable_count",
+     "excluded_count",
+     "exclusions_governed",
+     "exclusions_source"
+    ]
+   }
+  },
+  {
+   "section": "lines-and-sms",
+   "label": "the new property line is inbound-enabled but outbound stays disabled until a deliberate policy decision",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "e164": "<phone>",
+    "status": "active",
+    "outbound_enabled": true,
+    "outbound_policy": "proactive"
+   }
+  },
+  {
+   "section": "lines-and-sms",
+   "label": "the organization has one staff operations line",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "e164": "<phone>"
+   }
+  },
+  {
+   "section": "lines-and-sms",
+   "label": "the operations webhook accepts Mike's text",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "lines-and-sms",
+   "label": "with assignments at two properties, an unscoped staff text is answered with a property clarification, not a guess",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "reply": "Which property is this about: Skyline rehearsal <nonce> or Greenery? Please resend your question with the property name.",
+    "classification": null
+   }
+  },
+  {
+   "section": "lines-and-sms",
+   "label": "naming the property in the text is answered without a clarification (scope taken from the message)",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200,
+    "clarified": false,
+    "reply": "I don't see any work assigned to you right now. Your manager can assign it."
+   }
+  },
+  {
+   "section": "lease-configuration",
+   "label": "before setup the lease configuration read names what is missing",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200,
+    "missing_terms": [
+     "landlord_entity",
+     "application_fee",
+     "amenity_fee",
+     "utility_responsibility",
+     "late_fee",
+     "notice_requirement"
+    ],
+    "ready_to_generate": false,
+    "ready_to_execute": false,
+    "instrument": null
+   }
+  },
+  {
+   "section": "lease-configuration",
+   "label": "Mike (management module) retains a governing lease form and the lease terms, confirming himself as company signer",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": "greenery-rehearsal-lease-form.docx is now the retained governing lease source for Greenery. The signed-in account is the recorded company signer."
+   }
+  },
+  {
+   "section": "lease-configuration",
+   "label": "the lease configuration read reports nothing missing and both readiness flags true",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "missing_terms": [],
+    "ready_to_generate": true,
+    "ready_to_execute": true
+   }
+  },
+  {
+   "section": "lease-configuration",
+   "label": "the durable property carries the instrument lineage and the company signer",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "signers": [
+     "<uuid>"
+    ],
+    "form": "REHEARSAL-FORM"
+   }
+  },
+  {
+   "section": "pricing-gates-knowledge",
+   "label": "finding: the prospect agent's dated inventory still keys on units.occupancy_status='vacant' and units.bedrooms, which Deal Setup never writes, so it reports nothing for the established vacant beds",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "units": 0,
+    "qualification": "contractually_free_for_term_readiness_unconfirmed",
+    "legacy_columns": {
+     "vacant_flag": 0,
+     "with_bedrooms": 0
+    }
+   }
+  },
+  {
+   "section": "pricing-gates-knowledge",
+   "label": "in exact-space discovery the canonical targets are found, and without a published pricing version every eligible bed is pricing-unresolved",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "units": 0,
+    "qualification": "matching_incomplete_pricing_unresolved",
+    "unresolved": 13,
+    "first_reason": "unit_type_not_established"
+   }
+  },
+  {
+   "section": "pricing-gates-knowledge",
+   "label": "with the property on the intake allowlist an inquiry is accepted",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "pricing-gates-knowledge",
+   "label": "with the property on the application allowlist the application link may be born",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "reason_code": "ALLOWED"
+   }
+  },
+  {
+   "section": "pricing-gates-knowledge",
+   "label": "off the allowlist the same property refuses application birth: the Render environment is part of launch",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "reason_code": "PROPERTY_NOT_ACTIVATED"
+   }
+  },
+  {
+   "section": "pricing-gates-knowledge",
+   "label": "the prepared Greenery cards fit the existing fact writer (rehearsal load only; production loading needs owner confirmation of wording)",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "loaded": 9,
+    "skipped": [
+     {
+      "fact_key": "dimensions",
+      "status": "measurement_gap"
+     }
+    ]
+   }
+  },
+  {
+   "section": "pricing-gates-knowledge",
+   "label": "Ask Spine answers a Greenery knowledge question from the loaded cards",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "outcome": "answered",
+    "topics": [
+     "amenities"
+    ]
+   }
+  },
+  {
+   "section": "pricing-gates-knowledge",
+   "label": "Mike's Skyline session sees none of Greenery's targets",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "eligible_at_skyline": 0
+   }
+  }
+ ]
+}
