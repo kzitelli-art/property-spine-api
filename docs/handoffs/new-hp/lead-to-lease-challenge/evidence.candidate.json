@@ -1,0 +1,1276 @@
+{
+ "server": "932c9afafccd31f75385b1a7fc17c41deda48b32",
+ "summary": {
+  "passed": 125,
+  "failed": 3,
+  "sections": [
+   "fixture",
+   "inquiry",
+   "matching",
+   "availability-and-siblings",
+   "tour-and-choice",
+   "offers-readiness",
+   "wrong-property",
+   "send",
+   "changed-prices",
+   "readiness-at-submission",
+   "lease",
+   "representative-media"
+  ]
+ },
+ "results": [
+  {
+   "section": "fixture",
+   "label": "Skyline-shaped disposable fixture property exists",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "fixture",
+   "label": "an established opening position exists to carry vacancy claims",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "fixture",
+   "label": "fixture governing instrument names a company signer",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "fixture",
+   "label": "synthetic fixture created in the owned database only",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "inquiry",
+   "label": "One: inquiry enters through the canonical intake door",
+   "ok": true,
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "matching",
+   "label": "a unit label backed by a representative Matterport does not pick a bed (\"I saw the Matterport of C7, I'll take C7\")",
+   "ok": true,
+   "detail": {
+    "attached": null,
+    "expected": null
+   }
+  },
+  {
+   "section": "matching",
+   "label": "a negation is not a choice (\"not C7, the other one\")",
+   "ok": true,
+   "detail": {
+    "attached": null,
+    "expected": null
+   }
+  },
+  {
+   "section": "matching",
+   "label": "a question is not a choice (\"C7 or W1?\")",
+   "ok": true,
+   "detail": {
+    "attached": null,
+    "expected": null
+   }
+  },
+  {
+   "section": "matching",
+   "label": "an explicit single-position choice is recorded (\"I'll take W1\")",
+   "ok": true,
+   "detail": {
+    "attached": "W1",
+    "expected": "W1"
+   }
+  },
+  {
+   "section": "matching",
+   "label": "observation: a polite bare label outside the explicit grammar (\"W1 please\")",
+   "ok": true,
+   "detail": {
+    "attached": null,
+    "expected": "recorded only"
+   }
+  },
+  {
+   "section": "matching",
+   "label": "a bare affirmative to one whole-unit offer is recorded (\"yes\")",
+   "ok": true,
+   "detail": {
+    "attached": "W1",
+    "expected": "W1"
+   }
+  },
+  {
+   "section": "matching",
+   "label": "a bare affirmative cannot choose among beds (\"yes\")",
+   "ok": true,
+   "detail": {
+    "attached": null,
+    "expected": null
+   }
+  },
+  {
+   "section": "matching",
+   "label": "an availability question is not a choice (\"is W1 still available\")",
+   "ok": true,
+   "detail": {
+    "attached": null,
+    "expected": null
+   }
+  },
+  {
+   "section": "matching",
+   "label": "matching is a scripted-model service proof: the model reply text is not under test, only the durable unit attachment",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "staff availability read answers",
+   "ok": true,
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "the leased sibling bed is not marketable",
+   "ok": true,
+   "detail": {
+    "marketing_state": "occupied"
+   }
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "the free bed beside a leased sibling is marketable now",
+   "ok": true,
+   "detail": {
+    "marketing_state": "marketable_now",
+    "available_from": "2026-09-11",
+    "availability_confidence": "confirmed"
+   }
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "a whole unit turning with a ready date is expected, not confirmed",
+   "ok": true,
+   "detail": {
+    "marketing_state": "turnover_required",
+    "available_from": "2026-10-06",
+    "availability_confidence": "expected",
+    "physical_readiness": "turning"
+   }
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "a notice is not a move-out and not readiness",
+   "ok": true,
+   "detail": {
+    "marketing_state": "upcoming",
+    "available_from": "2026-10-21",
+    "availability_confidence": "incomplete",
+    "notice": "on_notice"
+   }
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "turn tasks with deadlines are not a governed ready date",
+   "ok": true,
+   "detail": {
+    "marketing_state": "turnover_required",
+    "available_from": null,
+    "availability_confidence": "incomplete",
+    "blocking_fact": "turnover_completion_not_scheduled"
+   }
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "leaseable targets read answers",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "the selector offers the free bed as an exact choice",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "the selector never offers the leased sibling bed",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "the selector never offers a turn without a governed ready date",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "staff availability read answers",
+   "ok": true,
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "the outgoing bed carries its own expected date",
+   "ok": true,
+   "detail": {
+    "available_from": "2026-10-26",
+    "availability_confidence": "expected"
+   }
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "the free sibling bed does not inherit the outgoing bed's expected date",
+   "ok": false,
+   "detail": {
+    "marketing_state": "turnover_required",
+    "available_from": null,
+    "availability_confidence": "incomplete",
+    "turnover": null
+   }
+  },
+  {
+   "section": "availability-and-siblings",
+   "label": "the selector still offers the free bed today under the sibling's turn plan",
+   "ok": false,
+   "detail": null
+  },
+  {
+   "section": "tour-and-choice",
+   "label": "Challenge One <nonce>: native tour slot published",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Tour time published.",
+     "slot": {
+      "id": "<uuid>",
+      "property_id": "<uuid>",
+      "unit_id": "<uuid>",
+      "leasing_agent_id": "<uuid>",
+      "starts_at": "2026-09-13T18:32:23.499Z",
+      "ends_at": "2026-09-13T19:32:23.499Z",
+      "capacity": 1,
+      "status": "open",
+      "booked_tour_id": null,
+      "created_by": "<uuid>",
+      "created_at": "2026-09-11T18:32:23.507Z",
+      "updated_at": "2026-09-11T18:32:23.507Z"
+     },
+     "created": true
+    }
+   }
+  },
+  {
+   "section": "tour-and-choice",
+   "label": "Challenge One <nonce>: prospect booked onto the exact slot",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Tour scheduled for Sun Sep 13 2026 18:32:23 GMT+0000 (Coordinated Universal Time). Slot booked; funnel advanced to tour_scheduled.",
+     "tour_id": "<uuid>",
+     "slot_id": "<uuid>",
+     "idempotent": false
+    }
+   }
+  },
+  {
+   "section": "tour-and-choice",
+   "label": "Challenge One <nonce>: tour check-in",
+   "ok": true,
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "tour-and-choice",
+   "label": "Challenge One <nonce>: tour outcome captured as ready to apply",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Outcome recorded \u2014 tour given. 1 unit shown. Follow-up rail opened \u2014 outcome \u00b7 owner set to the actual host.",
+     "tour_id": "<uuid>",
+     "conversion_id": "<uuid>"
+    }
+   }
+  },
+  {
+   "section": "tour-and-choice",
+   "label": "Challenge One <nonce>: the captured tour opened the canonical conversion",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "tour-and-choice",
+   "label": "the agent's ready-to-apply standing is the recorded truth",
+   "ok": true,
+   "detail": {
+    "tour_outcome": "ready_to_apply"
+   }
+  },
+  {
+   "section": "tour-and-choice",
+   "label": "the toured apartment is recorded at unit grain",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "tour-and-choice",
+   "label": "observation: the tour records no bed-grain choice; the exact bed enters only with the offer and invitation",
+   "ok": true,
+   "detail": {
+    "lead_unit_attached": false,
+    "bed_grain_tour_record": false
+   }
+  },
+  {
+   "section": "offers-readiness",
+   "label": "journey conversion exists",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "offers-readiness",
+   "label": "an offer cannot be prepared for the leased sibling bed",
+   "ok": true,
+   "detail": {
+    "status": 409,
+    "error": "not_offerable"
+   }
+  },
+  {
+   "section": "offers-readiness",
+   "label": "a start before the expected turn date refuses",
+   "ok": true,
+   "detail": {
+    "status": 409,
+    "error": "application_move_in_before_expected_ready"
+   }
+  },
+  {
+   "section": "offers-readiness",
+   "label": "a notice date is not a move-out: an offer on the notice date refuses",
+   "ok": true,
+   "detail": {
+    "status": 409,
+    "error": "application_ready_date_not_governed"
+   }
+  },
+  {
+   "section": "offers-readiness",
+   "label": "task deadlines on a turn are not a governed ready date",
+   "ok": true,
+   "detail": {
+    "status": 409,
+    "error": "application_ready_date_not_governed"
+   }
+  },
+  {
+   "section": "offers-readiness",
+   "label": "a leasing agent without pricing authority cannot author terms",
+   "ok": true,
+   "detail": {
+    "status": 403,
+    "error": "NO_APPLICATION_OFFER_AUTHORITY"
+   }
+  },
+  {
+   "section": "offers-readiness",
+   "label": "a complete offer for the free bed is retained",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "application_offer_id": "<uuid>",
+     "application_terms": {
+      "schema_version": 1,
+      "property_id": "<uuid>",
+      "person_id": "<uuid>",
+      "target": {
+       "space_id": "<uuid>",
+       "unit_id": "<uuid>"
+      },
+      "rent": "1025.00",
+      "security_deposit": "1025.00",
+      "lease_start_date": "2026-10-11",
+      "lease_end_date": "2027-10-10",
+      "fees": [],
+      "concessions": {
+       "status": "none"
+      }
+     },
+     "idempotent": false,
+     "applicant_review_required": false,
+     "receipt": "Application offer prepared."
+    }
+   }
+  },
+  {
+   "section": "offers-readiness",
+   "label": "observation: an offer may be prepared on an EXPECTED (not confirmed) ready date; readiness confidence is not carried to the applicant",
+   "ok": true,
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "wrong-property",
+   "label": "journey conversion exists",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "wrong-property",
+   "label": "a manager session at another property cannot author terms on this case",
+   "ok": true,
+   "detail": {
+    "status": 404
+   }
+  },
+  {
+   "section": "wrong-property",
+   "label": "another property's selector shows none of these homes",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "wrong-property",
+   "label": "another property's session alone cannot read this lead through the legacy lead door",
+   "ok": true,
+   "detail": {
+    "status": 401
+   }
+  },
+  {
+   "section": "wrong-property",
+   "label": "observation: with the shared operator key present, the legacy lead door answers regardless of the session's property (key-scoped, not property-scoped)",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "answered_this_lead": true
+   }
+  },
+  {
+   "section": "wrong-property",
+   "label": "Ask Spine at another property cannot propose this prospect's send",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "outcome": "leasing_clarification"
+   }
+  },
+  {
+   "section": "wrong-property",
+   "label": "another property's availability read shows none of these homes",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "wrong-property",
+   "label": "a client-supplied property id is never authority",
+   "ok": true,
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "send",
+   "label": "offer exists",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "send",
+   "label": "naming the leased sibling bed cannot be re-aimed at a bed the agent did not name",
+   "ok": false,
+   "detail": {
+    "status": 200,
+    "outcome": "application_send_proposed",
+    "proposed_target": "Unit C7-<nonce>, Bed B"
+   }
+  },
+  {
+   "section": "send",
+   "label": "Challenge One <nonce>: Ask Spine proposes the send for Unit C7-<nonce>, Bed B and asks for confirmation",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "outcome": "application_send_proposed"
+   }
+  },
+  {
+   "section": "send",
+   "label": "the same agent's session at another property cannot redeem the confirmation",
+   "ok": true,
+   "detail": {
+    "status": 403,
+    "outcome": "confirmation_property_mismatch"
+   }
+  },
+  {
+   "section": "send",
+   "label": "another staff member cannot redeem the agent's confirmation",
+   "ok": true,
+   "detail": {
+    "status": 403,
+    "outcome": "confirmation_actor_mismatch"
+   }
+  },
+  {
+   "section": "send",
+   "label": "Challenge One <nonce>: the agent's own confirmation sends the application",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "outcome": "application_sent",
+     "action_code": "send_application_after_tour",
+     "confirmation_required": false,
+     "confirmation": null,
+     "receipt": "Application sent to Challenge One <nonce> for Unit C7-<nonce>, Bed B.",
+     "subject": {
+      "display_name": "Challenge One <nonce>"
+     },
+     "target": {
+      "label": "Unit C7-<nonce>, Bed B"
+     },
+     "sent": true,
+     "replayed": false
+    }
+   }
+  },
+  {
+   "section": "send",
+   "label": "Challenge One <nonce>: the application text reached the fake transport only",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "send",
+   "label": "the invitation persists the exact bed",
+   "ok": true,
+   "detail": {
+    "status": "provider_dispatched"
+   }
+  },
+  {
+   "section": "send",
+   "label": "the proposal exposes no database identifiers",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "changed-prices",
+   "label": "invitation token exists",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "changed-prices",
+   "label": "the applicant reads server-owned terms",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "changed-prices",
+   "label": "the applicant sees the exact bed and the offered rent",
+   "ok": true,
+   "detail": {
+    "rent": "1025.00",
+    "unit_label": "C7-<nonce> \u00b7 Bed B"
+   }
+  },
+  {
+   "section": "changed-prices",
+   "label": "observation: the applicant context carries no readiness confidence field",
+   "ok": true,
+   "detail": [
+    "state",
+    "terms_required",
+    "application_terms",
+    "previous_terms_acknowledged",
+    "previous_application_terms",
+    "property_name",
+    "property_address",
+    "unit_label",
+    "intended_move_in",
+    "application_options",
+    "person",
+    "prefill"
+   ]
+  },
+  {
+   "section": "changed-prices",
+   "label": "management revises the offer before acceptance",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "application_offer_id": "<uuid>",
+     "application_terms": {
+      "schema_version": 1,
+      "property_id": "<uuid>",
+      "person_id": "<uuid>",
+      "target": {
+       "space_id": "<uuid>",
+       "unit_id": "<uuid>"
+      },
+      "rent": "1100.00",
+      "security_deposit": "1100.00",
+      "lease_start_date": "2026-10-11",
+      "lease_end_date": "2027-10-10",
+      "fees": [],
+      "concessions": {
+       "status": "none"
+      }
+     },
+     "idempotent": false,
+     "applicant_review_required": true,
+     "receipt": "Revised terms are ready in the existing application link. Applicant review is required; no message was sent."
+    }
+   }
+  },
+  {
+   "section": "changed-prices",
+   "label": "the same link now shows the replacement terms with a new hash",
+   "ok": true,
+   "detail": {
+    "rent": "1100.00"
+   }
+  },
+  {
+   "section": "changed-prices",
+   "label": "acknowledging the old price cannot submit against the new terms",
+   "ok": true,
+   "detail": {
+    "status": 409,
+    "receipt": "Review and acknowledge the current application terms before submitting."
+   }
+  },
+  {
+   "section": "changed-prices",
+   "label": "a form-supplied rent cannot override the offer",
+   "ok": true,
+   "detail": {
+    "status": 400,
+    "error": "Application terms are set by the offer, not by the submitted form."
+   }
+  },
+  {
+   "section": "changed-prices",
+   "label": "observation: the public submit door returns the refusal sentence as `error`; the stable code APPLICATION_TERMS_TAMPERED is not surfaced",
+   "ok": true,
+   "detail": {
+    "keys": [
+     "receipt",
+     "error"
+    ]
+   }
+  },
+  {
+   "section": "changed-prices",
+   "label": "a changed asking rent on the unit does not touch the negotiated terms",
+   "ok": true,
+   "detail": {
+    "rent": "1100.00"
+   }
+  },
+  {
+   "section": "changed-prices",
+   "label": "refused submissions created no application",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "changed-prices",
+   "label": "the applicant submits against the acknowledged replacement terms",
+   "ok": true,
+   "detail": {
+    "truncated": true,
+    "keys": [
+     "status",
+     "body"
+    ]
+   }
+  },
+  {
+   "section": "changed-prices",
+   "label": "the application retains the exact bed and the acknowledged offer",
+   "ok": true,
+   "detail": {
+    "rent": "1100.00"
+   }
+  },
+  {
+   "section": "changed-prices",
+   "label": "management cannot silently change applicant-acknowledged rent after submission",
+   "ok": true,
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "Two: inquiry enters through the canonical intake door",
+   "ok": true,
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "Challenge Two <nonce>: native tour slot published",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Tour time published.",
+     "slot": {
+      "id": "<uuid>",
+      "property_id": "<uuid>",
+      "unit_id": "<uuid>",
+      "leasing_agent_id": "<uuid>",
+      "starts_at": "2026-09-13T18:32:24.342Z",
+      "ends_at": "2026-09-13T19:32:24.342Z",
+      "capacity": 1,
+      "status": "open",
+      "booked_tour_id": null,
+      "created_by": "<uuid>",
+      "created_at": "2026-09-11T18:32:24.345Z",
+      "updated_at": "2026-09-11T18:32:24.345Z"
+     },
+     "created": true
+    }
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "Challenge Two <nonce>: prospect booked onto the exact slot",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Tour scheduled for Sun Sep 13 2026 18:32:24 GMT+0000 (Coordinated Universal Time). Slot booked; funnel advanced to tour_scheduled.",
+     "tour_id": "<uuid>",
+     "slot_id": "<uuid>",
+     "idempotent": false
+    }
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "Challenge Two <nonce>: tour check-in",
+   "ok": true,
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "Challenge Two <nonce>: tour outcome captured as ready to apply",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Outcome recorded \u2014 tour given. 1 unit shown. Follow-up rail opened \u2014 outcome \u00b7 owner set to the actual host.",
+     "tour_id": "<uuid>",
+     "conversion_id": "<uuid>"
+    }
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "Challenge Two <nonce>: the captured tour opened the canonical conversion",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "offer on the expected ready date is prepared",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "application_offer_id": "<uuid>",
+     "application_terms": {
+      "schema_version": 1,
+      "property_id": "<uuid>",
+      "person_id": "<uuid>",
+      "target": {
+       "space_id": "<uuid>",
+       "unit_id": "<uuid>"
+      },
+      "rent": "1400.00",
+      "security_deposit": "1400.00",
+      "lease_start_date": "2026-10-06",
+      "lease_end_date": "2027-10-05",
+      "fees": [],
+      "concessions": {
+       "status": "none"
+      }
+     },
+     "idempotent": false,
+     "applicant_review_required": false,
+     "receipt": "Application offer prepared."
+    }
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "Challenge Two <nonce>: Ask Spine proposes the send for Unit W1-<nonce> and asks for confirmation",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "outcome": "application_send_proposed"
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "the same agent's session at another property cannot redeem the confirmation",
+   "ok": true,
+   "detail": {
+    "status": 403,
+    "outcome": "confirmation_property_mismatch"
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "another staff member cannot redeem the agent's confirmation",
+   "ok": true,
+   "detail": {
+    "status": 403,
+    "outcome": "confirmation_actor_mismatch"
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "Challenge Two <nonce>: the agent's own confirmation sends the application",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "outcome": "application_sent",
+     "action_code": "send_application_after_tour",
+     "confirmation_required": false,
+     "confirmation": null,
+     "receipt": "Application sent to Challenge Two <nonce> for Unit W1-<nonce> (target 2026-10-06).",
+     "subject": {
+      "display_name": "Challenge Two <nonce>"
+     },
+     "target": {
+      "label": "Unit W1-<nonce> (target 2026-10-06)"
+     },
+     "sent": true,
+     "replayed": false
+    }
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "Challenge Two <nonce>: the application text reached the fake transport only",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "the invitation durably carries the intended move-in",
+   "ok": true,
+   "detail": {
+    "intended_move_in": "2026-10-06T00:00:00.000Z"
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "an outgoing lease extended past the start refuses the submission as no longer offerable",
+   "ok": true,
+   "detail": {
+    "status": 409,
+    "error": "This unit is no longer available, so this application link can no longer be used."
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "a slipped turn date refuses the submission with the readiness reason, not 'unavailable'",
+   "ok": true,
+   "detail": {
+    "status": 409,
+    "error": "The intended move-in date is before the current turn plan expects this home to be ready."
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "no application was born while readiness was uncertain",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "refusals leave the link unconsumed",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "the restored expected date lets the same link submit",
+   "ok": true,
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "staff availability read answers",
+   "ok": true,
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "readiness-at-submission",
+   "label": "observation: the application was born on an expected date; physical readiness remains unconfirmed",
+   "ok": true,
+   "detail": {
+    "availability_confidence": "expected",
+    "physical_readiness": "turning"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "application exists",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "the collecting agent cannot approve",
+   "ok": true,
+   "detail": {
+    "status": 403
+   }
+  },
+  {
+   "section": "lease",
+   "label": "a manager session at another property cannot approve",
+   "ok": true,
+   "detail": {
+    "status": 403
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the property manager approves",
+   "ok": true,
+   "detail": {
+    "truncated": true,
+    "keys": [
+     "status",
+     "body"
+    ]
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the acknowledged terms are confirmed for the lease",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Proposed terms confirmed for resident review. This is a proposal, not an executed lease.",
+     "idempotent": false,
+     "confirmation_id": "<uuid>",
+     "authority_basis": "managed_role_override",
+     "supersedes_confirmation_id": null
+    }
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the governing lease packet is generated",
+   "ok": true,
+   "detail": {
+    "truncated": true,
+    "keys": [
+     "status",
+     "body"
+    ]
+   }
+  },
+  {
+   "section": "lease",
+   "label": "a prepared packet blocks another price change",
+   "ok": true,
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "lease",
+   "label": "resident signing link issued",
+   "ok": true,
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Lease-signing link issued (expires in 14 days). Each presents the same retained governing form and exact deal terms as one package.",
+     "already_issued": false,
+     "tenant_url": "<owned-server>/t/lease/<token>",
+     "guarantor_url": null,
+     "signing_links": [
+      {
+       "signer_role": "tenant",
+       "display_name": "Challenge One <nonce>",
+       "url": "<owned-server>/t/lease/<token>"
+      }
+     ],
+     "packet_id": "<uuid>",
+     "status": "sent"
+    }
+   }
+  },
+  {
+   "section": "lease",
+   "label": "tenant link present",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "resident reads the packet",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "resident completes ack_term",
+   "ok": true,
+   "detail": {
+    "truncated": true,
+    "keys": [
+     "status",
+     "body"
+    ]
+   }
+  },
+  {
+   "section": "lease",
+   "label": "resident completes ack_rent",
+   "ok": true,
+   "detail": {
+    "truncated": true,
+    "keys": [
+     "status",
+     "body"
+    ]
+   }
+  },
+  {
+   "section": "lease",
+   "label": "resident completes ack_deposit",
+   "ok": true,
+   "detail": {
+    "truncated": true,
+    "keys": [
+     "status",
+     "body"
+    ]
+   }
+  },
+  {
+   "section": "lease",
+   "label": "resident completes ack_terms",
+   "ok": true,
+   "detail": {
+    "truncated": true,
+    "keys": [
+     "status",
+     "body"
+    ]
+   }
+  },
+  {
+   "section": "lease",
+   "label": "resident completes sign_resident",
+   "ok": true,
+   "detail": {
+    "truncated": true,
+    "keys": [
+     "status",
+     "body"
+    ]
+   }
+  },
+  {
+   "section": "lease",
+   "label": "resident executes",
+   "ok": true,
+   "detail": {
+    "truncated": true,
+    "keys": [
+     "status",
+     "body"
+    ]
+   }
+  },
+  {
+   "section": "lease",
+   "label": "leasing access is not company signing authority",
+   "ok": true,
+   "detail": {
+    "status": 403
+   }
+  },
+  {
+   "section": "lease",
+   "label": "management authority is not company signing authority",
+   "ok": true,
+   "detail": {
+    "status": 403,
+    "error": "company_signer_not_authorized"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the recorded company signer executes the lease",
+   "ok": true,
+   "detail": {
+    "truncated": true,
+    "keys": [
+     "status",
+     "body"
+    ]
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the tenancy is anchored to the exact bed at the acknowledged rent",
+   "ok": true,
+   "detail": {
+    "rent": "1100.00",
+    "lease_status": "pending"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "staff availability read answers",
+   "ok": true,
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the leased bed leaves the market",
+   "ok": true,
+   "detail": {
+    "marketing_state": "successor_pending"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the sibling stays off the market",
+   "ok": true,
+   "detail": {
+    "marketing_state": "occupied"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the selector offers neither bed of the apartment",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "another prospect cannot be offered the bed just leased",
+   "ok": true,
+   "detail": {
+    "status": 409,
+    "error": "not_offerable"
+   }
+  },
+  {
+   "section": "representative-media",
+   "label": "Ask Spine answers a media question",
+   "ok": true,
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "representative-media",
+   "label": "a Matterport that names a unit is still not an exact-home fact",
+   "ok": true,
+   "detail": {
+    "leasing_knowledge": "ESTABLISHED",
+    "topics": [
+     "virtual_tours"
+    ],
+    "missing_topics": [],
+    "scope": "property_wide",
+    "exact_home_association": "NOT_ESTABLISHED"
+   }
+  },
+  {
+   "section": "representative-media",
+   "label": "the wording carries the representative caveat",
+   "ok": true,
+   "detail": {
+    "answer": "Virtual tours:\nMatterport of a 3-bed apartment (recorded in Unit C7-<nonce>): https://matterport.example/skyline-3bed\n\nThese are property-wide descriptions or representative resources. They do not establish which apartment or bedroom they apply to; an exact-home match still needs verification."
+   }
+  },
+  {
+   "section": "representative-media",
+   "label": "an unrecorded floor plan is an honest blank, never a bed",
+   "ok": true,
+   "detail": {
+    "outcome": "not_established",
+    "grounded_on": {
+     "leasing_knowledge": "NOT_ESTABLISHED",
+     "topics": [],
+     "missing_topics": [
+      "floor_plans"
+     ],
+     "scope": "property_wide"
+    }
+   }
+  },
+  {
+   "section": "representative-media",
+   "label": "the canonical knowledge read carries the same NOT_ESTABLISHED association",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "representative-media",
+   "label": "source-level: the follow-up rung that offers recorded tours says they may be representative",
+   "ok": true,
+   "detail": null
+  },
+  {
+   "section": "representative-media",
+   "label": "another property's session cannot read this property's media facts",
+   "ok": true,
+   "detail": {
+    "outcome": "not_established"
+   }
+  },
+  {
+   "section": "representative-media",
+   "label": "deliberately unavailable here: the prospect-facing model wording about media is a provider test (scripted model only)",
+   "ok": true,
+   "detail": null
+  }
+ ]
+}
