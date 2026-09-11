@@ -120,12 +120,23 @@ Sequence exercised, in order, through HTTP where a door exists:
    (no tour hosting, no offer authorship) until the governed invite path
    or another writer supplies it. The governed invite + OTP path writes
    both (proved for the new teammate).
-6. **Materialised beds have no governed use and no door sets one.**
+6. **Materialised beds have no governed use until the reviewed mapping tool runs — and Greenery has no ruling block.**
    `inventory_materialization` is called by the ledger loader without
    `use_type`; `availability_read` refuses `use_not_configured`; the
-   selector offers nothing. No route or service writes `spaces.use_type`.
-   The full-path suite and the Skyline fixture set it in SQL. **Launch
-   blocker** until a writer exists or a repair write is authorised.
+   selector offers nothing. No HTTP route or service writes
+   `spaces.use_type`. The governed door is `tools/apply_unit_type_mapping.js`
+   (human-run with `DATABASE_URL`, `--property <id>`, dry run by default,
+   `--apply`): it maps `import_source_rows.raw->>'unit_type'` codes to
+   `property_unit_types` through `produced_space_id` and writes
+   `units.unit_type_id` and `spaces.use_type` with a receipt. It selects
+   one owner-approved `RULINGS` block by coverage of the source codes and
+   refuses when none covers them. Two rulings exist (an apartment
+   vocabulary, 2026-07-27; Skyline's `STU0001x` codes, 2026-08-20). **Greenery
+   needs (a) a source whose rows carry a unit-type code and (b) its own
+   ruling block added to the tool — a reviewed source change, then a
+   human production run.** Open question for QB: the tool's space update
+   sets `position_kind='unit'` on every mapped space (line 372); on a
+   bed-grain property that would re-kind materialised beds. Not exercised.
 7. **A newly recorded property line cannot text.** `/properties/:id/sms-number`
    creates the line `outbound_enabled=false, outbound_policy='disabled'`
    and no door changes that. The governed invite goes `link_only` with no
@@ -137,8 +148,13 @@ Sequence exercised, in order, through HTTP where a door exists:
    by Deal Setup; it reported nothing for the 13 established vacant beds.
    Exact-space discovery does find them (then waits on pricing).
 9. **Pricing needs unit types.** Every eligible bed is
-   `unit_type_not_established`; Greenery's units carry no unit type, so
-   pricing publication cannot resolve a rent until types are assigned.
+   `unit_type_not_established` (`effective_pricing.js`); the same mapping
+   run in finding 6 supplies them. Publication itself is
+   `tools/release/skyline_publish_pricing.js`-shaped (saveDraft →
+   submitReview → publishVersion with `previewPublication` first) and
+   needs a pricing authority grant, which has no HTTP route: it is
+   conferred by `src/identity/authority_resolution.js` through
+   `tools/release/skyline_grant_authority.js` with a second reviewer.
 10. **The legacy activation stays open with no deal.** Deal Setup neither
     sees nor closes it; whether to abandon it is an owner decision.
 11. **Login has no property picker.** With two assignments Mike lands on
@@ -147,8 +163,9 @@ Sequence exercised, in order, through HTTP where a door exists:
 
 Repair-class writes used only so later steps could be exercised, each
 labelled in the evidence: `spaces.use_type='residential'` on the sourced
-beds (finding 6) and outbound enabled on the Greenery line (finding 7).
-Neither exists as a product door today.
+beds (finding 6 — the governed path is the mapping tool, which the
+synthetic source could not feed because its rows carry no type code) and
+outbound enabled on the Greenery line (finding 7 — no door found).
 
 ## 5. Not established here
 

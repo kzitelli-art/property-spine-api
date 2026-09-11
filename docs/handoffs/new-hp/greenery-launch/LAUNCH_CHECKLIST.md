@@ -7,8 +7,8 @@ either a small product change (HP lane) or an authorised repair write, and
 either choice is the owner's. Nothing below has been done in production.
 
 The order is load-bearing. Adopt before the deal (finding 1); the text line
-before invites (finding 7); use type before anyone expects the selector to
-offer a bed (finding 6); unit types before pricing (finding 9).
+before invites (finding 7); the mapping run before anyone expects the
+selector to offer a bed or pricing to resolve (findings 6 and 9).
 
 ## 0 · Read first (production, read-only)
 
@@ -86,13 +86,20 @@ offer a bed (finding 6); unit types before pricing (finding 9).
 - [ ] Decide the legacy deal-less activation: leave open or abandon
       (finding 10). **OWNER.**
 
-## 5 · Position use — **BLOCKED**
+## 5 · Position use and unit types — reviewed mapping run
 
-- [ ] Materialised beds carry no `use_type`; availability reads
-      `use_not_configured` and the selector offers nothing (finding 6). No
-      route or service sets it. Needs a writer (HP lane) or an authorised
-      repair write `spaces.use_type='residential'` for the established
-      beds. **OWNER** decides which.
+- [ ] Materialised beds carry no `use_type` until
+      `tools/apply_unit_type_mapping.js` runs (finding 6). Prerequisites:
+      the Greenery rent roll rows carry a unit-type code
+      (`raw->>'unit_type'`), and the tool gains a **Greenery ruling block**
+      (owner-approved code → type/label/use list) — a reviewed source
+      change. Then a human runs it dry, reads the coverage report, and
+      re-runs with `--apply`. This also assigns the unit types pricing needs.
+- [ ] If the workbook carries no type code, the tool refuses by design;
+      **OWNER** then decides between adding codes to the source or an
+      authorised repair write for `use_type`.
+- [ ] QB: confirm the tool's `position_kind='unit'` write is correct for a
+      bed-grain property before running it on Greenery.
 
 ## 6 · Lease configuration and governing instrument — **OWNER inputs**
 
@@ -107,8 +114,11 @@ offer a bed (finding 6); unit types before pricing (finding 9).
 
 ## 7 · Pricing — **OWNER inputs**
 
-- [ ] Assign unit types to Greenery's units (pricing resolves per unit
-      type; every bed is `unit_type_not_established` today, finding 9).
+- [ ] Unit types come from the step-5 mapping run (pricing resolves per
+      unit type; every bed is `unit_type_not_established` today, finding 9).
+- [ ] Pricing authority has no HTTP route: confer it through
+      `tools/release/skyline_grant_authority.js` (two-party review) after
+      `skyline_authority_dryrun.js` passes its nine preconditions.
 - [ ] Draft → review → publish a pricing version for the terms offered
       (`/operator/pricing/draft`, `/review`, `/publish`), with the pricing
       authority grant in place. Until then the prospect agent cannot quote
