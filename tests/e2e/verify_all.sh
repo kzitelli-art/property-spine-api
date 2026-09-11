@@ -249,6 +249,7 @@ else
   step "required work target" node tests/proofs/triage_work_scope.db.js
   step "turn expected date stays on its exact home" node tests/proofs/availability_turn_date_scope.db.js
   step "legacy decision writes closed" node tests/e2e/legacy_decision_writes_disabled.e2e.js
+  step "greenery staff onboarding" node tests/proofs/greenery_staff_onboarding.db.js
   stop_owned_server || exit 1
 fi
 fi
