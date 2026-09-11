@@ -524,20 +524,35 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
   const turnoverByUnit = new Map((await pool.query(
     `select distinct on (t.unit_id)
             t.unit_id, t.id as turnover_id, t.ready_date as expected_ready_date,
-            t.outgoing_lease_id, l.end_date as outgoing_lease_end_date
+            t.outgoing_lease_id, l.end_date as outgoing_lease_end_date,
+            l.space_id as outgoing_space_id
        from turnovers t
-       left join leases l on l.id = t.outgoing_lease_id
+       left join leases l on l.id = t.outgoing_lease_id and l.property_id = t.property_id
+         and exists (select 1 from spaces ls where ls.id = l.space_id and ls.unit_id = t.unit_id)
       where t.property_id = $1 and t.status = 'in_progress' and t.unit_id is not null
       order by t.unit_id, t.created_at desc, t.id desc`,
     [property_id]
   )).rows.map((r) => [String(r.unit_id), r]));
 
+  const unitPositionCounts = new Map();
+  for (const p of dp.positions) {
+    const key = String(p.unit_id);
+    unitPositionCounts.set(key, (unitPositionCounts.get(key) || 0) + 1);
+  }
   const rows = dp.positions.map((p) => {
+    const unitTurn = turnoverByUnit.get(String(p.unit_id));
+    // A unit holds the turn, but an outgoing lease names its exact home.
+    // Its expected date cannot certify a sibling's future availability.
+    // A legacy turn without an outgoing lease retains only the unambiguous
+    // whole-unit meaning. Missing scope in shared housing stays unknown.
+    const turnApplies = unitTurn && (unitTurn.outgoing_lease_id
+      ? String(unitTurn.outgoing_space_id) === String(p.space_id)
+      : unitPositionCounts.get(String(p.unit_id)) === 1 && p.position_kind === 'unit');
     const withOps = {
       ...p,
       operating_use: ops.get(String(p.space_id)) || null,
       triage: triageByUnit.get(String(p.unit_id)) || null,
-      turnover: turnoverByUnit.get(String(p.unit_id)) || null,
+      turnover: turnApplies ? unitTurn : null,
     };
     const m = marketingState(withOps, true);
     const dates = availableFrom(withOps, m.state, asOf);
