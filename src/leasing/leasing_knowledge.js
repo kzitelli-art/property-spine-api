@@ -109,11 +109,17 @@ async function answer(db, { property_id, allowed_modules, question }) {
   const selected = rows.filter(r => keys.includes(r.fact_key));
   const missing = keys.filter(key => !selected.some(r => r.fact_key === key));
   const parts = selected.map(r => `${TOPICS[r.fact_key]}:\n${r.rendered_text}`);
+  // The stored wording is property-wide even when the question names a home.
+  // Keep useful representative links without inventing a space association or
+  // routing a media question into a different operating domain.
+  const needsHomeScope = selected.some(r => ["layouts", "dimensions", "photos", "floor_plans", "virtual_tours"].includes(r.fact_key));
+  if (needsHomeScope) parts.push("These are property-wide descriptions or representative resources. They do not establish which apartment or bedroom they apply to; an exact-home match still needs verification.");
   if (missing.length) parts.push(`Not established here: ${missing.map(k => TOPICS[k].toLowerCase()).join(", ")}.`);
   return { outcome: selected.length ? "answered" : "not_established",
     answer: parts.join("\n\n") || "No approved leasing knowledge is recorded for that question.",
     grounded_on: { leasing_knowledge: selected.length ? "ESTABLISHED" : "NOT_ESTABLISHED",
-      topics: selected.map(r => r.fact_key), missing_topics: missing },
+      topics: selected.map(r => r.fact_key), missing_topics: missing,
+      scope: "property_wide", ...(needsHomeScope ? { exact_home_association: "NOT_ESTABLISHED" } : {}) },
     references: selected.flatMap(r => safeLinks(r.rendered_text).map(url => ({ kind: "leasing_knowledge_link", label: TOPICS[r.fact_key], url }))),
   };
 }

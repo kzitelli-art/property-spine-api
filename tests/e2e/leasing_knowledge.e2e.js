@@ -22,6 +22,9 @@ async function main(){
     assert.equal(r.data.coverage.items.find(i=>i.fact_key==='virtual_tours').current.id,fact);
     r=await api('GET','/operator/agent-facts',null,tokens[1]);assert.equal(r.data.coverage.counts.missing,10);assert.equal(r.data.facts.length,0);
     r=await api('POST','/operator/ask-spine/message',{message:'send me Skyline Matterport'});assert.equal(r.data.outcome,'answered',JSON.stringify(r));assert.match(r.data.answer,/M7Lgne1gA72/);
+    assert.match(r.data.answer,/do not establish which apartment or bedroom/i);
+    r=await api('POST','/operator/ask-spine/message',{message:'send me Matterport for unit 2B'});
+    assert.equal(r.data.outcome,'answered');assert.equal(r.data.grounded_on.exact_home_association,'NOT_ESTABLISHED');assert.match(r.data.answer,/do not establish which apartment or bedroom/i);
     r=await api('POST','/operator/ask-spine/message',{message:'send me Matterport'},tokens[1]);assert.equal(r.data.outcome,'not_established');assert.doesNotMatch(r.data.answer,/M7Lgne1gA72/);
     r=await api('POST',`/operator/agent-facts/${fact}/replace`,{fact_key:'virtual_tours',rendered_text:'Wrong property',source_type:'verified_operator_confirmation'},tokens[1]);assert.equal(r.status,403);
     const agent=require('../../src/agent/agent')({pool})._service;
@@ -34,6 +37,7 @@ async function main(){
     const sms=await fetch(base+'/communications/inbound-sms',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:new URLSearchParams({MessageSid:sid,From:phone,To:line,Body:'send me Skyline Matterport'}).toString()});assert.equal(sms.status,200);
     let reply;for(let i=0;i<100;i++){reply=(await q('select o.body from comm_events i join comm_events o on o.in_reply_to_comm_event_id=i.id where i.sms_sid=$1',[sid])).rows[0];if(reply)break;await new Promise(r=>setTimeout(r,100));}
     assert.ok(reply,'staff webhook must record a reply');assert.match(reply.body,/3bM9GESQ7o2/);assert.doesNotMatch(reply.body,/M7Lgne1gA72/);
+    assert.match(reply.body,/do not establish which apartment or bedroom/i);
     r=await api('POST','/operator/agent-facts',{fact_key:'amenities',rendered_text:'Expired amenity',source_type:'verified_operator_confirmation',effective_until:'2020-01-01T00:00:00Z'});assert.equal(r.status,200);
     r=await api('POST','/operator/ask-spine/message',{message:'does Skyline have laundry?'});assert.equal(r.data.outcome,'not_established');
     r=await api('GET','/operator/agent-facts');assert.equal(r.data.coverage.items.find(i=>i.fact_key==='amenities').state,'expired');assert.equal(r.data.coverage.counts.current,1);

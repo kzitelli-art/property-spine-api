@@ -24,6 +24,18 @@ async function run() {
   let result = await ask.answer(db, null, { property_id:"property-a", allowed_modules:["leasing"], question:"send me the Matterport" });
   assert.equal(result.outcome,"answered"); assert.match(result.answer,/Representative/);
   assert.equal(result.references[0].url,"https://my.matterport.com/show/?m=example");
+  assert.match(result.answer,/do not establish which apartment or bedroom/i);
+  assert.equal(result.grounded_on.scope,"property_wide");
+  assert.equal(result.grounded_on.exact_home_association,"NOT_ESTABLISHED");
+  result = await ask.answer(db,null,{property_id:"property-a",allowed_modules:["leasing"],question:"send me Matterport for unit 2B"});
+  assert.equal(result.outcome,"answered");
+  assert.match(result.answer,/do not establish which apartment or bedroom/i);
+  assert.equal(result.references[0].url,"https://my.matterport.com/show/?m=example");
+  assert.equal(result.grounded_on.exact_home_association,"NOT_ESTABLISHED");
+  const faq = await knowledge.answer({query:async()=>({rows:[{fact_key:"leasing_faq",rendered_text:"Contact the leasing office."}]})},
+    {property_id:"property-a",allowed_modules:["leasing"],question:"show common questions"});
+  assert.doesNotMatch(faq.answer,/apartment or bedroom/i);
+  assert.equal(faq.grounded_on.exact_home_association,undefined);
   const before = reads;
   result = await ask.answer(db,null,{property_id:"property-a",allowed_modules:["maintenance"],question:"send me the Matterport"});
   assert.equal(result.outcome,"not_authorized"); assert.equal(reads,before);
