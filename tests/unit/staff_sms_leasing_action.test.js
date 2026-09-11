@@ -115,6 +115,24 @@ ok("a sole target in the toured unit can be selected from recorded context",
   privateAction.chooseTarget("Send the application", targets, "u204").target.space_id === "w");
 ok("two beds in the toured unit still require a choice",
   privateAction.chooseTarget("Send the application", targets, "u302").target === null);
+ok("an explicit unavailable bed never falls back to its free sibling",
+  privateAction.chooseTarget("Application for Unit 302 Bed A", [targets[1]], "u302").target === null);
+ok("a unit-only request never selects the only offerable sibling of a multi-bed unit",
+  privateAction.chooseTarget("Application for Unit 302", [targets[1]], "u302").target === null);
+ok("recorded unit context never guesses the only offerable sibling",
+  privateAction.chooseTarget("Send the application", [targets[1]], "u302").target === null);
+ok("an explicit unavailable unit never falls back to the hinted whole unit",
+  privateAction.chooseTarget("Application for Unit 999", [targets[2]], "u204").target === null);
+ok("an explicit unmatched bed never falls back to a single-space unit",
+  privateAction.chooseTarget("Application for Unit 204 Bed A", [targets[2]], "u204").target === null);
+ok("an explicitly different bed cannot be ignored in a physically sole-bed unit",
+  privateAction.chooseTarget("Application for Unit 302 Bed A", [{...targets[1],rentable_space_count:1}], "u302").target === null);
+ok("two named beds refuse even when just one is offerable",
+  privateAction.chooseTarget("Application for Unit 302 Bed A or Bed B", [targets[1]], "u302").target === null);
+ok("two named units refuse even when just one is offerable",
+  privateAction.chooseTarget("Application for Unit 999 or Unit 204", [targets[2]], "u204").target === null);
+ok("explicit free bed still resolves beside an unavailable sibling",
+  privateAction.chooseTarget("Application for Unit 302 Bed B", [targets[1]], "u302").target.space_id === "b");
 ok("the by-bed label says both unit and bed",
   privateAction.targetLabel(targets[1]) === "Unit 302, Bed B");
 ok("the whole-unit label stays simple",

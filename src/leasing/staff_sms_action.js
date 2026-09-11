@@ -231,12 +231,19 @@ function targetMatches(text, target) {
   const whole = !space || space === "whole unit";
   const hasSpace = !whole && message.includes(` ${space} `);
   if (whole && namesASpace) return false;
+  if (namesASpace && !hasSpace) return false;
   if (hasUnit && (whole || Number(target.rentable_space_count) === 1 || hasSpace)) return true;
   return !namesAUnit && !hasUnit && hasSpace;
 }
 
 function chooseTarget(text, allTargets, hintedUnitId = null) {
   const namesAUnit = /\bunit\s*[#-]?\s*[a-z0-9][a-z0-9-]*\b/i.test(String(text || ""));
+  const namesASpace = /\b(bed|space|room)\s*[#-]?\s*[a-z0-9][a-z0-9-]*\b/i.test(String(text || ""));
+  const namedUnits = new Set([...String(text || "").matchAll(/\bunit\s*[#-]?\s*([a-z0-9][a-z0-9-]*)\b/gi)].map(m => words(m[1])));
+  const namedSpaces = new Set([...String(text || "").matchAll(/\b(bed|space|room)\s*[#-]?\s*([a-z0-9][a-z0-9-]*)\b/gi)].map(m => words(`${m[1]} ${m[2]}`)));
+  if (namedUnits.size > 1 || namedSpaces.size > 1) {
+    return { target: null, candidates: allTargets, reason: "ambiguous_target" };
+  }
   const candidates = hintedUnitId && !namesAUnit
     ? allTargets.filter((target) => String(target.unit_id) === String(hintedUnitId))
     : allTargets;
@@ -247,7 +254,12 @@ function chooseTarget(text, allTargets, hintedUnitId = null) {
   const hinted = hintedUnitId
     ? allTargets.filter((target) => String(target.unit_id) === String(hintedUnitId))
     : allTargets;
-  if (hinted.length === 1) return { target: hinted[0], candidates: hinted, reason: "only_exact_target" };
+  // Explicit identity outranks recorded unit context. An unavailable named
+  // bed/unit must never be replaced by the only surviving menu entry.
+  if (namesAUnit || namesASpace) return { target: null, candidates: candidates, reason: "named_target_unavailable" };
+  // Availability count is not physical grain: one offerable bed in a shared
+  // unit is still an unchosen bed. Preserve the canonical sole-space mapping.
+  if (hinted.length === 1 && Number(hinted[0].rentable_space_count) === 1) return { target: hinted[0], candidates: hinted, reason: "only_exact_target" };
   return { target: null, candidates: hinted, reason: hinted.length ? "target_required" : "no_targets" };
 }
 
