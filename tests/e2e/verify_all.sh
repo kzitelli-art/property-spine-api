@@ -261,6 +261,22 @@ if [ "$FAILED" = "0" ]; then
   stop_owned_server || exit 1
 fi
 
+# Separate server configuration: do not prospect-activate the shared fixture
+# while the earlier historical/internal-QA proofs are running.
+if [ "$FAILED" = "0" ]; then
+  step "real intake inactive property fixture" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/real_intake_fixture.sql
+  E2E_INTAKE_INACTIVE_PROPERTY_ID=$(psql "$E2E_DATABASE_URL" -tAX -v ON_ERROR_STOP=1 -c "select id from properties where name='Real Intake Inactive E2E'") || exit 1
+  export E2E_INTAKE_INACTIVE_PROPERTY_ID
+  REAL_INTAKE_ACTIVE_ID=$(psql "$E2E_DATABASE_URL" -tAX -v ON_ERROR_STOP=1 -c "select id from properties where name='Skyline E2E'") || exit 1
+  [ -n "$E2E_INTAKE_INACTIVE_PROPERTY_ID" ] && [ -n "$REAL_INTAKE_ACTIVE_ID" ] || exit 1
+  E2E_PROSPECT_ACTIVATION_PROPERTY_IDS="$REAL_INTAKE_ACTIVE_ID" ./tests/e2e/boot.sh >"$RUN_DIR/real-intake-server.log" 2>&1 &
+  SERVER_PID=$!
+  node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID" || exit 1
+  step "real inquiry classification without consent" node tests/proofs/real_intake_classification.db.js
+  stop_owned_server || exit 1
+  unset E2E_INTAKE_INACTIVE_PROPERTY_ID
+fi
+
 echo "════════════════════════════════════════════════════════════"
 [ -n "$SKIPPED" ] && echo "  ⚠ NOT RUN: $SKIPPED — this is not a pass."
 if [ "$FAILED" = "0" ]; then echo "  ALL REQUIRED ASSERTIONS PASSED — cleanup must also succeed"; else echo "  ✗ VERIFICATION FAILED"; fi
