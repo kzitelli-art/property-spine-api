@@ -1,0 +1,572 @@
+{
+ "server": "fixed",
+ "summary": {
+  "mode": "successor",
+  "passed": 39,
+  "failed": 0,
+  "observations": 8
+ },
+ "results": [
+  {
+   "section": "fixture",
+   "label": "the existing account is created by the governed invite and OTP acceptance at the Skyline-shaped property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "invite": 200,
+    "delivery": "sms_sent",
+    "verify": 200,
+    "body": {
+     "receipt": "Verified. You're in.",
+     "session_token": "<token>",
+     "user": {
+      "id": "<uuid>",
+      "name": "Mike (rehearsal) <nonce>",
+      "phone_number": "<phone>"
+     },
+     "property": {
+      "id": "<uuid>",
+      "name": "Skyline rehearsal <nonce>"
+     },
+     "role_title": "Property Manager",
+     "role_key": "property_manager",
+     "person_id": "<uuid>",
+     "allowed_modules": [
+      "management",
+      "leasing",
+      "maintenance"
+     ],
+     "can_manage_roles": false,
+     "landing_module": "management",
+     "platform_role": "member"
+    }
+   }
+  },
+  {
+   "section": "fixture",
+   "label": "the account matches QB's read of the real one: human_staff, unique person bridge, verified phone, Skyline assignment and team, resolved there, no email",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "platform_role": "member",
+    "identity": "resolved",
+    "contexts": 1
+   }
+  },
+  {
+   "section": "fixture",
+   "label": "existing staff account exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "custody",
+   "label": "before custody nobody can invite at the property from another property's session",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403,
+    "reason": "staff_session_property_mismatch"
+   }
+  },
+  {
+   "section": "custody",
+   "label": "an org admin without an assignment cannot open the property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403
+   }
+  },
+  {
+   "section": "custody",
+   "label": "an unowned property could be adopted into any client; which client is the owner's decision and must be right the first time, because the next check shows it cannot be moved",
+   "ok": true,
+   "kind": "observe",
+   "detail": null
+  },
+  {
+   "section": "custody",
+   "label": "super admin adoption places the property with the client without changing its id",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "ok": true,
+     "property_id": "<uuid>",
+     "organization_id": "<uuid>",
+     "already": false,
+     "receipt": "Greenery rehearsal <nonce> now belongs to this organization."
+    }
+   }
+  },
+  {
+   "section": "custody",
+   "label": "once owned, a property cannot be moved to another client",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "reason": "property_already_has_an_organization"
+   }
+  },
+  {
+   "section": "custody",
+   "label": "an org admin cannot use the adoption door",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403
+   }
+  },
+  {
+   "section": "custody",
+   "label": "another client's org admin cannot provision staff at this property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 400,
+    "error": "Property does not belong to your organization."
+   }
+  },
+  {
+   "section": "first-property-access",
+   "label": "the org-admin invite door attaches a phone-only existing account to the property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": {
+     "ok": true,
+     "user": {
+      "id": "<uuid>",
+      "name": "Phone-only Org Admin <nonce>",
+      "email": null,
+      "phone": "<phone>"
+     },
+     "property_id": "<uuid>",
+     "role_key": "property_admin",
+     "note": "User provisioned. They can log in via phone OTP."
+    }
+   }
+  },
+  {
+   "section": "first-property-access",
+   "label": "no duplicate user or person was created by the phone-only provisioning",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "before": {
+     "users": 23,
+     "persons": 20
+    },
+    "after": {
+     "users": 23,
+     "persons": 20
+    }
+   }
+  },
+  {
+   "section": "first-property-access",
+   "label": "the super-admin invite door attaches a phone-only existing account to the property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201
+   }
+  },
+  {
+   "section": "first-property-access",
+   "label": "an omitted platform_role leaves the existing account's platform role unchanged",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "before": "org_admin",
+    "after": "org_admin"
+   }
+  },
+  {
+   "section": "first-property-access",
+   "label": "the super-admin invite door attaches the email-bearing org admin to the property when the exact email and platform role are supplied",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": {
+     "ok": true,
+     "user": {
+      "id": "<uuid>",
+      "name": "Org Admin <nonce>",
+      "email": "<email>",
+      "phone": "<phone>"
+     },
+     "organization_id": "<uuid>",
+     "property_id": "<uuid>",
+     "role_key": "property_admin",
+     "platform_role": "org_admin",
+     "note": "User provisioned. They can now log in via phone OTP at the operator app."
+    }
+   }
+  },
+  {
+   "section": "first-property-access",
+   "label": "no duplicate account and the platform role is preserved",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "before": {
+     "users": 23,
+     "persons": 20
+    },
+    "after": {
+     "users": 23,
+     "persons": 20
+    }
+   }
+  },
+  {
+   "section": "first-property-access",
+   "label": "repeating the super-admin door without platform_role keeps the org admin's platform role",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "before": "org_admin",
+    "after": "org_admin"
+   }
+  },
+  {
+   "section": "first-property-access",
+   "label": "with the first assignment in place the org admin opens the property through the selector",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "first-property-access",
+   "label": "the first-property access order on this baseline: adoption \u2192 an admin provisioning door creates the first team assignment (email-bearing account on the unfixed baseline) \u2192 property selector \u2192 governed invites from that session",
+   "ok": true,
+   "kind": "observe",
+   "detail": null
+  },
+  {
+   "section": "governed-invite",
+   "label": "org admin session at the property",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "governed-invite",
+   "label": "inviting an existing phone requires confirming the existing person; the candidate is the same person",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "reason": "existing_person_confirmation_required",
+    "candidates": 1
+   }
+  },
+  {
+   "section": "governed-invite",
+   "label": "confirming a person who does not carry that phone is refused",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "reason": "person_phone_mismatch"
+   }
+  },
+  {
+   "section": "governed-invite",
+   "label": "the governed invite is created for the confirmed existing person",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "delivery": "sms_sent",
+    "person_matches": true
+   }
+  },
+  {
+   "section": "governed-invite",
+   "label": "the invite code is delivered through the fake transport",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "delivery": "sms_sent"
+   }
+  },
+  {
+   "section": "governed-invite",
+   "label": "the existing account accepts by OTP and receives a session at the new property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Verified. You're in."
+    }
+   }
+  },
+  {
+   "section": "governed-invite",
+   "label": "acceptance names the same user and person and grants the leasing module",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "user_same": true,
+    "person_same": true,
+    "modules": [
+     "leasing"
+    ]
+   }
+  },
+  {
+   "section": "governed-invite",
+   "label": "no duplicate user or person was created by acceptance",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "before": {
+     "users": 23,
+     "persons": 20
+    },
+    "after": {
+     "users": 23,
+     "persons": 20
+    }
+   }
+  },
+  {
+   "section": "identity-at-property",
+   "label": "session at the property",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "identity-at-property",
+   "label": "resolveStaffIdentity resolves the account as staff at the new property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "state": "resolved",
+    "basis": "bridge_plus_active_assignment_plus_authority"
+   }
+  },
+  {
+   "section": "identity-at-property",
+   "label": "the person now holds staff contexts at both properties",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "contexts": 2
+   }
+  },
+  {
+   "section": "identity-at-property",
+   "label": "person-level assignments exist at both properties",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "assignments": [
+     "property_manager",
+     "leasing"
+    ]
+   }
+  },
+  {
+   "section": "identity-at-property",
+   "label": "the Skyline team assignment is untouched and the new one carries leasing",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "teams": [
+     {
+      "p": "skyline",
+      "modules": [
+       "management",
+       "leasing",
+       "maintenance"
+      ],
+      "active": true
+     },
+     {
+      "p": "greenery",
+      "modules": [
+       "leasing"
+      ],
+      "active": true
+     }
+    ]
+   }
+  },
+  {
+   "section": "identity-at-property",
+   "label": "platform role, classification and phone-only shape are preserved",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "platform_role": "member",
+    "account_kind": "human_staff",
+    "email": null
+   }
+  },
+  {
+   "section": "identity-at-property",
+   "label": "users.organization_id is never written by the governed invite path; org scope for staff comes from property_team_assignments through the property",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "organization_id": null
+   }
+  },
+  {
+   "section": "identity-at-property",
+   "label": "the property session reports leasing access",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "modules": [
+     "leasing"
+    ],
+    "landing": "leasing"
+   }
+  },
+  {
+   "section": "identity-at-property",
+   "label": "a leasing-module route answers the new property session",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "identity-at-property",
+   "label": "a management-gated read reports the leasing agent's ceiling",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200,
+    "can_configure": false
+   }
+  },
+  {
+   "section": "identity-at-property",
+   "label": "the original Skyline session and access still work",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "identity-at-property",
+   "label": "the new property session cannot invite at another property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403,
+    "reason": "staff_session_property_mismatch"
+   }
+  },
+  {
+   "section": "identity-at-property",
+   "label": "the account can switch between its two properties (the selector revokes the prior session and issues a new one)",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "repeat",
+   "label": "session at the property",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "repeat",
+   "label": "a repeated invitation and acceptance succeed without error",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "invite": 200,
+    "verify": 200
+   }
+  },
+  {
+   "section": "repeat",
+   "label": "the earlier invite's status after a repeat",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": "accepted"
+   }
+  },
+  {
+   "section": "repeat",
+   "label": "repetition is idempotent: one team assignment, one person assignment, one context, no duplicate user or person, still resolved",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "before": {
+     "users": 23,
+     "persons": 20
+    },
+    "after": {
+     "users": 23,
+     "persons": 20
+    }
+   }
+  },
+  {
+   "section": "repeat",
+   "label": "starting the OTP again on an accepted invite",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 409,
+    "receipt": "That invite was already used."
+   }
+  },
+  {
+   "section": "repeat",
+   "label": "starting the OTP on the superseded first invite",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 409,
+    "receipt": "That invite was already used."
+   }
+  },
+  {
+   "section": "repeat",
+   "label": "a later invite with a different role replaces the team assignment's role and modules in place",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "invite": 200,
+    "verify": 200,
+    "role_key": "property_manager",
+    "modules": [
+     "management",
+     "leasing",
+     "maintenance"
+    ],
+    "person_assignments_at_property": [
+     "leasing",
+     "property_manager"
+    ]
+   }
+  }
+ ]
+}

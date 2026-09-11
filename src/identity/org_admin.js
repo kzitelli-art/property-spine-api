@@ -177,9 +177,14 @@ module.exports = function orgAdminModule({ pool }) {
         )).rows[0];
       } else {
         user = (await pool.query(
+          //  Same index as the super-admin door: users has no plain UNIQUE
+          //  (phone), only the partial expression index
+          //  uq_users_phone_normalized, so the target must be that expression.
           `insert into users (name, phone, role, auth_provider, platform_role, organization_id, is_active, status)
            values ($1, $2, 'property_manager', 'phone_otp', 'member', $3, true, 'active')
-           on conflict (phone) do update
+           on conflict ((regexp_replace(phone, '\\D', '', 'g')))
+             where phone is not null and length(regexp_replace(phone, '\\D', '', 'g')) >= 10
+           do update
              set name = excluded.name, organization_id = excluded.organization_id,
                  is_active = true, status = 'active', updated_at = now()
            returning id, name, email, phone`,
