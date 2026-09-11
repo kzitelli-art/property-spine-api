@@ -9,7 +9,7 @@ const { routeStaffSmsTurn } = require("../../src/conversation/staff_sms_router")
 const { makeStaffLeasingAction } = require("../../src/leasing/staff_sms_action");
 const { operatingReceipt } = require("../../src/conversation/receipt");
 
-const EXPECTED = 59;
+const EXPECTED = 68;
 let passed = 0;
 let failed = 0;
 const ok = (label, condition, detail = "") => {
