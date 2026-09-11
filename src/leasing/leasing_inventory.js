@@ -316,7 +316,7 @@ module.exports = function leasingInventoryModule({ pool }) {
   //  Given the prospect's inbound text and the durable offered set from
   //  the prior run, return the ONE unit their words confirm — or null.
   //  Rules (conservative by design; ambiguity never guesses):
-  //    · a unit_number cited with word boundaries matches that unit;
+  //    · one exact unit label, or an unambiguous affirmative choice of it;
   //    · if EXACTLY ONE unit was offered, a bare affirmative
   //      ("yes", "sure", "sounds good", "i'll take it", "book it",
   //       "interested") selects it;
@@ -324,19 +324,33 @@ module.exports = function leasingInventoryModule({ pool }) {
   //      interest) → null: the agent asks for explicit confirmation
   //      rather than the system guessing.
   function matchConfirmationToOffer(inboundText, offeredUnits) {
-    const text = String(inboundText || "").toLowerCase();
+    const text = String(inboundText || "").trim().toLowerCase().replace(/[’]/g, "'");
     const offers = Array.isArray(offeredUnits) ? offeredUnits.filter(u => u.selection_eligible !== false) : [];
     if (!text || offers.length === 0) return null;
-    // explicit unit-number citation
-    for (const u of offers) {
+    // A mention is not a selection. Questions, negatives and conditional or
+    // comparative replies need clarification; never let the first label win.
+    // This remains the historical UNIT-interest writer, not exact-bed authority.
+    if (/[?]/.test(text) || /\b(no|not|never|neither|don't|dont|do not|can't|cannot|won't|wouldn't|isn't|isnt|aren't|arent|without|except|unless|if|maybe|perhaps|or|but|instead)\b/.test(text)) return null;
+    const cited = offers.filter(u => {
       const num = String(u.unit_number || "").toLowerCase();
-      if (!num) continue;
+      if (!num) return false;
       const re = new RegExp(`(^|[^a-z0-9])${num.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9])`);
-      if (re.test(text)) return u;
+      return re.test(text);
+    });
+    if (cited.length > 1) return null;
+    if (cited.length === 1) {
+      const choice = cited[0];
+      if (choice.space_id) return null; // unit attachment cannot preserve this identity
+      const label = String(choice.unit_number).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const exact = `(?:unit\\s+)?${label}`;
+      // Deliberately a small explicit grammar. Unrecognized free language stays
+      // in the conversation as evidence and is clarified, not guessed.
+      const affirmative = new RegExp(`^(?:(?:yes|yeah|yep|sure)[, ]+)?(?:(?:i(?:'ll| will)? (?:take|choose|select|want)|let's (?:choose|select)|please (?:select|choose))\\s+)?${exact}[.!]*$`);
+      return affirmative.test(text) ? choice : null;
     }
     // bare affirmative — only when exactly one option is on the table
-    if (offers.length === 1 &&
-        /\b(yes|yeah|yep|sure|sounds good|works for me|i'?ll take it|book it|interested|let'?s do it)\b/.test(text)) {
+    if (offers.length === 1 && !offers[0].space_id &&
+        /^(yes|yeah|yep|sure|sounds good|works for me|i'?ll take it|book it|interested|let'?s do it)[.!]*$/.test(text)) {
       return offers[0];
     }
     return null;
