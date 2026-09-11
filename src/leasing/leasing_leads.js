@@ -458,7 +458,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // the AI opening response with NO transport call and NO sent claim
   // ('ai_response_prepared', not 'ai_text_sent').
   // Returns a result object; throws { httpStatus, publicReceipt } on known failures.
-  async function intakeProspect(b) {
+  async function intakeProspect(b, { authenticatedRealIntake = false } = {}) {
     const propertyId = b.property_id;
     if (!propertyId) { const e = new Error("property_id is required."); e.httpStatus = 400; e.publicReceipt = e.message; throw e; }
 
@@ -543,8 +543,9 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       //    writes are INSIDE this transaction (reclassify accepts our client), so
       //    activation is atomic with the person/lead — a lead is never left
       //    half-activated. Append-only (reclassify supersedes prior class; consent
-      //    upserts the one canonical row). Unlisted property or no consent → skip
-      //    entirely (honest: captured, not textable). A STOP later still lands in
+      //    upserts the one canonical row). Unlisted property or no consent → no
+      //    opt-in write. Source classification at birth is decided separately
+      //    below. A STOP later still lands in
       //    contact_preferences and overrides this, exactly as the boundary expects.
       const _activated = propertyIsActivated(propertyId);
       const _consentSignal = extractConsentSignal(b);
@@ -599,12 +600,17 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           where person_id=$1 and property_id=$2 and superseded_at is null limit 1`,
         [person.id, propertyId])).rows[0];
       if (!_existingClass) {
+        // Real inquiry classification and permission to text are separate facts.
+        // Only the authenticated, property-bound intake route supplies this
+        // server-side provenance; public/demo bodies cannot grant it. This is
+        // birth only: an existing operator classification remains authoritative.
+        const realBirth = authenticatedRealIntake && _activated;
         await commBoundary.reclassify(
-          { person_id: person.id, property_id: propertyId, record_class: "internal_qa",
-            actor_user_id: null, reason: "birth_default_outside_activation" },
+          { person_id: person.id, property_id: propertyId, record_class: realBirth ? "production" : "internal_qa",
+            actor_user_id: null, reason: realBirth ? "authenticated_property_bound_intake" : "birth_default_outside_activation" },
           client
         );
-        console.log(`[intake] birth-guard classified person=${person.id} property=${propertyId} internal_qa (outside activation perimeter)`);
+        console.log(`[intake] birth-guard classified person=${person.id} property=${propertyId} ${realBirth ? "production (authenticated activated source; consent independent)" : "internal_qa (outside activation perimeter)"}`);
       }
 
       // ── THREAD IT (memo §2.2: never an orphaned event). The conversation-queue
@@ -789,7 +795,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // ── 1. AUTHENTICATED INTAKE (unchanged contract) — thin wrapper on the service. ──
   router.post("/leasing/intake", requireIntakeSecret, async (req, res) => {
     try {
-      const out = await intakeProspect(req.body || {});
+      const out = await intakeProspect(req.body || {}, { authenticatedRealIntake: true });
       return res.json({
         receipt: out.receipt, person_id: out.person_id, lead_id: out.lead_id,
         new_person: out.new_person, reused_opportunity: out.reused_opportunity,
