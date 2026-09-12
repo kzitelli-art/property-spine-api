@@ -277,6 +277,7 @@ if [ "$FAILED" = "0" ]; then
   step "authenticated intake delivery replay" node tests/proofs/intake_delivery_idempotency.db.js
   step "website inquiry visibility" node tests/proofs/website_inquiry_visibility.db.js
   step "website inquiry state and authority" node tests/proofs/website_inquiry_state.db.js
+  step "website capture-only intake" node tests/proofs/website_capture_only.db.js
   step "staff inquiry ownership and response" node tests/proofs/conversation_takeover_owner.db.js
   step "staff inquiry native tour booking" node tests/proofs/staff_conversation_tour.db.js
   step "unsent application draft correction" node tests/e2e/draft_offer_correction.e2e.js

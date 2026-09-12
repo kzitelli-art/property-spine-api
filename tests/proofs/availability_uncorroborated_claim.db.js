@@ -266,10 +266,9 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
       });
       ok("picker fixture enters through the property-bound canonical intake door", intake.status === 200 && intake.body && intake.body.person_id && intake.body.lead_id, "HTTP " + intake.status);
       const modelLogAfter = fs.readFileSync(process.env.E2E_ANTHROPIC_LOG,"utf8");
-      // Phone intake prepares a first response even when attempt_sms is false.
-      // Its one model attempt must be refused by the existing local sentinel;
-      // every later read remains forbidden from attempting generation.
-      ok("canonical phone intake attempted exactly one locally refused model draft", modelLogBefore === "" && /^\d+ messages\.create\r?\n$/.test(modelLogAfter));
+      // Explicit authenticated capture-only intake does not generate a reply;
+      // every later read must also remain free of model attempts.
+      ok("capture-only picker intake makes no model draft attempt", modelLogAfter === modelLogBefore);
 
       let consent = null;
       if (intake.body && intake.body.person_id) {

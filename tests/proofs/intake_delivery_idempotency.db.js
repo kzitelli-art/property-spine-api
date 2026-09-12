@@ -30,30 +30,30 @@ const {Pool}=require('pg');
   const modelBeforeFirst=log(process.env.E2E_ANTHROPIC_LOG);
   const first=await post(body,key);check(first.status===200&&first.body.capture?.state==='captured'&&first.body.replayed===false,'first keyed delivery captures canonical receipt');
   const modelAfter=log(process.env.E2E_ANTHROPIC_LOG);
-  check(modelAfter.length>modelBeforeFirst.length&&modelAfter.slice(modelBeforeFirst.length).includes('messages.create'),'first successful draft exercises the owned model sentinel');
+  check(modelAfter===modelBeforeFirst,'explicit capture-only delivery makes no model request');
   const reordered=Object.fromEntries(Object.entries(body).reverse());reordered.raw_payload={submission:body.raw_payload.submission,form:'leasing'};
   const second=await post(reordered,key);check(second.status===200&&second.body.replayed===true,'JSON key order does not change delivery fingerprint');
   check(second.body.lead_id===first.body.lead_id&&second.body.person_id===first.body.person_id&&second.body.conversation_id===first.body.conversation_id,'retry returns same durable identities');
-  check(second.body.capture.lead_event_id===first.body.capture.lead_event_id&&second.body.capture.response_state==='prepared'&&second.body.first_response_sent===false,'retry reads existing preparation without a sent claim');
-  assert.deepEqual(await counts(first.body.lead_id),{touches:1,received:1,prepared:1});check(true,'one touch, capture and prepared event for repeated key');
+  check(second.body.capture.lead_event_id===first.body.capture.lead_event_id&&second.body.capture.response_state==='not_required'&&second.body.first_response_sent===false,'retry reads capture-only receipt without a prepared or sent claim');
+  assert.deepEqual(await counts(first.body.lead_id),{touches:1,received:1,prepared:0});check(true,'one touch and capture, no prepared event for repeated key');
   check(log(process.env.E2E_ANTHROPIC_LOG)===modelAfter,'replay makes no second model request');
   for(const changed of [{...body,email:'changed-'+body.email},{...body,attempt_sms:true},{...body,message:'changed question'}])check((await post(changed,key)).status===409,'changed payload conflicts instead of rewriting captured delivery');
   for(const bad of ['', ' ', 'x'.repeat(257)])check((await post(bodyFor(),bad)).status===400,'supplied blank/oversize header refuses');
   const parallel=bodyFor(),parallelKey=randomUUID(),race=await Promise.all(Array.from({length:5},()=>post(parallel,parallelKey)));
   check(race.every(r=>r.status===200)&&race.filter(r=>r.body.replayed===false).length===1,'five concurrent retries capture once');
-  const raceId=race[0].body.lead_id;assert.deepEqual(await counts(raceId),{touches:1,received:1,prepared:1});check(true,'concurrent retry creates one prepared draft');
+  const raceId=race[0].body.lead_id;assert.deepEqual(await counts(raceId),{touches:1,received:1,prepared:0});check(true,'concurrent retry captures once without preparing a draft');
   const raceMessages=await one("select count(*) filter(where direction='inbound' and channel='website')::int inbound, count(*) filter(where direction='outbound')::int outbound from comm_events where conversation_id=$1",[race[0].body.conversation_id]);
-  check(raceMessages.inbound===1&&raceMessages.outbound===1,'concurrent replay retains one website inquiry and one prepared outbound');
+  check(raceMessages.inbound===1&&raceMessages.outbound===0,'concurrent replay retains one website inquiry and no outbound');
   const distinct=await post(body,key+'-another-submission');check(distinct.status===200&&!distinct.body.replayed&&distinct.body.lead_id===first.body.lead_id,'new delivery retains another touch on same provider lead');
-  assert.deepEqual(await counts(first.body.lead_id),{touches:2,received:2,prepared:2});check(true,'distinct submission not deduplicated by source_lead_id');
+  assert.deepEqual(await counts(first.body.lead_id),{touches:2,received:2,prepared:0});check(true,'distinct submission not deduplicated by source_lead_id');
   const legacy=bodyFor();const legacyA=await post(legacy),legacyB=await post(legacy);check(legacyA.status===200&&legacyB.status===200&&!legacyB.body.capture,'legacy headerless intake keeps existing response contract');
-  assert.deepEqual(await counts(legacyA.body.lead_id),{touches:2,received:2,prepared:2});check(true,'legacy same source_lead_id still records distinct arrivals');
+  assert.deepEqual(await counts(legacyA.body.lead_id),{touches:2,received:2,prepared:0});check(true,'headerless capture-only same source_lead_id still records distinct arrivals');
   const scoped=bodyFor(),scopeKey=randomUUID();const sourceA=await post({...scoped,source:'Unmapped provider A'},scopeKey),sourceB=await post({...scoped,source:'Unmapped provider B'},scopeKey);
   check(sourceA.status===200&&sourceB.status===200&&!sourceB.body.replayed,'different original unmapped provider labels do not collapse into shared source bucket');
   const propertyB=await post({...scoped,property_id:other,source:'Unmapped provider A'},scopeKey);check(propertyB.status===200&&!propertyB.body.replayed&&propertyB.body.lead_id!==sourceA.body.lead_id,'delivery identity scoped by property');
   // Fail precisely AFTER canonical capture: raising from the response write
   // rolls back only response work. Retry must not regenerate or send.
-  const failing=bodyFor(),failKey=randomUUID();const suffix=randomUUID().replaceAll('-','');
+  const failing={...bodyFor(),attempt_sms:true},failKey=randomUUID();const suffix=randomUUID().replaceAll('-','');
   const fn='owned_intake_fail_'+suffix;
   await pool.query(`create function ${fn}() returns trigger language plpgsql as $$ begin if NEW.direction='outbound' and exists(select 1 from persons where id=NEW.person_id and email='${failing.email}') then raise exception 'owned post-capture response failure'; end if; return NEW; end $$`);
   await pool.query(`create trigger ${fn} before insert on comm_events for each row execute function ${fn}()`);
@@ -64,7 +64,8 @@ const {Pool}=require('pg');
   assert.deepEqual(await counts(recovered.body.lead_id),{touches:1,received:1,prepared:0});check(true,'post-capture retry preserves one capture without a second draft');
   const recoveredMessages=await one("select count(*) filter(where direction='inbound' and channel='website')::int inbound, count(*) filter(where direction='outbound')::int outbound from comm_events where conversation_id=$1",[recovered.body.conversation_id]);
   check(recoveredMessages.inbound===1&&recoveredMessages.outbound===0&&log(process.env.E2E_ANTHROPIC_LOG)===modelBeforeRetry,'post-capture retry preserves original inquiry without another model or outbound attempt');
-  const crashBody=bodyFor(),crashKey=randomUUID(),modelBeforeCrash=log(process.env.E2E_ANTHROPIC_LOG);
+  for(const responseRequested of [false,true]){
+  const crashBody={...bodyFor(),attempt_sms:responseRequested},crashKey=randomUUID(),modelBeforeCrash=log(process.env.E2E_ANTHROPIC_LOG);
   const childEnv=boundary.serverEnvironment({LEASING_INTAKE_SECRET:'e2e-intake',LEASING_INTAKE_PROPERTY_IDS:property.id,
     PROSPECT_ACTIVATION_PROPERTY_IDS:property.id,E2E_INTAKE_CRASH_INPUT:JSON.stringify({body:crashBody,key:crashKey})});
   const crashed=await new Promise((resolve,reject)=>{
@@ -76,11 +77,12 @@ const {Pool}=require('pg');
   });
   check(crashed.code===86,'worker process died immediately after real canonical COMMIT: '+crashed.errors);
   const afterCrash=await post(crashBody,crashKey);
-  check(afterCrash.status===200&&afterCrash.body.replayed&&afterCrash.body.capture.response_state==='not_established'&&afterCrash.body.first_response_sent===null,'HTTP retry after process death returns captured unknown response');
+  check(afterCrash.status===200&&afterCrash.body.replayed&&afterCrash.body.capture.response_state===(responseRequested?'not_established':'not_required')&&afterCrash.body.first_response_sent===(responseRequested?null:false),'HTTP retry after process death preserves '+(responseRequested?'unknown response completion':'capture-only no-response requirement'));
   assert.deepEqual(await counts(afterCrash.body.lead_id),{touches:1,received:1,prepared:0});check(true,'process death and retry leave one capture, no prepared response');
   const crashMessages=await one("select count(*) filter(where direction='inbound' and channel='website')::int inbound, count(*) filter(where direction='outbound')::int outbound from comm_events where conversation_id=$1",[afterCrash.body.conversation_id]);
   check(log(process.env.E2E_ANTHROPIC_LOG)===modelBeforeCrash&&crashMessages.inbound===1&&crashMessages.outbound===0,'process-death retry retains the original question without a model or outbound attempt');
-  check(log(process.env.E2E_SMS_LOG)===smsBefore,'all capture-only and conflicting retries make no SMS transport calls');
+  }
+  check(log(process.env.E2E_SMS_LOG)===smsBefore,'capture-only, conflicting and failed-response retries make no SMS transport calls');
   console.log('RESULT '+checks+'/'+checks+' intake delivery checks');
  }finally{await pool.end()}
 })().catch(e=>{console.error(e);process.exitCode=1});
