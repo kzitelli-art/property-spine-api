@@ -1,5 +1,9 @@
 # Released staff tour booking: actual browser acceptance
 
+## QB transport-observation successor
+
+The proof now checks the API nonce before HTTP mutations and requires `E2E_SMS_LOG`. A synthetic returning-staff OTP request must produce a matching record in that exact fake transport log before the booking baseline is measured. A missing or unrelated log can no longer silently establish no-send. On API992a8db plus the reviewed Fable onboarding/organization-boundary successor and unchanged app2c57e71, all13 booking assertions passed again. This positive-control OTP is test-only fake transport, separate from the no-message booking claim. Root visually inspected `tmp/tour-browser-qb-proof/booked-overview.png`; log `tmp/tour-browser-qb.log` and `receipt.json` retain local evidence. This repeat uses the nonce-owned Fable runtime; root owns its subsequent cleanup. Product booking files are unchanged. The original run and cleanup below remain a separate historical receipt.
+
 Released source pair: API `992a8db4750722cb64ef116a8e6ba47c19872351`, app `2c57e7192e2efb3526547e31d45a8cf71de15ef4`. Isolated sibling worktrees under `tour-browser-20260912`, branch `codex/tour-browser-acceptance-20260912`. Only proof and receipt added; product files unchanged.
 
 ## Actual path and result
