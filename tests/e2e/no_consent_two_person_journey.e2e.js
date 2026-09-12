@@ -9,7 +9,8 @@
 // no can_manage_roles override and no pricing grant; "KZ" holds the override
 // and is the sole configured company signer. Mike owns the inquiry, records
 // the email he sent outside Spine, books the tour, prepares and attests the
-// application link. KZ authors and corrects terms, approves, and executes.
+// application link, generates the packet, and issues signing links. KZ authors
+// and corrects terms, approves, confirms acknowledged terms, and executes.
 // Every send is an attestation, never a transport. Nothing is written by SQL
 // after a business action.
 const assert = require("node:assert/strict");
@@ -101,8 +102,34 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
   let P = null;
   const offer = (tok, space, rent, start, key, extra = {}) => api("POST", `/operator/leasing/conversions/${F.conversion.id}/application-offer`, { token: tok, body: { space_id: space, rent, security_deposit: rent, lease_start_date: start, lease_end_date: plusYear(start), fees: [], concessions: { status: "none" }, idempotency_key: key, ...extra } });
   const prepare = (tok, key, extra = {}) => api("POST", `/operator/leasing/conversions/${F.conversion.id}/send-application`, { token: tok, body: { delivery_method: "manual_email", unit_id: F.unit.id, space_id: F.bedB.id, application_offer_id: F.offer2, intended_move_in: dates.start, idempotency_key: key, ...extra } });
-  const deskRead = async (label) => { const d = await api("GET", "/operator/leasing/desk", { token: F.mike.tok }); check(d.status === 200, `the Leasing desk still loads for Mike ${label}`, { status: d.status, error: d.body && d.body.error }); return d; };
-  const queueRow = async (tok) => { const r = await api("GET", "/operator/leasing/conversation-queue", { token: tok }); return (r.body && (r.body.items || r.body.conversations) || []).find((x) => x.conversation_id === F.conversation) || null; };
+  const deskRead = async (label) => {
+    const d = await api("GET", "/operator/leasing/desk", { token: F.mike.tok });
+    need(d.status === 200 && d.body && d.body.property_id === P && Array.isArray(d.body.application_records && d.body.application_records.records),
+      `the Leasing desk loads the same property for Mike ${label}`, { status: d.status, property_id: d.body && d.body.property_id, error: d.body && d.body.error });
+    if (F.app) {
+      const records = d.body.application_records.records.filter(r => r.application_id === F.app);
+      check(records.length === 1 && records[0].person_id === F.person && records[0].conversion_id === F.conversion.id && records[0].unit_id === F.unit.id && (!F.leaseId || records[0].lease_id === F.leaseId),
+        `the desk retains this exact application, person, conversion and available tenancy identity ${label}`, { count: records.length, application_id: records[0] && records[0].application_id, lease_id: records[0] && records[0].lease_id });
+    }
+    return d;
+  };
+  const queueRow = async (tok, label = "at the current inquiry step") => {
+    const r = await api("GET", "/operator/leasing/conversation-queue", { token: tok });
+    need(r.status === 200 && r.body && r.body.property_id === P && r.body.projection_version === "conversation_board_v1" && Array.isArray(r.body.conversations),
+      `the conversation queue loads the same property ${label}`, { status: r.status, property_id: r.body && r.body.property_id, error: r.body && r.body.error });
+    const rows = r.body.conversations.filter(x => x.conversation_id === F.conversation);
+    check(rows.length <= 1 && rows.every(x => x.person_id === F.person), `the queue does not duplicate or re-aim this conversation ${label}`, { matching_rows: rows.length });
+    // The active queue deliberately excludes booked/advanced conversations.
+    // Absence here is not failure; successful same-property read is required.
+    return rows[0] || null;
+  };
+  const operatingReads = async label => { await deskRead(label); await queueRow(F.mike.tok, label); };
+  const termsState = async () => ({
+    application: await one("select status, proposed_terms_confirmation_id, rent, deposit, lease_start_date, lease_end_date, term_source, terms_completed_at, terms_completed_by from lease_applications where id=$1", [F.app]),
+    confirmations: (await q("select id, event_id, actor_user_id, application_offer_id, application_terms_hash from application_proposed_terms_confirmations where application_id=$1 order by created_at,id", [F.app])).rows,
+    events: await one("select count(*)::int n from events where property_id=$1 and type='proposed_terms_confirmed' and note like $2", [P, `proposed terms confirmed for application ${F.app} (%`]),
+  });
+  const sameTermsState = async (before, label) => check(JSON.stringify(await termsState()) === JSON.stringify(before), label);
 
   try {
     // ── 1 · property and the two actors ─────────────────────────────
@@ -125,7 +152,7 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
         await q("insert into assignments (person_id,property_id,role,provenance) values ($1,$2,'asset_manager',$3)", [p.id, P, JSON.stringify({ source: "journey_fixture" })]);
       }
       const signer = await one("select lease_config->'execution_authority'->'company_signer_user_ids' as signers from properties where id=$1", [P]);
-      check(Array.isArray(signer.signers) && signer.signers.map(String).includes(String(F.kz.id)), "KZ is the configured company signer", { signers: (signer.signers || []).length });
+      check(Array.isArray(signer.signers) && signer.signers.length === 1 && signer.signers.map(String).includes(String(F.kz.id)), "KZ is the sole configured company signer", { signers: (signer.signers || []).length });
       await q("update communication_lines set outbound_enabled=true, outbound_policy='proactive' where property_id=$1 and line_type='property_facing' and status='active'", [P]);
       // Operating prerequisite, set as fixture: tour times cannot be published without a property timezone.
       await q("update properties set operating_timezone=coalesce(operating_timezone,'America/New_York') where id=$1", [P]);
@@ -138,6 +165,13 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       // A foreign property where KZ also holds authority: the property wall control.
       F.other = await one("insert into properties (name,address,organization_id) values ($1,'2 Scope Wall',$2) returning id", [`Journey Other ${nonce}`, F.property.organization_id]);
       await q("insert into property_team_assignments (property_id,user_id,role_title,allowed_modules,primary_for_modules,active,can_manage_roles) values ($1,$2,'property_admin','{management,leasing}','{management}',true,true)", [F.other.id, F.kz.id]);
+      await q("insert into lead_sources (name,source_type) values ($1,'website') on conflict do nothing", ["Website"]);
+      // All direct fixture writes precede Mike's invite/OTP, the first action.
+      // Occupied sibling control uses a separate apartment, never the chosen bed.
+      const c7 = await one("insert into units (property_id,unit_number) values ($1,$2) returning id", [P, `C7-${nonce}`]);
+      await q("update spaces set space_label='Bed A', use_type='residential', position_kind='bed' where unit_id=$1", [c7.id]);
+      F.c7A = await one("select id from spaces where unit_id=$1 and space_label='Bed A'", [c7.id]);
+      await q("insert into leases (property_id,space_id,start_date,end_date,lease_status,rent) values ($1,$2,$3,$4,'active',950)", [P, F.c7A.id, plusDays(-100), plusDays(200)]);
       F.kzTok = await session(F.kz.id, P);
       // Mike joins through the governed door with the real role preset: property_manager, no override.
       F.mikePhone = num(1);
@@ -145,7 +179,7 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       need(made.verify && made.verify.status === 200, "Mike joins through the governed invite and OTP as property_manager", { invite: made.invite && made.invite.status, verify: made.verify && made.verify.status });
       F.mike = { id: made.verify.body.user.id, tok: made.verify.body.session_token };
       const asg = await one("select role_key, can_manage_roles, allowed_modules from property_team_assignments where user_id=$1 and property_id=$2 and active", [F.mike.id, P]);
-      check(asg && asg.can_manage_roles === false && ["management", "leasing", "maintenance"].every((m) => asg.allowed_modules.includes(m)), "Mike's assignment: Leasing, Management, Maintenance, no can_manage_roles", asg);
+      check(asg && asg.role_key === "property_manager" && asg.can_manage_roles === false && ["management", "leasing", "maintenance"].every((m) => asg.allowed_modules.includes(m)), "Mike's assignment: property_manager, Leasing, Management, Maintenance, no can_manage_roles", asg);
       const grants = await one("select count(*)::int n from concession_authority_grants where property_id=$1 and person_id=$2", [P, (await one("select person_id from users where id=$1", [F.mike.id])).person_id]);
       check(grants.n === 0, "Mike holds no pricing or concession authority grant", grants);
       const id = await staffIdentity.resolveStaffIdentity(pool, { user_id: F.mike.id, property_id: P });
@@ -156,7 +190,6 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
     // ── 2 · the website inquiry, no consent, capture only ───────────
     await section("inquiry", async () => {
       F.prospect = { name: `NoConsent Prospect ${nonce}`, phone: num(2), email: `prospect-${nonce}@example.test` };
-      await q("insert into lead_sources (name,source_type) values ($1,'website') on conflict do nothing", ["Website"]);
       F.q1 = `Can you send me the floor plan for a two-bedroom? ${nonce}`;
       const body = { property_id: P, name: F.prospect.name, email: F.prospect.email, phone: F.prospect.phone, source: "Website", source_lead_id: `sq-${nonce}`, response_channel: "website", message: F.q1, attempt_sms: false };
       const before = quiet();
@@ -241,14 +274,9 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
     await section("offer", async () => {
       need(F.conversion, "conversion exists");
       const targets = await api("GET", "/operator/leasing/leaseable-units", { token: F.mike.tok });
+      need(targets.status === 200 && Array.isArray(targets.body && targets.body.eligible_targets), "the exact-home selector read succeeds before choosing a bed", { status: targets.status });
       const chosen = (targets.body.eligible_targets || []).find((t) => t.space_id === F.bedB.id);
       need(!!chosen && chosen.resolution_basis === "chosen_space" && chosen.marketing_state === "marketable_now", "Bed B is offerable as an exact choice", chosen && { marketing_state: chosen.marketing_state });
-      // Sibling apartment C7: Bed A leased (possession), Bed B free. Fixture rows before the offers.
-      const baseline = await one("select ib.id as import_batch_id, a.id as activation_id from import_batches ib join activations a on a.property_id=ib.property_id where ib.property_id=$1 order by ib.created_at limit 1", [P]);
-      const c7 = await one("insert into units (property_id,unit_number) values ($1,$2) returning id", [P, `C7-${nonce}`]);
-      await q("update spaces set space_label='Bed A', use_type='residential', position_kind='bed' where unit_id=$1", [c7.id]);
-      F.c7A = await one("select id from spaces where unit_id=$1 and space_label='Bed A'", [c7.id]);
-      await q("insert into leases (property_id,space_id,start_date,end_date,lease_status,rent) values ($1,$2,$3,$4,'active',950)", [P, F.c7A.id, plusDays(-100), plusDays(200)]);
       const mikeOffer = await offer(F.mike.tok, F.bedB.id, 1025, dates.start, `mike-${nonce}`);
       check(mikeOffer.status === 403 && mikeOffer.body.error === "NO_APPLICATION_OFFER_AUTHORITY", "Mike cannot author terms: no override, no pricing grant", { status: mikeOffer.status, error: mikeOffer.body && mikeOffer.body.error });
       const occupied = await offer(F.kzTok, F.c7A.id, 950, dates.start, `occ-${nonce}`);
@@ -257,11 +285,11 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       need(first.status === 200 && first.body.application_offer_id, "KZ authors the offer for the chosen bed", { status: first.status });
       F.offer1 = first.body.application_offer_id;
       const mikeFix = await offer(F.mike.tok, F.bedB.id, 1100, dates.start, `mikefix-${nonce}`, { supersedes_application_offer_id: F.offer1 });
-      check(mikeFix.status === 403, "Mike cannot correct the draft either", { status: mikeFix.status });
+      check(mikeFix.status === 403 && mikeFix.body && mikeFix.body.error === "NO_APPLICATION_OFFER_AUTHORITY", "Mike cannot correct the draft either", { status: mikeFix.status, error: mikeFix.body && mikeFix.body.error });
       const fix = await offer(F.kzTok, F.bedB.id, 1100, dates.start, `fix-${nonce}`, { supersedes_application_offer_id: F.offer1 });
       need(fix.status === 200 && fix.body.draft_revision === true && fix.body.applicant_review_required === false, "KZ corrects the unsent draft before any invitation exists (explicit successor, no message)", { status: fix.status, body: fix.body && { draft_revision: fix.body.draft_revision, applicant_review_required: fix.body.applicant_review_required, receipt: fix.body.receipt } });
       F.offer2 = fix.body.application_offer_id;
-      await deskRead("after the corrected draft offer exists");
+      await operatingReads("after the corrected draft offer exists");
       const branch = await offer(F.kzTok, F.bedB.id, 1150, dates.start, `branch-${nonce}`, { supersedes_application_offer_id: F.offer1 });
       check(branch.status === 409, "the superseded draft cannot be corrected twice", { status: branch.status, error: branch.body && branch.body.error });
     });
@@ -270,7 +298,7 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
     await section("prepare", async () => {
       need(F.offer2, "corrected offer exists");
       const smsAttempt = await api("POST", `/operator/leasing/conversions/${F.conversion.id}/send-application`, { token: F.mike.tok, body: { delivery_method: "sms", unit_id: F.unit.id, space_id: F.bedB.id, application_offer_id: F.offer2, intended_move_in: dates.start, idempotency_key: `sms-${nonce}` } });
-      check(smsAttempt.status >= 400 && sms().filter((m) => m.to === F.prospect.phone).length === 0, "a text delivery is refused without consent and nothing is texted", { status: smsAttempt.status, error: smsAttempt.body && smsAttempt.body.error });
+      check(smsAttempt.status === 403 && smsAttempt.body && smsAttempt.body.error === "person_has_not_consented" && sms().filter((m) => m.to === F.prospect.phone).length === 0, "a text delivery is refused without consent and nothing is texted", { status: smsAttempt.status, error: smsAttempt.body && smsAttempt.body.error });
       const stale = await prepare(F.mike.tok, `stale-${nonce}`, { application_offer_id: F.offer1 });
       check(stale.status === 409, "the superseded offer cannot be prepared", { status: stale.status, error: stale.body && stale.body.error });
       const wrongBed = await prepare(F.mike.tok, `wrongbed-${nonce}`, { space_id: F.c7A.id, unit_id: (await one("select unit_id from spaces where id=$1", [F.c7A.id])).unit_id });
@@ -286,7 +314,7 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       check(lost.status === 409 && lost.body.error === "APPLICATION_LINK_ALREADY_PREPARED" && lost.body.invitation_id === F.invitation && lost.body.link === null, "a lost-response retry names the existing invitation and never re-mints the link", { status: lost.status, error: lost.body && lost.body.error, link: lost.body && lost.body.link });
       const expiry = await prepare(F.mike.tok, `prep-${nonce}`, { expires_at: new Date(Date.now() + 3 * 86400000).toISOString() });
       check(expiry.status === 409 && expiry.body.error === "APPLICATION_PREPARATION_CONFLICT", "a retry with a changed expiry is a conflict, not a silent change", { status: expiry.status, error: expiry.body && expiry.body.error });
-      await deskRead("after the link is prepared");
+      await operatingReads("after the link is prepared");
       const detail = await api("GET", `/operator/leasing/conversations/${F.conversation}`, { token: F.mike.tok });
       const preparedList = JSON.stringify(detail.body).includes(F.invitation);
       check(detail.status === 200 && preparedList && !JSON.stringify(detail.body).includes(F.link.split("/t/application/")[1]), "reload: conversation detail names the prepared invitation and exposes no token", { listed: preparedList });
@@ -310,6 +338,7 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       need(attest.status === 200, "Mike attests that he emailed the link", { status: attest.status, body: attest.body });
       const inv = await one("select status, dispatch_source, channel from application_invitations where id=$1", [F.invitation]);
       check(inv.status === "manually_sent" && inv.dispatch_source === "manual" && inv.channel === "email", "the invitation reads manually sent by email, never provider dispatched", inv);
+      await operatingReads("after Mike attests the application email");
       const twice = await api("POST", `/operator/leasing/application-invitations/${F.invitation}/sent`, { token: F.mike.tok, body: { send_obligation_id: sendOb, channel: "email", recipient_snapshot: F.prospect.email } });
       const sentInvitations = await one("select count(*)::int n, min(sent_at)::text first_sent from application_invitations where conversion_id=$1 and status in ('manually_sent','provider_dispatched')", [F.conversion.id]);
       check(twice.status === 200 && twice.body.idempotent === true && twice.body.finalized === false && sentInvitations.n === 1, "a second attestation is a replay: one sent invitation, the first send fact stands", { status: twice.status, idempotent: twice.body && twice.body.idempotent, receipt: twice.body && twice.body.receipt, sent_invitations: sentInvitations.n });
@@ -328,7 +357,7 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       F.app = submitted.body.application.id;
       const again = await api("POST", "/applications/submit-public", { body });
       check(again.status === 200 && again.body.idempotent && again.body.application.id === F.app, "a repeated submission returns the same application");
-      await deskRead("after the application is submitted");
+      await operatingReads("after the application is submitted");
       const row = await one("select person_id, space_id, application_offer_id, conversion_id from lease_applications where id=$1", [F.app]);
       check(row.person_id === F.person && row.space_id === F.bedB.id && row.application_offer_id === F.offer2 && row.conversion_id === F.conversion.id, "the application is the same person, conversion, bed and corrected offer");
     });
@@ -338,42 +367,60 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       need(F.app, "application exists");
       const ob = await one("select o.assigned_role, o.assigned_user_id from lease_applications a join obligations o on o.id=a.approval_obligation_id where a.id=$1", [F.app]);
       const mikeApprove = await api("POST", `/operator/leasing/applications/${F.app}/approve`, { token: F.mike.tok, body: {} });
-      check(mikeApprove.status === 403, "Mike is not the approval obligation's owner and holds no override", { status: mikeApprove.status, obligation_role: ob && ob.assigned_role });
+      check(mikeApprove.status === 403 && mikeApprove.body && mikeApprove.body.error === "not_permitted" && ob && ob.assigned_user_id !== F.mike.id && ob.assigned_role === "leasing_manager", "Mike receives the canonical approval refusal for the manager-owned obligation", { status: mikeApprove.status, error: mikeApprove.body && mikeApprove.body.error, obligation_role: ob && ob.assigned_role });
       const foreign = await api("POST", `/operator/leasing/applications/${F.app}/approve`, { token: await session(F.kz.id, F.other.id), body: {} });
       check(foreign.status === 403, "KZ's session at another property cannot approve", { status: foreign.status });
       const approved = await api("POST", `/operator/leasing/applications/${F.app}/approve`, { token: F.kzTok, body: {} });
-      need(approved.status < 400, "KZ approves under the governed override", { status: approved.status });
+      need(approved.status === 200 && approved.body.application && approved.body.application.id === F.app && approved.body.terms_review_obligation_id, "KZ approves this application under the governed override", { status: approved.status });
+      await operatingReads("after KZ approves the application");
+      const beforeTerms = await termsState();
       const changed = await api("POST", `/operator/leasing/applications/${F.app}/proposed-terms`, { token: F.mike.tok, body: { rent: 1150, security_deposit: 1100, lease_start_date: dates.start, lease_end_date: dates.end, concession_status: "none", idempotency_key: `changed-${nonce}` } });
-      check(changed.status === 409, "terms the applicant did not acknowledge cannot be confirmed", { status: changed.status });
-      let terms = await api("POST", `/operator/leasing/applications/${F.app}/proposed-terms`, { token: F.mike.tok, body: { rent: 1100, security_deposit: 1100, lease_start_date: dates.start, lease_end_date: dates.end, concession_status: "none", idempotency_key: `terms-${nonce}` } });
-      let termsBy = "mike";
-      if (terms.status >= 400) { terms = await api("POST", `/operator/leasing/applications/${F.app}/proposed-terms`, { token: F.kzTok, body: { rent: 1100, security_deposit: 1100, lease_start_date: dates.start, lease_end_date: dates.end, concession_status: "none", idempotency_key: `terms-${nonce}` } }); termsBy = "kz"; }
-      need(terms.status < 400, "the acknowledged terms are confirmed", { status: terms.status, by: termsBy });
-      observe("who confirmed the acknowledged terms", { by: termsBy });
-      let packet = await api("POST", `/operator/leasing/applications/${F.app}/lease-packet`, { token: F.mike.tok, body: {} }); let packetBy = "mike";
-      if (packet.status >= 400) { packet = await api("POST", `/operator/leasing/applications/${F.app}/lease-packet`, { token: F.kzTok, body: {} }); packetBy = "kz"; }
-      need(packet.status < 400 && packet.body.packet, "the governing lease packet is generated", { status: packet.status, by: packetBy });
-      observe("who generated the packet", { by: packetBy });
+      check(changed.status === 409 && changed.body && changed.body.error === "application_terms_conflict", "unacknowledged terms are refused on the canonical terms-conflict basis", { status: changed.status, error: changed.body && changed.body.error });
+      await sameTermsState(beforeTerms, "Mike's mismatched terms create no confirmation, event or projection change");
+      const changedByKz = await api("POST", `/operator/leasing/applications/${F.app}/proposed-terms`, { token: F.kzTok, body: { rent: 1150, security_deposit: 1100, lease_start_date: dates.start, lease_end_date: dates.end, concession_status: "none", idempotency_key: `changed-kz-${nonce}` } });
+      check(changedByKz.status === 409 && changedByKz.body && changedByKz.body.error === "application_terms_conflict", "KZ's override cannot confirm terms the applicant did not acknowledge", { status: changedByKz.status, error: changedByKz.body && changedByKz.body.error });
+      await sameTermsState(beforeTerms, "KZ's mismatched terms also leave the confirmation, events and application unchanged");
+      const termsBody = { rent: 1100, security_deposit: 1100, lease_start_date: dates.start, lease_end_date: dates.end, concession_status: "none", idempotency_key: `terms-${nonce}` };
+      const mikeTerms = await api("POST", `/operator/leasing/applications/${F.app}/proposed-terms`, { token: F.mike.tok, body: termsBody });
+      need(mikeTerms.status === 403 && mikeTerms.body && mikeTerms.body.error === "not_authorized_for_terms", "Mike cannot confirm even acknowledged terms: exact authority refusal, no fallback", { status: mikeTerms.status, error: mikeTerms.body && mikeTerms.body.error });
+      await sameTermsState(beforeTerms, "Mike's authority refusal creates no confirmation/event and changes no terms pointer or projection");
+      const terms = await api("POST", `/operator/leasing/applications/${F.app}/proposed-terms`, { token: F.kzTok, body: termsBody });
+      need(terms.status === 200 && terms.body.confirmation_id && terms.body.authority_basis === "managed_role_override" && terms.body.idempotent === false, "KZ confirms the acknowledged terms with the governed override", { status: terms.status, authority_basis: terms.body && terms.body.authority_basis });
+      F.termsConfirmation = terms.body.confirmation_id;
+      const confirmation = await one("select id, application_id, property_id, actor_user_id, application_offer_id, authority_basis from application_proposed_terms_confirmations where id=$1", [F.termsConfirmation]);
+      check(confirmation && confirmation.application_id === F.app && confirmation.property_id === P && confirmation.actor_user_id === F.kz.id && confirmation.application_offer_id === F.offer2 && confirmation.authority_basis === "managed_role_override", "the canonical terms confirmation belongs to KZ, this application and its corrected offer");
+      const afterTerms = await termsState();
+      check(afterTerms.confirmations.length === beforeTerms.confirmations.length + 1 && afterTerms.events.n === beforeTerms.events.n + 1 && afterTerms.application.proposed_terms_confirmation_id === F.termsConfirmation && afterTerms.application.terms_completed_by === F.kz.id, "KZ adds one confirmation/event and advances the application pointer to that exact confirmation");
+      await operatingReads("after KZ confirms acknowledged terms");
+      const packet = await api("POST", `/operator/leasing/applications/${F.app}/lease-packet`, { token: F.mike.tok, body: {} });
+      need(packet.status === 200 && packet.body.packet && packet.body.packet.id && packet.body.packet.application_id === F.app && packet.body.packet.property_id === P && packet.body.packet.unit_id === F.unit.id && packet.body.packet.application_offer_id === F.offer2 && packet.body.packet.proposed_terms_confirmation_id === F.termsConfirmation && packet.body.packet.status === "draft", "Mike generates the exact governing packet from KZ's confirmation without an actor fallback", { status: packet.status });
       F.packet = packet.body.packet.id;
+      const generatedBy = await one("select count(*)::int n from lease_packet_audit_events where lease_packet_id=$1 and event_type='packet_generated' and actor_role='operator' and event_json->>'actor_user_id'=$2 and event_json->>'application_id'=$3", [F.packet, F.mike.id, F.app]);
+      check(generatedBy.n === 1, "the packet-generated audit names Mike as the actual actor for this application", generatedBy);
+      await operatingReads("after Mike generates the packet");
       const late = await offer(F.kzTok, F.bedB.id, 1120, dates.start, `late-${nonce}`, { supersedes_application_offer_id: F.offer2 });
       check(late.status === 409, "a prepared packet blocks a further offer change", { status: late.status });
       const before = quiet();
-      let issued = await api("POST", `/operator/leasing/lease-packets/${F.packet}/send`, { token: F.mike.tok, body: { idempotency_key: `issue-${nonce}` } }); let issuedBy = "mike";
-      if (issued.status >= 400) { issued = await api("POST", `/operator/leasing/lease-packets/${F.packet}/send`, { token: F.kzTok, body: { idempotency_key: `issue-${nonce}` } }); issuedBy = "kz"; }
-      need(issued.status < 400 && Array.isArray(issued.body.signing_links), "resident and guarantor signing links are issued", { status: issued.status, by: issuedBy });
-      observe("who issued the signing links; no text left for the prospect", { by: issuedBy, texts_to_prospect: sms().filter((m) => m.to === F.prospect.phone).length, quiet: stillQuiet(before) });
+      const issued = await api("POST", `/operator/leasing/lease-packets/${F.packet}/send`, { token: F.mike.tok, body: { idempotency_key: `issue-${nonce}` } });
+      need(issued.status === 200 && issued.body.packet_id === F.packet && issued.body.already_issued === false && Array.isArray(issued.body.signing_links) && issued.body.signing_links.length === 2, "Mike issues the resident and guarantor links for this packet without an actor fallback", { status: issued.status, packet_id: issued.body && issued.body.packet_id });
+      const issuedRow = await one("select property_id, application_id, issue_actor_user_id, status from lease_packets where id=$1", [F.packet]);
+      const issuedAudit = await one("select count(*)::int n from lease_packet_audit_events where lease_packet_id=$1 and event_type='packet_sent' and event_json->>'actor_user_id'=$2", [F.packet, F.mike.id]);
+      check(issuedRow.property_id === P && issuedRow.application_id === F.app && issuedRow.issue_actor_user_id === F.mike.id && issuedRow.status === "sent" && issuedAudit.n === 1, "the issued packet and its audit retain Mike as the actor on the same application");
+      check(stillQuiet(before) && sms().filter((m) => m.to === F.prospect.phone).length === 0, "issuing links calls no model or transport and does not text the prospect");
+      await operatingReads("after Mike issues the signing links");
       const links = Object.fromEntries(issued.body.signing_links.map((l) => [l.signer_role, String(l.url).split("/t/lease/")[1]]));
       need(links.tenant && links.guarantor && links.tenant !== links.guarantor, "separate resident and guarantor secrets");
-      const reissue = await api("POST", `/operator/leasing/lease-packets/${F.packet}/send`, { token: issuedBy === "mike" ? F.mike.tok : F.kzTok, body: { idempotency_key: `issue-${nonce}` } });
-      check(reissue.status < 400 && (reissue.body.already_issued === true || reissue.body.idempotent), "re-issuing is a replay, not a second package", { status: reissue.status });
+      const reissue = await api("POST", `/operator/leasing/lease-packets/${F.packet}/send`, { token: F.mike.tok, body: { idempotency_key: `issue-${nonce}` } });
+      check(reissue.status === 200 && reissue.body.packet_id === F.packet && reissue.body.already_issued === true && Array.isArray(reissue.body.signing_links) && reissue.body.signing_links.length === 0, "Mike's re-issue is the same-packet replay with no new signing secrets", { status: reissue.status });
       const g = await completeSigner({ token: links.guarantor, name: F.guarantor.name, initials: "JG", sessionId: `g-${nonce}` });
       check(g.submit && g.submit.status < 400 && g.fields.every((f) => f.signer_role === "guarantor"), "the guarantor completes only guarantor controls", { status: g.submit && g.submit.status, failed: g.failed });
       const premature = await api("POST", `/operator/leasing/lease-packets/${F.packet}/company-sign`, { token: F.kzTok, body: {} });
       check(premature.status === 409, "the company cannot execute before the resident has signed", { status: premature.status });
       const r = await completeSigner({ token: links.tenant, name: F.prospect.name, initials: "NP", sessionId: `r-${nonce}` });
       check(r.submit && r.submit.status < 400 && r.submit.body.packet && r.submit.body.packet.status === "resident_executed", "the resident completes and the package reads resident executed", { status: r.submit && r.submit.status, failed: r.failed });
+      await operatingReads("after resident and guarantor signatures");
       const mikeSign = await api("POST", `/operator/leasing/lease-packets/${F.packet}/company-sign`, { token: F.mike.tok, body: {} });
-      check(mikeSign.status === 403, "Mike is not the company signer", { status: mikeSign.status, error: mikeSign.body && mikeSign.body.error });
+      check(mikeSign.status === 403 && mikeSign.body && mikeSign.body.error === "company_signer_not_authorized", "Mike is not the company signer", { status: mikeSign.status, error: mikeSign.body && mikeSign.body.error });
       const executed = await api("POST", `/operator/leasing/lease-packets/${F.packet}/company-sign`, { token: F.kzTok, body: {} });
       need(executed.status < 400 && executed.body.tenancy && executed.body.tenancy.lease_id, "KZ executes and the tenancy is created", { status: executed.status, body: executed.body });
       F.leaseId = executed.body.tenancy.lease_id;
@@ -385,12 +432,15 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       check(lease.lease_status === "pending" && lease.economic_tenancy_activated_at === null && possession.n === 0, "execution leaves a pending lease without economic activation or possession", { lease_status: lease.lease_status, activated: lease.economic_tenancy_activated_at, move_in_events: possession.n });
       check((await one("select count(*)::int n from leases where property_id=$1 and space_id=$2 and lease_status not in ('cancelled','void','superseded')", [P, F.bedB.id])).n === 1, "exactly one lease exists on the bed");
       const targets = await api("GET", "/operator/leasing/leaseable-units", { token: F.mike.tok });
+      need(targets.status === 200 && Array.isArray(targets.body && targets.body.eligible_targets), "the selector read succeeds after execution; read failure cannot masquerade as no targets", { status: targets.status });
       check(!(targets.body.eligible_targets || []).some((t) => t.space_id === F.bedB.id), "the leased bed leaves the selector");
       const review = await api("GET", `/operator/leasing/application-review?application_id=${F.app}`, { token: F.mike.tok });
       check(review.status === 200 && review.body.application_id === F.app && review.body.lease_id === F.leaseId && review.body.space && review.body.space.space_id === F.bedB.id, "Application Review reads the same application, bed and tenancy", { status: review.status });
       const card = await api("GET", `/operator/leasing/person-card?person_id=${F.person}`, { token: F.mike.tok });
-      check(card.status === 200 && card.body.leasing_standing && card.body.leasing_standing.tenancy && card.body.leasing_standing.tenancy.lease_id === F.leaseId, "the Person Card reads the same pending tenancy", { status: card.status });
-      await deskRead("after execution");
+      const standing = card.body && card.body.leasing_standing;
+      check(card.status === 200 && card.body.property_id === P && card.body.person && card.body.person.id === F.person && standing && standing.tenancy && standing.tenancy.lease_id === F.leaseId && standing.tenancy.space_id === F.bedB.id && standing.tenancy.state === "pending", "the Person Card reads the same person/property and exact pending-bed tenancy", { status: card.status });
+      check(standing && Array.isArray(standing.uncertainty) && !standing.uncertainty.some(item => item.kind === "read_failed"), "Person Card success contains no concealed leasing-standing read failure", { uncertainty: standing && standing.uncertainty });
+      await operatingReads("after execution");
       check(sms().filter((m) => m.to === F.prospect.phone).length === 0 && sms().filter((m) => m.to === F.guarantor.phone).length === 0, "no text was ever sent to the prospect or the guarantor in the whole journey");
     });
 
