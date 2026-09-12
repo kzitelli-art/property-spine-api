@@ -47,7 +47,7 @@ const sessions=require('../../src/identity/staff_session_service');
   const bed=await one("select id from spaces where unit_id=$1 and space_label='Bed B'",[unit.id]);
   const start=new Date(Date.now()+30*86400000).toISOString().slice(0,10),end=new Date(Date.now()+394*86400000).toISOString().slice(0,10);
   const offer=await call('POST','/operator/leasing/conversions/'+conversion.id+'/application-offer',{space_id:bed.id,rent:1025,security_deposit:1025,lease_start_date:start,lease_end_date:end,fees:[],concessions:{status:'none'},idempotency_key:tag+'-offer'});assert.equal(offer.status,200,JSON.stringify(offer));
-  const body={unit_id:unit.id,space_id:bed.id,intended_move_in:start,application_offer_id:offer.body.application_offer_id,idempotency_key:tag+'-manual',delivery_method:'manual_email'};
+  const body={unit_id:unit.id,space_id:bed.id,intended_move_in:start,application_offer_id:offer.body.application_offer_id,idempotency_key:tag+'-manual',delivery_method:'manual_email',expires_at:new Date(Date.now()+7*86400000).toISOString()};
   const before=sms();
   const invalid=await call('POST','/operator/leasing/conversions/'+conversion.id+'/send-application',{...body,delivery_method:'email'});check(invalid.status===400&&invalid.body.error==='invalid_delivery_method','unsupported transport cannot silently fall through');
   // These are refusal-only fixture personas; no intent or invitation may be born.
@@ -70,6 +70,7 @@ const sessions=require('../../src/identity/staff_session_service');
   const inv=await one('select status,sent_at,channel,token_digest from application_invitations where id=$1',[out.invitation_id]);check(inv.status==='prepared'&&!inv.sent_at&&!inv.channel,'preparation records no send or channel attestation');
   const replay=await call('POST','/operator/leasing/conversions/'+conversion.id+'/send-application',body);check(replay.status===409&&replay.body.invitation_id===out.invitation_id&&replay.body.send_obligation_id===out.send_obligation_id&&!replay.body.link&&replay.body.recovery_action==='regenerate','lost response retry preserves invitation and exposes explicit token recovery');
   const wrong=await call('POST','/operator/leasing/conversions/'+conversion.id+'/send-application',{...body,space_id:randomUUID()});check(wrong.status===409&&wrong.body.error==='APPLICATION_PREPARATION_CONFLICT','changed target refuses without another invitation');
+  const wrongExpiry=await call('POST','/operator/leasing/conversions/'+conversion.id+'/send-application',{...body,expires_at:new Date(Date.now()+8*86400000).toISOString()});check(wrongExpiry.status===409&&wrongExpiry.body.error==='APPLICATION_PREPARATION_CONFLICT','changed explicit expiry refuses instead of matching retry');
   check((await one('select count(*)::int n from application_invitations where conversion_id=$1',[conversion.id])).n===1,'retry and conflict preserve one invitation');
   check(sms()===before,'manual preparation and retries never use transport');
   const recoveryRead=await call('GET','/operator/leasing/conversations/'+conv.id);

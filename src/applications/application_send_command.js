@@ -89,6 +89,7 @@ async function stageApplicationSend(client, deps, input) {
       if (!basis.allowed) throw commandError(403, "You do not own this work or hold its covering role.", "APPLICATION_SEND_FORBIDDEN");
       const conflict = String(prior.unit_id) !== unitId || (spaceId && String(prior.space_id) !== spaceId)
         || (input.applicationOfferId && String(prior.application_offer_id) !== String(input.applicationOfferId))
+        || (input.expiresAt != null && new Date(prior.expires_at).getTime() !== new Date(input.expiresAt).getTime())
         || (intendedMoveIn && String(prior.intended_move_in instanceof Date ? prior.intended_move_in.toISOString().slice(0,10) : prior.intended_move_in).slice(0,10) !== intendedMoveIn.slice(0,10));
       const error = commandError(409, conflict
         ? "An invitation already exists with different home or terms. Review its existing correction action."
