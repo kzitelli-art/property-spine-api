@@ -1,0 +1,1458 @@
+{
+ "server": "d45d7687ba11aa8b624bfbce9150cee8733f6eec",
+ "summary": {
+  "shape": "skyline",
+  "stopped_at": null,
+  "passed": 84,
+  "failed": 0,
+  "observations": 10
+ },
+ "results": [
+  {
+   "section": "property-and-staff",
+   "label": "Skyline-shaped fixture property exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "property-and-staff",
+   "label": "fixture manager (instrument company signer) exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "property-and-staff",
+   "label": "fixture unit 3B with established Bed B exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "property-and-staff",
+   "label": "the leasing agent joins through the governed invite and OTP",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "invite": 200,
+    "delivery": "sms_sent",
+    "verify": 200,
+    "body": {
+     "receipt": "Verified. You're in.",
+     "session_token": "u6Q3Ii0nHiU9jW7UTMRDK9KothdG24WIofH4WWndIG4",
+     "user": {
+      "id": "<uuid>",
+      "name": "Mike (journey) 50b1134e",
+      "phone_number": "<phone>"
+     },
+     "property": {
+      "id": "<uuid>",
+      "name": "Skyline E2E"
+     },
+     "role_title": "Leasing Agent",
+     "role_key": "leasing_agent",
+     "person_id": "<uuid>",
+     "allowed_modules": [
+      "leasing"
+     ],
+     "can_manage_roles": false,
+     "landing_module": "leasing",
+     "platform_role": "member"
+    }
+   }
+  },
+  {
+   "section": "property-and-staff",
+   "label": "the agent resolves as staff at the property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "state": "resolved"
+   }
+  },
+  {
+   "section": "property-and-staff",
+   "label": "the manager resolves as staff at the property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "state": "resolved",
+    "basis": "bridge_plus_active_assignment_plus_authority"
+   }
+  },
+  {
+   "section": "property-and-staff",
+   "label": "staff ready",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "inquiry",
+   "label": "the authenticated website inquiry is captured once",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "New prospect \u2014 opened a new Skyline E2E opportunity. AI opening response prepared (no message dispatched). Draft: \"Hi Journey, thanks for the inquiry! I'm confirming current availability and pricing now. I'd love to show you around, or is there anything I can answer first?\"",
+     "person_id": "<uuid>",
+     "lead_id": "<uuid>",
+     "new_person": true,
+     "reused_opportunity": false,
+     "first_response_sent": false,
+     "status": "new",
+     "conversation_id": "<uuid>",
+     "replayed": false,
+     "capture": {
+      "state": "captured",
+      "lead_event_id": "<uuid>",
+      "response_state": "prepared"
+     }
+    }
+   }
+  },
+  {
+   "section": "inquiry",
+   "label": "a relay redelivery replays the same person, lead and conversation",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "replayed": true
+   }
+  },
+  {
+   "section": "inquiry",
+   "label": "the form's positive consent is recorded (no consent would leave the prospect untextable)",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "consent_state": "opted_in"
+   }
+  },
+  {
+   "section": "inquiry",
+   "label": "capture sent nothing to the prospect",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "ownership",
+   "label": "conversation exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "ownership",
+   "label": "the agent takes ownership of the inquiry",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "ok": true,
+     "mode": "human_takeover",
+     "by": "<uuid>"
+    }
+   }
+  },
+  {
+   "section": "ownership",
+   "label": "the conversation detail names the agent as accountable owner",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "owner": true
+   }
+  },
+  {
+   "section": "ownership",
+   "label": "repeating the take-over by the same owner",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "ownership",
+   "label": "a second staff member cannot take an owned inquiry away silently",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "ownership",
+   "label": "the agent's personal Ask read after taking ownership",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "outcome": "answered",
+    "open_items": 4
+   }
+  },
+  {
+   "section": "tour",
+   "label": "conversation exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "tour",
+   "label": "the agent books the prospect onto a native slot from the conversation",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Tour booked. No confirmation message was sent.",
+     "tour_id": "<uuid>",
+     "slot_id": "<uuid>",
+     "scheduled_for": "2026-09-14T01:31:38.324Z",
+     "status": "scheduled",
+     "idempotent": false
+    }
+   }
+  },
+  {
+   "section": "tour",
+   "label": "a repeated booking returns the same tour",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "tour",
+   "label": "the tour is on the same lead and property",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "tour",
+   "label": "booking sent no message",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "tour",
+   "label": "tour check-in",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "tour",
+   "label": "the agent records the actual outcome as ready to apply",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Outcome recorded \u2014 tour given. Follow-up rail opened \u2014 outcome \u00b7 owner set to the actual host.",
+     "tour_id": "<uuid>",
+     "conversion_id": "<uuid>"
+    }
+   }
+  },
+  {
+   "section": "tour",
+   "label": "re-saving the same outcome replays instead of recording twice",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "tour",
+   "label": "the outcome opened the conversion for the same person",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "tour",
+   "label": "post-tour follow-up is the agent's accountable work",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "exact-home",
+   "label": "conversion exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "exact-home",
+   "label": "leaseable targets read",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "exact-home",
+   "label": "the established vacant bed is offerable as an exact choice",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "marketing_state": "marketable_now",
+    "availability_confidence": "confirmed"
+   }
+  },
+  {
+   "section": "exact-home",
+   "label": "the free sibling is offerable, the leased sibling and the unknown-readiness home are not",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "offer",
+   "label": "exact bed exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "offer",
+   "label": "the leasing agent cannot author terms without pricing authority",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403,
+    "error": "NO_APPLICATION_OFFER_AUTHORITY"
+   }
+  },
+  {
+   "section": "offer",
+   "label": "an offer on the leased sibling bed refuses",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "error": "not_offerable"
+   }
+  },
+  {
+   "section": "offer",
+   "label": "an offer on a home with no governed ready date refuses truthfully",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "error": "application_ready_date_not_governed"
+   }
+  },
+  {
+   "section": "offer",
+   "label": "the manager authors a complete offer for the chosen bed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "application_offer_id": "<uuid>",
+     "application_terms": {
+      "schema_version": 1,
+      "property_id": "<uuid>",
+      "person_id": "<uuid>",
+      "target": {
+       "space_id": "<uuid>",
+       "unit_id": "<uuid>"
+      },
+      "rent": "1025.00",
+      "security_deposit": "1025.00",
+      "lease_start_date": "2026-10-12",
+      "lease_end_date": "2027-10-11",
+      "fees": [],
+      "concessions": {
+       "status": "none"
+      }
+     },
+     "idempotent": false,
+     "applicant_review_required": false,
+     "receipt": "Application offer prepared."
+    }
+   }
+  },
+  {
+   "section": "offer",
+   "label": "an identical retry returns the same offer",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "offer",
+   "label": "the same request identity with different terms is refused",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "error": "APPLICATION_OFFER_IDEMPOTENCY_CONFLICT"
+   }
+  },
+  {
+   "section": "send",
+   "label": "offer exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "send",
+   "label": "naming the occupied sibling bed is refused or clarified, never re-aimed at the free bed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "outcome": "leasing_clarification",
+    "proposed": null
+   }
+  },
+  {
+   "section": "send",
+   "label": "naming the apartment without the bed asks for clarification",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "outcome": "leasing_clarification",
+    "answer": "undefined"
+   }
+  },
+  {
+   "section": "send",
+   "label": "the agent's request for the chosen bed becomes a server-selected proposal",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "outcome": "application_send_proposed"
+   }
+  },
+  {
+   "section": "send",
+   "label": "the proposal names the exact bed and exposes no identifiers",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "send",
+   "label": "revising terms before an invitation exists is refused, not silently branched",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "receipt": "One current invitation is required to revise these terms."
+   }
+  },
+  {
+   "section": "send",
+   "label": "another staff member cannot redeem the agent's confirmation",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403
+   }
+  },
+  {
+   "section": "send",
+   "label": "the agent's confirmation sends the application",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "outcome": "application_sent",
+     "action_code": "send_application_after_tour",
+     "confirmation_required": false,
+     "confirmation": null,
+     "receipt": "Application sent to Journey Prospect 50b1134e for Unit 3B, Bed B.",
+     "subject": {
+      "display_name": "Journey Prospect 50b1134e"
+     },
+     "target": {
+      "label": "Unit 3B, Bed B"
+     },
+     "sent": true,
+     "replayed": false
+    }
+   }
+  },
+  {
+   "section": "send",
+   "label": "the application text reached the fake transport",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "send",
+   "label": "a repeated confirmation is a used receipt, not a second send",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "send",
+   "label": "a second send request after the invitation exists",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200,
+    "kind": "clarification_or_refusal",
+    "outcome": "leasing_clarification"
+   }
+  },
+  {
+   "section": "send",
+   "label": "the manager revises the offer on the existing invitation; applicant review is required",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "application_offer_id": "<uuid>",
+     "application_terms": {
+      "schema_version": 1,
+      "property_id": "<uuid>",
+      "person_id": "<uuid>",
+      "target": {
+       "space_id": "<uuid>",
+       "unit_id": "<uuid>"
+      },
+      "rent": "1100.00",
+      "security_deposit": "1100.00",
+      "lease_start_date": "2026-10-12",
+      "lease_end_date": "2027-10-11",
+      "fees": [],
+      "concessions": {
+       "status": "none"
+      }
+     },
+     "idempotent": false,
+     "applicant_review_required": true,
+     "receipt": "Revised terms are ready in the existing application link. Applicant review is required; no message was sent."
+    }
+   }
+  },
+  {
+   "section": "send",
+   "label": "a revision sends no new message",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "send",
+   "label": "no stale confirmation could be minted after the send; the confirm-time terms guard was not exercised here",
+   "ok": true,
+   "kind": "observe",
+   "detail": null
+  },
+  {
+   "section": "send",
+   "label": "a second revision of the already-superseded offer is refused",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "error": "APPLICATION_TERMS_REVIEW_REQUIRED"
+   }
+  },
+  {
+   "section": "send",
+   "label": "one invitation and one message exist",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "invitations": 1,
+    "texts": 1
+   }
+  },
+  {
+   "section": "send",
+   "label": "the invitation carries the exact bed, the current offer and the same person",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "application",
+   "label": "application link exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "application",
+   "label": "the applicant reads server-owned terms",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "application",
+   "label": "the applicant sees the current rent and the exact bed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "rent": "1100.00",
+    "unit_label": "3B \u00b7 Bed B"
+   }
+  },
+  {
+   "section": "application",
+   "label": "acknowledging the superseded terms cannot submit",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "error": "Review and acknowledge the current application terms before submitting."
+   }
+  },
+  {
+   "section": "application",
+   "label": "the prospect submits against the acknowledged terms",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Application submitted for Journey Prospect 50b1134e. Now with leasing_manager for approval.",
+     "application": {
+      "id": "<uuid>",
+      "property_id": "<uuid>",
+      "unit_id": "<uuid>",
+      "person_id": "<uuid>",
+      "status": "submitted",
+      "applicant_name": "Journey Prospect 50b1134e",
+      "unit_label": null,
+      "rent": "1100.00",
+      "deposit": "1100.00",
+      "guarantor_name": "Journey Guarantor 50b1134e",
+      "captured": {
+       "pets": "None",
+       "email": "<email>",
+       "phone": "<phone>",
+       "address": {
+        "city": "Philadelphia",
+        "line1": "100 Test Street",
+        "line2": "",
+        "state": "PA",
+        "postal_code": "19147"
+       },
+       "employer": "Test Employer",
+       "has_pets": "no",
+       "job_title": "Analyst",
+       "occupants": 1,
+       "income_notes": "",
+       "current_since": "2024-01",
+       "date_of_birth": "1995-04-12",
+       "income_amount": 72000,
+       "income_status": "employed",
+       "housing_status": "rent",
+       "desired_move_in": "2026-10-12",
+       "household_names": "",
+       "additional_notes": "",
+       "guarantor_needed": "yes",
+       "income_frequency": "annual",
+       "move_flexibility": "plus_minus_7",
+       "guarantor_contact": {
+        "name": "Journey Guarantor 50b1134e",
+        "email": "<email>",
+        "phone": "<phone>"
+       },
+       "application_form_version": "tenant_v3",
+       "electronic_delivery_consent": true,
+       "applicant_accuracy_certified": true
+      },
+      "activation_obligation_id": null,
+      "applicant_signed_at": null,
+      "guarantor_signed_at": null,
+      "countersigned_at": null,
+      "activated_at": null,
+      "created_at": "2026-09-12T01:31:38.868Z",
+      "updated_at": "2026-09-12T01:31:38.868Z",
+      "conversion_id": "<uuid>",
+      "source": "applicant",
+      "decision_by_user_id": null,
+      "decision_reason": null,
+      "decided_at": null,
+      "approval_obligation_id": "<uuid>",
+      "lease_start_date": "2026-10-12T00:00:00.000Z",
+      "lease_end_date": "2027-10-11T00:00:00.000Z",
+      "term_source": null,
+      "terms_completed_at": null,
+      "terms_completed_by": null,
+      "concession_status": "none",
+      "terms_review_obligation_id": null,
+      "proposed_terms_confirmation_id": null,
+      "executed_lease_record_id": null,
+      "leasing_lead_id": "<uuid>",
+      "submitted_at": "2026-09-12T01:31:38.868Z",
+      "approved_at": null,
+      "terminal_at": null,
+      "terminal_code": null,
+      "space_id": "<uuid>",
+      "intended_move_in": "2026-10-12T00:00:00.000Z",
+      "application_offer_id": "<uuid>",
+      "application_terms_hash": "<sha256>",
+      "application_terms_acknowledged_at": "2026-09-12T01:31:38.868Z"
+     },
+     "approval_obligation_id": "<uuid>",
+     "rung_closed": null
+    }
+   }
+  },
+  {
+   "section": "application",
+   "label": "a repeated submission returns the same application",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "application",
+   "label": "the application is the same person, conversion, bed and offer, with the named guarantor",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "application",
+   "label": "exactly one application exists for this person here",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "application exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "the agent cannot approve the application they collected",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the manager's session at another property cannot approve",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the manager approves",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Approved. Terms-review next for Journey Prospect 50b1134e. The resident acknowledges proposed terms; an executed lease is a separate, later fact.",
+     "application": {
+      "id": "<uuid>",
+      "property_id": "<uuid>",
+      "unit_id": "<uuid>",
+      "person_id": "<uuid>",
+      "status": "lease_ready",
+      "application_position": "approved_terms_pending",
+      "application_next": {
+       "source_type": "lease_application",
+       "source_id": "<uuid>",
+       "obligation_id": "<uuid>",
+       "packet_id": null,
+       "blocked_reason": null,
+       "label": "Send terms for review.",
+       "code": "send_terms_for_review",
+       "state": "available",
+       "blocker_code": null,
+       "warning_code": null,
+       "action_code": "send_terms_for_review",
+       "group_code": "send_terms_for_review"
+      },
+      "applicant_name": "Journey Prospect 50b1134e",
+      "unit_label": null,
+      "rent": 1100,
+      "deposit": 1100,
+      "guarantor_name": "Journey Guarantor 50b1134e",
+      "applicant_signed_at": null,
+      "guarantor_signed_at": null,
+      "countersigned_at": null,
+      "activated_at": null,
+      "activation_obligation_id": null,
+      "terms_review_obligation_id": "<uuid>",
+      "outstanding_inputs": [
+       "terms_acknowledged"
+      ],
+      "next_action": "Send terms for review."
+     },
+     "terms_review_obligation_id": "<uuid>"
+    }
+   }
+  },
+  {
+   "section": "lease",
+   "label": "terms the applicant did not acknowledge cannot be confirmed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the acknowledged terms are confirmed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Proposed terms confirmed for resident review. This is a proposal, not an executed lease.",
+     "idempotent": false,
+     "confirmation_id": "<uuid>",
+     "authority_basis": "managed_role_override",
+     "supersedes_confirmation_id": null
+    }
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the governing lease packet is generated",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Lease package generated for Journey Prospect 50b1134e. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms.",
+     "packet": {
+      "id": "<uuid>",
+      "property_id": "<uuid>",
+      "application_id": "<uuid>",
+      "unit_id": "<uuid>",
+      "version": 1,
+      "status": "draft",
+      "proposed_terms_confirmation_id": "<uuid>",
+      "application_offer_id": "<uuid>",
+      "application_terms_hash": "<sha256>",
+      "sent_at": null,
+      "tenant_token_expires_at": null,
+      "is_placeholder": false,
+      "is_demonstration_summary": false,
+      "is_governing_lease_package": true,
+      "acknowledgment_meaning": "lease_execution",
+      "instrument": {
+       "form_code": "TEST-FIXTURE-FORM",
+       "form_version": "0-test",
+       "source_filename": "test-governing-lease.docx",
+       "source_sha256": "<sha256>",
+       "terms_sha256": "<sha256>",
+       "package_sha256": "<sha256>",
+       "download_path": "/t/lease/{token}/instrument"
+      },
+      "terms": {
+       "fees": [],
+       "unit_id": "<uuid>",
+       "space_id": "<uuid>",
+       "unit_label": "3B",
+       "space_label": "Bed B",
+       "unit_number": "3B",
+       "monthly_rent": "1100.00",
+       "property_name": "Skyline E2E",
+       "guarantor_name": "Journey Guarantor 50b1134e",
+       "lease_end_date": "2027-10-11",
+       "resident_names": "Journey Prospect 50b1134e",
+       "lease_start_date": "2026-10-12",
+       "parking_interest": null,
+       "property_address": "1400 Skyline Blvd, Austin, TX 78704",
+       "security_deposit": "1100.00",
+       "concession_status": "none",
+       "guarantor_required": true,
+       "landlord_legal_entity": "[landlord entity pending \u2014 supply on the property record]",
+       "utility_payment_preference": null
+      },
+      "rendered_snapshot": {
+       "title": "Residential Lease Package",
+       "summary": {
+        "unit": "3B",
+        "monthly_rent": "1100.00",
+        "lease_end_date": "2027-10-11",
+        "resident_names": "Journey Prospect 50b1134e",
+        "landlord_entity": "Skyline Owner LP (fixture)",
+        "lease_start_date": "2026-10-12",
+        "security_deposit": "1100.00",
+        "guarantor_required": true
+       },
+       "sections": [
+        {
+         "ack": false,
+         "key": "parties",
+         "body": [
+          "Landlord: Skyline Owner LP (fixture).",
+          "Resident(s): Journey Prospect 50b1134e.",
+          "Guarantor: Journey Guarantor 50b1134e.",
+          "Home: 3B, Bed B, 1400 Skyline Blvd, Austin, TX 78704."
+         ],
+         "title": "Parties & Home"
+        },
+        {
+         "ack": true,
+         "key": "term",
+         "body": [
+          "Starts: Oct 12, 2026.",
+          "Ends: Oct 11, 2027."
+         ],
+         "title": "Lease Dates"
+        },
+        {
+         "ack": true,
+         "key": "rent",
+         "body": [
+          "Monthly rent: $1,100.00.",
+          "Payment location: the online resident portal."
+         ],
+         "title": "Rent"
+        },
+        {
+         "ack": true,
+         "key": "deposit",
+         "body": [
+          "Security deposit: $1,100.00."
+         ],
+         "title": "Deposit & Property Charges"
+        },
+        {
+         "ack": false,
+         "key": "operations",
+         "body": [
+          "Resident pays all utilities.",
+          "Renewal / move-out notice: At least 60 days written notice before the end of the term."
+         ],
+         "title": "Utilities, Notice & Parking"
+        },
+        {
+         "ack": true,
+         "key": "ack",
+         "body": [
+          "The governing lease form and this exact deal-terms schedule are presented together as one package.",
+          "Your electronic signature applies to that complete package. The company must countersign before the tenancy is activated."
+         ],
+         "title": "Sign the Complete Package"
+        }
+       ],
+       "subtitle": "1400 Skyline Blvd, Austin, TX 78704",
+       "instrument": {
+        "form_code": "TEST-FIXTURE-FORM",
+        "form_version": "0-test",
+        "terms_sha256": "<sha256>",
+        "source_sha256": "<sha256>",
+        "text_snapshot": "TEST GOVERNING LEASE BODY. Fixture only. This readable retained document exists so the end-to-end proof signs exact source bytes bound to exact deal terms. It is not the Skyline form of record, is not legal proof, carries no legal terms, and has no legal effect.\n\nTEST GOVERNING LEASE BODY. Fixture only. This readable retained document exists so the end-to-end proof signs exact source bytes bound to exact deal terms. It is not the Skyline form of record, is not legal proof, carries no legal terms, and has no legal effect.\n\nTEST GOVERNING LEASE BODY. Fixture only. This readable retained document exists so the end-to-end proof signs exact source bytes bound to exact deal terms. It is not the Skyline form of record, is not legal proof, carries no legal terms, and has no legal effect.\n\nTEST GOVERNING LEASE BODY. Fixture only. This readable retained document exists so the end-to-end proof signs exact source bytes bound to exact deal terms. It is not the Skyline form of record, is not legal proof, carries no legal terms, and has no legal effect.\n\nTEST GOVERNING LEASE BODY. Fixture only. This readable retained document exists so the end-to-end proof signs exact source bytes bound to exact deal terms. It is not the Skyline form of record, is not legal proof, carries no legal terms, and has no legal effect.",
+        "package_sha256": "<sha256>",
+        "terms_schedule": {
+         "term": {
+          "lease_end_date": "2027-10-11",
+          "lease_start_date": "2026-10-12"
+         },
+         "parties": {
+          "guarantor_name": "Journey Guarantor 50b1134e",
+          "resident_names": "Journey Prospect 50b1134e",
+          "landlord_entity": "Skyline Owner LP (fixture)"
+         },
+         "premises": {
+          "unit_id": "<uuid>",
+          "space_id": "<uuid>",
+          "unit_label": "3B",
+          "space_label": "Bed B",
+          "property_name": "Skyline E2E",
+          "property_address": "1400 Skyline Blvd, Austin, TX 78704"
+         },
+         "economics": {
+          "fees": [],
+          "amenity_fee": null,
+          "monthly_rent": "1100.00",
+          "application_fee": null,
+          "security_deposit": "1100.00",
+          "concession_status": "none",
+          "utility_fee_total": null,
+          "utility_fee_payment_preference": null
+         },
+         "operations": {
+          "late_fee": null,
+          "parking_interest": null,
+          "notice_requirement": "At least 60 days written notice before the end of the term.",
+          "rent_payment_location": "the online resident portal",
+          "utility_responsibility": "Resident pays all utilities."
+         },
+         "schema_version": 1
+        },
+        "source_filename": "test-governing-lease.docx"
+       },
+       "not_the_lease": null,
+       "is_placeholder": false,
+       "is_demonstration_summary": false,
+       "is_governing_lease_package": true
+      },
+      "progress": {
+       "completed": 0,
+       "required": 8
+      },
+      "fields": [
+       {
+        "id": "<uuid>",
+        "field_key": "ack_term",
+        "section_key": "term",
+        "label": "Lease dates",
+        "field_type": "acknowledgment",
+        "signer_role": "tenant",
+        "required": true,
+        "completed": false,
+        "completed_at": null,
+        "display_order": 1
+       },
+       {
+        "id": "<uuid>",
+        "field_key": "ack_rent",
+        "section_key": "rent",
+        "label": "Monthly rent",
+        "field_type": "acknowledgment",
+        "signer_role": "tenant",
+        "required": true,
+        "completed": false,
+        "completed_at": null,
+        "display_order": 2
+       },
+       {
+        "id": "<uuid>",
+        "field_key": "ack_deposit",
+        "section_key": "deposit",
+        "label": "Security deposit",
+        "field_type": "acknowledgment",
+        "signer_role": "tenant",
+        "required": true,
+        "completed": false,
+        "completed_at": null,
+        "display_order": 3
+       },
+       {
+        "id": "<uuid>",
+        "field_key": "ack_terms",
+        "section_key": "ack",
+        "label": "Official lease package",
+        "field_type": "acknowledgment",
+        "signer_role": "tenant",
+        "required": true,
+        "completed": false,
+        "completed_at": null,
+        "display_order": 4
+       },
+       {
+        "id": "<uuid>",
+        "field_key": "ack_guarantor",
+        "section_key": "ack",
+        "label": "Guarantor acknowledgment",
+        "field_type": "acknowledgment",
+        "signer_role": "tenant",
+        "required": true,
+        "completed": false,
+        "completed_at": null,
+        "display_order": 5
+       },
+       {
+        "id": "<uuid>",
+        "field_key": "sign_resident",
+        "section_key": "ack",
+        "label": "Resident signature",
+        "field_type": "signature",
+        "signer_role": "tenant",
+        "required": true,
+        "completed": false,
+        "completed_at": null,
+        "display_order": 6
+       },
+       {
+        "id": "<uuid>",
+        "field_key": "ack_guarantor_package",
+        "section_key": "ack",
+        "label": "Guarantor package review",
+        "field_type": "acknowledgment",
+        "signer_role": "guarantor",
+        "required": true,
+        "completed": false,
+        "completed_at": null,
+        "display_order": 7
+       },
+       {
+        "id": "<uuid>",
+        "field_key": "sign_guarantor",
+        "section_key": "ack",
+        "label": "Guarantor signature",
+        "field_type": "signature",
+        "signer_role": "guarantor",
+        "required": true,
+        "completed": false,
+        "completed_at": null,
+        "display_order": 8
+       },
+       {
+        "id": "<uuid>",
+        "field_key": "sign_company",
+        "section_key": "ack",
+        "label": "Company signature",
+        "field_type": "signature",
+        "signer_role": "company",
+        "required": false,
+        "completed": false,
+        "completed_at": null,
+        "display_order": 9
+       }
+      ],
+      "documents": [
+       {
+        "id": "<uuid>",
+        "document_type": "lease_body",
+        "title": "Complete Lease & Required Addenda (governing \u2014 TEST-FIXTURE-FORM)",
+        "file_url": null,
+        "required_acknowledgment": false,
+        "acknowledged_at": null,
+        "has_retained_source": true
+       },
+       {
+        "id": "<uuid>",
+        "document_type": "rental_license",
+        "title": "Rental License",
+        "file_url": null,
+        "required_acknowledgment": true,
+        "acknowledged_at": null,
+        "has_retained_source": false
+       },
+       {
+        "id": "<uuid>",
+        "document_type": "rental_suitability",
+        "title": "Certificate of Rental Suitability",
+        "file_url": null,
+        "required_acknowledgment": true,
+        "acknowledged_at": null,
+        "has_retained_source": false
+       }
+      ],
+      "signing_parties": [
+       {
+        "signer_role": "tenant",
+        "display_name": "Journey Prospect 50b1134e",
+        "link_issued_at": null,
+        "token_expires_at": null,
+        "submitted_at": null,
+        "signature_completed_at": null,
+        "complete": false
+       },
+       {
+        "signer_role": "guarantor",
+        "display_name": "Journey Guarantor 50b1134e",
+        "link_issued_at": null,
+        "token_expires_at": null,
+        "submitted_at": null,
+        "signature_completed_at": null,
+        "complete": false
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "section": "lease",
+   "label": "generating the packet again",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200,
+    "same": true
+   }
+  },
+  {
+   "section": "lease",
+   "label": "a prepared packet blocks a further offer change",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "lease",
+   "label": "resident and guarantor links are issued",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Separate resident and guarantor signing links issued (expires in 14 days). Each presents the same retained governing form and exact deal terms as one package.",
+     "already_issued": false,
+     "tenant_url": "http://127.0.0.1:3111/t/lease/<token>",
+     "guarantor_url": "http://127.0.0.1:3111/t/lease/<token>",
+     "signing_links": [
+      {
+       "signer_role": "tenant",
+       "display_name": "Journey Prospect 50b1134e",
+       "url": "http://127.0.0.1:3111/t/lease/<token>"
+      },
+      {
+       "signer_role": "guarantor",
+       "display_name": "Journey Guarantor 50b1134e",
+       "url": "http://127.0.0.1:3111/t/lease/<token>"
+      }
+     ],
+     "packet_id": "<uuid>",
+     "status": "sent"
+    }
+   }
+  },
+  {
+   "section": "lease",
+   "label": "separate resident and guarantor secrets",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "re-issuing is a replay, not a second package",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "already_issued": true,
+    "lease_texts_after_both": 0
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the guarantor completes only guarantor controls",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the company cannot execute before the resident has signed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the resident completes and the package reads resident executed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "packet": "resident_executed"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "re-submitting the resident signature",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 404,
+    "receipt": "Lease link is invalid, expired, or already submitted."
+   }
+  },
+  {
+   "section": "lease",
+   "label": "leasing access is not company signing authority",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the recorded company signer executes and the tenancy is created",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": {
+     "receipt": "Lease executed and tenancy created \u2014 pending lease <uuid>.",
+     "lease_packet_id": "<uuid>",
+     "application_id": "<uuid>",
+     "verification_basis": "spine_instrument",
+     "execution_channel": "spine_esign",
+     "instrument_body_sha256": "<sha256>",
+     "instrument_terms_sha256": "<sha256>",
+     "instrument_package_sha256": "<sha256>",
+     "executed_lease_record_id": "<uuid>",
+     "idempotent": false,
+     "activation_status": "admitted",
+     "blockers": [],
+     "tenancy": {
+      "lease_id": "<uuid>",
+      "lease_status": "pending",
+      "economics_conflict": null
+     },
+     "tenancy_error": null
+    }
+   }
+  },
+  {
+   "section": "lease",
+   "label": "executing again creates no second tenancy",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the tenancy is anchored to the exact bed at the acknowledged rent and dates",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "rent": "1100.00",
+    "lease_status": "pending"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "distinct facts after execution: lease status, economic activation and possession are not claimed by signing alone",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "lease_status": "pending",
+    "economic_tenancy_activated_at": null,
+    "move_in_events": 0
+   }
+  },
+  {
+   "section": "lease",
+   "label": "exactly one lease exists on the bed",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "the leased bed leaves the selector",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "staff review read after execution",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200,
+    "action": "term_confirmed"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the Person Card reads the same tenancy",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "lease",
+   "label": "Ask Spine read of the same person after execution",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "outcome": "answered",
+    "stage": "applicant_followup"
+   }
+  },
+  {
+   "section": "removed-authority",
+   "label": "agent exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "removed-authority",
+   "label": "the manager removes the agent's access through the governed door",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Access updated.",
+     "assignment_id": "<uuid>",
+     "allowed_modules": [
+      "leasing"
+     ],
+     "primary_for_modules": [
+      "leasing"
+     ],
+     "landing_module": "leasing",
+     "active": false
+    }
+   }
+  },
+  {
+   "section": "removed-authority",
+   "label": "the agent's live session loses access immediately",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 401
+   }
+  },
+  {
+   "section": "removed-authority",
+   "label": "a removed agent cannot propose a send",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 401
+   }
+  },
+  {
+   "section": "removed-authority",
+   "label": "access restored through the same door",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200
+   }
+  }
+ ]
+}
