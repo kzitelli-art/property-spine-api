@@ -129,7 +129,7 @@ async function readBoundApplicationOffer(client, app, { allowHistorical = false,
   if (!allowHistorical) await assertCurrentApplicationOffer(client, offerId);
   const result = { id: offerId, terms: rawTerms, hash: String(termsHash) };
   if (allowHistorical) {
-    const pending = await readPendingApplicationOffer(client, app);
+    const pending = await readPendingApplicationOffer(client, app, { lock });
     if (pending) {
       result.pending_review = {
         id: pending.id, terms_hash: pending.hash, terms: pending.terms,

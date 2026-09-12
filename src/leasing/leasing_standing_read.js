@@ -178,7 +178,7 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
   // invitation-linked pending offer. Standing only projects that result; it
   // never reconstructs terms from legacy application columns or asking rent.
   const termsReview = app ? await attempt("application_offer", async () => {
-    const state = await readBoundApplicationOffer(db, app, { allowHistorical: true });
+    const state = await readBoundApplicationOffer(db, app, { allowHistorical: true, lock: false });
     if (!state) return null;
     return {
       acknowledged_at: state.id ? (app.application_terms_acknowledged_at || null) : null,
