@@ -83,6 +83,9 @@ step "proof boundary refusal checks" node tests/e2e/proof_boundary.test.js
 step "source governance gates"   node tests/verify_source_governance.js
 step "next-action oracle"        node src/shared/proof_next_action_resolver.js
 step "application review actions" node tests/unit/application_review_action_contract.test.js
+step "application offer writer and read locks" node tests/unit/application_offer_terms.test.js
+step "application review offer projection" node tests/unit/application_review_offer.test.js
+step "historical pending offer read locks" node tests/unit/proposed_terms_read_lock.test.js
 step "leasing knowledge coverage" node tests/unit/leasing_knowledge_coverage.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
 step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js
@@ -286,6 +289,7 @@ if [ "$FAILED" = "0" ]; then
   step "canonical application draft recovery" node tests/proofs/application_draft_recovery.db.js
   step "manual email application preparation" node tests/proofs/manual_email_application.db.js
   step "staff-assisted journey (Skyline shape)" env JOURNEY_SHAPE=skyline node tests/e2e/staff_assisted_journey.e2e.js
+  step "historical application projections" node tests/proofs/proposed_terms_read_lock.db.js
   step "no-consent two-person journey" node tests/e2e/no_consent_two_person_journey.e2e.js
   stop_owned_server || exit 1
   unset E2E_INTAKE_INACTIVE_PROPERTY_ID
