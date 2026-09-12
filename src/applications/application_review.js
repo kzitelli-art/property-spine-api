@@ -389,7 +389,10 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
   //  offer from lease_applications, and do not turn a missing/corrupt offer
   //  into a legacy-looking review. Applications without an offer preserve
   //  the historic review shape with a null application_offer.
-  const offerState = await readBoundApplicationOffer(client, app, { allowHistorical: true });
+  //  A review is a projection: it never binds, confirms or supersedes the
+  //  offer, so it takes no row lock. The Leasing desk reads this detail
+  //  inside a READ ONLY transaction, where a lock is refused outright.
+  const offerState = await readBoundApplicationOffer(client, app, { allowHistorical: true, lock: false });
   const boundOffer = offerState && offerState.id ? offerState : null;
   const pendingOffer = offerState && offerState.pending_review ? offerState.pending_review : null;
   const verdict = await applicationTermsComplete(app, client);

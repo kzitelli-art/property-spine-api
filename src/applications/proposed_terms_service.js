@@ -29,7 +29,7 @@ const {
 // adapter deliberately does not re-normalize or reconstruct the snapshot:
 // the offer reader returns the immutable application_terms object and its
 // terms_hash, which are the applicant's acknowledged version.
-async function readPendingApplicationOffer(client, app) {
+async function readPendingApplicationOffer(client, app, { lock = true } = {}) {
   if (!app || !app.id || !app.property_id) return null;
   const pending = (await client.query(
     `select id, application_offer_id, property_id, person_id, space_id
@@ -62,6 +62,7 @@ async function readPendingApplicationOffer(client, app) {
     property_id: app.property_id,
     person_id: app.person_id,
     space_id: app.space_id,
+    lock,
   });
   if (!offer || String(offer.offer_id) !== String(invitation.application_offer_id) ||
       !offer.application_terms || typeof offer.application_terms !== "object" ||
@@ -72,9 +73,9 @@ async function readPendingApplicationOffer(client, app) {
   return { id: offer.offer_id, hash: String(offer.terms_hash), terms: offer.application_terms };
 }
 
-async function readBoundApplicationOffer(client, app, { allowHistorical = false } = {}) {
+async function readBoundApplicationOffer(client, app, { allowHistorical = false, lock = true } = {}) {
   if (!app.application_offer_id) {
-    const pending = await readPendingApplicationOffer(client, app);
+    const pending = await readPendingApplicationOffer(client, app, { lock });
     if (!pending) return null;
     if (!allowHistorical) {
       throw conflict("APPLICATION_TERMS_REVIEW_REQUIRED",
@@ -94,6 +95,7 @@ async function readBoundApplicationOffer(client, app, { allowHistorical = false 
     property_id: app.property_id,
     person_id: app.person_id,
     space_id: app.space_id,
+    lock,
   });
   const offerId = offer && offer.offer_id;
   const rawTerms = offer && offer.application_terms;

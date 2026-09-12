@@ -89,6 +89,17 @@ const input = { actor: ACTOR, person_id: PERSON, space_id: SPACE, lease_start_da
   const successor2 = await prepareApplicationOffer(q, { ...input, idempotency_key: "successor-2", application_id: "application-1", supersedes_application_offer_id: successor.offer.id });
   assert.equal(successor2.offer.supersedes_application_offer_id, successor.offer.id);
   assert.equal((await readApplicationOffer(q, { offer_id: saved.id, property_id: PROPERTY, person_id: PERSON, space_id: SPACE })).offer_id, saved.id);
+  // A projection may read the offer without a row lock (the Leasing desk reads
+  // application rows inside a READ ONLY transaction, where FOR UPDATE is refused).
+  {
+    const seen = [];
+    const spy = { async query(sql, args) { if (/^\s*select \* from lease_offers where id=\$1/.test(sql)) seen.push(sql); return q.query(sql, args); } };
+    assert.equal((await readApplicationOffer(spy, { offer_id: saved.id, property_id: PROPERTY, person_id: PERSON, space_id: SPACE, lock: false })).offer_id, saved.id);
+    assert.equal((await readApplicationOffer(spy, { offer_id: saved.id, property_id: PROPERTY, person_id: PERSON, space_id: SPACE })).offer_id, saved.id);
+    assert.equal(seen.length, 2, "both reads reached the offer row");
+    assert.ok(!/for update/i.test(seen[0]), "lock:false takes no row lock");
+    assert.ok(/for update/i.test(seen[1]), "the default read still locks for writers");
+  }
   saved.expires_at = new Date(Date.now() - 1000).toISOString();
   await assert.rejects(() => readApplicationOffer(q, { offer_id: saved.id, property_id: PROPERTY, person_id: PERSON, space_id: SPACE }), /expired/);
   console.log("application_offer_terms: PASS");
