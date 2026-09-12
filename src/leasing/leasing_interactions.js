@@ -24,6 +24,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");
+const externalEmailReply = require("./external_email_reply");
 
 module.exports = function leasingInteractionsModule({ pool, sms, leasingLifecycle, commBoundary }) {
   const router = express.Router();
@@ -147,6 +148,49 @@ module.exports = function leasingInteractionsModule({ pool, sms, leasingLifecycl
     );
   }
 
+  // Staff records an email already sent elsewhere. Caller holds thread state
+  // and has checked scoped takeover ownership; no transport is invoked here.
+  async function recordExternalEmailReply(client, { conversation, actor_user_id,
+    obligation_id, body, recipient, occurred_at, idempotency_key,
+    external_reference = null, already_sent }) {
+    if (already_sent !== true) throw httpErr(400, "Confirm that you already sent this email externally.");
+    if (!conversation?.id || !actor_user_id || !obligation_id) throw httpErr(400, "Scoped conversation ownership is required.");
+    if (typeof body !== "string" || !body.trim() || body.length > 1500) throw httpErr(400, "An email body of up to 1500 characters is required.");
+    if (typeof idempotency_key !== "string" || !/^[\x21-\x7e]{1,256}$/.test(idempotency_key)) throw httpErr(400, "A stable recording key is required.");
+    if (typeof occurred_at !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(occurred_at)
+      || !Number.isFinite(Date.parse(occurred_at)) || Date.parse(occurred_at) > Date.now()) throw httpErr(400, "Enter when the email was sent, with its timezone; it cannot be in the future.");
+    const [year,month,day] = occurred_at.slice(0,10).split('-').map(Number);
+    if (new Date(Date.UTC(year,month-1,day)).toISOString().slice(0,10) !== occurred_at.slice(0,10)) throw httpErr(400, "Enter a valid calendar date for the email.");
+    if (external_reference != null && (typeof external_reference !== "string" || external_reference.length > 500)) throw httpErr(400, "External reference must be text up to 500 characters.");
+    const person = (await client.query("select email from persons where id=$1", [conversation.person_id])).rows[0];
+    const email = person?.email?.trim();
+    if (!email || typeof recipient !== "string" || recipient.trim().toLowerCase() !== email.toLowerCase()) throw httpErr(409, "The recipient must match this person's recorded email address.");
+    const payload = { kind: "external_email_reply", body: body.trim(), recipient: email,
+      occurred_at: new Date(occurred_at).toISOString(), external_reference: external_reference?.trim() || null,
+      actor_user_id, already_sent: true, provider_delivery: "not_verified" };
+    const key = `${conversation.property_id}:${conversation.id}:${actor_user_id}:${idempotency_key}`;
+    const prior = (await client.query(`select ce.*, sl.raw || jsonb_build_object('captured_at',sl.received_at) as claim from comm_events ce
+      join comm_event_status_log sl on sl.comm_event_id=ce.id and sl.raw->>'kind'='external_email_reply'
+      where ce.provider='manual' and ce.provider_event_id=$1 order by sl.received_at limit 1`, [key])).rows[0];
+    if (prior) {
+      if (Object.keys(payload).some(k => prior.claim[k] !== payload[k])) throw httpErr(409, "This recording key already identifies a different external email claim.");
+      const { claim, ...event } = prior;
+      return { recorded: true, replayed: true, dispatched: false, provider_delivery: "not_verified", comm_event: event, external_email_reply: claim };
+    }
+    const event = (await client.query(`insert into comm_events
+      (property_id,person_id,conversation_id,channel,direction,body,sender_role,
+       provider,provider_event_id,provider_status,actor_user_id,sent_by_user_id,obligation_id,occurred_at)
+      values($1,$2,$3,'email','outbound',$4,'agent','manual',$5,'recorded_external',$6,$6,$7,$8) returning *`,
+      [conversation.property_id,conversation.person_id,conversation.id,payload.body,key,actor_user_id,obligation_id,payload.occurred_at])).rows[0];
+    const status = (await client.query(`insert into comm_event_status_log
+      (comm_event_id,provider,provider_event_id,provider_status,raw)
+      values($1,'manual',$2,'recorded_external',$3::jsonb) returning received_at`,
+      [event.id,key,JSON.stringify(payload)])).rows[0];
+    await client.query("update conversations set last_message_at=greatest(coalesce(last_message_at,'epoch'),$2::timestamptz) where id=$1", [conversation.id,payload.occurred_at]);
+    return { recorded: true, replayed: false, dispatched: false, provider_delivery: "not_verified",
+      comm_event: event, external_email_reply: {...payload, captured_at: status.received_at} };
+  }
+
   // ── inbound STOP/START maintains canonical opt-out truth. ──
   async function applyConsentSignal(client, { person_id, channel = "text", consent_state, source = "inbound" }) {
     if (!person_id || !consent_state) throw httpErr(400, "person_id and consent_state required.");
@@ -189,8 +233,9 @@ module.exports = function leasingInteractionsModule({ pool, sms, leasingLifecycl
               provider, provider_event_id, provider_status, provider_status_updated_at,
               actor_user_id, ai_drafted_at, human_approved_by_user_id, sent_by_user_id,
               call_duration_seconds, call_disposition, media_refs,
-              conversion_case_id, obligation_id, occurred_at
-         from comm_events
+              conversion_case_id, obligation_id, occurred_at,
+              ${externalEmailReply.evidenceSql("ce")} as external_email_reply
+         from comm_events ce
         where person_id=$1 and property_id=$2
         order by occurred_at asc`,
       [person_id, property_id]
@@ -263,6 +308,6 @@ module.exports = function leasingInteractionsModule({ pool, sms, leasingLifecycl
     finally { client.release(); }
   });
 
-  router._service = { recordOutboundText, recordProviderStatus, applyConsentSignal, recordCall, readThread, ensureConversation };
+  router._service = { recordOutboundText, recordExternalEmailReply, recordProviderStatus, applyConsentSignal, recordCall, readThread, ensureConversation };
   return router;
 };

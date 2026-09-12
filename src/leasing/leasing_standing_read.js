@@ -43,6 +43,7 @@
 //  READ-ONLY. Nothing here writes. Class 1 — permanent product primitive.
 // ════════════════════════════════════════════════════════════════════
 "use strict";
+const externalEmailReply = require("./external_email_reply");
 
 const { resolveRelationshipStage } = require("../shared/relationship_stage");
 const { resolveSpaceEconomics } = require("../money/effective_pricing");
@@ -106,6 +107,23 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
       recorded_at: row.occurred_at instanceof Date ? row.occurred_at.toISOString() : row.occurred_at,
       body: String(row.body).slice(0,4000),
       body_truncated: String(row.body).length > 4000 })).reverse(),
+  };
+
+  // Staff external replies remain attributed assertions, never prospect words
+  // or provider-confirmed delivery. Capture time is separate from occurrence.
+  const externalRows = await attempt("external_replies", async () => (await db.query(
+    `select ce.id, ce.body, ce.occurred_at, ce.actor_user_id, u.name as actor_name,
+            ${externalEmailReply.evidenceSql("ce")} as claim, count(*) over() as total_events
+       from comm_events ce left join users u on u.id=ce.actor_user_id
+      where ce.person_id=$1 and ce.property_id=$2 and ${externalEmailReply.predicateSql("ce")}
+      order by ce.occurred_at desc, ce.id desc limit 10`, [person_id,property_id])).rows, notes);
+  const externalReplies = externalRows === null ? {read_state:"READ_FAILED",messages:null} : {
+    read_state:"OK", interpretation:"Staff reports of external email replies; provider delivery and substantive resolution are not verified.",
+    truncated:externalRows.length>0 && Number(externalRows[0].total_events)>externalRows.length,
+    messages:externalRows.map(r=>({comm_event_id:r.id,channel:"email",body:r.body,
+      actor_user_id:r.actor_user_id,actor_name:r.actor_name,occurred_at:r.occurred_at,
+      captured_at:r.claim.captured_at,recipient:r.claim.recipient,external_reference:r.claim.external_reference,
+      provenance:"staff_external_email_attestation",claim_strength:"asserted",provider_delivery:"not_verified"})).reverse(),
   };
 
   // Recorded history, not a current recommendation. Keep corrections as
@@ -384,6 +402,7 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
     person: person ? { id: person.id, name: person.name } : null,
     property_id,
     inquiry_history: inquiryHistory,
+    external_replies: externalReplies,
     tour_history: tourHistory,
     opportunity: conversion ? { id: conversion.id, current_stage: conversion.current_stage } : null,
     target: app ? {

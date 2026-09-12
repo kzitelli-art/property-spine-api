@@ -23,6 +23,7 @@
 //          spawnObligationFromEvent, completeObligation }));
 
 const crypto = require("crypto");
+const externalEmailReply = require("../leasing/external_email_reply");
 // The ONE governed-charge language producer. Every quotable surface uses it;
 // there is no second wording helper anywhere in a call path.
 //  THE ONLY ROUTE TO A QUOTABLE PRICE. Never units.market_rent, never the
@@ -1157,8 +1158,10 @@ Reply with ONLY the message text.`;
         try {
           history = (await client1.query(
             `select direction, body from (
-               select direction, body, occurred_at, id from comm_events
-                where conversation_id=$1 and channel in ('text','website') and body is not null
+               select direction, case when ${externalEmailReply.predicateSql("ce")}
+                 then '[Staff recorded an external email; delivery unverified] ' || body else body end as body,
+                 occurred_at, id from comm_events ce
+                where conversation_id=$1 and channel in ('text','website','email') and body is not null
                 order by occurred_at desc nulls last, id desc limit 40
              ) t order by occurred_at asc nulls last, id asc`,
             [tx1.conversation_id]
@@ -1996,9 +1999,10 @@ Reply with ONLY the message text.`;
           [state.current_review_obligation_id, conv.property_id, conv.person_id, conv.id])).rows[0] || null
         : null;
       const messages = (await client.query(
-        `select id, channel, direction, body, sender_role, ai_drafted_at, sent_by_user_id, occurred_at,
-                provider_status, provider_status_updated_at
-           from comm_events where conversation_id=$1 and channel in ('text','website') and body is not null
+        `select id, channel, direction, body, sender_role, ai_drafted_at, sent_by_user_id, actor_user_id, occurred_at,
+                provider_status, provider_status_updated_at,
+                ${externalEmailReply.evidenceSql("ce")} as external_email_reply
+           from comm_events ce where conversation_id=$1 and channel in ('text','website','email') and body is not null
            order by occurred_at asc nulls last, id asc`,
         [conv.id]
       )).rows;
@@ -2322,6 +2326,17 @@ Reply with ONLY the message text.`;
     });
   }
 
+  // Recording an external reply neither completes takeover custody nor hands
+  // control back to AI. The existing owner check and state lock serialize work.
+  async function assertExternalReplyOwner(client, { conversationId, actorUserId }) {
+    const state = await loadThreadState(client, conversationId, true);
+    if (state.mode !== "human_takeover") throw httpErr(409, "Take ownership of this conversation before recording an external reply.");
+    const work = await assertHumanWorkOwner(client, state, actorUserId);
+    if (!work || !['open','in_progress','blocked','escalated'].includes(work.status)
+      || String(work.assigned_user_id) !== String(actorUserId)) throw httpErr(409, "An active conversation assignment to you is required.");
+    return work;
+  }
+
   // HAND BACK: thread human_takeover -> ai_active. The EXPLICIT counterpart to
   // take-over. The no-silent-re-entry invariant holds: only a deliberate,
   // server-authenticated manager action (this service, or an approved draft
@@ -2446,7 +2461,9 @@ Reply with ONLY the message text.`;
         let history;
         try {
           history = (await c1.query(
-            `select direction, body from (select direction, body, occurred_at, id from comm_events where conversation_id=$1 and channel in ('text','website') and body is not null order by occurred_at desc nulls last, id desc limit 40) t order by occurred_at asc nulls last, id asc`,
+            `select direction, body from (select direction,
+              case when ${externalEmailReply.predicateSql("ce")} then '[Staff recorded an external email; delivery unverified] ' || body else body end as body,
+              occurred_at, id from comm_events ce where conversation_id=$1 and channel in ('text','website','email') and body is not null order by occurred_at desc nulls last, id desc limit 40) t order by occurred_at asc nulls last, id asc`,
             [prep.conv.id]
           )).rows;
         } finally { c1.release(); }
@@ -2563,7 +2580,7 @@ Reply with ONLY the message text.`;
   router._service = {
     preGenerationPolicy, postGenerationPolicy, directPricingReply, resolveContext, buildMessages,
     sendDraftService, getConversationStateService, takeOverConversationService,
-    handBackConversationService,
+    handBackConversationService, assertExternalReplyOwner,
     regenerateDraftService, resolveConversationByPair,
     processInbound,
   };

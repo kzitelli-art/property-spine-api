@@ -1702,10 +1702,16 @@ async function answer(db, anthropic, {
     };
     const messages = history.messages || [];
     const lines = messages.map(m => `${String(m.recorded_at).slice(0,10)} — ${m.body}${m.body_truncated ? " [message shortened]" : ""}`);
+    const external = person.external_replies;
+    const externalLines = external?.read_state === "OK" ? (external.messages || []).map(m =>
+      `${String(m.occurred_at).slice(0,10)} — ${m.actor_name || "Staff"} recorded an external email (delivery unverified): ${m.body}`) : [];
+    const externalText = externalLines.length ? `\n\nRecorded staff replies:\n${externalLines.join("\n\n")}`
+      : external && external.read_state !== "OK" ? "\n\nExternal reply history could not be read." : "";
     return { outcome: "answered", answer: messages.length
-      ? `${person.subject_name}'s recorded website inquiries${history.truncated ? " (latest ten)" : ""}:\n${lines.join("\n\n")}`
-      : `No website inquiry messages are recorded in ${person.subject_name}'s communication history.`,
-      grounded_on: { inquiry_read_state: "OK", inquiry_history: withoutDatabaseIds(history) }, references: [] };
+      ? `${person.subject_name}'s recorded website inquiries${history.truncated ? " (latest ten)" : ""}:\n${lines.join("\n\n")}${externalText}`
+      : `No website inquiry messages are recorded in ${person.subject_name}'s communication history.${externalText}`,
+      grounded_on: { inquiry_read_state: "OK", inquiry_history: withoutDatabaseIds(history),
+        ...(external ? {external_replies:withoutDatabaseIds(external)} : {}) }, references: [] };
   }
 
   if (subject === "leasing_person" && isApplicationSendStateQuestion(q)) {

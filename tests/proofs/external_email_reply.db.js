@@ -1,0 +1,100 @@
+"use strict";
+// Class 3: synthetic staff assertions through owned HTTP, never mailbox delivery.
+const assert=require('node:assert/strict'),fs=require('node:fs'),{randomUUID}=require('node:crypto');
+const boundary=require('../e2e/proof_boundary'); require('../e2e/proof_fence_preload');
+const {Pool}=require('pg'),sessions=require('../../src/identity/staff_session_service');
+(async()=>{
+ await boundary.assertDatabase(); await boundary.waitServer(process.env.E2E_API_BASE);
+ assert(process.env.E2E_SMS_LOG); assert(process.env.E2E_ANTHROPIC_LOG);
+ const pool=new Pool({connectionString:boundary.manifest().url,ssl:false});
+ const one=async(sql,args=[])=>(await pool.query(sql,args)).rows[0];
+ const log=p=>fs.existsSync(p)?fs.readFileSync(p,'utf8'):'';
+ let checks=0; const check=(v,label)=>{assert(v,label);checks++;console.log('PASS '+label);};
+ try {
+  const tag=randomUUID(),p=await one("select id from properties where name='Skyline E2E' order by created_at desc limit 1"),foreign=await one("select id from properties where name='Website inquiry inactive E2E' order by created_at desc limit 1");
+  assert(p&&foreign);
+  const actor=async(label,property)=>{
+   const phone='+1500'+String(parseInt(randomUUID().slice(0,6),16)).padStart(7,'0').slice(-7);
+   const person=await one('insert into persons(name,phone) values($1,$2) returning id',[label+' '+tag,phone]);
+   const user=await one("insert into users(name,phone,role,is_active,status,account_kind,person_id) values($1,$2,'leasing_agent',true,'active','human_staff',$3) returning id",[label+' '+tag,phone,person.id]);
+   await pool.query("insert into property_team_assignments(user_id,property_id,role_title,allowed_modules,active) values($1,$2,'Leasing Agent','{leasing}',true)",[user.id,property]);
+   const session=await sessions.issueStaffSession(pool,{userId:user.id,propertyId:property,purpose:'bootstrap_invite'});
+   return {...user,phone,token:session.session_token||session.token};
+  };
+  const owner=await actor('External email owner',p.id),other=await actor('Other staff',p.id),outside=await actor('Foreign staff',foreign.id);
+  await pool.query("insert into communication_lines(e164,line_type,property_id,authority_ceiling,permitted_audience,inbound_enabled,outbound_enabled,outbound_policy,status) select $1,'property_facing',$2,'external','residents_and_prospects',true,true,'proactive','active' where not exists(select 1 from communication_lines where property_id=$2 and status='active' and outbound_enabled=true)",[owner.phone,p.id]);
+  const source='Owned external email '+tag;
+  await pool.query("insert into lead_sources(name,source_type) values($1,'website')",[source]);
+  const smsPerson=await one('insert into persons(name,primary_phone_e164) values($1,$2) returning id',['SMS control '+tag,'+1500'+String(parseInt(tag.slice(0,6),16)).padStart(7,'0').slice(-7)]);
+  const smsConversation=await one('insert into conversations(person_id,property_id) values($1,$2) returning id',[smsPerson.id,p.id]);
+  await pool.query("insert into contact_preferences(person_id,channel,consent_state) values($1,'text','opted_in')",[smsPerson.id]);
+  // Setup ends here; subsequent SQL only observes. All prospect/staff work uses HTTP.
+  const call=async(token,method,path,body,headers={})=>{const r=await fetch(process.env.E2E_API_BASE+path,{method,headers:{'content-type':'application/json',...(token?{'x-staff-session':token}:{}),...headers},...(body?{body:JSON.stringify(body)}:{})});return {status:r.status,body:await r.json()};};
+  const beforeControl=log(process.env.E2E_SMS_LOG);
+  const otp=await call(null,'POST','/auth/sms/start',{phone_number:owner.phone});assert.equal(otp.status,200,JSON.stringify(otp));
+  assert(log(process.env.E2E_SMS_LOG).slice(beforeControl.length).includes(owner.phone),'owned OTP control establishes transport observation');
+  const sms=log(process.env.E2E_SMS_LOG),model=log(process.env.E2E_ANTHROPIC_LOG);
+  const name='Email Prospect '+tag.slice(0,8),email=tag+'@example.invalid';
+  const intake=async(message,key)=>call(null,'POST','/leasing/intake',{property_id:p.id,source,name,email,attempt_sms:false,response_channel:'website',message},{'x-intake-secret':'e2e-intake','idempotency-key':tag+'-'+key});
+  const first=await intake('Where can I find the floor plan?','first');assert.equal(first.status,200,JSON.stringify(first));
+  const cid=first.body.conversation_id,route='/operator/leasing/conversations/'+cid+'/reply';
+  const detail=()=>call(owner.token,'GET','/operator/leasing/conversations/'+cid);
+  const queue=async()=>{const r=await call(owner.token,'GET','/operator/leasing/conversation-queue');assert.equal(r.status,200);return (r.body.items||r.body.conversations).find(x=>x.conversation_id===cid);};
+  const unclaimed=await call(owner.token,'POST',route,{channel:'email',already_sent:true,recipient:email,body:'Not owned',occurred_at:new Date().toISOString(),idempotency_key:tag+'-unclaimed'});
+  check(unclaimed.status===409,'unclaimed conversation cannot record a human reply');
+  const take=await call(owner.token,'POST','/operator/conversations/'+cid+'/take-over',{});assert.equal(take.status,200);
+  const claimed=await detail();check(claimed.body.human_owner.user_id===owner.id&&claimed.body.waiting_on==='manager','takeover keeps inquiry unanswered with named owner');
+  const workId=claimed.body.human_owner.obligation_id;
+  const sentAt=new Date().toISOString();
+  const body={channel:'email',already_sent:true,recipient:email,body:'I emailed the requested floor plan.',occurred_at:sentAt,idempotency_key:tag+'-reply',external_reference:'synthetic-mailbox-'+tag};
+  const noAttestation=await call(owner.token,'POST',route,{...body,already_sent:false});check(noAttestation.status===400,'recording requires explicit already-sent attestation');
+  const stolen=await call(other.token,'POST',route,body);check(stolen.status===409,'second staff cannot record against another owner');
+  const cross=await call(outside.token,'POST',route,{...body,property_id:p.id,actor_user_id:owner.id});check(cross.status===403||cross.status===404,'claimed body identity cannot defeat property scope');
+  const mismatch=await call(owner.token,'POST',route,{...body,recipient:'different@example.invalid'});check(mismatch.status===409,'recipient mismatch refuses without choosing another contact');
+  const future=await call(owner.token,'POST',route,{...body,occurred_at:new Date(Date.now()+86400000).toISOString()});check(future.status===400,'future occurrence cannot answer an inquiry');
+  const invalid=await call(owner.token,'POST',route,{...body,occurred_at:'2026-02-30T12:00:00Z'});check(invalid.status===400,'invalid calendar occurrence refuses');
+  const blankKey=await call(owner.token,'POST',route,{...body,idempotency_key:' '});check(blankKey.status===400,'blank recording identity refuses');
+  const parallel=await Promise.all([call(owner.token,'POST',route,body),call(owner.token,'POST',route,body)]);
+  const result=parallel.find(r=>r.body.replayed===false)||parallel[0];assert.equal(result.status,200,JSON.stringify(result));
+  check(parallel.every(r=>r.status===200)&&parallel.filter(r=>r.body.replayed===false).length===1,'concurrent same recording creates once and replays');
+  check(result.body.recorded===true&&result.body.dispatched===false&&result.body.provider_delivery==='not_verified','external reply receipt asserts recording, never delivery');
+  const replay=await call(owner.token,'POST',route,body);check(replay.status===200&&replay.body.replayed===true&&replay.body.comm_event.id===result.body.comm_event.id,'same request replays one attributed record');
+  const conflict=await call(owner.token,'POST',route,{...body,body:'Changed external email text'});check(conflict.status===409,'changed body under same key conflicts');
+  const timeConflict=await call(owner.token,'POST',route,{...body,occurred_at:new Date(Date.parse(sentAt)-1000).toISOString()});check(timeConflict.status===409,'changed occurrence under same key conflicts');
+  const observed=await one('select * from comm_events where id=$1',[result.body.comm_event.id]);
+  check(observed.channel==='email'&&observed.actor_user_id===owner.id&&observed.provider_status==='recorded_external'&&observed.obligation_id===workId,'existing communication records exact actor, channel and work');
+  check((await one("select count(*)::int n from comm_events where conversation_id=$1 and channel='email'",[cid])).n===1,'retry/conflict do not duplicate email');
+  const answered=await detail(),answeredQueue=await queue();
+  check(answered.body.messages.some(m=>m.id===observed.id&&m.channel==='email'),'conversation reads the email event');
+  check(answered.body.mode==='human_takeover'&&answered.body.human_owner.user_id===owner.id,'recording preserves human control and custody');
+  check(answered.body.messages.find(m=>m.id===observed.id).external_email_reply?.captured_at
+    && (await one('select status from obligations where id=$1',[workId])).status==='in_progress','capture time is exposed and reply never completes takeover custody');
+  check(answeredQueue.waiting_on==='prospect'&&answeredQueue.last_delivered_outbound_at===null&&answeredQueue.delivery_state!=='delivered','manual reply answers pending inquiry without provider-delivery claim');
+  const card=await call(owner.token,'GET','/operator/leasing/person-card?person_id='+first.body.person_id);
+  check(card.status===200&&card.body.history.some(e=>e.detail?.channel==='email'&&e.claim_strength==='asserted'),'Person history labels external email as staff assertion');
+  const foreignCard=await call(outside.token,'GET','/operator/leasing/person-card?person_id='+first.body.person_id);
+  check(!JSON.stringify(foreignCard.body).includes(body.body),'foreign property Person read does not expose reply body');
+  const ask=await call(owner.token,'POST','/operator/ask-spine/ask',{question:'What did '+name+' ask about?'});
+  if(!ask.body.answer?.includes(body.body)) console.log('ASK_OBSERVATION '+JSON.stringify(ask));
+  check(ask.status===200&&ask.body.answer.includes(body.body)&&/unverified|not verified/i.test(ask.body.answer),'Ask reads attributed external reply without delivery claim');
+  check(ask.body.grounded_on.inquiry_history.messages.every(m=>m.channel==='website')
+    && ask.body.grounded_on.external_replies.messages[0].claim_strength==='asserted','Ask retains separate prospect submissions and staff assertions');
+  const foreignAsk=await call(outside.token,'POST','/operator/ask-spine/ask',{question:'What did '+name+' ask about?'});
+  check(!JSON.stringify(foreignAsk.body).includes(body.body),'foreign property Ask does not expose reply body');
+  const follow=await intake('A new question: is the balcony private?','follow');assert.equal(follow.status,200);
+  check((await queue()).waiting_on==='manager','new inbound returns required attention to the same human');
+  check((await detail()).body.human_owner.obligation_id===workId,'new inquiry retains exact existing accountable work');
+  const stale=await call(owner.token,'POST',route,{...body,idempotency_key:tag+'-older',body:'Earlier email retained after the newer inquiry.',occurred_at:sentAt});check(stale.status===200,'older external email can be recorded as history');
+  check((await queue()).waiting_on==='manager','older occurrence cannot answer newer inbound');
+  const text=await call(owner.token,'POST',route,{body:'Default text remains a text.'});check(text.status===409&&/no verified text number/i.test(text.body.error),'default SMS behavior still requires verified phone');
+  const handback=await call(owner.token,'POST','/operator/conversations/'+cid+'/hand-back',{});check(handback.status===200,'only explicit handback releases takeover control');
+  const afterHandback=await call(owner.token,'POST',route,body);check(afterHandback.status===409,'old retry cannot bypass revoked takeover authority');
+  check(log(process.env.E2E_SMS_LOG)===sms&&log(process.env.E2E_ANTHROPIC_LOG)===model,'recording and reading use neither transport nor model');
+  const defaultSms=await call(owner.token,'POST','/operator/leasing/conversations/'+smsConversation.id+'/reply',{body:'Explicit synthetic default SMS positive control.'});
+  check(defaultSms.status===200&&defaultSms.body.sent===true,'unchanged default text action still sends through permitted fake transport');
+  check(defaultSms.body.comm_event.channel==='text'&&defaultSms.body.comm_event.actor_user_id===owner.id
+    && !defaultSms.body.comm_event.human_approved_at,'default SMS keeps text provenance and no invented approval');
+  check(log(process.env.E2E_SMS_LOG).length>sms.length,'default SMS positive control reaches observed fake log');
+  console.log('External email reply: '+checks+' checks passed');
+ }finally{await pool.end();}
+})().catch(e=>{console.error(e);process.exitCode=1;});

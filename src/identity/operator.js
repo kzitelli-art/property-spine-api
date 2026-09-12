@@ -32,6 +32,7 @@
 //       the operator-facing actions agent.js exposes. Mounted under "/".
 
 const crypto = require("crypto");
+const externalEmailReply = require("../leasing/external_email_reply");
 const staffSessions = require("./staff_session_service.js");
 const { resolveDemoProperty } = require("../shared/demo_property_identity.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
@@ -842,6 +843,8 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     const body = (req.body && typeof req.body.body === "string") ? req.body.body.trim() : "";
     if (!body) return res.status(400).json({ error: "Write a message first." });
     if (body.length > 1500) return res.status(400).json({ error: "Message is too long (1500 characters maximum)." });
+    const channel = req.body?.channel || "text";
+    if (!["text", "email"].includes(channel)) return res.status(400).json({ error: "Unsupported reply channel." });
     if (!interactionsService || typeof interactionsService.recordOutboundText !== "function") {
       return res.status(503).json({ error: "The canonical communications service is unavailable." });
     }
@@ -861,6 +864,19 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       if (life.close_seq != null && (life.reopen_seq == null || Number(life.reopen_seq) < Number(life.close_seq))) {
         const e = httpErr(409, "Reopen the relationship before sending another message.");
         throw e;
+      }
+
+      if (channel === "email") {
+        if (!interactionsService.recordExternalEmailReply || !agentService.assertExternalReplyOwner) throw httpErr(503, "External reply recording is unavailable.");
+        const work = await agentService.assertExternalReplyOwner(client, { conversationId: conv.id, actorUserId: req.operator.id });
+        const out = await interactionsService.recordExternalEmailReply(client, {
+          conversation: conv, actor_user_id: req.operator.id, obligation_id: work.id, body,
+          recipient: req.body.recipient, occurred_at: req.body.occurred_at,
+          idempotency_key: req.body.idempotency_key, external_reference: req.body.external_reference,
+          already_sent: req.body.already_sent,
+        });
+        await client.query("commit");
+        return res.json({ ...out, receipt: "Your report of the external email was recorded. Delivery is not verified; you still own the conversation." });
       }
 
       const person = (await client.query(
@@ -1070,6 +1086,12 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       where direction='outbound' and sender_role in ('agent','ai') and provider_status in ('sent','delivered')
       group by conversation_id
     ),
+    manual_out as (
+      select ce.conversation_id, max(ce.occurred_at) as at from comm_events ce
+      join conversations mc on mc.id=ce.conversation_id and mc.property_id=ce.property_id and mc.person_id=ce.person_id
+      where ${externalEmailReply.predicateSql("ce")}
+      group by ce.conversation_id
+    ),
     any_out as (
       select distinct on (conversation_id) conversation_id, occurred_at as at, provider_status
       from comm_events where direction='outbound' and sender_role in ('agent','ai')
@@ -1094,6 +1116,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         pr.name as person_name,
         coalesce(ats.mode,'ai_active') as control_mode,
         qi.at as last_inbound_at, qo.at as last_delivered_outbound_at,
+        mo.at as last_manual_reply_at,
         (qi.channel='website' and not exists (
           select 1 from agent_runs ar left join agent_drafts ad on ad.agent_run_id=ar.id
           where ar.conversation_id=e.conversation_id and ar.input_thread_version=ats.thread_version
@@ -1106,7 +1129,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         cr.reason_note as closure_note, cr.actor_id as closure_actor_id,
         cr.closed_by_name as closure_actor_name, cr.closed_at as closure_occurred_at,
         cr.closed_recorded_at as closure_recorded_at,
-        (qi.at is not null and (qo.at is null or qi.at >= qo.at)) as inbound_unanswered,
+        (qi.at is not null and (greatest(qo.at,mo.at) is null or qi.at >= greatest(qo.at,mo.at))) as inbound_unanswered,
         (li.close_seq is not null and (li.reopen_seq is null or li.reopen_seq < li.close_seq)) as is_closed,
         (lt.conversation_id is not null) as is_booked,
         (qi.at is not null or ao.at is not null) as has_engagement,
@@ -1119,6 +1142,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       left join live_tour lt on lt.conversation_id = e.conversation_id
       left join qual_in qi on qi.conversation_id = e.conversation_id
       left join qual_out qo on qo.conversation_id = e.conversation_id
+      left join manual_out mo on mo.conversation_id = e.conversation_id
       left join any_out ao on ao.conversation_id = e.conversation_id
       left join attempts_since_inbound asi on asi.conversation_id = e.conversation_id
       left join agent_thread_state ats on ats.conversation_id = e.conversation_id
@@ -1141,6 +1165,8 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
              when inbound_unanswered and website_needs_staff then 'manager'
              when inbound_unanswered and control_mode = 'awaiting_review' then 'manager'
              when inbound_unanswered and control_mode = 'ai_active' then 'ai'
+             when last_manual_reply_at > coalesce(last_inbound_at,'epoch')
+               and last_manual_reply_at >= coalesce(last_delivered_outbound_at,'epoch') then 'prospect'
              when last_delivered_outbound_at is not null
                   and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at)
                   and outreach_attempts >= 3 then 'manager'
@@ -1158,6 +1184,8 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
                when inbound_unanswered and website_needs_staff then 'website_inquiry_pending_human'
                when inbound_unanswered and control_mode = 'awaiting_review' then 'qualifying_prospect_inbound_unanswered_pending_human'
                when inbound_unanswered then 'qualifying_prospect_inbound_unanswered'
+               when last_manual_reply_at > coalesce(last_inbound_at,'epoch')
+                 and last_manual_reply_at >= coalesce(last_delivered_outbound_at,'epoch') then 'recorded_external_reply_is_latest'
                when last_delivered_outbound_at is not null and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at) and outreach_attempts >= 3 then 'cadence_exhausted_pending_human'
                when last_delivered_outbound_at is not null and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at) then 'delivered_outreach_is_latest'
                when has_engagement then 'engaged_no_clear_owner'
@@ -1273,7 +1301,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         PROJECTION_CTE + `
         select conversation_id, person_id, person_name, lead_status,
                commercial_state, waiting_on, control_mode, delivery_state,
-               last_inbound_at, last_delivered_outbound_at, last_meaningful_activity_at,
+               last_inbound_at, last_delivered_outbound_at, last_manual_reply_at, last_meaningful_activity_at,
                tour_id, tour_status, closure_reason, closure_note, closure_actor_id,
                closure_actor_name, closure_occurred_at, closure_recorded_at, outreach_attempts,
                last_any_outbound_at, last_outbound_status,
@@ -2665,6 +2693,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const msgs = (await client.query(
         `select ce.id, ce.conversation_id, ce.channel, ce.direction, ce.sender_role, ce.body,
                 ce.occurred_at, ce.provider_status, ce.sent_by_user_id,
+                ${externalEmailReply.evidenceSql("ce")} as external_email_reply,
                 su.name as sent_by_name
            from comm_events ce
            left join users su on su.id=ce.sent_by_user_id
@@ -2676,12 +2705,13 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           ? (p.name || "Prospect")
           : (m.sent_by_name || (m.sender_role === "ai" ? "AI leasing agent" : "Property team"));
         entries.push({
-          occurred_at: m.occurred_at, recorded_at: m.occurred_at,
-          source: "conversation", verb: "sent",
+          occurred_at: m.occurred_at, recorded_at: m.external_email_reply?.captured_at || m.occurred_at,
+          source: "conversation", verb: m.external_email_reply ? "recorded_external_email" : "sent",
           actor: { id: m.sent_by_user_id || null, name: who, kind: m.direction === "inbound" ? "person" : "user" },
-          summary: `${who} sent: ${String(m.body || "").slice(0, 140)}`,
-          claim_strength: "proven",
-          detail: { conversation_id: m.conversation_id, channel: m.channel, direction: m.direction, body: m.body, provider_status: m.provider_status || null },
+          summary: `${who} ${m.external_email_reply ? "reported an external email (delivery unverified)" : "sent"}: ${String(m.body || "").slice(0, 140)}`,
+          claim_strength: m.external_email_reply ? "asserted" : "proven",
+          detail: { conversation_id: m.conversation_id, channel: m.channel, direction: m.direction, body: m.body, provider_status: m.provider_status || null,
+            ...(m.external_email_reply ? {external_email_reply: m.external_email_reply} : {}) },
           supersedes: null,
         });
       }
