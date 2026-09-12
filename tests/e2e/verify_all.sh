@@ -274,6 +274,7 @@ if [ "$FAILED" = "0" ]; then
   SERVER_PID=$!
   node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID" || exit 1
   step "real inquiry classification without consent" node tests/proofs/real_intake_classification.db.js
+  step "authenticated intake delivery replay" node tests/proofs/intake_delivery_idempotency.db.js
   step "staff inquiry ownership and response" node tests/proofs/conversation_takeover_owner.db.js
   step "staff inquiry native tour booking" node tests/proofs/staff_conversation_tour.db.js
   stop_owned_server || exit 1

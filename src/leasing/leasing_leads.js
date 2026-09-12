@@ -458,7 +458,14 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // the AI opening response with NO transport call and NO sent claim
   // ('ai_response_prepared', not 'ai_text_sent').
   // Returns a result object; throws { httpStatus, publicReceipt } on known failures.
-  async function intakeProspect(b, { authenticatedRealIntake = false } = {}) {
+  function stableIntakeJson(value) {
+    if (Array.isArray(value)) return '[' + value.map(stableIntakeJson).join(',') + ']';
+    if (value && typeof value === 'object') return '{' + Object.keys(value).sort()
+      .map(key => JSON.stringify(key) + ':' + stableIntakeJson(value[key])).join(',') + '}';
+    return JSON.stringify(value);
+  }
+
+  async function intakeProspect(b, { authenticatedRealIntake = false, deliveryKey } = {}) {
     const propertyId = b.property_id;
     if (!propertyId) { const e = new Error("property_id is required."); e.httpStatus = 400; e.publicReceipt = e.message; throw e; }
 
@@ -468,14 +475,70 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     const sourceName = b.source || b.source_name || null;
     const attemptSms = b.attempt_sms !== false;   // default true (authenticated path unchanged)
 
+    // source_lead_id identifies a provider's lead, NOT necessarily a delivery.
+    // Only the authenticated HTTP header opts into replay protection. Preserve
+    // legacy repeat touches and all raw source provenance unchanged.
+    let delivery = null;
+    if (authenticatedRealIntake && deliveryKey !== undefined) {
+      if (typeof deliveryKey !== 'string' || !/^[\x21-\x7e]{1,256}$/.test(deliveryKey)
+          || (sourceName !== null && typeof sourceName !== 'string')) {
+        const e = new Error('Idempotency-Key must contain 1–256 printable non-space characters.');
+        e.httpStatus = 400; e.publicReceipt = e.message; throw e;
+      }
+      const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+      delivery = {
+        key_digest: digest(stableIntakeJson([String(propertyId).toLowerCase(), (sourceName || '').trim().toLowerCase(), deliveryKey])),
+        fingerprint: digest(stableIntakeJson(b)),
+      };
+    }
+
     let conversationId = null;
     const client = await pool.connect();
-    let person, createdPerson, lead, reusedOpportunity, prop, strategyEnvelope = null;
+    let person, createdPerson, lead, reusedOpportunity, prop, capturedEvent, strategyEnvelope = null;
     try {
       await client.query("begin");
 
       prop = (await client.query(`select id, name, coalesce(display_name, name) as display_name from properties where id=$1`, [propertyId])).rows[0];
       if (!prop) { await client.query("rollback"); const e = new Error("No property with that id."); e.httpStatus = 404; e.publicReceipt = e.message; throw e; }
+
+      if (delivery) {
+        // Transaction-owned lock: concurrent retries cannot both capture. The
+        // committed lead_received event is the durable anchor after a crash;
+        // retry never re-runs capture, drafting or transport once it exists.
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', ['leasing-intake:' + delivery.key_digest]);
+        const prior = (await client.query(
+          `select e.id, e.lead_id, e.metadata, l.person_id, l.status,
+                  (select c.id from conversations c where c.property_id=l.property_id and c.person_id=l.person_id limit 1) conversation_id
+             from lead_events e join leasing_leads l on l.id=e.lead_id
+            where l.property_id=$1 and e.event_type='lead_received'
+              and e.metadata->'intake_delivery'->>'key_digest'=$2
+            order by e.created_at limit 1`, [propertyId, delivery.key_digest])).rows[0];
+        if (prior) {
+          if (prior.metadata.intake_delivery.fingerprint !== delivery.fingerprint) {
+            const e = new Error('This Idempotency-Key was already used for a different intake payload.');
+            e.httpStatus = 409; e.publicReceipt = e.message; throw e;
+          }
+          const completion = (await client.query(
+            `select event_type, metadata from lead_events where lead_id=$1
+              and event_type in ('ai_response_prepared','ai_text_sent')
+              and metadata->'intake_delivery'->>'key_digest'=$2
+              order by created_at desc limit 1`, [prior.lead_id, delivery.key_digest])).rows[0];
+          const responseState = completion ? (completion.event_type === 'ai_response_prepared' ? 'prepared' : completion.metadata.sent ? 'sent' : 'not_sent')
+            : prior.metadata.intake_delivery.response_requested ? 'not_established' : 'not_required';
+          await client.query('commit');
+          return {
+            receipt: responseState === 'not_established'
+              ? 'Inquiry already captured. Automatic response completion is not established; check the conversation before sending. No new response was attempted by this retry.'
+              : 'Inquiry already captured; returning its existing response state. No new response was attempted by this retry.',
+            person_id: prior.person_id, lead_id: prior.lead_id, conversation_id: prior.conversation_id,
+            new_person: prior.metadata.intake_delivery.new_person,
+            reused_opportunity: prior.metadata.repeat,
+            first_response_sent: responseState === 'not_established' ? null : responseState === 'sent',
+            status: prior.status, property_name: prop.name, replayed: true,
+            capture: { state: 'captured', lead_event_id: prior.id, response_state: responseState },
+          };
+        }
+      }
 
       let sourceId = null;
       let claimedButUnmapped = false;
@@ -532,9 +595,10 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
          values ($1,$2,$3,$4,$5,$6)`,
         [lead.id, person.id, sourceId, b.source_lead_id || null, b.source_listing_id || null, JSON.stringify(b)]);
 
-      await recordLeadEvent(client, {
+      capturedEvent = await recordLeadEvent(client, {
         leadId: lead.id, type: "lead_received", actorType: "prospect", actorId: person.id,
-        metadata: { source: sourceName, repeat: reusedOpportunity },
+        metadata: { source: sourceName, repeat: reusedOpportunity,
+          ...(delivery ? { intake_delivery: { ...delivery, new_person: createdPerson, response_requested: !!phone } } : {}) },
       });
 
       // ── PROSPECT ACTIVATION (Path A) — write the two facts the comms boundary
@@ -741,6 +805,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
               leadId: lead.id, type: "ai_text_sent", actorType: "ai", commEventId: commEvent.id,
               metadata: {
                 sent: wire.sent, reason: wire.reason || null,
+                ...(delivery ? { intake_delivery: delivery } : {}),
                 ai_operating_context_hash: drafted.operatingContextHash || null,
                 ai_operating_context_applied: !!drafted.operatingContextApplied,
                 ai_operating_context_unavailable: !!drafted.operatingContextUnavailable,
@@ -765,6 +830,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
               leadId: lead.id, type: "ai_response_prepared", actorType: "ai", commEventId: commEvent.id,
               metadata: {
                 sent: false, prepared: true, channel: b.response_channel || "demo_browser",
+                ...(delivery ? { intake_delivery: delivery } : {}),
                 ai_operating_context_hash: drafted.operatingContextHash || null,
                 ai_operating_context_applied: !!drafted.operatingContextApplied,
                 ai_operating_context_unavailable: !!drafted.operatingContextUnavailable,
@@ -785,6 +851,8 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         new_person: createdPerson, reused_opportunity: reusedOpportunity,
         first_response_sent: firstResponseSent, status: lead.status, draft_body: draftBody,
         property_name: prop.name,
+        ...(delivery ? { replayed: false, capture: { state: 'captured', lead_event_id: capturedEvent.id,
+          response_state: !phone ? 'not_required' : firstResponseSent ? 'sent' : attemptSms ? 'not_sent' : 'prepared' } } : {}),
       };
     } catch (e) {
       try { await client.query("rollback"); } catch {}
@@ -795,11 +863,13 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // ── 1. AUTHENTICATED INTAKE (unchanged contract) — thin wrapper on the service. ──
   router.post("/leasing/intake", requireIntakeSecret, async (req, res) => {
     try {
-      const out = await intakeProspect(req.body || {}, { authenticatedRealIntake: true });
+      const out = await intakeProspect(req.body || {}, { authenticatedRealIntake: true, deliveryKey: req.get('Idempotency-Key') });
       return res.json({
         receipt: out.receipt, person_id: out.person_id, lead_id: out.lead_id,
         new_person: out.new_person, reused_opportunity: out.reused_opportunity,
         first_response_sent: out.first_response_sent, status: out.status,
+        conversation_id: out.conversation_id,
+        ...(out.capture ? { replayed: out.replayed, capture: out.capture } : {}),
       });
     } catch (e) {
       if (e.httpStatus) return res.status(e.httpStatus).json({ receipt: e.publicReceipt || e.message });
