@@ -1,0 +1,747 @@
+{
+ "server": "8cf5078752e62785d239f5721e735fcadb64ec37",
+ "summary": {
+  "passed": 33,
+  "failed": 0,
+  "observations": 16
+ },
+ "results": [
+  {
+   "section": "shape-as-found",
+   "label": "the rehearsal property reproduces the production read's shape: 64 parent and 107 other legacy units, one placeholder each, no use, no lineage, no organization, basis unknown",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "units": 171,
+    "spaces": 171,
+    "placeholders": 171,
+    "use_configured": 0,
+    "beds": 0,
+    "leases": 0,
+    "source_rows": 0,
+    "opening_positions": 0,
+    "basis": "unknown",
+    "organization_id": null,
+    "parents": 64,
+    "non_parent": 107,
+    "tracker_positions": 105
+   }
+  },
+  {
+   "section": "shape-as-found",
+   "label": "before: canonical availability holds all 171 placeholders as occupancy not established",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "occupancy_unknown": 171
+   }
+  },
+  {
+   "section": "shape-as-found",
+   "label": "before: occupancy by basis",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "reason": "leasing_basis_unsupported"
+   }
+  },
+  {
+   "section": "shape-as-found",
+   "label": "rehearsal property exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "adopt",
+   "label": "super-admin adoption places the existing property with the organization, keeping its id",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "ok": true,
+     "property_id": "<uuid>",
+     "organization_id": "<uuid>",
+     "already": false,
+     "receipt": "Greenery now belongs to this organization."
+    }
+   }
+  },
+  {
+   "section": "adopt",
+   "label": "adoption is idempotent",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "adopt",
+   "label": "an organization admin cannot use the adoption door",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403
+   }
+  },
+  {
+   "section": "first-access",
+   "label": "the organization-admin door for an organization-less existing account",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 409,
+    "reason": "existing_account_authority_conflict"
+   }
+  },
+  {
+   "section": "first-access",
+   "label": "the super-admin door attaches the existing account to the adopted property without a second user",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": {
+     "ok": true,
+     "user": {
+      "id": "<uuid>",
+      "name": "Mike (rehearsal) c9de9f3d",
+      "email": "<email>",
+      "phone": "<phone>"
+     },
+     "organization_id": "<uuid>",
+     "property_id": "<uuid>",
+     "role_key": "property_admin",
+     "platform_role": "member",
+     "note": "User provisioned. They can now log in via phone OTP at the operator app."
+    }
+   }
+  },
+  {
+   "section": "first-access",
+   "label": "the account's platform role and person identity are unchanged",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "before": {
+     "platform_role": "member",
+     "organization_id": null,
+     "person_id": "<uuid>"
+    },
+    "after": {
+     "platform_role": "member",
+     "organization_id": "<uuid>",
+     "person_id": "<uuid>"
+    }
+   }
+  },
+  {
+   "section": "first-access",
+   "label": "one active team assignment exists at the property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "role_key": "property_admin",
+    "can_manage_roles": true,
+    "allowed_modules": [
+     "management",
+     "leasing",
+     "maintenance",
+     "reporting",
+     "asset_management"
+    ],
+    "active": true
+   }
+  },
+  {
+   "section": "first-access",
+   "label": "person-level assignment and staff identity after the admin door (tour hosting and offer authorship need a resolved identity; Deal Setup does not)",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "person_assignments": 0,
+    "identity": "not_assigned_here",
+    "basis": "no_assignment_at_property"
+   }
+  },
+  {
+   "section": "first-access",
+   "label": "Mike holds a session at the property",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "deal",
+   "label": "the organization admin creates the deal container",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": {
+     "deal": {
+      "id": "<uuid>",
+      "deal_name": "The Greenery",
+      "onboarding_type": "existing_asset",
+      "status": "created",
+      "organization_id": "<uuid>",
+      "organization_absent_reason": null,
+      "created_at": "2026-09-12T12:53:24.457Z",
+      "authority_basis": "platform_role:org_admin"
+     },
+     "receipt": "Deal \"The Greenery\" created."
+    }
+   }
+  },
+  {
+   "section": "deal",
+   "label": "the existing property joins the deal; no replacement property is created",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "receipt": "Greenery is now part of \"The Greenery\"."
+   }
+  },
+  {
+   "section": "read-source",
+   "label": "the rent roll is uploaded and its bytes retained",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": {
+     "artifact": {
+      "id": "<uuid>",
+      "filename": "greenery-legacy-rehearsal-rent-roll.csv",
+      "byte_size": 7040,
+      "uploaded_at": "2026-09-12T12:53:24.480Z"
+     },
+     "receipt": "greenery-legacy-rehearsal-rent-roll.csv is on file. Spine keeps it so it can always show what this position came from."
+    }
+   }
+  },
+  {
+   "section": "read-source",
+   "label": "a governed setup opens for the property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": {
+     "activation": {
+      "id": "<uuid>",
+      "deal_id": "<uuid>",
+      "property_id": "<uuid>",
+      "source_label": "Greenery rent roll",
+      "status": "open",
+      "created_at": "2026-09-12T12:53:24.488Z"
+     },
+     "reopened": false,
+     "receipt": "Setup started for Greenery."
+    }
+   }
+  },
+  {
+   "section": "read-source",
+   "label": "the retained source is read with the bed basis",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": "Read 106 rows from greenery-legacy-rehearsal-rent-roll.csv, dated 2026-09-09. 106 ready, 0 need a look, 0 unassigned or blocked, 0 conflicting. Nothing is live yet."
+   }
+  },
+  {
+   "section": "read-source",
+   "label": "read-source counts",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "rows_read": 106,
+    "counts": {
+     "staged": 106,
+     "needs_review": 0,
+     "blocked": 0,
+     "conflicted": 0,
+     "vacant": 22
+    },
+    "mapping": {
+     "understood": [
+      {
+       "column": "Unit",
+       "read_as": "unit number"
+      },
+      {
+       "column": "Room",
+       "read_as": "space label"
+      },
+      {
+       "column": "Type",
+       "read_as": "unit type"
+      },
+      {
+       "column": "Resident",
+       "read_as": "name"
+      },
+      {
+       "column": "Market Rent",
+       "read_as": "market rent"
+      },
+      {
+       "column": "Actual Rent",
+       "read_as": "actual rent"
+      },
+      {
+       "column": "Lease From",
+       "read_as": "lease from"
+      },
+      {
+       "column": "Lease To",
+       "read_as": "lease to"
+      }
+     ],
+     "ignored": [],
+     "not_understood": [],
+     "receipt": "8 columns understood. Nothing was left unread."
+    }
+   }
+  },
+  {
+   "section": "read-source",
+   "label": "the leasing basis is recorded on the property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "basis": "bed"
+   }
+  },
+  {
+   "section": "read-source",
+   "label": "no unit was created or removed: every legacy identity survives",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "units": 171
+   }
+  },
+  {
+   "section": "read-source",
+   "label": "parents' pristine placeholders became the first named bed and the second bed was created; nothing else changed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "spaces": 212,
+    "expected_spaces": 212,
+    "beds": 87,
+    "placeholders": 125
+   }
+  },
+  {
+   "section": "read-source",
+   "label": "all 107 legacy non-parent rows keep their placeholder label; exactly one (the probe) gained source lineage",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "placeholders_kept": 107,
+    "with_lineage": 1
+   }
+  },
+  {
+   "section": "read-source",
+   "label": "finding: a source row whose Unit column carries a legacy room-style label resolves to that legacy record, not to its parent apartment; the reader matches unit_number text",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "matched": true,
+    "unit_number": "114 - 3"
+   }
+  },
+  {
+   "section": "read-source",
+   "label": "one proposal per source row awaits a human",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "proposals": 106,
+    "by_status": {
+     "staged": 106
+    }
+   }
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "proposals exist",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "row confirmations",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "confirmed": 106,
+    "refused": [],
+    "refused_total": 0
+   }
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "every source row (105 positions plus the probe) confirms against the materialised inventory",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "confirmed": 106,
+    "expected": 106
+   }
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "the opening lease and occupancy position is established",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": "Lease & occupancy established as of 2026-09-09: 106 units, nothing outstanding."
+   }
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "leases exist only for the occupied source positions; one opening position; still 171 units",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "leases": 84,
+    "occupied_rows": 84,
+    "opening_positions": 1
+   }
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "after: canonical availability by marketing state (beds carry no use type yet; legacy placeholders stay unknown)",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "occupied": 84,
+    "occupancy_unknown": 106,
+    "use_not_configured": 22
+   }
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "after: 106 legacy rows stay occupancy-unknown, every occupied source row reads occupied, every vacant one (plus the probe) reads use-not-configured, nothing is marketable",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "unknown": 106,
+    "occupied": 84,
+    "use_not_configured": 22,
+    "marketable_now": 0
+   }
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "after: occupancy by basis",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": "ok",
+    "basis": "bed",
+    "occupied_count": 84,
+    "rentable_count": 212,
+    "excluded_count": 0,
+    "occupancy_pct": 39.6
+   }
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "after: canonical rent roll totals (HTTP)",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200,
+    "totals": {
+     "inventory": 212,
+     "leasable": 212,
+     "down": 0,
+     "confirmed_contractual_occupancy": {
+      "occupied": 84,
+      "of_leasable_resolved": 212,
+      "pct": 39.62,
+      "excluded_from_denominator": {
+       "down": 0,
+       "contested": 0
+      },
+      "reported_beside": {
+       "unresolved_positions": 106,
+       "evidence_disagrees": 0,
+       "evidence_inconclusive": 106
+      }
+     },
+     "contractual_rent_trusted": 92400,
+     "contractual_rent_excluded_contested": 0,
+     "positions_contributing_rent": 84,
+     "occupied_without_known_rent": 0
+    }
+   }
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "the rent roll reads the occupied source positions and reports the 106 unresolved legacy rows beside them",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "occupied": 84,
+    "unresolved": 106
+   }
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "finding: the legacy placeholders are counted in inventory and leasable totals, so the headline occupancy percentage is computed over 212 positions, not the 105 the source establishes",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "inventory": 212,
+    "leasable": 212,
+    "occupied": 84,
+    "pct_reported": 39.62,
+    "pct_over_source_positions": 80,
+    "occupancy_by_basis_pct": 39.6,
+    "occupancy_by_basis_rentable": 212
+   }
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "after: rent roll units read (HTTP)",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200,
+    "units": 171,
+    "keys": [
+     "property_id",
+     "as_of",
+     "established",
+     "truth_state",
+     "why",
+     "next_step",
+     "opening_baseline",
+     "opening_truth",
+     "totals",
+     "unattached_source_rows"
+    ]
+   }
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "after: the application selector offers nothing while no bed carries a governed use type",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "eligible": 0
+   }
+  },
+  {
+   "section": "confirm-and-establish",
+   "label": "no lease was attached to any legacy non-parent record by the establishment",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "n": 0
+   }
+  },
+  {
+   "section": "classification",
+   "label": "the reviewed classification tool, dry run, against the established rehearsal property",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "exit": 1,
+    "tail": [
+     "property <uuid>",
+     "",
+     "REFUSING: no approved ruling covers this property's source codes.",
+     "  present: 2BR-SHARED, STUDIO",
+     "  reviewed_mapping_receipt_2026-07-27: missing 2BR-SHARED, STUDIO",
+     "  skyline_owner_statement_2026-08-20_source_silent_on_bath_distinction: missing 2BR-SHARED, STUDIO"
+    ]
+   }
+  },
+  {
+   "section": "classification",
+   "label": "with no Greenery ruling block the tool refuses and names the unmapped source codes; nothing is classified",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "exit": 1
+   }
+  },
+  {
+   "section": "classification",
+   "label": "no use type was written",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "use_configured": 0
+   }
+  },
+  {
+   "section": "repeat-upload",
+   "label": "re-reading the same source into the established setup is refused",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "error": "setup_not_open"
+   }
+  },
+  {
+   "section": "repeat-upload",
+   "label": "uploading the identical file again",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200,
+    "artifact_new": false,
+    "receipt": "That is the same file already on record (greenery-legacy-rehearsal-rent-roll.csv)."
+   }
+  },
+  {
+   "section": "repeat-upload",
+   "label": "opening another setup after establishment",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 201,
+    "receipt": "Setup started for Greenery.",
+    "activation_same": false
+   }
+  },
+  {
+   "section": "repeat-upload",
+   "label": "reading the identical file into a second setup",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 409,
+    "error": "already_established_from_this_file",
+    "receipt": "This rent roll (greenery-legacy-rehearsal-rent-roll.csv, as of 2026-09-09) has already been read for this property. Re-reading it would double the evidence underneath the position."
+   }
+  },
+  {
+   "section": "repeat-upload",
+   "label": "the repeat changed no inventory, lease or position",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "units": 171,
+    "spaces": 212,
+    "leases": 84
+   }
+  },
+  {
+   "section": "unresolved-mappings",
+   "label": "decisions the owner must make before the legacy rows can be reconciled (computed, not written)",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "legacy_non_parent_rows_without_established_counterpart": 106,
+    "extras_beyond_source_positions": [
+     "114 - 3",
+     "214 - 3"
+    ],
+    "naming_conflicts": [
+     {
+      "legacy": "102 - 2",
+      "source": "102 (single position, no room named)"
+     },
+     {
+      "legacy": "401 - 3",
+      "source": "401A / 401B"
+     }
+    ],
+    "suffix_equivalence_unestablished": {
+     "example": "301B",
+     "legacy_candidates": [
+      "301 - 1",
+      "301 - 2"
+     ],
+     "note": "B = Room 2 is not established by either label"
+    },
+    "a_suffixed_singles": [
+     {
+      "label": "208A",
+      "legacy_row": "208A",
+      "established": true,
+      "sibling_B_inferred": false
+     },
+     {
+      "label": "308A",
+      "legacy_row": "308A",
+      "established": true,
+      "sibling_B_inferred": false
+     },
+     {
+      "label": "404A",
+      "legacy_row": "404A",
+      "established": true,
+      "sibling_B_inferred": false
+     },
+     {
+      "label": "408A",
+      "legacy_row": "408A",
+      "established": true,
+      "sibling_B_inferred": false
+     },
+     {
+      "label": "414A",
+      "legacy_row": "414A",
+      "established": true,
+      "sibling_B_inferred": false
+     }
+    ],
+    "probe_row_landed_on_legacy_record": "114 - 3"
+   }
+  },
+  {
+   "section": "unresolved-mappings",
+   "label": "an A-suffixed single establishes exactly one bed; no B bed is inferred",
+   "ok": true,
+   "kind": "check",
+   "detail": [
+    {
+     "label": "208A",
+     "legacy_row": "208A",
+     "established": true,
+     "sibling_B_inferred": false
+    },
+    {
+     "label": "308A",
+     "legacy_row": "308A",
+     "established": true,
+     "sibling_B_inferred": false
+    },
+    {
+     "label": "404A",
+     "legacy_row": "404A",
+     "established": true,
+     "sibling_B_inferred": false
+    },
+    {
+     "label": "408A",
+     "legacy_row": "408A",
+     "established": true,
+     "sibling_B_inferred": false
+    },
+    {
+     "label": "414A",
+     "legacy_row": "414A",
+     "established": true,
+     "sibling_B_inferred": false
+    }
+   ]
+  }
+ ]
+}
