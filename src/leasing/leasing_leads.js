@@ -26,6 +26,7 @@ const staffSessions = require("../identity/staff_session_service.js"); // BRICK 
 const staffIdentity = require("../identity/staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const { recordPersonFact } = require("../identity/person_facts.js"); // 092: the ONE person × property fact write
 const crypto = require("crypto");
+const { recordInboundCapture } = require("../agent/inbound_capture");
 const { resolveDemoProperty, resolveDemoPropertyRow } = require("../shared/demo_property_identity.js");
 const aiLeasingStrategy = require("./ai_leasing_strategy");
 // Slice 9 attribution foundation: the ONE place an appointment binds to an opportunity.
@@ -495,6 +496,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     let conversationId = null;
     const client = await pool.connect();
     let person, createdPerson, lead, reusedOpportunity, prop, capturedEvent, strategyEnvelope = null;
+    let responseRequested = !!phone;
     try {
       await client.query("begin");
 
@@ -590,16 +592,10 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       }
 
       // every arrival is a touch (attribution).
-      await client.query(
+      const sourceTouch = (await client.query(
         `insert into lead_source_touches (lead_id, person_id, source_id, source_lead_id, source_listing_id, raw_payload)
-         values ($1,$2,$3,$4,$5,$6)`,
-        [lead.id, person.id, sourceId, b.source_lead_id || null, b.source_listing_id || null, JSON.stringify(b)]);
-
-      capturedEvent = await recordLeadEvent(client, {
-        leadId: lead.id, type: "lead_received", actorType: "prospect", actorId: person.id,
-        metadata: { source: sourceName, repeat: reusedOpportunity,
-          ...(delivery ? { intake_delivery: { ...delivery, new_person: createdPerson, response_requested: !!phone } } : {}) },
-      });
+         values ($1,$2,$3,$4,$5,$6) returning id`,
+        [lead.id, person.id, sourceId, b.source_lead_id || null, b.source_listing_id || null, JSON.stringify(b)])).rows[0];
 
       // ── PROSPECT ACTIVATION (Path A) — write the two facts the comms boundary
       //    requires for a customer_care autonomous send, IFF this property is on
@@ -694,6 +690,29 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       });
       strategyEnvelope = strategyAssignment.envelope || null;
 
+      // A website question is an inbound communication even without a phone.
+      // Its source touch and the canonical communication commit together. The
+      // shared capture owner invalidates stale drafts, retaining human control;
+      // no agent run, offer interpretation, model call or transport happens here.
+      let inquiryEvent = null;
+      if (authenticatedRealIntake && b.response_channel === "website"
+          && typeof b.message === "string" && b.message.trim()) {
+        const captured = await recordInboundCapture(client, {
+          conversation: { id: conversationId, property_id: propertyId,
+            person_id: person.id, unit_id: lead.unit_id || null },
+          body: b.message, channel: "website", provider: "leasing_intake",
+          providerEventId: sourceTouch.id, leasingLifecycle,
+        });
+        inquiryEvent = captured.inbound;
+        if (["human_takeover", "awaiting_review", "paused", "closed"].includes(captured.state.mode)) responseRequested = false;
+      }
+      capturedEvent = await recordLeadEvent(client, {
+        leadId: lead.id, type: "lead_received", actorType: "prospect", actorId: person.id,
+        commEventId: inquiryEvent?.id || null,
+        metadata: { source: sourceName, repeat: reusedOpportunity,
+          ...(delivery ? { intake_delivery: { ...delivery, new_person: createdPerson, response_requested: responseRequested } } : {}) },
+      });
+
       await client.query("commit");
 
       // ── SLICE 2 (form side): the stated move-month is a first-party captured fact —
@@ -742,10 +761,12 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       }
 
       // ── Immediate AI first response (outside the txn; lead is durable). ──
-      let responseReceipt = "Opportunity saved. No phone on file, so no text sent — the team can follow up by email.";
+      let responseReceipt = phone
+        ? "Inquiry saved. Existing conversation control is preserved; no automated reply was generated or sent."
+        : "Opportunity saved. No phone on file, so no text sent — the team can follow up by email.";
       let firstResponseSent = false;
       let draftBody = null;
-      if (phone) {
+      if (responseRequested) {
         let unitLabel = null, rent = null;
         if (lead.unit_id) {
           const u = (await pool.query(`select unit_number, market_rent from units where id=$1`, [lead.unit_id])).rows[0];
@@ -852,7 +873,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         first_response_sent: firstResponseSent, status: lead.status, draft_body: draftBody,
         property_name: prop.name,
         ...(delivery ? { replayed: false, capture: { state: 'captured', lead_event_id: capturedEvent.id,
-          response_state: !phone ? 'not_required' : firstResponseSent ? 'sent' : attemptSms ? 'not_sent' : 'prepared' } } : {}),
+          response_state: !responseRequested ? 'not_required' : firstResponseSent ? 'sent' : attemptSms ? 'not_sent' : 'prepared' } } : {}),
       };
     } catch (e) {
       try { await client.query("rollback"); } catch {}

@@ -38,6 +38,7 @@ const { compareEconomicSources, staleReasonForOperator } =
 const aiLeasingStrategy = require("../leasing/ai_leasing_strategy");
 const aiLeasingStrategyRuntime = require("../leasing/ai_leasing_strategy_runtime");
 const aiLeasingOperatingContext = require("../leasing/ai_leasing_operating_context"); // GOVERNED OPERATING CONTEXT LEASING v1
+const { loadThreadState, recordInboundCapture } = require("./inbound_capture");
 
 const PROMPT_REVISION = "stage-a-v12"; // v12: exact-space informational matching with published pricing and explicit pricing term. v10: linked-unit rent uses governed pricing.
 // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
@@ -268,25 +269,6 @@ module.exports = function agentModule(deps) {
       )).rows[0];
     }
     return c;
-  }
-
-  // ensure a thread-state row for a conversation; returns it (locked if forUpdate)
-  async function loadThreadState(client, conversation_id, forUpdate) {
-    const lock = forUpdate ? " for update" : "";
-    let s = (await client.query(
-      `select * from agent_thread_state where conversation_id=$1${lock}`, [conversation_id]
-    )).rows[0];
-    if (!s) {
-      // create then re-select (so we can lock it consistently)
-      await client.query(
-        "insert into agent_thread_state (conversation_id) values ($1) on conflict (conversation_id) do nothing",
-        [conversation_id]
-      );
-      s = (await client.query(
-        `select * from agent_thread_state where conversation_id=$1${lock}`, [conversation_id]
-      )).rows[0];
-    }
-    return s;
   }
 
   // ── the curated fact resolver + the LIVE unit read ─────────────────────────
@@ -996,27 +978,10 @@ Reply with ONLY the message text.`;
               actorUserId: null,
             })
           : { assigned: false, created: false, reason: "no_open_leasing_opportunity", envelope: null };
-        const state = await loadThreadState(client, conv.id, true); // FOR UPDATE
-
-        // persist the canonical inbound comm_event (the real record). sms_sid is
-        // stamped when present (SMS door) — the unique idempotency anchor.
-        const inbound = (await client.query(
-          `insert into comm_events
-             (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, sender_role, sms_sid)
-           values ($1,$2,$3,$4,'text','inbound',$5,'leasing','prospect',$6) returning id`,
-          [b.property_id, b.person_id, b.unit_id || null, conv.id, b.body, b.sms_sid || null]
-        )).rows[0];
-        await client.query("update conversations set last_message_at = now() where id=$1", [conv.id]);
-
-        // GENUINE-INBOUND REOPEN: a qualifying prospect inbound persisted above. If this
-        // conversation's latest-relevant lifecycle state is closed_not_fit, reopen it in
-        // THIS transaction (source_comm_event_id = this inbound). No-op when not closed;
-        // idempotent under the conversation lock. (Foundation 054 lifecycle rail.)
-        if (leasingLifecycle && b.body && String(b.body).trim() !== "") {
-          await leasingLifecycle.maybeReopenOnQualifyingInbound(client, {
-            conversationId: conv.id, sourceCommEventId: inbound.id,
-          });
-        }
+        const { state, inbound, newVersion } = await recordInboundCapture(client, {
+          conversation: { ...conv, unit_id: b.unit_id || null }, body: b.body,
+          channel: "text", smsSid: b.sms_sid || null, leasingLifecycle,
+        });
 
         // ── OFFERED → SELECTED (funnel-flow Build 2) ────────────────────
         // If the last DISPATCHED draft carried a real offered-unit set,
@@ -1071,16 +1036,6 @@ Reply with ONLY the message text.`;
         } catch (e) { console.error("[agent/inbound] selection check failed (non-fatal):", e.message); }
 
         const mode = state.mode;
-        const newVersion = Number(state.thread_version) + 1;
-
-        // supersede any prior ready draft on this conversation (new inbound invalidates it)
-        await client.query(
-          `update agent_drafts d set status='superseded', superseded_at=now(), updated_at=now()
-             from agent_runs r
-            where d.agent_run_id=r.id and r.conversation_id=$1 and d.status='ready'`,
-          [conv.id]
-        );
-
         // NO SILENT AI RE-ENTRY: in human_takeover / paused / closed, persist the
         // inbound and refresh the human obligation, but DO NOT create an agent run.
         if (mode === "human_takeover" || mode === "paused" || mode === "closed") {
@@ -1203,7 +1158,7 @@ Reply with ONLY the message text.`;
           history = (await client1.query(
             `select direction, body from (
                select direction, body, occurred_at, id from comm_events
-                where conversation_id=$1 and channel='text' and body is not null
+                where conversation_id=$1 and channel in ('text','website') and body is not null
                 order by occurred_at desc nulls last, id desc limit 40
              ) t order by occurred_at asc nulls last, id asc`,
             [tx1.conversation_id]
@@ -2041,9 +1996,9 @@ Reply with ONLY the message text.`;
           [state.current_review_obligation_id, conv.property_id, conv.person_id, conv.id])).rows[0] || null
         : null;
       const messages = (await client.query(
-        `select id, direction, body, sender_role, ai_drafted_at, sent_by_user_id, occurred_at,
+        `select id, channel, direction, body, sender_role, ai_drafted_at, sent_by_user_id, occurred_at,
                 provider_status, provider_status_updated_at
-           from comm_events where conversation_id=$1 and channel='text' and body is not null
+           from comm_events where conversation_id=$1 and channel in ('text','website') and body is not null
            order by occurred_at asc nulls last, id asc`,
         [conv.id]
       )).rows;
@@ -2491,7 +2446,7 @@ Reply with ONLY the message text.`;
         let history;
         try {
           history = (await c1.query(
-            `select direction, body from (select direction, body, occurred_at, id from comm_events where conversation_id=$1 and channel='text' and body is not null order by occurred_at desc nulls last, id desc limit 40) t order by occurred_at asc nulls last, id asc`,
+            `select direction, body from (select direction, body, occurred_at, id from comm_events where conversation_id=$1 and channel in ('text','website') and body is not null order by occurred_at desc nulls last, id desc limit 40) t order by occurred_at asc nulls last, id asc`,
             [prep.conv.id]
           )).rows;
         } finally { c1.release(); }

@@ -811,7 +811,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       // honest nulls, never a crash.
       const proj = (await pool.query(
         PROJECTION_CTE + `
-        select commercial_state, closure_reason, closure_note, closure_actor_id,
+        select commercial_state, waiting_on, control_bucket, bucket_reason_code, closure_reason, closure_note, closure_actor_id,
                closure_actor_name, closure_occurred_at, closure_recorded_at
         from projected where conversation_id=$2`,
         [req.operator.property_id, req.params.conversationId]
@@ -822,7 +822,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
             actor_id: proj.closure_actor_id, actor_name: proj.closure_actor_name,
             occurred_at: proj.closure_occurred_at, recorded_at: proj.closure_recorded_at }
         : null;
-      return res.json({ ...state, facts, vitals, commercial_state, closure });
+      return res.json({ ...state, facts, vitals, commercial_state, closure,
+        waiting_on: proj?.waiting_on || null, control_bucket: proj?.control_bucket || null,
+        bucket_reason_code: proj?.bucket_reason_code || null });
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
 
@@ -1055,9 +1057,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       order by conversation_id, created_at asc
     ),
     qual_in as (
-      select conversation_id, max(occurred_at) as at from comm_events
+      select distinct on (conversation_id) conversation_id, occurred_at as at, channel from comm_events
       where direction='inbound' and sender_role='prospect' and body is not null and btrim(body) <> ''
-      group by conversation_id
+      order by conversation_id, occurred_at desc, id desc
     ),
     qual_out as (
       select conversation_id, max(occurred_at) as at from comm_events
@@ -1088,6 +1090,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         pr.name as person_name,
         coalesce(ats.mode,'ai_active') as control_mode,
         qi.at as last_inbound_at, qo.at as last_delivered_outbound_at,
+        (qi.channel='website' and not exists (
+          select 1 from agent_runs ar left join agent_drafts ad on ad.agent_run_id=ar.id
+          where ar.conversation_id=e.conversation_id and ar.input_thread_version=ats.thread_version
+            and (ar.status='pending' or ad.status='ready')
+        )) as website_needs_staff,
         ao.at as last_any_outbound_at, ao.provider_status as last_outbound_status,
         greatest(coalesce(qi.at,'epoch'::timestamptz), coalesce(ao.at,'epoch'::timestamptz),
                  coalesce(c.last_message_at,'epoch'::timestamptz)) as last_meaningful_activity_at,
@@ -1126,7 +1133,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         case when is_closed then 'none'
              when is_booked and inbound_unanswered then 'manager'
              when is_booked then 'none'
-             when inbound_unanswered and control_mode in ('awaiting_review','human_takeover') then 'manager'
+             when inbound_unanswered and control_mode = 'human_takeover' then 'manager'
+             when inbound_unanswered and website_needs_staff then 'manager'
+             when inbound_unanswered and control_mode = 'awaiting_review' then 'manager'
              when inbound_unanswered and control_mode = 'ai_active' then 'ai'
              when last_delivered_outbound_at is not null
                   and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at)
@@ -1141,7 +1150,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           case when is_closed then 'latest_relevant_lifecycle_is_close'
                when is_booked and inbound_unanswered then 'booked_tour_inbound_unanswered_pending_human'
                when is_booked then 'live_linked_tour'
-               when inbound_unanswered and control_mode in ('awaiting_review','human_takeover') then 'qualifying_prospect_inbound_unanswered_pending_human'
+               when inbound_unanswered and control_mode = 'human_takeover' then 'qualifying_prospect_inbound_unanswered_pending_human'
+               when inbound_unanswered and website_needs_staff then 'website_inquiry_pending_human'
+               when inbound_unanswered and control_mode = 'awaiting_review' then 'qualifying_prospect_inbound_unanswered_pending_human'
                when inbound_unanswered then 'qualifying_prospect_inbound_unanswered'
                when last_delivered_outbound_at is not null and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at) and outreach_attempts >= 3 then 'cadence_exhausted_pending_human'
                when last_delivered_outbound_at is not null and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at) then 'delivered_outreach_is_latest'
@@ -1166,6 +1177,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         case
           when control_mode = 'human_takeover' then 'human_takeover'
           when waiting_on = 'manager' and (derivation->>'rule_code') = 'cadence_exhausted_pending_human' then 'cadence_exhausted_pending_human'
+          when waiting_on = 'manager' and (derivation->>'rule_code') = 'website_inquiry_pending_human' then 'website_inquiry_pending_human'
           when waiting_on = 'manager'          then 'draft_requires_review'
           when waiting_on = 'ai'               then 'ai_preparing_reply'
           when waiting_on = 'prospect'         then 'awaiting_prospect'
@@ -2596,7 +2608,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       }
       if (!personId) return res.status(400).json({ error: "person_id or lead_id required" });
       // the property wall: the person must actually have presence at THIS property
-      const p = (await client.query(`select id, name from persons where id=$1`, [personId])).rows[0];
+      const p = (await client.query(`select id, name, primary_phone_e164 as phone, email from persons where id=$1`, [personId])).rows[0];
       if (!p) return res.status(404).json({ error: "person not found" });
       const presence = (await client.query(
         `select 1 where exists (select 1 from leasing_leads where person_id=$1 and property_id=$2)
@@ -2647,7 +2659,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           order by c.created_at desc limit 1`,
         [personId, propertyId])).rows[0] || null;
       const msgs = (await client.query(
-        `select ce.id, ce.conversation_id, ce.direction, ce.sender_role, ce.body,
+        `select ce.id, ce.conversation_id, ce.channel, ce.direction, ce.sender_role, ce.body,
                 ce.occurred_at, ce.provider_status, ce.sent_by_user_id,
                 su.name as sent_by_name
            from comm_events ce
@@ -2665,7 +2677,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           actor: { id: m.sent_by_user_id || null, name: who, kind: m.direction === "inbound" ? "person" : "user" },
           summary: `${who} sent: ${String(m.body || "").slice(0, 140)}`,
           claim_strength: "proven",
-          detail: { conversation_id: m.conversation_id, direction: m.direction, body: m.body, provider_status: m.provider_status || null },
+          detail: { conversation_id: m.conversation_id, channel: m.channel, direction: m.direction, body: m.body, provider_status: m.provider_status || null },
           supersedes: null,
         });
       }
@@ -3039,7 +3051,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       } catch (_) { /* honest null — the rest of the card is still true */ }
 
       return res.json({
-        person: { id: p.id, name: p.name },
+        person: { id: p.id, name: p.name, phone: p.phone || null, email: p.email || null },
         property_id: propertyId,
         conversation_id: conversation ? conversation.id : null,
         conversation: conversation ? { id: conversation.id, status: conversation.status, mode: conversation.mode || "ai_active" } : null,

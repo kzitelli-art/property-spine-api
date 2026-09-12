@@ -8,10 +8,10 @@
 // canonical. The remaining question is whether the prospect's words survive
 // into the same Conversation, Person Card, and Ask Spine reads staff use.
 //
-// Default EXPECT_INQUIRY_VISIBILITY=absent records the current released
-// behavior. A later source correction can be witnessed with
-// EXPECT_INQUIRY_VISIBILITY=present; that mode requires both distinct website
-// submissions to be visible through every canonical read exercised here.
+// Default EXPECT_INQUIRY_VISIBILITY=present requires the intended corrected
+// behavior. Set EXPECT_INQUIRY_VISIBILITY=absent only when recording the
+// current released first red; that mode requires each distinct website
+// submission to be absent from the deficient canonical reads.
 //
 // No server, database, provider, or production setup is performed here. The
 // proof_boundary launcher owns the ephemeral runtime when this file is run.
@@ -20,12 +20,15 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const { randomUUID } = require("node:crypto");
 const { Pool } = require("pg");
-const boundary = require("./proof_boundary");
-require("./proof_fence_preload");
+const boundary = require("../e2e/proof_boundary");
+require("../e2e/proof_fence_preload");
 const staffSessions = require("../../src/identity/staff_session_service");
 const askSpineAnswer = require("../../src/agent/ask_spine_answer");
 
-const expectedVisibility = process.env.EXPECT_INQUIRY_VISIBILITY === "present";
+const visibilityExpectation = process.env.EXPECT_INQUIRY_VISIBILITY || "present";
+assert(["present", "absent"].includes(visibilityExpectation),
+  "EXPECT_INQUIRY_VISIBILITY must be present or absent");
+const expectedVisibility = visibilityExpectation === "present";
 const markerState = expectedVisibility ? "present" : "absent";
 
 const readFile = (file) => file && fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
@@ -73,9 +76,18 @@ const readFile = (file) => file && fs.existsSync(file) ? fs.readFileSync(file, "
     ...(body !== undefined ? { body } : {}),
     headers: { "x-staff-session": token },
   });
-  const containsBoth = (value) => {
+  const inquiryMarkers = (value) => {
     const text = JSON.stringify(value || {});
-    return text.includes(originalMessage) && text.includes(followupMessage);
+    return {
+      original: text.includes(originalMessage),
+      followup: text.includes(followupMessage),
+    };
+  };
+  const checkInquiryVisibility = (value, label) => {
+    const seen = inquiryMarkers(value);
+    const visible = seen.original && seen.followup;
+    const honest = expectedVisibility ? visible : !seen.original && !seen.followup;
+    check(honest, `${label}: original=${seen.original} followup=${seen.followup} expected=${markerState}`);
   };
 
   let token;
@@ -96,6 +108,43 @@ const readFile = (file) => file && fs.existsSync(file) ? fs.readFileSync(file, "
     const sourceLeadId = `squarespace-${tag}`;
     originalMessage = `I need to know whether the ${tag.slice(0, 8)} two-bedroom allows cats.`;
     followupMessage = `Also, can I see the ${tag.slice(0, 8)} floor plan?`;
+
+    // Establish that the owned fake transport is real before using its log as
+    // a negative control. This is the same authenticated local OTP path used
+    // by the intake replay proof; the website inquiry itself has no phone and
+    // must leave this post-control log unchanged.
+    const otpSuffix = String(parseInt(tag.slice(0, 6), 16)).padStart(7, "0").slice(-7);
+    const otpPhone = `+1503${otpSuffix}`;
+    const otpUser = await one(
+      `insert into users(name, phone, role, is_active, status, account_kind)
+       values($1, $2, 'property_manager', true, 'active', 'human_staff') returning id`,
+      [`Website proof OTP ${tag.slice(0, 8)}`, otpPhone],
+    );
+    await pool.query(
+      `insert into communication_lines
+         (e164, line_type, property_id, authority_ceiling, permitted_audience,
+          inbound_enabled, outbound_enabled, outbound_policy, status)
+       select $1, 'property_facing', $2, 'external', 'residents_and_prospects',
+              true, true, 'proactive', 'active'
+        where not exists(select 1 from communication_lines
+                          where property_id=$2 and status='active' and outbound_enabled=true)`,
+      [otpPhone, property.id],
+    );
+    await pool.query(
+      `insert into property_team_assignments
+         (user_id, property_id, role_title, allowed_modules, primary_for_modules, active)
+       values($1, $2, 'Property Manager', '{leasing}', '{leasing}', true)`,
+      [otpUser.id, property.id],
+    );
+    const otp = await request("POST", "/auth/sms/start", { body: { phone_number: otpPhone } });
+    const transportAfterOtp = readFile(transportLog);
+    const otpLines = transportAfterOtp.slice(transportBefore.length).split(/\r?\n/).filter(Boolean);
+    check(otp.status === 200 && otp.body && otp.body.delivery === "sms_sent",
+      "owned OTP control reaches the real local transport route");
+    check(otpLines.some((line) => {
+      try { const row = JSON.parse(line); return row.to === otpPhone && /access code is \d{6}/.test(row.body || ""); }
+      catch (_) { return false; }
+    }), "owned OTP control writes an observable delivery record");
 
     // Fixture setup happens before the HTTP witness. Nothing here pretends to
     // be a website delivery or repairs a read after the actions begin.
@@ -281,34 +330,38 @@ const readFile = (file) => file && fs.existsSync(file) ? fs.readFileSync(file, "
     check(detail.status === 200 && detail.body && detail.body.mode === "human_takeover"
       && detail.body.human_owner && detail.body.human_owner.user_id === staffUserId,
     "conversation detail exposes the server-derived staff owner");
-    check(expectedVisibility ? containsBoth(detailMessages) : !containsBoth(detailMessages),
-      `conversation detail shows original and follow-up inquiry text: ${markerState}`);
+    checkInquiryVisibility(detailMessages, "conversation detail inquiry text");
 
     const card = await staff("GET", `/operator/leasing/person-card?person_id=${encodeURIComponent(first.body.person_id)}`);
     check(card.status === 200 && card.body && card.body.person
       && card.body.person.id === first.body.person_id,
     "Person Card reads the email-only person through the property wall");
-    check(expectedVisibility ? containsBoth({ history: card.body.history, recent_messages: card.body.relationship?.recent_messages })
-      : !containsBoth({ history: card.body.history, recent_messages: card.body.relationship?.recent_messages }),
-    `Person Card exposes original and follow-up inquiry text: ${markerState}`);
+    checkInquiryVisibility({ history: card.body.history, recent_messages: card.body.relationship?.recent_messages },
+      "Person Card inquiry text");
 
     const askQuestion = `What did ${prospectName} ask about?`;
     const ask = await staff("POST", "/operator/ask-spine/ask", { question: askQuestion });
     check(ask.status === 200 && ask.body && ask.body.property_id === property.id
       && typeof ask.body.outcome === "string" && typeof ask.body.answer === "string",
     "Ask Spine answers through its authenticated read-only envelope");
+    if (expectedVisibility) {
+      check(ask.body.answer.includes(originalMessage) && ask.body.answer.includes(followupMessage)
+        && ask.body.grounded_on?.inquiry_read_state === "OK",
+        "Ask HTTP retrieves both submitted questions from the canonical inquiry read");
+    }
     const gathered = await askSpineAnswer.gatherFacts(pool, {
       property_id: property.id,
       allowed_modules: ["leasing"],
       subject: "leasing_person",
       question: askQuestion,
     });
-    check(expectedVisibility ? containsBoth(gathered) : !containsBoth(gathered),
-      `Ask Spine's canonical fact bundle carries original and follow-up inquiry text: ${markerState}`);
-    check(expectedVisibility ? containsBoth(ask.body) : !containsBoth(ask.body),
-      `Ask Spine HTTP response carries original and follow-up inquiry text: ${markerState}`);
+    checkInquiryVisibility(gathered, "Ask Spine canonical fact bundle inquiry text");
+    // The owned fake model intentionally refuses generic narration. The HTTP
+    // envelope proves authentication and read routing; the deterministic
+    // gatherFacts assertion above is the content witness until the explicit
+    // website-inquiry Ask reader is implemented.
 
-    check(readFile(transportLog) === transportBefore,
+    check(readFile(transportLog) === transportAfterOtp,
       "email-only capture, replay, claim, and reads produce no text transport attempt");
     console.log(`RESULT ${checks}/${checks} EXPECT_INQUIRY_VISIBILITY=${markerState}`);
   } finally {

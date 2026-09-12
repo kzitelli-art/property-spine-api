@@ -42,7 +42,8 @@ const {Pool}=require('pg');
   const parallel=bodyFor(),parallelKey=randomUUID(),race=await Promise.all(Array.from({length:5},()=>post(parallel,parallelKey)));
   check(race.every(r=>r.status===200)&&race.filter(r=>r.body.replayed===false).length===1,'five concurrent retries capture once');
   const raceId=race[0].body.lead_id;assert.deepEqual(await counts(raceId),{touches:1,received:1,prepared:1});check(true,'concurrent retry creates one prepared draft');
-  check((await one('select count(*)::int n from comm_events where conversation_id=$1',[race[0].body.conversation_id])).n===1,'concurrent replay creates one comm event');
+  const raceMessages=await one("select count(*) filter(where direction='inbound' and channel='website')::int inbound, count(*) filter(where direction='outbound')::int outbound from comm_events where conversation_id=$1",[race[0].body.conversation_id]);
+  check(raceMessages.inbound===1&&raceMessages.outbound===1,'concurrent replay retains one website inquiry and one prepared outbound');
   const distinct=await post(body,key+'-another-submission');check(distinct.status===200&&!distinct.body.replayed&&distinct.body.lead_id===first.body.lead_id,'new delivery retains another touch on same provider lead');
   assert.deepEqual(await counts(first.body.lead_id),{touches:2,received:2,prepared:2});check(true,'distinct submission not deduplicated by source_lead_id');
   const legacy=bodyFor();const legacyA=await post(legacy),legacyB=await post(legacy);check(legacyA.status===200&&legacyB.status===200&&!legacyB.body.capture,'legacy headerless intake keeps existing response contract');
@@ -54,14 +55,15 @@ const {Pool}=require('pg');
   // rolls back only response work. Retry must not regenerate or send.
   const failing=bodyFor(),failKey=randomUUID();const suffix=randomUUID().replaceAll('-','');
   const fn='owned_intake_fail_'+suffix;
-  await pool.query(`create function ${fn}() returns trigger language plpgsql as $$ begin if exists(select 1 from persons where id=NEW.person_id and email='${failing.email}') then raise exception 'owned post-capture response failure'; end if; return NEW; end $$`);
+  await pool.query(`create function ${fn}() returns trigger language plpgsql as $$ begin if NEW.direction='outbound' and exists(select 1 from persons where id=NEW.person_id and email='${failing.email}') then raise exception 'owned post-capture response failure'; end if; return NEW; end $$`);
   await pool.query(`create trigger ${fn} before insert on comm_events for each row execute function ${fn}()`);
   let failed;try{failed=await post(failing,failKey)}finally{await pool.query(`drop trigger ${fn} on comm_events`);await pool.query(`drop function ${fn}()`);}
   check(failed.status===500,'injected response failure happens after canonical capture');
   const modelBeforeRetry=log(process.env.E2E_ANTHROPIC_LOG),recovered=await post(failing,failKey);
   check(recovered.status===200&&recovered.body.replayed===true&&recovered.body.capture.response_state==='not_established'&&recovered.body.first_response_sent===null,'captured incomplete response returns unknown rather than falsely sent or undelivered');
   assert.deepEqual(await counts(recovered.body.lead_id),{touches:1,received:1,prepared:0});check(true,'post-capture retry preserves one capture without a second draft');
-  check((await one('select count(*)::int n from comm_events where conversation_id=$1',[recovered.body.conversation_id])).n===0&&log(process.env.E2E_ANTHROPIC_LOG)===modelBeforeRetry,'post-capture retry makes no model or message attempt');
+  const recoveredMessages=await one("select count(*) filter(where direction='inbound' and channel='website')::int inbound, count(*) filter(where direction='outbound')::int outbound from comm_events where conversation_id=$1",[recovered.body.conversation_id]);
+  check(recoveredMessages.inbound===1&&recoveredMessages.outbound===0&&log(process.env.E2E_ANTHROPIC_LOG)===modelBeforeRetry,'post-capture retry preserves original inquiry without another model or outbound attempt');
   const crashBody=bodyFor(),crashKey=randomUUID(),modelBeforeCrash=log(process.env.E2E_ANTHROPIC_LOG);
   const childEnv=boundary.serverEnvironment({LEASING_INTAKE_SECRET:'e2e-intake',LEASING_INTAKE_PROPERTY_IDS:property.id,
     PROSPECT_ACTIVATION_PROPERTY_IDS:property.id,E2E_INTAKE_CRASH_INPUT:JSON.stringify({body:crashBody,key:crashKey})});
@@ -76,7 +78,8 @@ const {Pool}=require('pg');
   const afterCrash=await post(crashBody,crashKey);
   check(afterCrash.status===200&&afterCrash.body.replayed&&afterCrash.body.capture.response_state==='not_established'&&afterCrash.body.first_response_sent===null,'HTTP retry after process death returns captured unknown response');
   assert.deepEqual(await counts(afterCrash.body.lead_id),{touches:1,received:1,prepared:0});check(true,'process death and retry leave one capture, no prepared response');
-  check(log(process.env.E2E_ANTHROPIC_LOG)===modelBeforeCrash&&(await one('select count(*)::int n from comm_events where conversation_id=$1',[afterCrash.body.conversation_id])).n===0,'process-death retry makes no model or message attempt');
+  const crashMessages=await one("select count(*) filter(where direction='inbound' and channel='website')::int inbound, count(*) filter(where direction='outbound')::int outbound from comm_events where conversation_id=$1",[afterCrash.body.conversation_id]);
+  check(log(process.env.E2E_ANTHROPIC_LOG)===modelBeforeCrash&&crashMessages.inbound===1&&crashMessages.outbound===0,'process-death retry retains the original question without a model or outbound attempt');
   check(log(process.env.E2E_SMS_LOG)===smsBefore,'all capture-only and conflicting retries make no SMS transport calls');
   console.log('RESULT '+checks+'/'+checks+' intake delivery checks');
  }finally{await pool.end()}

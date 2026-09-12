@@ -29,8 +29,11 @@ const sessions=require('../../src/identity/staff_session_service');
   assert(sms().slice(priorTransport.length).split(/\r?\n/).filter(Boolean).some(line=>JSON.parse(line).to===phone),'real owned HTTP transport writes this exact fake log');
   const issued=await sessions.issueStaffSession(pool,{userId:user.id,propertyId:p.id,purpose:'bootstrap_invite'}),token=issued.session_token||issued.token;
   const source='Browser owned '+tag,name='Browser Tour '+tag.slice(0,8);await pool.query("insert into lead_sources(name,source_type) values($1,'website')",[source]);
-  const intake=await fetch(api+'/leasing/intake',{method:'POST',headers:{'content-type':'application/json','x-intake-secret':'e2e-intake'},body:JSON.stringify({property_id:p.id,name,email:tag+'@example.invalid',source,sms_consent:false,attempt_sms:false,response_channel:'website'})});
+  const original='Please send me the studio floor plan.',followup='Also, which layout has a balcony?';
+  const payload={property_id:p.id,name,email:tag+'@example.invalid',source,sms_consent:false,attempt_sms:false,response_channel:'website',message:original};
+  const intake=await fetch(api+'/leasing/intake',{method:'POST',headers:{'content-type':'application/json','x-intake-secret':'e2e-intake','Idempotency-Key':tag},body:JSON.stringify(payload)});
   assert.equal(intake.status,200);const lead=await intake.json(),conv=await one('select id from conversations where person_id=$1 and property_id=$2',[lead.person_id,p.id]);
+  const second=await fetch(api+'/leasing/intake',{method:'POST',headers:{'content-type':'application/json','x-intake-secret':'e2e-intake','Idempotency-Key':tag+'-followup'},body:JSON.stringify({...payload,message:followup})});assert.equal(second.status,200);await second.json();
   const starts=new Date(Date.now()+30*3600000),ends=new Date(starts.getTime()+1800000);
   const slot=await one("insert into tour_availability(property_id,leasing_agent_id,starts_at,ends_at,status,capacity) values($1,$2,$3,$4,'open',1) returning *",[p.id,user.id,starts.toISOString(),ends.toISOString()]);
   await boundary.portFree(5173);
@@ -58,6 +61,13 @@ const sessions=require('../../src/identity/staff_session_service');
   await page.getByText(/open lead conversations/i).click();
   await page.getByRole('button',{name,exact:true}).click();
   await page.getByRole('tab',{name:'Communication',exact:true}).click();
+  await page.getByText(original,{exact:true}).waitFor();await page.getByText(followup,{exact:true}).waitFor();
+  check((await page.locator('#pcRail').innerText()).includes('Website inquiry needs attention'),'actual app labels unanswered website inquiry as staff attention');
+  check(!(await page.locator('#pcRail').innerText()).includes('AI is handling'),'actual app does not claim nonexistent AI work');
+  check((await page.locator('#pcRail').innerText()).includes('No phone is recorded for texting.')
+    && (await page.locator('#pcRail').innerText()).includes(tag+'@example.invalid')
+    && await page.locator('#pcxCompose').count()===0,'email-only inquiry shows its contact and no unusable SMS composer');
+  await page.screenshot({path:path.join(artifacts,'website-questions.png'),fullPage:true});
   await page.getByRole('button',{name:'Take over',exact:true}).click();
   await page.getByText('You are handling this conversation',{exact:true}).waitFor();
   const work=await one('select current_review_obligation_id from agent_thread_state where conversation_id=$1',[conv.id]);

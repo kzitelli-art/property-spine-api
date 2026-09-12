@@ -84,6 +84,30 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
   const stageOut = await attempt("relationship_stage",
     () => resolveRelationshipStage(db, { personId: person_id, propertyId: property_id, asOf: as_of }), notes);
 
+  // The inbound ledger owns what the prospect submitted, not whether its
+  // statements are true. Only website events linked to this person's scoped
+  // intake captures belong here; private staff messages are not gathered.
+  const inquiryRows = await attempt("website_inquiries", async () => (await db.query(
+    `select ce.id, ce.body, ce.occurred_at, le.id as source_event_id,
+            le.metadata->>'source' as source, count(*) over() as total_events
+       from lead_events le join leasing_leads l on l.id=le.lead_id
+       join comm_events ce on ce.id=le.comm_event_id
+        and ce.property_id=l.property_id and ce.person_id=l.person_id
+      where l.person_id=$1 and l.property_id=$2 and le.event_type='lead_received'
+        and ce.channel='website' and ce.direction='inbound' and ce.body is not null
+      order by ce.occurred_at desc, ce.id desc limit 10`, [person_id, property_id])).rows, notes);
+  const inquiryHistory = inquiryRows === null ? {
+    read_state: notes.find(n => n.subject === "website_inquiries")?.read_state || "READ_FAILED", messages: null,
+  } : {
+    read_state: "OK", interpretation: "Recorded website submissions; prospect statements are not verified property facts or contact consent.",
+    truncated: inquiryRows.length > 0 && Number(inquiryRows[0].total_events) > inquiryRows.length,
+    messages: inquiryRows.map(row => ({ source_event_id: row.source_event_id,
+      comm_event_id: row.id, channel: "website", source: row.source || null,
+      recorded_at: row.occurred_at instanceof Date ? row.occurred_at.toISOString() : row.occurred_at,
+      body: String(row.body).slice(0,4000),
+      body_truncated: String(row.body).length > 4000 })).reverse(),
+  };
+
   // Recorded history, not a current recommendation. Keep corrections as
   // separate events and never infer today's standing from an earlier tour.
   // Only published tour events are read here, never private staff threads.
@@ -359,6 +383,7 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
     as_of: asOf,
     person: person ? { id: person.id, name: person.name } : null,
     property_id,
+    inquiry_history: inquiryHistory,
     tour_history: tourHistory,
     opportunity: conversion ? { id: conversion.id, current_stage: conversion.current_stage } : null,
     target: app ? {

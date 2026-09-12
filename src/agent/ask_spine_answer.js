@@ -297,6 +297,10 @@ const TENANCY_TERMS =
  *  cannot reach leasing through a substring.                            */
 const LEASING_PERSON_STRONG =
   /\b(appl(?:y|ie[sd]|ication|icant)s?|countersign(?:s|ed|ing)?|signers?|execut(?:e[sd]?|ing|ion)|where is|where'?s|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|tours?|toured|touring|packets?|(?:waiting on|pending|outstanding|missing|awaiting|needs?|requires?) (?:a |an |the |their |his |her )?signatures?|holding (?:this|the|his|her|their|my|our) (?:lease|application|packet|file|approval|signing|renewal|move[- ]?in) up|holding up (?:[a-z]+'?s? )?(?:lease|application|packet|file|approval|signing|renewal|move[- ]?in))\b/i;
+function isWebsiteInquiryQuestion(text) {
+  return /\bwebsite (?:inquir(?:y|ies)|questions?|messages?)\b/i.test(text)
+    || (/\bwhat did\b.+\bask(?: about)?\b/i.test(text) && /\bprospects?\b/i.test(text));
+}
 /*  Ordinary English that leasing uses. Yields to explicit maintenance
  *  vocabulary — see `leasingPerson` below.                              */
 const LEASING_PERSON_WEAK =
@@ -450,7 +454,7 @@ function questionSubject(question) {
   /*  STRONG outright; WEAK only when no explicit maintenance vocabulary
    *  is present. `work` still yields to leasingPerson below, so this is
    *  the only place a technician's sentence can hold its ground.  */
-  const leasingSignal = LEASING_PERSON_STRONG.test(text)
+  const leasingSignal = LEASING_PERSON_STRONG.test(text) || isWebsiteInquiryQuestion(text)
     || (LEASING_PERSON_WEAK.test(text) && !EXPLICIT_WORK_TERMS.test(text));
   const leasingPerson = leasingSignal && !tourSchedule && !contractedService && !equity && !debt
     && !(economics && !LEASING_PERSON_DETAIL_TERMS.test(text) && !isApplicationTermsQuestion(text));
@@ -1677,6 +1681,31 @@ async function answer(db, anthropic, {
       leasingReader, applicationReviewReader, applicationsService,
     });
     return propertySigningResponse(facts);
+  }
+
+  if (subject === "leasing_person" && isWebsiteInquiryQuestion(q)) {
+    const facts = await gatherFacts(db, {
+      property_id, allowed_modules: modules, subject, question: q, leasingReader, applicationsService,
+    });
+    const person = facts.leasing_person;
+    if (!person || person.read_state !== "OK") return {
+      outcome: "unavailable", answer: person?.read_state === "AMBIGUOUS_SUBJECT"
+        ? "More than one person matches. Use the person's full name."
+        : person?.read_state === "NO_SUBJECT" ? "I couldn't identify that person at this property. Use their full name."
+          : "I couldn't read that person's website inquiries. Try again.",
+      grounded_on: { inquiry_read_state: person?.read_state || "READ_FAILED" }, references: [],
+    };
+    const history = person.inquiry_history;
+    if (!history || history.read_state !== "OK") return {
+      outcome: "unavailable", answer: "I couldn't read the website inquiry history. Try again.",
+      grounded_on: { inquiry_read_state: history?.read_state || "READ_FAILED" }, references: [],
+    };
+    const messages = history.messages || [];
+    const lines = messages.map(m => `${String(m.recorded_at).slice(0,10)} — ${m.body}${m.body_truncated ? " [message shortened]" : ""}`);
+    return { outcome: "answered", answer: messages.length
+      ? `${person.subject_name}'s recorded website inquiries${history.truncated ? " (latest ten)" : ""}:\n${lines.join("\n\n")}`
+      : `No website inquiry messages are recorded in ${person.subject_name}'s communication history.`,
+      grounded_on: { inquiry_read_state: "OK", inquiry_history: withoutDatabaseIds(history) }, references: [] };
   }
 
   if (subject === "leasing_person" && isApplicationSendStateQuestion(q)) {
