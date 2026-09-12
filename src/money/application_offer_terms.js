@@ -313,24 +313,61 @@ async function readApplicationOffer(q, { offer_id, property_id, person_id, space
   if (row.expires_at && new Date(row.expires_at).getTime() <= Date.now()) {
     throw failure("APPLICATION_OFFER_EXPIRED", "application offer has expired.", 409);
   }
-  const terms = row.offered_terms_snapshot && row.offered_terms_snapshot.application_terms;
-  const hash = row.offered_terms_snapshot && row.offered_terms_snapshot.application_terms_hash;
-  if (!terms || !hash || termsHash(terms) !== hash) throw failure("APPLICATION_OFFER_CORRUPT", "application offer terms hash does not match the retained terms.", 409);
+  const {terms, hash} = retainedApplicationTerms(row);
   return { offer_id: row.id, terms_hash: hash, rent: terms.rent,
     security_deposit: terms.security_deposit, lease_start_date: terms.lease_start_date,
     lease_end_date: terms.lease_end_date, fees: terms.fees, concessions: terms.concessions,
     application_terms: terms };
 }
 
+function retainedApplicationTerms(row) {
+  const terms = row.offered_terms_snapshot && row.offered_terms_snapshot.application_terms;
+  const hash = row.offered_terms_snapshot && row.offered_terms_snapshot.application_terms_hash;
+  if (!terms || !hash || termsHash(terms) !== hash) throw failure("APPLICATION_OFFER_CORRUPT", "application offer terms hash does not match the retained terms.", 409);
+  return {terms, hash};
+}
+
+const CURRENT_APPLICATION_OFFER_PREDICATE = `source='application_proposal' and status in ('draft','sent')
+  and not exists (select 1 from lease_offers child where child.supersedes_application_offer_id=lease_offers.id)
+  and (expires_at is null or expires_at>now())`;
+
 // One selection rule for preparation and conversational review. Multiple
 // current offers require an explicit choice; never choose the newest silently.
 async function currentApplicationOfferIds(q,{property_id,person_id,space_id}) {
   return (await q.query(`select id from lease_offers
       where property_id=$1 and person_id=$2 and space_id=$3
-        and source='application_proposal' and status in ('draft','sent')
-        and not exists (select 1 from lease_offers child where child.supersedes_application_offer_id=lease_offers.id)
-        and (expires_at is null or expires_at>now()) limit 2`,
+        and ${CURRENT_APPLICATION_OFFER_PREDICATE} limit 2`,
       [property_id,person_id,space_id])).rows;
+}
+
+// Recovery read for staff surfaces. Same currentness and retained-term checks
+// as sending, one batch query, no write or row lock. This reports drafts; it
+// grants no correction/dispatch authority and never chooses between duplicates.
+async function readCurrentApplicationDrafts(q,{property_id,person_ids=[]}={}) {
+  if (!property_id) throw failure('APPLICATION_OFFER_CONTEXT_REQUIRED','a server-derived property is required.');
+  const ids=[...new Set(person_ids.filter(Boolean).map(String))];
+  const out=new Map(ids.map(id=>[id,{draft_offers:[],ambiguous_space_ids:[]}]));
+  if (!ids.length) return out;
+  const rows=(await q.query(`select id,person_id,space_id,status,application_id,communicated_at,offered_terms_snapshot,
+      exists(select 1 from application_invitations i where i.application_offer_id=lease_offers.id) as has_invitation,
+      exists(select 1 from lease_applications a where a.application_offer_id=lease_offers.id) as has_application
+    from lease_offers where property_id=$1 and person_id=any($2::uuid[])
+      and ${CURRENT_APPLICATION_OFFER_PREDICATE}
+    order by person_id,space_id,id`,[property_id,ids])).rows;
+  const groups=new Map();
+  for(const row of rows){
+    const key=`${row.person_id}:${row.space_id}`;
+    if(!groups.has(key)) groups.set(key,[]);
+    groups.get(key).push(row);
+  }
+  for(const group of groups.values()){
+    const row=group[0], entry=out.get(String(row.person_id));
+    if(group.length!==1){entry.ambiguous_space_ids.push(row.space_id);continue;}
+    if(row.status!=='draft'||row.application_id||row.communicated_at||row.has_invitation||row.has_application) continue;
+    const {terms}=retainedApplicationTerms(row);
+    entry.draft_offers.push({id:row.id,space_id:row.space_id,terms});
+  }
+  return out;
 }
 async function resolveApplicationOffer(q, {offer_id=null,property_id,person_id,space_id}) {
   if (!offer_id) {
@@ -354,4 +391,4 @@ function describeApplicationTerms(t) {
   return `${money(t.rent)} per month; deposit ${money(t.security_deposit)}; lease ${t.lease_start_date || "start not established"} to ${t.lease_end_date || "end not established"}; ${fees}; ${t.concessions && t.concessions.status === "none" ? "no concessions" : "concessions require review"}.`;
 }
 
-module.exports = { prepareApplicationOffer, readApplicationOffer, assertCurrentApplicationOffer, resolveApplicationOffer, termsHash, describeApplicationTerms };
+module.exports = { prepareApplicationOffer, readApplicationOffer, assertCurrentApplicationOffer, resolveApplicationOffer, readCurrentApplicationDrafts, termsHash, describeApplicationTerms };

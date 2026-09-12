@@ -7,6 +7,7 @@ require("./proof_fence_preload");
 const { Pool } = require("pg");
 const staffSessions = require("../../src/identity/staff_session_service");
 const staffIdentity = require("../../src/identity/staff_identity_resolver");
+const {readCurrentApplicationDrafts} = require("../../src/money/application_offer_terms");
 
 const BASE = process.env.E2E_API_BASE;
 const SMS_LOG = process.env.E2E_SMS_LOG;
@@ -184,12 +185,24 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
     });
 
     await section("draft-correction", async () => {
+      const recover = async () => {
+        const client=await pool.connect();
+        try {
+          await client.query('begin transaction isolation level repeatable read read only');
+          const result=await readCurrentApplicationDrafts(client,{property_id:P,person_ids:[F.person]});
+          await client.query('commit');
+          return result.get(F.person);
+        } finally {await client.query('rollback').catch(()=>{});client.release();}
+      };
+      check((await recover()).draft_offers.length===0,"recovery distinguishes no established draft before preparation");
       const terms = { space_id:F.bedB.id, rent:1250, security_deposit:1025, lease_start_date:dates.start, lease_end_date:dates.end, fees:[], concessions:{status:"none"}, idempotency_key:`wrong-${nonce}` };
       const save = (body, token=F.managerTok) => api("POST",`/operator/leasing/conversions/${F.conversion.id}/application-offer`,{token,body});
       const creation = await Promise.all([save(terms),save({...terms,idempotency_key:`competing-create-${nonce}`})]);
       need(creation.filter(r=>r.status===200).length===1 && creation.filter(r=>r.status===409 && r.body.error==='APPLICATION_OFFER_ALREADY_EXISTS').length===1,"concurrent first creates establish exactly one draft",creation.map(r=>({status:r.status,error:r.body?.error})));
       const wrong = creation.find(r=>r.status===200);
       need(wrong.body.application_offer_id && wrong.body.application_terms.rent==='1250.00',"manager saves the mistaken 1250 draft");
+      const savedDraft=await recover();
+      check(savedDraft.draft_offers.length===1 && savedDraft.draft_offers[0].id===wrong.body.application_offer_id && savedDraft.draft_offers[0].space_id===F.bedB.id && savedDraft.draft_offers[0].terms.rent==='1250.00',"an independent read-only recovery returns the saved exact-home draft");
       const before = await one("select count(*)::int n from application_invitations where conversion_id=$1",[F.conversion.id]);
       need(before.n===0,"no invitation exists before the correction");
       const proposal = () => api('POST','/operator/ask-spine/message',{token:F.agent.tok,body:{message:`Send ${F.prospect.name} the application for Unit 3B, Bed B.`}});
@@ -207,6 +220,8 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       need(corrections.filter(r=>r.status===200).length===1 && corrections.filter(r=>r.status===409).length===1,"concurrent corrections append one successor",corrections.map(r=>({status:r.status,error:r.body?.error})));
       const winner = corrections.findIndex(r=>r.status===200), correct=corrections[winner], winningTerms=correctionRequests[winner];
       need(correct.body.application_offer_id!==wrong.body.application_offer_id && correct.body.application_terms.rent==='1025.00' && correct.body.draft_revision===true && correct.body.applicant_review_required===false,"manager corrects the unsent draft to 1025 without applicant review");
+      const recoveredCorrection=await recover();
+      check(recoveredCorrection.draft_offers.length===1 && recoveredCorrection.draft_offers[0].id===correct.body.application_offer_id && recoveredCorrection.draft_offers[0].terms.rent==='1025.00',"recovery follows the successor without reviving the old terms");
       const retry = await save(winningTerms);
       check(retry.status===200 && retry.body.idempotent===true && retry.body.application_offer_id===correct.body.application_offer_id,"correction retry returns its retained successor");
       const conflict = await save({...winningTerms,rent:1050});
@@ -228,6 +243,7 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       need(sent.status===200 && sent.body.sent===true,"fresh confirmation sends the corrected offer through the existing command",sent);
       const invitation = await one('select application_offer_id,space_id from application_invitations where conversion_id=$1',[F.conversion.id]);
       check(invitation.application_offer_id===correct.body.application_offer_id && invitation.space_id===F.bedB.id,"invitation binds the corrected offer and exact bed");
+      check((await recover()).draft_offers.length===0,"an invited offer is not exposed as an uninvited recoverable draft");
       const afterSendRevision = await save({...terms,rent:1100,supersedes_application_offer_id:correct.body.application_offer_id,idempotency_key:`after-send-${nonce}`});
       check(afterSendRevision.status===200 && afterSendRevision.body.applicant_review_required===true && afterSendRevision.body.draft_revision===false,"after an invitation the existing applicant-review revision path remains");
       const sentMessages = sms().filter(m=>m.to===F.prospect.phone);
