@@ -284,6 +284,20 @@ if [ "$FAILED" = "0" ]; then
   unset E2E_INTAKE_INACTIVE_PROPERTY_ID
 fi
 
+# Greenery deliberately has no eligible home. Use its own synthetic property
+# ID and server allowlists; never copy Skyline inventory/configuration into it.
+# The preceding server is stopped before boot, and the same nonce-owned run
+# boundary and EXIT cleanup cover this separate phase.
+if [ "$FAILED" = "0" ]; then
+  GREENERY_JOURNEY_ID=$(node -e 'console.log(require("node:crypto").randomUUID())') || exit 1
+  [ -n "$GREENERY_JOURNEY_ID" ] || exit 1
+  E2E_INTAKE_INACTIVE_PROPERTY_ID="$GREENERY_JOURNEY_ID" E2E_PROSPECT_ACTIVATION_PROPERTY_IDS="$GREENERY_JOURNEY_ID" ./tests/e2e/boot.sh >"$RUN_DIR/greenery-journey-server.log" 2>&1 &
+  SERVER_PID=$!
+  node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID" || exit 1
+  step "staff-assisted journey (empty Greenery shape)" env JOURNEY_SHAPE=greenery PROOF_GREENERY_ID="$GREENERY_JOURNEY_ID" PROOF_EVIDENCE_LABEL="greenery-$GREENERY_JOURNEY_ID" node tests/e2e/staff_assisted_journey.e2e.js
+  stop_owned_server || exit 1
+fi
+
 echo "════════════════════════════════════════════════════════════"
 [ -n "$SKIPPED" ] && echo "  ⚠ NOT RUN: $SKIPPED — this is not a pass."
 if [ "$FAILED" = "0" ]; then echo "  ALL REQUIRED ASSERTIONS PASSED — cleanup must also succeed"; else echo "  ✗ VERIFICATION FAILED"; fi
