@@ -1,11 +1,22 @@
 {
  "server": "8cf5078752e62785d239f5721e735fcadb64ec37",
  "summary": {
-  "passed": 33,
+  "passed": 40,
   "failed": 0,
-  "observations": 16
+  "observations": 17
  },
  "results": [
+  {
+   "section": "shape-as-found",
+   "label": "the label groups match the production read (89 suffixed, 18 unsuffixed, 64 prefixed)",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "unprefixed_with_suffix": 89,
+    "unprefixed_without_suffix": 18,
+    "prefixed_apartment": 64
+   }
+  },
   {
    "section": "shape-as-found",
    "label": "the rehearsal property reproduces the production read's shape: 64 parent and 107 other legacy units, one placeholder each, no use, no lineage, no organization, basis unknown",
@@ -105,7 +116,7 @@
      "ok": true,
      "user": {
       "id": "<uuid>",
-      "name": "Mike (rehearsal) c9de9f3d",
+      "name": "Mike (rehearsal) 60c491b1",
       "email": "<email>",
       "phone": "<phone>"
      },
@@ -186,7 +197,7 @@
       "status": "created",
       "organization_id": "<uuid>",
       "organization_absent_reason": null,
-      "created_at": "2026-09-12T12:53:24.457Z",
+      "created_at": "2026-09-12T12:59:44.690Z",
       "authority_basis": "platform_role:org_admin"
      },
      "receipt": "Deal \"The Greenery\" created."
@@ -214,8 +225,8 @@
      "artifact": {
       "id": "<uuid>",
       "filename": "greenery-legacy-rehearsal-rent-roll.csv",
-      "byte_size": 7040,
-      "uploaded_at": "2026-09-12T12:53:24.480Z"
+      "byte_size": 7469,
+      "uploaded_at": "2026-09-12T12:59:44.715Z"
      },
      "receipt": "greenery-legacy-rehearsal-rent-roll.csv is on file. Spine keeps it so it can always show what this position came from."
     }
@@ -235,7 +246,7 @@
       "property_id": "<uuid>",
       "source_label": "Greenery rent roll",
       "status": "open",
-      "created_at": "2026-09-12T12:53:24.488Z"
+      "created_at": "2026-09-12T12:59:44.727Z"
      },
      "reopened": false,
      "receipt": "Setup started for Greenery."
@@ -249,7 +260,7 @@
    "kind": "check",
    "detail": {
     "status": 201,
-    "body": "Read 106 rows from greenery-legacy-rehearsal-rent-roll.csv, dated 2026-09-09. 106 ready, 0 need a look, 0 unassigned or blocked, 0 conflicting. Nothing is live yet."
+    "body": "Read 105 rows from greenery-legacy-rehearsal-rent-roll.csv, dated 2026-09-09. 105 ready, 0 need a look, 0 unassigned or blocked, 0 conflicting. Nothing is live yet."
    }
   },
   {
@@ -258,13 +269,13 @@
    "ok": true,
    "kind": "observe",
    "detail": {
-    "rows_read": 106,
+    "rows_read": 105,
     "counts": {
-     "staged": 106,
+     "staged": 105,
      "needs_review": 0,
      "blocked": 0,
      "conflicted": 0,
-     "vacant": 22
+     "vacant": 21
     },
     "mapping": {
      "understood": [
@@ -327,34 +338,25 @@
   },
   {
    "section": "read-source",
-   "label": "parents' pristine placeholders became the first named bed and the second bed was created; nothing else changed",
+   "label": "every parent's pristine placeholder became its first tracker label, second labels were created, and the 107 legacy placeholders are untouched",
    "ok": true,
    "kind": "check",
    "detail": {
     "spaces": 212,
     "expected_spaces": 212,
-    "beds": 87,
-    "placeholders": 125
+    "beds": 105,
+    "placeholders": 107,
+    "aSingles": 5
    }
   },
   {
    "section": "read-source",
-   "label": "all 107 legacy non-parent rows keep their placeholder label; exactly one (the probe) gained source lineage",
+   "label": "all 107 legacy non-parent rows keep their placeholder and gained no source lineage",
    "ok": true,
    "kind": "check",
    "detail": {
     "placeholders_kept": 107,
-    "with_lineage": 1
-   }
-  },
-  {
-   "section": "read-source",
-   "label": "finding: a source row whose Unit column carries a legacy room-style label resolves to that legacy record, not to its parent apartment; the reader matches unit_number text",
-   "ok": true,
-   "kind": "observe",
-   "detail": {
-    "matched": true,
-    "unit_number": "114 - 3"
+    "with_lineage": 0
    }
   },
   {
@@ -363,9 +365,9 @@
    "ok": true,
    "kind": "check",
    "detail": {
-    "proposals": 106,
+    "proposals": 105,
     "by_status": {
-     "staged": 106
+     "staged": 105
     }
    }
   },
@@ -382,19 +384,19 @@
    "ok": true,
    "kind": "observe",
    "detail": {
-    "confirmed": 106,
+    "confirmed": 105,
     "refused": [],
     "refused_total": 0
    }
   },
   {
    "section": "confirm-and-establish",
-   "label": "every source row (105 positions plus the probe) confirms against the materialised inventory",
+   "label": "every one of the 105 source positions confirms against the materialised inventory",
    "ok": true,
    "kind": "check",
    "detail": {
-    "confirmed": 106,
-    "expected": 106
+    "confirmed": 105,
+    "expected": 105
    }
   },
   {
@@ -404,7 +406,7 @@
    "kind": "check",
    "detail": {
     "status": 201,
-    "body": "Lease & occupancy established as of 2026-09-09: 106 units, nothing outstanding."
+    "body": "Lease & occupancy established as of 2026-09-09: 105 units, nothing outstanding."
    }
   },
   {
@@ -424,20 +426,20 @@
    "ok": true,
    "kind": "observe",
    "detail": {
+    "occupancy_unknown": 107,
     "occupied": 84,
-    "occupancy_unknown": 106,
-    "use_not_configured": 22
+    "use_not_configured": 21
    }
   },
   {
    "section": "confirm-and-establish",
-   "label": "after: 106 legacy rows stay occupancy-unknown, every occupied source row reads occupied, every vacant one (plus the probe) reads use-not-configured, nothing is marketable",
+   "label": "after: the 107 legacy rows stay occupancy-unknown, every occupied source row reads occupied, every vacant one reads use-not-configured, nothing is marketable",
    "ok": true,
    "kind": "check",
    "detail": {
-    "unknown": 106,
+    "unknown": 107,
     "occupied": 84,
-    "use_not_configured": 22,
+    "use_not_configured": 21,
     "marketable_now": 0
    }
   },
@@ -475,9 +477,9 @@
        "contested": 0
       },
       "reported_beside": {
-       "unresolved_positions": 106,
+       "unresolved_positions": 107,
        "evidence_disagrees": 0,
-       "evidence_inconclusive": 106
+       "evidence_inconclusive": 107
       }
      },
      "contractual_rent_trusted": 92400,
@@ -489,12 +491,12 @@
   },
   {
    "section": "confirm-and-establish",
-   "label": "the rent roll reads the occupied source positions and reports the 106 unresolved legacy rows beside them",
+   "label": "the rent roll reads the occupied source positions and reports the 107 unresolved legacy rows beside them",
    "ok": true,
    "kind": "check",
    "detail": {
     "occupied": 84,
-    "unresolved": 106
+    "unresolved": 107
    }
   },
   {
@@ -563,15 +565,15 @@
      "property <uuid>",
      "",
      "REFUSING: no approved ruling covers this property's source codes.",
-     "  present: 2BR-SHARED, STUDIO",
-     "  reviewed_mapping_receipt_2026-07-27: missing 2BR-SHARED, STUDIO",
-     "  skyline_owner_statement_2026-08-20_source_silent_on_bath_distinction: missing 2BR-SHARED, STUDIO"
+     "  present: STU00010, STU00011, STU00012",
+     "  reviewed_mapping_receipt_2026-07-27: missing STU00010, STU00011, STU00012",
+     "  skyline_owner_statement_2026-08-20_source_silent_on_bath_distinction: missing STU00010, STU00011, STU00012"
     ]
    }
   },
   {
    "section": "classification",
-   "label": "with no Greenery ruling block the tool refuses and names the unmapped source codes; nothing is classified",
+   "label": "with no Greenery ruling block the tool refuses and names the three August workpaper codes; nothing is classified",
    "ok": true,
    "kind": "check",
    "detail": {
@@ -642,106 +644,195 @@
    }
   },
   {
-   "section": "unresolved-mappings",
-   "label": "decisions the owner must make before the legacy rows can be reconciled (computed, not written)",
+   "section": "stem-convention-probe",
+   "label": "the second same-shaped property joins the deal",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201
+   }
+  },
+  {
+   "section": "stem-convention-probe",
+   "label": "the stem-convention export is uploaded",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": {
+     "artifact": {
+      "id": "<uuid>",
+      "filename": "greenery-tracker-export-as-is.csv",
+      "byte_size": 6629,
+      "uploaded_at": "2026-09-12T12:59:46.971Z"
+     },
+     "receipt": "greenery-tracker-export-as-is.csv is on file. Spine keeps it so it can always show what this position came from."
+    }
+   }
+  },
+  {
+   "section": "stem-convention-probe",
+   "label": "a setup opens on the probe property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201
+   }
+  },
+  {
+   "section": "stem-convention-probe",
+   "label": "convention B (bare stems in the Unit column) read-source result",
    "ok": true,
    "kind": "observe",
    "detail": {
-    "legacy_non_parent_rows_without_established_counterpart": 106,
-    "extras_beyond_source_positions": [
-     "114 - 3",
-     "214 - 3"
-    ],
-    "naming_conflicts": [
-     {
-      "legacy": "102 - 2",
-      "source": "102 (single position, no room named)"
-     },
-     {
-      "legacy": "401 - 3",
-      "source": "401A / 401B"
-     }
-    ],
-    "suffix_equivalence_unestablished": {
-     "example": "301B",
-     "legacy_candidates": [
-      "301 - 1",
-      "301 - 2"
-     ],
-     "note": "B = Room 2 is not established by either label"
+    "status": 201,
+    "counts": {
+     "staged": 105,
+     "needs_review": 0,
+     "blocked": 0,
+     "conflicted": 0,
+     "vacant": 21
     },
-    "a_suffixed_singles": [
-     {
-      "label": "208A",
-      "legacy_row": "208A",
-      "established": true,
-      "sibling_B_inferred": false
-     },
-     {
-      "label": "308A",
-      "legacy_row": "308A",
-      "established": true,
-      "sibling_B_inferred": false
-     },
-     {
-      "label": "404A",
-      "legacy_row": "404A",
-      "established": true,
-      "sibling_B_inferred": false
-     },
-     {
-      "label": "408A",
-      "legacy_row": "408A",
-      "established": true,
-      "sibling_B_inferred": false
-     },
-     {
-      "label": "414A",
-      "legacy_row": "414A",
-      "established": true,
-      "sibling_B_inferred": false
-     }
+    "receipt": "Read 105 rows from greenery-tracker-export-as-is.csv, dated 2026-09-09. 105 ready, 0 need a look, 0 unassigned or blocked, 0 conflicting. Nothing is live yet."
+   }
+  },
+  {
+   "section": "stem-convention-probe",
+   "label": "finding: with bare stems the reader creates NEW units for every stem that has no legacy row of that exact text, and touches no prefixed parent",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "units_before": 171,
+    "units_after": 217,
+    "created": 46,
+    "created_sample": [
+     "101",
+     "102",
+     "107",
+     "109",
+     "110",
+     "111"
     ],
-    "probe_row_landed_on_legacy_record": "114 - 3"
+    "parents_touched": 0
+   }
+  },
+  {
+   "section": "stem-convention-probe",
+   "label": "finding: the 18 unsuffixed stems land on the legacy rows of that exact text (103, 104, \u2026), not on their prefixed parents",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "landed_on_legacy": [
+     "103",
+     "104",
+     "105",
+     "106",
+     "108",
+     "116",
+     "204",
+     "205",
+     "206",
+     "208",
+     "304",
+     "305",
+     "308",
+     "314",
+     "404",
+     "405",
+     "406",
+     "408"
+    ]
+   }
+  },
+  {
+   "section": "stem-convention-probe",
+   "label": "nothing on the probe property was confirmed or established; it exists only to show what the export convention decides",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "expected_rows": 105
    }
   },
   {
    "section": "unresolved-mappings",
-   "label": "an A-suffixed single establishes exactly one bed; no B bed is inferred",
+   "label": "decisions the owner must make before the 107 legacy rows can be reconciled (computed, not written)",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "textual_correspondences": 102,
+    "unmatched_legacy_labels": [
+     "102 - 2",
+     "114 - C",
+     "214 - 2",
+     "301 - B",
+     "401 - 3"
+    ],
+    "source_rooms_lacking_candidates": [
+     "1325-102/Room1",
+     "1325-301/Room2",
+     "1325-401/Room2"
+    ],
+    "count_differences": [
+     {
+      "parent": "1325-114",
+      "legacy_rows": [
+       "114 - 1",
+       "114 - C"
+      ],
+      "tracker_labels": [
+       "114"
+      ]
+     },
+     {
+      "parent": "1325-214",
+      "legacy_rows": [
+       "214 - 1",
+       "214 - 2"
+      ],
+      "tracker_labels": [
+       "214"
+      ]
+     }
+    ],
+    "a_suffixed_singles": [
+     "208A",
+     "308A",
+     "404A",
+     "408A",
+     "414A"
+    ],
+    "note": "correspondences are proposals for the existing recognition authority; none is an identity mapping and none was written"
+   }
+  },
+  {
+   "section": "unresolved-mappings",
+   "label": "the retained labels reproduce QB's comparison: 102 textual correspondences, five unmatched legacy labels, three source rooms without a candidate",
    "ok": true,
    "kind": "check",
-   "detail": [
-    {
-     "label": "208A",
-     "legacy_row": "208A",
-     "established": true,
-     "sibling_B_inferred": false
-    },
-    {
-     "label": "308A",
-     "legacy_row": "308A",
-     "established": true,
-     "sibling_B_inferred": false
-    },
-    {
-     "label": "404A",
-     "legacy_row": "404A",
-     "established": true,
-     "sibling_B_inferred": false
-    },
-    {
-     "label": "408A",
-     "legacy_row": "408A",
-     "established": true,
-     "sibling_B_inferred": false
-    },
-    {
-     "label": "414A",
-     "legacy_row": "414A",
-     "established": true,
-     "sibling_B_inferred": false
-    }
-   ]
+   "detail": {
+    "unmatched": [
+     "102 - 2",
+     "114 - C",
+     "214 - 2",
+     "301 - B",
+     "401 - 3"
+    ],
+    "rooms_lacking": [
+     "1325-102/Room1",
+     "1325-301/Room2",
+     "1325-401/Room2"
+    ]
+   }
+  },
+  {
+   "section": "unresolved-mappings",
+   "label": "each A-suffixed single established exactly one bed; no B bed was inferred",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "a_beds": 5,
+    "b_beds": 0
+   }
   }
  ]
 }
