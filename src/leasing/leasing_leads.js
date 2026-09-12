@@ -474,7 +474,11 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     const email = normalizeEmail(b.email);
     if (!phone && !email) { const e = new Error("A phone or email is required to identify the prospect."); e.httpStatus = 400; e.publicReceipt = e.message; throw e; }
     const sourceName = b.source || b.source_name || null;
-    const attemptSms = b.attempt_sms !== false;   // default true (authenticated path unchanged)
+    const attemptSms = b.attempt_sms !== false;   // omitted flag retains the existing response-requested mode
+    // Authenticated capture-only intake records the inquiry for staff. Phone
+    // presence is not a request to draft an outbound message. The public demo's
+    // deliberate preparation-only mode remains a separate existing contract.
+    const captureOnly = authenticatedRealIntake && !attemptSms;
 
     // source_lead_id identifies a provider's lead, NOT necessarily a delivery.
     // Only the authenticated HTTP header opts into replay protection. Preserve
@@ -496,7 +500,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     let conversationId = null;
     const client = await pool.connect();
     let person, createdPerson, lead, reusedOpportunity, prop, capturedEvent, strategyEnvelope = null;
-    let responseRequested = !!phone;
+    let responseRequested = !!phone && !captureOnly;
     try {
       await client.query("begin");
 
@@ -761,7 +765,9 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       }
 
       // ── Immediate AI first response (outside the txn; lead is durable). ──
-      let responseReceipt = phone
+      let responseReceipt = captureOnly
+        ? "Inquiry saved for staff follow-up. No automated reply was generated or sent."
+        : phone
         ? "Inquiry saved. Existing conversation control is preserved; no automated reply was generated or sent."
         : "Opportunity saved. No phone on file, so no text sent — the team can follow up by email.";
       let firstResponseSent = false;
