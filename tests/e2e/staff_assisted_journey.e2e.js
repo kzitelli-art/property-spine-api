@@ -323,9 +323,9 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       const first = await proposal("Unit 3B, Bed B");
       need(first.status === 200 && first.body.kind === "application_send_proposal" && first.body.confirmation && first.body.confirmation.token, "the agent's request for the chosen bed becomes a server-selected proposal", { status: first.status, outcome: first.body && first.body.outcome, answer: first.body && first.body.answer });
       check(first.body.target && first.body.target.label === "Unit 3B, Bed B" && !JSON.stringify(first.body).includes(F.bedB.id), "the proposal names the exact bed and exposes no identifiers");
-      // Before any invitation exists the route refuses a revision (its rule: one current invitation).
-      const early = await offer(F.bedB.id, 1100, dates.start, `revise-${nonce}`, { supersedes_application_offer_id: F.offer1 });
-      check(early.status === 409, "revising terms before an invitation exists is refused, not silently branched", { status: early.status, receipt: early.body && early.body.receipt });
+      // Pre-invitation correction and stale-confirmation refusal are exercised
+      // by draft_offer_correction.e2e.js. Keep this chain's original terms until
+      // its post-send revision below, so it proves applicant review separately.
       const wrongActor = await api("POST", "/operator/ask-spine/application-send/confirm", { token: F.managerTok, body: { confirmation: first.body.confirmation.token } });
       check(wrongActor.status === 403 && wrongActor.body.outcome === "confirmation_actor_mismatch", "another staff member cannot redeem the agent's confirmation", { status: wrongActor.status });
       const smsFrom = sms().length;

@@ -193,6 +193,9 @@ async function evaluateManualEmailPreparationBatch(q, { property_id, person_ids 
   const property_allowlisted = envList("APPLICATION_INTENT_PROPERTY_IDS").includes(String(property_id));
   const ids = [...new Set(person_ids.filter(Boolean).map(String))];
   const facts = new Map();
+  const drafts = await require('../money/application_offer_terms').readCurrentApplicationDrafts(q, {
+    property_id, person_ids: ids,
+  });
   if (enabled && property_allowlisted && ids.length) {
     const r = await q.query(`select p.id, p.email, cp.consent_state from persons p
       left join contact_preferences cp on cp.person_id=p.id and cp.channel='email'
@@ -209,7 +212,7 @@ async function evaluateManualEmailPreparationBatch(q, { property_id, person_ids 
   const out = new Map();
   for (const id of [...ids, null]) {
     const fact = facts.get(id);
-    out.set(id, { ...decideApplicationLinkBirth({ enabled, property_allowlisted,
+    out.set(id, { ...drafts.get(id), ...decideApplicationLinkBirth({ enabled, property_allowlisted,
       person_id: fact ? id : null, email: fact?.email, email_consent_state: fact?.consent_state,
       delivery_method: "manual_email" }), prepared_invitations: prepared.filter(r => String(r.person_id) === id)
         .map(({person_id, ...r}) => ({...r, link:null, prepared:true, sent:false, dispatched:false, delivery_method:"manual_email"})) });

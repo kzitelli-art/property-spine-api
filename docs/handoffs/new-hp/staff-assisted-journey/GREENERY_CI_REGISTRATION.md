@@ -15,7 +15,7 @@ This is a separate sequential server configuration within the runner's nonce-own
 Windows PowerShell invoked bundled GNU Bash 5.2.37 (x86_64-pc-msys), distributed as:
 C:/Users/kamer/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/git/usr/bin/sh.exe
 
-Command: sh.exe -n tests/e2e/verify_all.sh — exit 0. git diff --check — passed. bash.exe is not installed at the corresponding path; the available sh.exe identifies itself as GNU Bash. This checks syntax only. The newly registered Greenery shape is NOT claimed green until QB obtains the new exact-SHA CI result. Prior 30/0 remains historical and does not prove the strengthened registration.
+Command: sh.exe -n tests/e2e/verify_all.sh — exit 0. git diff --check — passed. bash.exe is not installed at the corresponding path; the available sh.exe identifies itself as GNU Bash. Initial local validation was syntax only. QB subsequently verified full configured CI [34692918961](https://github.com/kzitelli-art/property-spine-api/actions/runs/34692918961) succeeded at exact8cf5078752e62785d239f5721e735fcadb64ec37. Job103551265403 logs show Skyline89/0, empty Greenery34/0, all56 source gates and canonical owned-database cleanup. Prior30/0 remains historical. These results establish the empty fixture registration, not production's171-row legacy establishment.
 
 ## Existing staff browser hook (read-only finding)
 

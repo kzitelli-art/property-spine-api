@@ -279,6 +279,9 @@ if [ "$FAILED" = "0" ]; then
   step "website inquiry state and authority" node tests/proofs/website_inquiry_state.db.js
   step "staff inquiry ownership and response" node tests/proofs/conversation_takeover_owner.db.js
   step "staff inquiry native tour booking" node tests/proofs/staff_conversation_tour.db.js
+  step "unsent application draft correction" node tests/e2e/draft_offer_correction.e2e.js
+  step "canonical application draft recovery" node tests/proofs/application_draft_recovery.db.js
+  step "manual email application preparation" node tests/proofs/manual_email_application.db.js
   step "staff-assisted journey (Skyline shape)" env JOURNEY_SHAPE=skyline node tests/e2e/staff_assisted_journey.e2e.js
   stop_owned_server || exit 1
   unset E2E_INTAKE_INACTIVE_PROPERTY_ID
