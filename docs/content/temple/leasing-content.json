@@ -31,22 +31,50 @@
     "g_amenities": {
       "url": "https://www.templegreenery.com/ameneties-near-temple",
       "checked_at": "2026-09-10",
-      "kind": "official_website"
+      "kind": "official_website",
+      "verifications": [
+        {
+          "checked_at": "2026-09-12",
+          "method": "official_page_read",
+          "result": "Page accessible; descriptive source claims rechecked. Website publication is not current operator approval."
+        }
+      ]
     },
     "g_studio": {
       "url": "https://www.templegreenery.com/studio-apartment-near-temple",
       "checked_at": "2026-09-10",
-      "kind": "official_website"
+      "kind": "official_website",
+      "verifications": [
+        {
+          "checked_at": "2026-09-12",
+          "method": "official_page_read",
+          "result": "Page accessible; descriptive source claims rechecked. Website publication is not current operator approval."
+        }
+      ]
     },
     "g_one": {
       "url": "https://www.templegreenery.com/one-bedroom-apartment-near-temple",
       "checked_at": "2026-09-10",
-      "kind": "official_website"
+      "kind": "official_website",
+      "verifications": [
+        {
+          "checked_at": "2026-09-12",
+          "method": "official_page_read",
+          "result": "Page accessible; descriptive source claims rechecked. Website publication is not current operator approval."
+        }
+      ]
     },
     "g_two": {
       "url": "https://www.templegreenery.com/two-bedroom-apartment-near-temple",
       "checked_at": "2026-09-10",
-      "kind": "official_website"
+      "kind": "official_website",
+      "verifications": [
+        {
+          "checked_at": "2026-09-12",
+          "method": "official_page_read",
+          "result": "Page accessible; descriptive source claims rechecked. Website publication is not current operator approval."
+        }
+      ]
     },
     "g_neighborhood": {
       "url": "https://www.templegreenery.com/temple-university-neighborhood",
@@ -81,7 +109,14 @@
     "g_tours": {
       "url": "https://amberstudent.com/places/the-greenery-philadelphia-2408064848211",
       "checked_at": "2026-09-09",
-      "kind": "third_party_listing"
+      "kind": "third_party_listing",
+      "verifications": [
+        {
+          "checked_at": "2026-09-12",
+          "method": "public_listing_html",
+          "result": "HTTP200; retained H8eLkJVRrQT and D3SQQ8uqFix model IDs both present in listing HTML"
+        }
+      ]
     },
     "s_owner_operating_facts": {
       "repository_path": "docs/SKYLINE_OPERATING_FACTS.md",
@@ -94,6 +129,40 @@
         "AMENITIES"
       ],
       "note": "Historical source confirmation, not a new approval or current physical inspection."
+    },
+    "g_contact": {
+      "url": "https://www.templegreenery.com/contact-us",
+      "checked_at": "2026-09-12",
+      "kind": "official_website",
+      "note": "Address corroborated. Page names John Franco and a 2025-2026 leasing season; current manager/phone ownership not established and not imported."
+    },
+    "g_junior_matterport": {
+      "url": "https://my.matterport.com/show/?m=H8eLkJVRrQT",
+      "checked_at": "2026-09-12",
+      "kind": "public_media_metadata",
+      "title": "Junior 1BR - 700SF - Matterport 3D Showcase",
+      "result": "HTTP200 HTML title. Listing association rechecked; no full visual walkthrough, exact-home mapping or measurement verification."
+    },
+    "g_two_matterport": {
+      "url": "https://my.matterport.com/show/?m=D3SQQ8uqFix",
+      "checked_at": "2026-09-12",
+      "kind": "public_media_metadata",
+      "title": "2BR, 2BA - 1032SF - Matterport 3D Showcase",
+      "result": "HTTP200 HTML title. Listing association rechecked; no full visual walkthrough, exact-home mapping or measurement verification."
+    },
+    "g_studio05_rendering": {
+      "url": "https://images.squarespace-cdn.com/content/v1/5c7ed8728dfc8c52be97c35e/1567683034188-RXZGGRB3EV4F4QMMA3Q1/The%2B05%2BLine%2BStudio%2BApartment%2BNear%2BTemple%2BUniversity",
+      "checked_at": "2026-09-12",
+      "kind": "official_public_rendering",
+      "parent_source": "g_studio",
+      "note": "Public image linked by official studio page as 05. Marketing rendering, not a verified exact-home plan or measured geometry."
+    },
+    "g_studio08_rendering": {
+      "url": "https://images.squarespace-cdn.com/content/v1/5c7ed8728dfc8c52be97c35e/1567683184234-XA6BK91XEY6PTVMX2X8E/The%2B08%2BLine%2BStudio%2Bapartment%2Bnear%2BTemple%2BUniversity",
+      "checked_at": "2026-09-12",
+      "kind": "official_public_rendering",
+      "parent_source": "g_studio",
+      "note": "Public image linked by official studio page as 08. Marketing rendering, not a verified exact-home plan or measured geometry."
     }
   },
   "properties": [
@@ -252,7 +321,7 @@
     {
       "property_name": "The Greenery",
       "physical_address": "1325 North 15th Street, Philadelphia, PA",
-      "canonical_property_id": null,
+      "canonical_property_id": "a29181cd-3ba1-461c-aead-cd989add1d11",
       "publication_status": "prepared_not_loaded",
       "facts": [
         {
@@ -271,20 +340,35 @@
         {
           "fact_key": "amenities",
           "status": "source_attributed_draft",
-          "rendered_text": "The website lists in-unit washer/dryers, dishwashers, Amazon Hub lockers, fob-controlled entrances and garage parking. Balcony availability depends on the layout. Confirm current parking terms and package procedures with the team. Cameras and access controls are building features, not a guarantee of safety or package security.\n\nSources: https://www.templegreenery.com/ameneties-near-temple\nhttps://www.templegreenery.com/studio-apartment-near-temple",
+          "rendered_text": "The website lists in-unit washer/dryers, dishwashers, Amazon Hub lockers, fob-controlled entrances and garage parking. Balcony availability depends on the layout. Confirm current parking terms and package procedures with the team. Cameras and access controls are building features, not a guarantee of safety or package security.\n\nSources: https://www.templegreenery.com/ameneties-near-temple\nhttps://www.templegreenery.com/studio-apartment-near-temple\n\nSources checked September 12, 2026.",
           "source_type": "other_documented_source",
           "source_refs": [
             "g_amenities",
             "g_studio"
           ],
           "review_notes": [
-            "Parking price, exact camera count and blanket balcony claim are excluded."
-          ]
+            "Parking price, exact camera count and blanket balcony claim are excluded.",
+            "Source links rechecked September 12, 2026; no new operator approval or production publication."
+          ],
+          "previous_draft": {
+            "fact_key": "amenities",
+            "status": "source_attributed_draft",
+            "rendered_text": "The website lists in-unit washer/dryers, dishwashers, Amazon Hub lockers, fob-controlled entrances and garage parking. Balcony availability depends on the layout. Confirm current parking terms and package procedures with the team. Cameras and access controls are building features, not a guarantee of safety or package security.\n\nSources: https://www.templegreenery.com/ameneties-near-temple\nhttps://www.templegreenery.com/studio-apartment-near-temple",
+            "source_type": "other_documented_source",
+            "source_refs": [
+              "g_amenities",
+              "g_studio"
+            ],
+            "review_notes": [
+              "Parking price, exact camera count and blanket balcony claim are excluded."
+            ]
+          },
+          "prepared_at": "2026-09-12"
         },
         {
           "fact_key": "layouts",
           "status": "source_attributed_draft",
-          "rendered_text": "The studio page distinguishes 05 with a balcony from 08 without one. The one-bedroom page describes 04 and 14 as courtyard-facing and 06 as a junior one-bedroom. The two-bedroom page describes en-suite bathrooms, street-facing 01 and two balconies on 12. These are source model labels; confirm the exact apartment association before making an offer.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple",
+          "rendered_text": "The studio page distinguishes 05 with a balcony from 08 without one. The one-bedroom page describes 04 and 14 as courtyard-facing and 06 as a junior one-bedroom. The two-bedroom page describes en-suite bathrooms, street-facing 01 and two balconies on 12. These are source model labels; confirm the exact apartment association before making an offer.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple\n\nSources checked September 12, 2026.",
           "source_type": "other_documented_source",
           "source_refs": [
             "g_studio",
@@ -292,8 +376,24 @@
             "g_two"
           ],
           "review_notes": [
-            "The 02/16 paragraph has inconsistent bedroom wording and is excluded."
-          ]
+            "The 02/16 paragraph has inconsistent bedroom wording and is excluded.",
+            "Source links rechecked September 12, 2026; no new operator approval or production publication."
+          ],
+          "previous_draft": {
+            "fact_key": "layouts",
+            "status": "source_attributed_draft",
+            "rendered_text": "The studio page distinguishes 05 with a balcony from 08 without one. The one-bedroom page describes 04 and 14 as courtyard-facing and 06 as a junior one-bedroom. The two-bedroom page describes en-suite bathrooms, street-facing 01 and two balconies on 12. These are source model labels; confirm the exact apartment association before making an offer.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple",
+            "source_type": "other_documented_source",
+            "source_refs": [
+              "g_studio",
+              "g_one",
+              "g_two"
+            ],
+            "review_notes": [
+              "The 02/16 paragraph has inconsistent bedroom wording and is excluded."
+            ]
+          },
+          "prepared_at": "2026-09-12"
         },
         {
           "fact_key": "dimensions",
@@ -313,41 +413,92 @@
         {
           "fact_key": "photos",
           "status": "source_attributed_draft",
-          "rendered_text": "The official studio, one-bedroom and two-bedroom pages provide photographs or renderings of their published options. A rendering illustrates an arrangement; furniture shown does not mean it is included. Ask the team for current images of the specific home if its condition, view or furnishings are important to your decision.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple",
+          "rendered_text": "The official studio, one-bedroom and two-bedroom pages provide photographs or renderings of their published options. A rendering illustrates an arrangement; furniture shown does not mean it is included. Ask the team for current images of the specific home if its condition, view or furnishings are important to your decision.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple\n\nSources checked September 12, 2026.",
           "source_type": "other_documented_source",
           "source_refs": [
             "g_studio",
             "g_one",
             "g_two"
           ],
-          "review_notes": []
+          "review_notes": [
+            "Source links rechecked September 12, 2026; no new operator approval or production publication."
+          ],
+          "previous_draft": {
+            "fact_key": "photos",
+            "status": "source_attributed_draft",
+            "rendered_text": "The official studio, one-bedroom and two-bedroom pages provide photographs or renderings of their published options. A rendering illustrates an arrangement; furniture shown does not mean it is included. Ask the team for current images of the specific home if its condition, view or furnishings are important to your decision.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple",
+            "source_type": "other_documented_source",
+            "source_refs": [
+              "g_studio",
+              "g_one",
+              "g_two"
+            ],
+            "review_notes": []
+          },
+          "prepared_at": "2026-09-12"
         },
         {
           "fact_key": "floor_plans",
           "status": "source_attributed_draft",
-          "rendered_text": "The public studio page includes 05 and 08 layout diagrams. The one-bedroom page includes 04, 06 and 14, and the two-bedroom page includes several labeled arrangements. Confirm the drawing-to-apartment match before relying on it for a specific home. These illustrations do not establish room measurements.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple",
+          "rendered_text": "The Greenery publishes representative layout illustrations on its studio, one-bedroom and two-bedroom pages. Two direct studio renderings are available:\n05 studio rendering: https://images.squarespace-cdn.com/content/v1/5c7ed8728dfc8c52be97c35e/1567683034188-RXZGGRB3EV4F4QMMA3Q1/The%2B05%2BLine%2BStudio%2BApartment%2BNear%2BTemple%2BUniversity\n08 studio rendering: https://images.squarespace-cdn.com/content/v1/5c7ed8728dfc8c52be97c35e/1567683184234-XA6BK91XEY6PTVMX2X8E/The%2B08%2BLine%2BStudio%2Bapartment%2Bnear%2BTemple%2BUniversity\nThese are marketing illustrations, not measured construction drawings. Confirm the drawing-to-apartment match before relying on one for a specific home. Furniture depicted does not establish what is included.\n\nOther published layouts:\nhttps://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple\n\nSources checked September 12, 2026.",
           "source_type": "other_documented_source",
           "source_refs": [
             "g_studio",
             "g_one",
-            "g_two"
+            "g_two",
+            "g_studio05_rendering",
+            "g_studio08_rendering"
           ],
           "review_notes": [
-            "Fifteen private unit-group renderings and building maps remain internal; source filenames are not verified canonical mappings."
-          ]
+            "Fifteen private unit-group renderings and building maps remain internal; source filenames are not verified canonical mappings.",
+            "Source links rechecked September 12, 2026; no new operator approval or production publication."
+          ],
+          "previous_draft": {
+            "fact_key": "floor_plans",
+            "status": "source_attributed_draft",
+            "rendered_text": "The public studio page includes 05 and 08 layout diagrams. The one-bedroom page includes 04, 06 and 14, and the two-bedroom page includes several labeled arrangements. Confirm the drawing-to-apartment match before relying on it for a specific home. These illustrations do not establish room measurements.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/one-bedroom-apartment-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple",
+            "source_type": "other_documented_source",
+            "source_refs": [
+              "g_studio",
+              "g_one",
+              "g_two"
+            ],
+            "review_notes": [
+              "Fifteen private unit-group renderings and building maps remain internal; source filenames are not verified canonical mappings."
+            ]
+          },
+          "prepared_at": "2026-09-12"
         },
         {
           "fact_key": "virtual_tours",
           "status": "source_attributed_draft",
-          "rendered_text": "Two tours were recovered from The Greenery's public listing:\nJunior 1BR, labeled 700 SF: https://my.matterport.com/show/?m=H8eLkJVRrQT\n2BR / 2BA, labeled 1,032 SF: https://my.matterport.com/show/?m=D3SQQ8uqFix\nThese show listing-associated representative models. Exact apartment/stack associations are unconfirmed, and the area labels are not certified measurements.\n\nSources: https://amberstudent.com/places/the-greenery-philadelphia-2408064848211",
+          "rendered_text": "Two representative tours are linked from The Greenery public listing:\nJunior 1BR: https://my.matterport.com/show/?m=H8eLkJVRrQT\n2BR / 2BA: https://my.matterport.com/show/?m=D3SQQ8uqFix\nThe model pages responded on September 12, 2026. Their titles contain area labels, but those labels are not verified measurements. Exact apartment/stack associations remain unconfirmed. These tours do not establish current availability, condition or the furniture package of an offered home.\n\nListing source: https://amberstudent.com/places/the-greenery-philadelphia-2408064848211\n\nSources checked September 12, 2026.",
           "source_type": "other_documented_source",
           "source_refs": [
-            "g_tours"
+            "g_tours",
+            "g_junior_matterport",
+            "g_two_matterport"
           ],
           "review_notes": [
             "Model titles checked 2026-09-09; fresh web-tool Matterport re-open failed 2026-09-10.",
-            "No studio Matterport recovered. Do not substitute a 1BR tour for a studio."
-          ]
+            "No studio Matterport recovered. Do not substitute a 1BR tour for a studio.",
+            "Source links rechecked September 12, 2026; no new operator approval or production publication.",
+            "Earlier failed web-tool re-open remains historical. September 12 direct HTML requests returned200 and expected titles; no full walkthrough claimed."
+          ],
+          "previous_draft": {
+            "fact_key": "virtual_tours",
+            "status": "source_attributed_draft",
+            "rendered_text": "Two tours were recovered from The Greenery's public listing:\nJunior 1BR, labeled 700 SF: https://my.matterport.com/show/?m=H8eLkJVRrQT\n2BR / 2BA, labeled 1,032 SF: https://my.matterport.com/show/?m=D3SQQ8uqFix\nThese show listing-associated representative models. Exact apartment/stack associations are unconfirmed, and the area labels are not certified measurements.\n\nSources: https://amberstudent.com/places/the-greenery-philadelphia-2408064848211",
+            "source_type": "other_documented_source",
+            "source_refs": [
+              "g_tours"
+            ],
+            "review_notes": [
+              "Model titles checked 2026-09-09; fresh web-tool Matterport re-open failed 2026-09-10.",
+              "No studio Matterport recovered. Do not substitute a 1BR tour for a studio."
+            ]
+          },
+          "prepared_at": "2026-09-12"
         },
         {
           "fact_key": "neighborhood",
@@ -365,16 +516,33 @@
         {
           "fact_key": "leasing_faq",
           "status": "source_attributed_draft",
-          "rendered_text": "Does every studio have a balcony? No: the studio page identifies 05 as its balcony layout.\nIs laundry in the apartment? The website lists in-unit washer/dryers.\nIs furniture included? The apartment pages describe furnishing as an option; confirm the selected package and current terms.\nCan I have my own bathroom? The two-bedroom page describes en-suite bathrooms; confirm the offered home's layout.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/ameneties-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple",
+          "rendered_text": "Where is The Greenery? 1325 North 15th Street, Philadelphia, PA 19121.\nIs laundry in the apartment? The property website lists in-unit washer/dryers.\nWhich studio has a balcony? The studio page identifies the 05 model as its balcony layout; do not infer that every studio has one.\nIs furniture included? The website describes furnishing as an option. Confirm the exact home package and current terms with the leasing team.\n\nSources:\nhttps://www.templegreenery.com/contact-us\nhttps://www.templegreenery.com/ameneties-near-temple\nhttps://www.templegreenery.com/studio-apartment-near-temple\n\nSources checked September 12, 2026.",
           "source_type": "other_documented_source",
           "source_refs": [
-            "g_studio",
+            "g_contact",
             "g_amenities",
-            "g_two"
+            "g_studio"
           ],
           "review_notes": [
-            "Do not import furnishing/parking dollar amounts or historical late-fee/trash rules."
-          ]
+            "Do not import furnishing/parking dollar amounts or historical late-fee/trash rules.",
+            "Source links rechecked September 12, 2026; no new operator approval or production publication.",
+            "Do not import the contact page manager name or phone as current: it names John Franco and an old leasing season. Current routing/manager identity must be confirmed separately."
+          ],
+          "previous_draft": {
+            "fact_key": "leasing_faq",
+            "status": "source_attributed_draft",
+            "rendered_text": "Does every studio have a balcony? No: the studio page identifies 05 as its balcony layout.\nIs laundry in the apartment? The website lists in-unit washer/dryers.\nIs furniture included? The apartment pages describe furnishing as an option; confirm the selected package and current terms.\nCan I have my own bathroom? The two-bedroom page describes en-suite bathrooms; confirm the offered home's layout.\n\nSources: https://www.templegreenery.com/studio-apartment-near-temple\nhttps://www.templegreenery.com/ameneties-near-temple\nhttps://www.templegreenery.com/two-bedroom-apartment-near-temple",
+            "source_type": "other_documented_source",
+            "source_refs": [
+              "g_studio",
+              "g_amenities",
+              "g_two"
+            ],
+            "review_notes": [
+              "Do not import furnishing/parking dollar amounts or historical late-fee/trash rules."
+            ]
+          },
+          "prepared_at": "2026-09-12"
         },
         {
           "fact_key": "move_in_guidance",
@@ -388,10 +556,11 @@
             "2020/2021 packets retained as historical sources only; old staff names, portal instructions and fees are excluded."
           ]
         }
-      ]
+      ],
+      "canonical_identity_basis": "Addressed existing Greenery UUID from retained September11 read-only Temple identity receipt; durable ID preserved. This source/content lane performed no new production identity read."
     }
   ],
-  "updated_at": "2026-09-11",
+  "updated_at": "2026-09-12",
   "staging_sets": {
     "skyline_essentials": {
       "property_name": "Skyline",
@@ -401,6 +570,19 @@
       ],
       "publication_status": "prepared_not_loaded",
       "note": "Only these two existing cards are selected. Other 18 cards remain deferred drafts; source certainty does not confer publication authority."
+    },
+    "greenery_essentials": {
+      "property_name": "The Greenery",
+      "fact_keys": [
+        "amenities",
+        "layouts",
+        "photos",
+        "floor_plans",
+        "virtual_tours",
+        "leasing_faq"
+      ],
+      "publication_status": "prepared_not_loaded",
+      "note": "Six source-attributed existing cards. Publication remains an explicit authorized staff action. Measurements, current contact routing, availability, economic terms and policies are not established by this set."
     }
   }
 }
