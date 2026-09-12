@@ -124,7 +124,9 @@ function app(overrides = {}) {
   assert.strictEqual(boundReaderCalls.length, 1);
   assert.strictEqual(boundReaderCalls[0].app.property_id, PROPERTY);
   assert.strictEqual(boundReaderCalls[0].app.space_id, SPACE);
-  assert.deepStrictEqual(boundReaderCalls[0].options, { allowHistorical: true });
+  // The review is a projection: historical offers are allowed and no row lock is
+  // taken, so the Leasing desk can read it inside a READ ONLY transaction.
+  assert.deepStrictEqual(boundReaderCalls[0].options, { allowHistorical: true, lock: false });
 
   pendingInvitationOfferId = PENDING_OFFER;
   const pending = await buildReviewDetail(clientFor(app()), APPLICATION, PROPERTY);

@@ -302,12 +302,17 @@ async function assertCurrentApplicationOffer(q, offer_id) {
   return row;
 }
 
-async function readApplicationOffer(q, { offer_id, property_id, person_id, space_id } = {}) {
+//  lock: writers that go on to bind, confirm or supersede the offer hold the
+//  row (the default). A projection that only reads it — the Leasing desk's
+//  application rows run inside a READ ONLY transaction — must not: Postgres
+//  refuses SELECT FOR UPDATE there and the whole desk went 503 for the
+//  property as soon as one submitted application was bound to an offer.
+async function readApplicationOffer(q, { offer_id, property_id, person_id, space_id, lock = true } = {}) {
   if (!offer_id || !property_id || !person_id || !space_id) throw failure("APPLICATION_OFFER_CONTEXT_REQUIRED", "offer_id, property_id, person_id, and space_id are required.");
   const row = (await q.query(
     `select * from lease_offers where id=$1 and property_id=$2 and person_id=$3
       and source='application_proposal' and space_id=$4
-      and status in ('draft','sent','earned') for update`,
+      and status in ('draft','sent','earned')${lock ? " for update" : ""}`,
     [offer_id, property_id, person_id, space_id || null])).rows[0];
   if (!row) throw failure("APPLICATION_OFFER_NOT_FOUND", "application offer not found for this property/person/space.", 404);
   if (row.expires_at && new Date(row.expires_at).getTime() <= Date.now()) {

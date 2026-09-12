@@ -286,6 +286,7 @@ if [ "$FAILED" = "0" ]; then
   step "canonical application draft recovery" node tests/proofs/application_draft_recovery.db.js
   step "manual email application preparation" node tests/proofs/manual_email_application.db.js
   step "staff-assisted journey (Skyline shape)" env JOURNEY_SHAPE=skyline node tests/e2e/staff_assisted_journey.e2e.js
+  step "no-consent two-person journey" node tests/e2e/no_consent_two_person_journey.e2e.js
   stop_owned_server || exit 1
   unset E2E_INTAKE_INACTIVE_PROPERTY_ID
 fi
