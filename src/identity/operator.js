@@ -776,10 +776,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   router.get("/operator/leasing/conversations/:conversationId", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      let vitals;
+      let vitals, conversationPersonId;
       const client = await pool.connect();
       try {
         const conv = await scopedConversation(client, req.params.conversationId, req.operator.property_id);
+        conversationPersonId = conv.person_id;
         vitals = await prospectVitals(client, { personId: conv.person_id, propertyId: req.operator.property_id });
       } finally { client.release(); }
       const state = await agentService.getConversationStateService({ conversationId: req.params.conversationId });
@@ -822,7 +823,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
             actor_id: proj.closure_actor_id, actor_name: proj.closure_actor_name,
             occurred_at: proj.closure_occurred_at, recorded_at: proj.closure_recorded_at }
         : null;
+      const sendCap = await capability.evaluateApplicationLinkBirth(pool, { property_id: req.operator.property_id, person_id: conversationPersonId });
+      const manualCap = await capability.evaluateManualEmailPreparation(pool, { property_id: req.operator.property_id, person_id: conversationPersonId });
       return res.json({ ...state, facts, vitals, commercial_state, closure,
+        send_application_capability: sendCap, manual_email_preparation: manualCap,
         waiting_on: proj?.waiting_on || null, control_bucket: proj?.control_bucket || null,
         bucket_reason_code: proj?.bucket_reason_code || null });
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
@@ -4001,9 +4005,12 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     PROPERTY_NOT_ACTIVATED:    { status: 403, error: "property_not_activated" },
     NO_CONSENT:                { status: 403, error: "person_has_not_consented" },
     PERSON_UNKNOWN:            { status: 403, error: "person_unknown" },
+    EMAIL_MISSING:             { status: 403, error: "person_email_missing" },
+    EMAIL_OPTED_OUT:           { status: 403, error: "person_email_opted_out" },
   };
-  async function applicationBirthGate(req, person_id, q = pool) {
-    const verdict = await capability.evaluateApplicationLinkBirth(q, {
+  async function applicationBirthGate(req, person_id, q = pool, deliveryMethod = "sms") {
+    const evaluate = deliveryMethod === "manual_email" ? capability.evaluateManualEmailPreparation : capability.evaluateApplicationLinkBirth;
+    const verdict = await evaluate(q, {
       property_id: req.operator.property_id,
       person_id: person_id || null,
     });
@@ -4264,6 +4271,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       }
 
       const {
+        delivery_method = "sms",
         unit_id,
         space_id = null,
         intended_move_in = null,
@@ -4272,6 +4280,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         message_prefix = "",
       } = req.body || {};
 
+      if (!["sms", "manual_email"].includes(delivery_method)) return res.status(400).json({ error: "invalid_delivery_method" });
+      const applicantOrigin = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "");
+      if (delivery_method === "manual_email" && !applicantOrigin) return res.status(503).json({ error: "applicant_link_origin_not_configured" });
       if (!unit_id) {
         return res.status(400).json({
           error: "unit_id is required.",
@@ -4312,7 +4323,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           });
         }
 
-        const gate = await applicationBirthGate(req, conv.person_id, client);
+        const gate = await applicationBirthGate(req, conv.person_id, client, delivery_method);
         if (!gate.ok) {
           await client.query("rollback");
           return res.status(gate.status).json(gate);
@@ -4322,6 +4333,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           client,
           { conversionService, applicationInvitations },
           {
+            deliveryMethod: delivery_method,
             conversionId,
             actorUserId: req.operator.id,
             unitId: unit_id,
@@ -4345,17 +4357,30 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           }
         );
 
+        if (delivery_method === "manual_email") {
+          staged.email = (await client.query("select email from persons where id=$1", [conv.person_id])).rows[0]?.email?.trim();
+        }
         await client.query("commit");
       } catch (e) {
         await client.query("rollback").catch(() => {});
         return res.status(e.httpStatus || 500).json({
           error: e.code || e.publicMessage || e.message,
           receipt: e.publicMessage || e.message || "The application send could not be prepared.",
+          ...(e.recovery || {}),
         });
       } finally {
         client.release();
       }
 
+      if (delivery_method === "manual_email") return res.json({
+        prepared: true, sent: false, dispatched: false, delivery_method,
+        conversion_id: staged.conversion_id, invitation_id: staged.invitation_id,
+        send_obligation_id: staged.send_obligation_id, prepare_obligation_id: staged.prepare_obligation_id,
+        unit_id: staged.unit_id, space_id: staged.space_id, intended_move_in: staged.intended_move_in,
+        link: applicantOrigin + "/t/application/" + staged.token,
+        recipient_snapshot: staged.email, email: staged.email,
+        receipt: "Application link prepared. Nothing was sent. Email it externally, then record that you sent it.",
+      });
       try {
         const out = await applicationSendCommand.dispatchApplicationSend(
           { applicationInvitations },

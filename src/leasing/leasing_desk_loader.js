@@ -245,14 +245,17 @@ async function loadFollowupRows(client, propertyId, deps) {
   // returned WITHOUT a verdict, and the normalizer leaves the action as it
   // was. A capability read that breaks must not blank the desk — an absent
   // verdict is honestly unknown, never a silent denial.
-  let capabilityByPerson = null;
+  let capabilityByPerson = null, manualEmailByPerson = null;
   try {
     const capability = require("../identity/capability");
     capabilityByPerson = await capability.evaluateApplicationLinkBirthBatch(client, {
       property_id: propertyId,
       person_ids: rows.map((r) => r.person_id).filter(Boolean),
     });
-  } catch (_) { capabilityByPerson = null; }
+    manualEmailByPerson = await capability.evaluateManualEmailPreparationBatch(client, {
+      property_id: propertyId, person_ids: rows.map((r) => r.person_id).filter(Boolean),
+    });
+  } catch (_) { capabilityByPerson = null; manualEmailByPerson = null; }
 
   // ONE resolver read per DISTINCT owner, on CLIENT (in-snapshot).
   const ownerIds = [...new Set(rows.map((r) => r.owner_user_id).filter(Boolean))];
@@ -268,6 +271,7 @@ async function loadFollowupRows(client, propertyId, deps) {
     // The server-authored verdict for the one action this row can offer.
     // null = not evaluated (see fail-soft above), which the normalizer
     // treats as "no opinion", never as a denial.
+    manual_email_preparation: manualEmailByPerson?.get(r.person_id ? String(r.person_id) : null) || null,
     send_application_capability: capabilityByPerson
       ? (capabilityByPerson.get(r.person_id ? String(r.person_id) : null) || null)
       : null,

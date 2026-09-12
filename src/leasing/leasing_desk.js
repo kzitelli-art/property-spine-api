@@ -321,7 +321,8 @@ function normalizeFollowupAction(row) {
     // A null verdict means capability was not evaluated on this deploy — the
     // action is left exactly as it was. Unknown is not denial.
     const cap = row.send_application_capability || null;
-    if (cap && cap.allowed === false) {
+    const manual = row.manual_email_preparation || null;
+    if (cap && cap.allowed === false && !manual?.allowed) {
       return blockedFollowupAction({
         code: "send_application",
         label: "Send",
@@ -332,10 +333,11 @@ function normalizeFollowupAction(row) {
     }
     return {
       code: "send_application",
-      label: "Send",
+      label: cap?.allowed === false && manual?.allowed ? "Prepare email" : "Send",
       kind: "task_write",
       target: { type: "conversion", id: conversionId },
       capability: cap || null,
+      manual_email_preparation: manual,
     };
   }
 

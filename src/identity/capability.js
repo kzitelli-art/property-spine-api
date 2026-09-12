@@ -51,6 +51,8 @@ const REASONS = {
     "Application links aren't switched on for this property yet.",
   NO_CONSENT:
     "This person hasn't agreed to be contacted yet.",
+  EMAIL_MISSING: "No email address is recorded for this person.",
+  EMAIL_OPTED_OUT: "This person has asked not to be contacted by email.",
   PERSON_UNKNOWN:
     "No person is connected to this work yet.",
 };
@@ -90,7 +92,7 @@ function envList(name) {
 //
 //  Absence is refusal, unchanged: no consent row means no, never "not yet
 //  decided, so proceed".
-function decideApplicationLinkBirth({ enabled, property_allowlisted, person_id, consent_state }) {
+function decideApplicationLinkBirth({ enabled, property_allowlisted, person_id, consent_state, delivery_method = "sms", email = null, email_consent_state = null }) {
   const deny = (code) => ({
     action: ACTION_APPLICATION_LINK,
     allowed: false,
@@ -100,6 +102,13 @@ function decideApplicationLinkBirth({ enabled, property_allowlisted, person_id, 
 
   if (!enabled) return deny("APPLICATION_LINK_DISABLED");
   if (!property_allowlisted) return deny("PROPERTY_NOT_ACTIVATED");
+  if (delivery_method === "manual_email") {
+    if (!person_id) return deny("PERSON_UNKNOWN");
+    if (["opted_out", "stop", "revoked"].includes(String(email_consent_state || "").toLowerCase())) return deny("EMAIL_OPTED_OUT");
+    if (typeof email !== "string" || !email.trim()) return deny("EMAIL_MISSING");
+    return { action: ACTION_APPLICATION_LINK, allowed: true, reason_code: "ALLOWED",
+      display_reason: "Ready to prepare an email link. Nothing will be sent." };
+  }
   // A person is optional at the gate's original call site (some routes pass
   // none), but a board row that offers Send always has one.
   if (person_id) {
@@ -177,9 +186,45 @@ async function evaluateApplicationLinkBirthBatch(q, { property_id, person_ids = 
   return out;
 }
 
+// Manual preparation is not a transport. Read the recorded destination and
+// email revocation from their existing owners; text consent remains separate.
+async function evaluateManualEmailPreparationBatch(q, { property_id, person_ids = [] }) {
+  const enabled = envFlag("APPLICATION_INTENT_PREPARE_ENABLED");
+  const property_allowlisted = envList("APPLICATION_INTENT_PROPERTY_IDS").includes(String(property_id));
+  const ids = [...new Set(person_ids.filter(Boolean).map(String))];
+  const facts = new Map();
+  if (enabled && property_allowlisted && ids.length) {
+    const r = await q.query(`select p.id, p.email, cp.consent_state from persons p
+      left join contact_preferences cp on cp.person_id=p.id and cp.channel='email'
+      where p.id=any($1::uuid[])`, [ids]);
+    for (const row of r.rows) facts.set(String(row.id), row);
+  }
+  const prepared = ids.length ? (await q.query(`select ai.id as invitation_id, ai.person_id, ai.conversion_id,
+    o.id as send_obligation_id, p.email as recipient_snapshot, p.email
+    from application_invitations ai join persons p on p.id=ai.person_id
+    join obligations o on o.related_type='application_invitation' and o.related_id=ai.id
+      and o.type='send_application_link' and o.status='open'
+    where ai.property_id=$1 and ai.person_id=any($2::uuid[]) and ai.status='prepared'
+    order by ai.created_at desc`, [property_id, ids])).rows : [];
+  const out = new Map();
+  for (const id of [...ids, null]) {
+    const fact = facts.get(id);
+    out.set(id, { ...decideApplicationLinkBirth({ enabled, property_allowlisted,
+      person_id: fact ? id : null, email: fact?.email, email_consent_state: fact?.consent_state,
+      delivery_method: "manual_email" }), prepared_invitations: prepared.filter(r => String(r.person_id) === id)
+        .map(({person_id, ...r}) => ({...r, link:null, prepared:true, sent:false, dispatched:false, delivery_method:"manual_email"})) });
+  }
+  return out;
+}
+async function evaluateManualEmailPreparation(q, { property_id, person_id = null }) {
+  return (await evaluateManualEmailPreparationBatch(q, { property_id, person_ids: [person_id] })).get(person_id ? String(person_id) : null);
+}
+
 module.exports = {
   ACTION_APPLICATION_LINK,
   REASONS,
+  evaluateManualEmailPreparation,
+  evaluateManualEmailPreparationBatch,
   // ELIGIBLE_RECORD_CLASSES is gone. It existed for a few hours on
   // 2026-07-26 as a shared allowlist so this gate and the tenancy admission
   // perimeter could not disagree about which CLASSES were eligible. The
