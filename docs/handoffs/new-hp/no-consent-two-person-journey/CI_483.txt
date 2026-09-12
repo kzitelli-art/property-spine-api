@@ -1,0 +1,12 @@
+Exact API: dab19b6a84493093911427dfe2de29ee91451ac9
+Workflow: https://github.com/kzitelli-art/property-spine-api/actions/runs/34704388244
+Run: 483; verify job: 103581692529; conclusion: success
+Selected decoded job log lines (not the full log):
+2026-09-12T16:10:58.7769035Z   ✓ PASS — all 56 source-governance gates exited 0
+2026-09-12T16:10:58.8498682Z ── application offer writer and read locks PASS
+2026-09-12T16:10:58.9274403Z ── historical pending offer read locks PASS
+2026-09-12T16:12:25.3836865Z ── historical application projections PASS
+2026-09-12T16:12:25.3862725Z Proposed terms historical read: 6 passed, 0 failed
+2026-09-12T16:12:28.7913032Z no-consent two-person journey: 155 passed, 0 failed, 3 observations
+2026-09-12T16:12:30.5002438Z   ALL REQUIRED ASSERTIONS PASSED — cleanup must also succeed
+2026-09-12T16:12:30.6294543Z Cleanup verified: dropped owned database spine_proof_a89760c067fd1f6da0ad664a

@@ -19,7 +19,7 @@ Root combined portable fixes f3c2155 and assertion successor e4c08f1 as tested s
 - Desk and queue are reread at ten material transitions. Scope and application identity are checked. The final selector must return200 before absence is interpreted. Person Card must carry the exact pending-bed tenancy and no hidden read_failed uncertainty.
 - Lead-source and occupied-sibling fixture writes now precede the first invite/OTP action. Later direct SQL is read-only. The original fixture prelude still cancels prior nonterminal leases on standard BedB, so this is not a twice-executed same-bed history-preservation claim.
 
-The unit branch/mode test and existing offer/read tests are now registered in the ordinary full runner. The historical DB regression is registered before the no-consent journey. Source gates passed56/56 on the correction lane; full combined CI is the next gate and is not claimed by this local receipt.
+The unit branch/mode test and existing offer/read tests are now registered in the ordinary full runner. The historical DB regression is registered before the no-consent journey. Source gates passed56/56 on the correction lane. Subsequently, exact combined CI34704388244/run483 passed at dab19b6, including155/0 journey and6/0 historical regression plus owned cleanup. That exact API is now live with app e23a36a; see RELEASE.md for release verification and recovery. Original witness evidence remains historical.
 
 ## Cleanup and scope
 
