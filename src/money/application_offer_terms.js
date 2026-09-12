@@ -171,6 +171,12 @@ async function prepareApplicationOffer(q, {
     `select s.id, s.unit_id from spaces s join units u on u.id=s.unit_id
       where s.id=$1 and u.property_id=$2`, [space_id, actor.property_id])).rows[0];
   if (!target) throw failure("SPACE_NOT_ON_PROPERTY", "space does not belong to this property.", 403);
+  // The public preparation doors share one current-offer check. Serialize it
+  // across browser and staff-message writers, including different conversions
+  // for the same person and exact home. The caller owns this transaction.
+  await q.query("select pg_advisory_xact_lock(hashtextextended($1, 0))", [
+    `application-offer:${actor.property_id}:${person_id}:${space_id}`,
+  ]);
   if (application_id) {
     const linkedApplication = (await q.query(
       `select id from lease_applications where id=$1 and property_id=$2 and person_id=$3 and space_id=$4`,
@@ -219,8 +225,14 @@ async function prepareApplicationOffer(q, {
         && String(existing.application_id || "") === String(application_id || "")) return { idempotent: true, offer: existing, application_terms: old };
     throw failure("APPLICATION_OFFER_IDEMPOTENCY_CONFLICT", "same idempotency key carries different application terms.", 409);
   }
-  if (create_only && (await currentApplicationOfferIds(q,{property_id:actor.property_id,person_id,space_id})).length) {
-    throw failure('APPLICATION_OFFER_ALREADY_EXISTS','An application offer already exists; review it before creating revised terms.',409);
+  if (create_only) {
+    const current = await currentApplicationOfferIds(q,{property_id:actor.property_id,person_id,space_id});
+    if (!predecessor && current.length) {
+      throw failure('APPLICATION_OFFER_ALREADY_EXISTS','An application offer already exists; review it before creating revised terms.',409);
+    }
+    if (predecessor && (current.length !== 1 || current[0].id !== predecessor.id)) {
+      throw failure('APPLICATION_TERMS_REVIEW_REQUIRED','Review the one current draft before correcting its terms.',409);
+    }
   }
   if (predecessor) {
     const successor = (await q.query(

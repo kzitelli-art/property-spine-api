@@ -13,6 +13,7 @@ let forceRetry = false;
 let retryReading = false;
 let governedCatalog = null;
 const q = { async query(sql, args) {
+  if (/pg_advisory_xact_lock/.test(sql)) return { rows: [] };
   if (/from users u where u\.id/.test(sql)) return { rows: [{ id: ACTOR.id, person_id: ACTING_PERSON, account_kind: "human_staff", is_active: true, status: "active" }] };
   if (/count\(\*\)::int as n from users/.test(sql)) return { rows: [{ n: 1 }] };
   if (/personHasConflictingLinks/.test(sql)) return { rows: [] };

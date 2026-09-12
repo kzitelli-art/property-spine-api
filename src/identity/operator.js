@@ -4062,19 +4062,37 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const conv = (await client.query("select person_id,property_id,status from leasing_conversions where id=$1", [req.params.conversionId])).rows[0];
+      const conv = (await client.query("select person_id,property_id,status from leasing_conversions where id=$1 for update", [req.params.conversionId])).rows[0];
       if (!conv || conv.property_id !== req.operator.property_id) {
         await client.query("rollback"); return res.status(404).json({receipt:"No application case in this property."});
       }
       if (conv.status !== "active") { await client.query("rollback"); return res.status(409).json({receipt:"This application case is closed."}); }
       const b = req.body || {};
-      let invitation = null, application = null;
+      let invitation = null, application = null, draftRevision = false;
       if (b.supersedes_application_offer_id || b.application_id) {
         const invitations = (await client.query(`select * from application_invitations
           where conversion_id=$1 and status in ('prepared','manually_sent','provider_dispatched','consumed')
           order by created_at desc for update`, [req.params.conversionId])).rows;
-        if (invitations.length !== 1) throw Object.assign(new Error("One current invitation is required to revise these terms."),{httpStatus:409});
-        invitation = invitations[0];
+        if (invitations.length === 0 && b.supersedes_application_offer_id && !b.application_id) {
+          // Correction before the first invitation is an explicit successor,
+          // never an edit to the retained terms or a second unnamed draft.
+          // Any prior link/application keeps the existing revision boundary.
+          const draft = (await client.query(`select o.id from lease_offers o
+            where o.id=$1 and o.property_id=$2 and o.person_id=$3 and o.space_id=$4
+              and o.source='application_proposal' and o.status='draft'
+              and o.application_id is null and o.communicated_at is null
+              and not exists(select 1 from application_invitations i
+                where i.conversion_id=$5 or i.application_offer_id=o.id)
+              and not exists(select 1 from lease_applications a
+                where a.conversion_id=$5 or a.application_offer_id=o.id)`,
+            [b.supersedes_application_offer_id,conv.property_id,conv.person_id,b.space_id,req.params.conversionId])).rows[0];
+          if (!draft) throw Object.assign(new Error("Only an unsent draft without an invitation or application can be corrected here."),{httpStatus:409,code:"APPLICATION_DRAFT_REVISION_UNAVAILABLE"});
+          draftRevision = true;
+        } else {
+          if (invitations.length !== 1) throw Object.assign(new Error("One current invitation is required to revise these terms."),{httpStatus:409});
+          invitation = invitations[0];
+        }
+        if (invitation) {
         if (invitation.property_id !== conv.property_id || invitation.person_id !== conv.person_id ||
             invitation.space_id !== b.space_id)
           throw Object.assign(new Error("The offer must retain this invitation's exact applicant and home."),{httpStatus:409});
@@ -4094,6 +4112,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           throw Object.assign(new Error("The requested application does not belong to this invitation."),{httpStatus:409});
         if (b.application_id && !b.supersedes_application_offer_id && application.application_offer_id)
           throw Object.assign(new Error("Review the existing offer before proposing revised terms."),{httpStatus:409});
+        }
       }
       const made = await applicationOffers.prepareApplicationOffer(client, {
         actor:{...req.operator,user_id:req.operator.id}, person_id:conv.person_id,
@@ -4102,6 +4121,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         concessions:b.concessions, idempotency_key:b.idempotency_key,
         supersedes_application_offer_id:b.supersedes_application_offer_id || null,
         application_id:application ? application.id : null,
+        create_only:!invitation && !b.application_id,
       });
       const target = await applicationTargetAuthority.resolveApplicationTarget(client, {
         property_id:req.operator.property_id, space_id:made.offer.space_id,
@@ -4117,7 +4137,8 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       }
       await client.query("commit");
       return res.json({application_offer_id:made.offer.id,application_terms:made.application_terms,idempotent:made.idempotent,
-        applicant_review_required:!!invitation, receipt:invitation ? "Revised terms are ready in the existing application link. Applicant review is required; no message was sent." : "Application offer prepared."});
+        applicant_review_required:!!invitation, draft_revision:draftRevision,
+        receipt:invitation ? "Revised terms are ready in the existing application link. Applicant review is required; no message was sent." : draftRevision ? "Application draft corrected. No invitation was created and no message was sent." : "Application offer prepared."});
     } catch(e) {
       await client.query("rollback").catch(()=>{});
       return res.status(e.httpStatus||500).json({error:e.code,receipt:e.message});
