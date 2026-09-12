@@ -1,0 +1,163 @@
+{
+  "checked_at": "2026-09-12T15:55:52.481Z",
+  "phase": "released",
+  "api_commit": "1320c2c5a6e52caa15de967670ed826ea1d10a84",
+  "app_commit": "e23a36a4588cdeda10eb3d902cea4b917f68dbe9",
+  "all_match": true,
+  "health": {
+    "ok": true,
+    "db_time": "2026-09-12T15:55:52.399Z",
+    "build": {
+      "build_identified": true,
+      "commit_short": "1320c2c",
+      "resolved_from": "render_env",
+      "started_at": "2026-09-12T13:36:46.977Z"
+    }
+  },
+  "files": [
+    {
+      "file": "index.html",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "1219ad081196d87f794a4b3b0f98e84dcaaf717ba103442d9f2e2310b782b6cf"
+    },
+    {
+      "file": "application-offer-review.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "8a4eefb1d45d400d74f9723db0fb608fda7929b50ed461ab95d3a0e58b4e8934"
+    },
+    {
+      "file": "asset-management-door.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "577a057990d732418ea1e0335c8c4a6ff9a69717ecab72e0ab1a3b3a05ddbe57"
+    },
+    {
+      "file": "authoritative-property-context.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "c7921ce3b40cb7407e3beeb8b159abbe8497546b35e2513f869f9508b54d7a30"
+    },
+    {
+      "file": "build-info.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "4c72dcd47c88d0c197ae17c91f4716dfc2c9d8534c12214b9a5eeb900a05462c"
+    },
+    {
+      "file": "contracted-services-door.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "530ec46352986ed3c072f3e75eab4865d3058d6dc64e0a6fc8060c1901ec068d"
+    },
+    {
+      "file": "conversations-board.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "d392c691d6d0c66c86f93a7783ea68f296a5d306b516231e4ce43632d424ccfe"
+    },
+    {
+      "file": "followups-door.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "9729b5f8f92a037a029dc0ce6de3418cf8d0bdc8e2f91b7b263dd1e6f413e42a"
+    },
+    {
+      "file": "leasing-experience.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "1a82d56fb437336d112059e5921dcbfa9bd84c277e2086c6831b743245dcc343"
+    },
+    {
+      "file": "logos.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "0c09e0902b9f223137865022f3823f981242226ef7e8c5f2a0a0fa4b3257411b"
+    },
+    {
+      "file": "moveins-door.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "a6bef3ce6dfe5d2dcb39a67cc33920da119a3f1467fb0a4b606c7093985eb193"
+    },
+    {
+      "file": "person-card-information.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "c84216e22eae00c916a9aab7168407cc63d4a217d446b4675e739812f3721fb6"
+    },
+    {
+      "file": "policy.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "1695804a21d17249c9ced771b2a987f8259bbc47c89b27173c0a523f479270bd"
+    },
+    {
+      "file": "proof-normalizer.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "70b035b833ae8c944daeab69c8a7b7266cad23ef81e8e26655cdc052fd6021dc"
+    },
+    {
+      "file": "property-spine-data.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "97a9fb8fa7ba7500ca14adf27698db3be11ee201240ae86b5ea21bbb80f6a064"
+    },
+    {
+      "file": "readiness-door.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "c18b051904ccc0260783e256aad58b34ffbee56586387c95c2451b6e1d34cd8d"
+    },
+    {
+      "file": "staff-agent-door.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "17194cb0f980c902e23a7a02b0216e63f7e482352925c702b8cdc85a1b7b205f"
+    },
+    {
+      "file": "turn-scope-door.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "14fc1f5a8c77b364ce8ca3bcf17390f592f304fd4f2fbbbb0f13e40d83eac21b"
+    },
+    {
+      "file": "unit-triage-door.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "0a0e899b85757110304fb9f5fd6ff13a5df0aa4e25a3e23331538e81c8b7a5fb"
+    },
+    {
+      "file": "unit-turn-page.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "5d0e0a3bf930eef5e14f0bbe2eec353e1a0943b59f45fad433e5f661e4ace183"
+    },
+    {
+      "file": "utilities-door.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "8a00979127764c6e938ed42525a83aa96053d0d60a2ddecf5de48914ce6786cf"
+    },
+    {
+      "file": "work-acceptance-door.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "d8bbd8f92daf04a3c1b35cdd1c5095617a31949aa9deb7a8a1922c23d20da376"
+    },
+    {
+      "file": "work-lifecycle-door.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "2395717875d3639bdd5260e569e8a733b61d72bddb1f36dcfe9adb7334bd63c0"
+    },
+    {
+      "file": "leasing-setup.js",
+      "status": 200,
+      "matches_commit": true,
+      "sha256": "51d509c120f639abbfe674a4f6a2796ced4b7cea6f86edca307ff977388b3f7f"
+    }
+  ]
+}
