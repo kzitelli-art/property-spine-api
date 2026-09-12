@@ -1,6 +1,6 @@
 # Skyline and The Greenery — first content fill
 
-Prepared September 10, 2026. **20 topic cards; not loaded into the live chatbot.** Source-attributed wording is ready for review against the actual property. Two dimension cards explicitly preserve missing measurements and source conflicts. No new policy has been approved by this research.
+Prepared September 10, updated September 11, 2026. Skyline amenities and common questions now use the dated owner-confirmed operating facts. **20 topic cards; not loaded into the live chatbot.** Source-attributed wording is ready for review against the actual property. Two dimension cards explicitly preserve missing measurements and source conflicts. No new policy has been approved by this research.
 
 ## Skyline
 
@@ -16,9 +16,9 @@ Review: Roof-deck access is omitted because the website and lease-template revie
 
 ### amenities
 
-The property website lists shared laundry on floors 2–4, lounges, a fitness room, bike storage, garage parking and package handling. Furnished apartments are described with bedroom furniture and a furnished living room. Confirm current access arrangements and any charges with the team; this description does not establish hours, pricing or availability.
+Skyline has a roof deck, cardio room, laundry, assigned parking, an on-site management office, package storage and 24-hour emergency maintenance. Apartments are furnished with a bed, desk, wardrobe, armchair, coffee table, kitchen table and stools. These features were confirmed by ownership on August 20, 2026. This describes building features, not current access hours, parking availability, charges or permission to use a particular amenity; confirm arrangements and the furniture package for your specific home with the team.
 
-Sources: [s amenities](https://www.templeskyline.com/amenities).
+Source: [owner-confirmed operating facts](../../SKYLINE_OPERATING_FACTS.md), August 20, 2026. Prepared September 11, not published. Prior website draft retained in JSON.
 
 ### layouts
 
@@ -69,14 +69,9 @@ Sources: [s neighborhood](https://www.templeskyline.com/apartments-near-temple-u
 
 ### leasing faq
 
-Do I need furniture? The website describes furnished apartments; confirm the package for your selected home.
-Is laundry inside the apartment? The published arrangement is shared laundry on floors 2–4.
-Can I see a layout before visiting? Public layout diagrams and representative virtual tours are available.
-What is available and what will I pay? That needs the current inventory and published terms for your exact selection.
+Are the apartments furnished? Yes. Ownership confirmed the furniture package on August 20, 2026: bed, desk, wardrobe, armchair, coffee table, kitchen table and stools. Confirm the package for your specific home before planning what to bring. Is there laundry at the property? Yes, ownership confirmed laundry on site. Laundry hours and access instructions are not established by this answer.
 
-Sources: [s amenities](https://www.templeskyline.com/amenities) · [s layouts](https://www.templeskyline.com/two-bedroom).
-
-Review: Do not repeat website utility-fee wording, deposit/guarantor conditions or insurance requirements as settled policy.
+Source: [owner-confirmed operating facts](../../SKYLINE_OPERATING_FACTS.md), August 20, 2026. Prepared September 11, not published. Prior website draft retained in JSON.
 
 ### move in guidance
 

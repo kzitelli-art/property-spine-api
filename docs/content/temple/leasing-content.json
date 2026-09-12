@@ -82,13 +82,25 @@
       "url": "https://amberstudent.com/places/the-greenery-philadelphia-2408064848211",
       "checked_at": "2026-09-09",
       "kind": "third_party_listing"
+    },
+    "s_owner_operating_facts": {
+      "repository_path": "docs/SKYLINE_OPERATING_FACTS.md",
+      "git_revision": "992a8db",
+      "confirmed_on": "2026-08-20",
+      "kind": "documented_owner_confirmation",
+      "authority": "Kameron Zitelli; document records physical inspection by Mike Grivna",
+      "sections": [
+        "FURNISHED",
+        "AMENITIES"
+      ],
+      "note": "Historical source confirmation, not a new approval or current physical inspection."
     }
   },
   "properties": [
     {
       "property_name": "Skyline",
       "physical_address": "1417 North 15th Street, Philadelphia, PA",
-      "canonical_property_id": null,
+      "canonical_property_id": "14e41b7c-e91c-49e8-9651-10c4908a8f6a",
       "publication_status": "prepared_not_loaded",
       "facts": [
         {
@@ -105,13 +117,25 @@
         },
         {
           "fact_key": "amenities",
-          "status": "source_attributed_draft",
-          "rendered_text": "The property website lists shared laundry on floors 2–4, lounges, a fitness room, bike storage, garage parking and package handling. Furnished apartments are described with bedroom furniture and a furnished living room. Confirm current access arrangements and any charges with the team; this description does not establish hours, pricing or availability.\n\nSources: https://www.templeskyline.com/amenities",
+          "status": "documented_owner_source_prepared_not_published",
+          "rendered_text": "Skyline has a roof deck, cardio room, laundry, assigned parking, an on-site management office, package storage and 24-hour emergency maintenance. Apartments are furnished with a bed, desk, wardrobe, armchair, coffee table, kitchen table and stools. These features were confirmed by ownership on August 20, 2026. This describes building features, not current access hours, parking availability, charges or permission to use a particular amenity; confirm arrangements and the furniture package for your specific home with the team.",
           "source_type": "other_documented_source",
           "source_refs": [
-            "s_amenities"
+            "s_owner_operating_facts"
           ],
-          "review_notes": []
+          "review_notes": [
+            "Prepared from the dated owner-confirmed document; publication by a currently authorized staff actor remains a separate action.",
+            "No prices, charges, availability, screening/accommodation rules or tour schedule are established here.",
+            "Roof deck existence is supported by ownership. Access entitlement remains governed separately; this does not override lease restrictions."
+          ],
+          "previous_draft": {
+            "rendered_text": "The property website lists shared laundry on floors 2–4, lounges, a fitness room, bike storage, garage parking and package handling. Furnished apartments are described with bedroom furniture and a furnished living room. Confirm current access arrangements and any charges with the team; this description does not establish hours, pricing or availability.\n\nSources: https://www.templeskyline.com/amenities",
+            "status": "source_attributed_draft",
+            "source_refs": [
+              "s_amenities"
+            ],
+            "review_notes": []
+          }
         },
         {
           "fact_key": "layouts",
@@ -190,16 +214,27 @@
         },
         {
           "fact_key": "leasing_faq",
-          "status": "source_attributed_draft",
-          "rendered_text": "Do I need furniture? The website describes furnished apartments; confirm the package for your selected home.\nIs laundry inside the apartment? The published arrangement is shared laundry on floors 2–4.\nCan I see a layout before visiting? Public layout diagrams and representative virtual tours are available.\nWhat is available and what will I pay? That needs the current inventory and published terms for your exact selection.\n\nSources: https://www.templeskyline.com/amenities\nhttps://www.templeskyline.com/two-bedroom",
+          "status": "documented_owner_source_prepared_not_published",
+          "rendered_text": "Are the apartments furnished? Yes. Ownership confirmed the furniture package on August 20, 2026: bed, desk, wardrobe, armchair, coffee table, kitchen table and stools. Confirm the package for your specific home before planning what to bring. Is there laundry at the property? Yes, ownership confirmed laundry on site. Laundry hours and access instructions are not established by this answer.",
           "source_type": "other_documented_source",
           "source_refs": [
-            "s_amenities",
-            "s_layouts"
+            "s_owner_operating_facts"
           ],
           "review_notes": [
-            "Do not repeat website utility-fee wording, deposit/guarantor conditions or insurance requirements as settled policy."
-          ]
+            "Prepared from the dated owner-confirmed document; publication by a currently authorized staff actor remains a separate action.",
+            "No prices, charges, availability, screening/accommodation rules or tour schedule are established here."
+          ],
+          "previous_draft": {
+            "rendered_text": "Do I need furniture? The website describes furnished apartments; confirm the package for your selected home.\nIs laundry inside the apartment? The published arrangement is shared laundry on floors 2–4.\nCan I see a layout before visiting? Public layout diagrams and representative virtual tours are available.\nWhat is available and what will I pay? That needs the current inventory and published terms for your exact selection.\n\nSources: https://www.templeskyline.com/amenities\nhttps://www.templeskyline.com/two-bedroom",
+            "status": "source_attributed_draft",
+            "source_refs": [
+              "s_amenities",
+              "s_layouts"
+            ],
+            "review_notes": [
+              "Do not repeat website utility-fee wording, deposit/guarantor conditions or insurance requirements as settled policy."
+            ]
+          }
         },
         {
           "fact_key": "move_in_guidance",
@@ -211,7 +246,8 @@
           ],
           "review_notes": []
         }
-      ]
+      ],
+      "canonical_identity_basis": "QB verified addressed Skyline target on September 11, 2026; current runtime identity review is independent from dated content-source confirmation."
     },
     {
       "property_name": "The Greenery",
@@ -354,5 +390,17 @@
         }
       ]
     }
-  ]
+  ],
+  "updated_at": "2026-09-11",
+  "staging_sets": {
+    "skyline_essentials": {
+      "property_name": "Skyline",
+      "fact_keys": [
+        "amenities",
+        "leasing_faq"
+      ],
+      "publication_status": "prepared_not_loaded",
+      "note": "Only these two existing cards are selected. Other 18 cards remain deferred drafts; source certainty does not confer publication authority."
+    }
+  }
 }
