@@ -80,7 +80,7 @@ preserved) and the second label was created where the tracker has one.
    marks `114 - 1` as the same position as `114A`, retires it as superseded,
    or excludes it from the denominator with a reason. The mapping tool only
    classifies use; Deal Setup only adds what the source names. Until a
-   reviewed correction path exists, the 106 rows are a permanent unknown.
+   reviewed correction path exists, the 107 rows remain unresolved.
 3. **The export convention decides the inventory.** The tracker names
    homes `101A`, `102`, `103` with no `1325-` prefix. Read as-is (convention
    B, bare stem in `Unit`), the reader matched no prefixed parent at all: it

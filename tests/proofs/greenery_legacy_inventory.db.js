@@ -19,8 +19,8 @@
 // source upload, read-source with the bed basis, per-row confirmation and
 // establishment, then reads inventory, availability, occupancy and the rent
 // roll before and after, and the reviewed classification tool in dry-run.
-// It never deletes, merges, retires or manufactures a bed, and it writes no
-// SQL after a business action.
+// Fixture SQL precedes business actions. Later SQL observes results only;
+// there is no direct SQL repair or identity rewrite.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -97,6 +97,7 @@ function shape() {
   const F = {};
   const S = shape();
   const G = GREENERY_ID;
+  const G2 = randomUUID();
   const session = async (userId, propertyId) => (await staffSessions.issueStaffSession(pool, { userId, propertyId, purpose: "bootstrap_invite" })).session_token;
   async function user(name, { platform_role = "member", organization_id = null, phone = null, email = null } = {}) {
     const person = await one("insert into persons (name,phone,primary_phone_e164,source) values ($1,$2,$2,'rehearsal') returning id", [name, phone]);
@@ -124,10 +125,19 @@ function shape() {
       (select count(*)::int from opening_tenancy_positions where property_id=$1) opening_positions,
       (select leasing_basis from properties where id=$1) basis,
       (select organization_id from properties where id=$1) organization_id`, [G]);
+  const preservedIdentity = async (phase) => {
+    const units = new Map((await q("select id,unit_number from units where property_id=$1", [G])).rows.map(r => [r.unit_number,r.id]));
+    const spaces = new Map((await q("select s.id,s.unit_id from spaces s join units u on u.id=s.unit_id where u.property_id=$1", [G])).rows.map(r => [r.id,r.unit_id]));
+    check(units.size === F.legacyUnitIds.size && [...F.legacyUnitIds].every(([label,id]) => units.get(label) === id)
+      && [...F.legacySpaceIds].every(([id,unitId]) => spaces.get(id) === unitId),
+      phase + ": all 171 original unit IDs and all 171 original space IDs retain their parent identity",
+      { original_units:F.legacyUnitIds.size, original_spaces:F.legacySpaceIds.size, current_units:units.size, current_spaces:spaces.size });
+  };
 
   try {
     await section("shape-as-found", async () => {
-      // Fixture SQL before any business action. Labelled: the production read's shape, synthetic labels.
+      // Both fixture properties precede business actions. Real retained labels;
+      // synthetic identities, authority, occupancy, rents and dates.
       F.org = await one("insert into organizations (name,slug) values ($1,$2) returning id", [`Greenery Client ${nonce}`, `greenery-client-${nonce}`]);
       F.anchor = await one("insert into properties (name,organization_id,leasing_basis) values ($1,$2,'bed') returning id", [`Skyline rehearsal ${nonce}`, F.org.id]);
       F.sa = await user(`Platform Admin ${nonce}`, { platform_role: "super_admin", phone: num(1), email: `sa-${nonce}@example.test` });
@@ -141,6 +151,11 @@ function shape() {
         values ($1,'Greenery','The Greenery (rehearsal)','1325 N 15th (rehearsal)',null,'unknown',null,'predates_canonical_identity_requirement') returning id`, [G]);
       for (const label of [...S.parents, ...S.legacy]) await q("insert into units (property_id,unit_number) values ($1,$2)", [G, label]);
       F.legacyUnitIds = new Map((await q("select id, unit_number from units where property_id=$1", [G])).rows.map((r) => [r.unit_number, r.id]));
+      F.legacySpaceIds = new Map((await q("select s.id,s.unit_id from spaces s join units u on u.id=s.unit_id where u.property_id=$1", [G])).rows.map(r => [r.id,r.unit_id]));
+      await one(`insert into properties (id,name,display_name,organization_id,leasing_basis) values ($1,'Greenery (convention probe)','Greenery (convention probe)',$2,'unknown') returning id`, [G2, F.org.id]);
+      for (const label of [...S.parents, ...S.legacy]) await q("insert into units (property_id,unit_number) values ($1,$2)", [G2,label]);
+      await assign(F.sa,G2,{manage:true});
+      F.probeTok = await session(F.sa.id,G2);
       F.before = await inventory();
       const nonParent = S.legacy.length, parents = S.parents.length;
       const groups = { unprefixed_with_suffix: S.legacy.filter((l) => / - /.test(l)).length, unprefixed_without_suffix: S.legacy.filter((l) => !/ - /.test(l)).length, prefixed_apartment: parents };
@@ -192,7 +207,8 @@ function shape() {
       need(added.status === 201, "the existing property joins the deal; no replacement property is created", { status: added.status, receipt: added.body && added.body.receipt });
     });
 
-    // ── source: 105 tracker positions under 64 parents, plus one labelled probe row ──
+    // Real position labels; deliberately synthetic occupancy (84/105), rents
+    // and dates. These are not a read of actual Greenery occupancy or terms.
     const AS_OF = plusDays(-3);
     // Convention A: Unit = the prefixed parent as production names it, Room = the tracker label.
     // Convention B: Unit = the bare tracker stem, Room = the A/B letter (blank for singles) — the
@@ -229,6 +245,7 @@ function shape() {
       F.read = read.body;
       observe("read-source counts", { rows_read: read.body.rows_read, counts: read.body.counts, mapping: read.body.mapping });
       F.afterRead = await inventory();
+      await preservedIdentity("after source read");
       const twoLabel = Object.values(S.kind).filter((k) => k === "two").length; const aSingles = Object.values(S.kind).filter((k) => k === "single_A").length;
       check(F.afterRead.basis === "bed", "the leasing basis is recorded on the property", { basis: F.afterRead.basis });
       check(F.afterRead.units === 171, "no unit was created or removed: every legacy identity survives", { units: F.afterRead.units });
@@ -308,12 +325,9 @@ function shape() {
 
     // ── convention B on a second property of the same shape: read only, never confirmed ──
     await section("stem-convention-probe", async () => {
-      const G2 = randomUUID();
-      await one(`insert into properties (id,name,display_name,organization_id,leasing_basis) values ($1,'Greenery (convention probe)','Greenery (convention probe)',$2,'unknown') returning id`, [G2, F.org.id]);
-      for (const label of [...S.parents, ...S.legacy]) await q("insert into units (property_id,unit_number) values ($1,$2)", [G2, label]);
       const added = await api("POST", `/deal-setup/deals/${F.deal}/properties`, { token: F.oaTok, body: { property_id: G2 } });
       need(added.status === 201, "the second same-shaped property joins the deal", { status: added.status });
-      const tok = await session(F.sa.id, G2).catch(() => null) || (await (async () => { await q("insert into property_team_assignments (property_id,user_id,role_title,role_key,scope_type,allowed_modules,primary_for_modules,can_manage_roles,active) values ($1,$2,'property_admin','property_admin','property','{management,leasing}','{management}',true,true)", [G2, F.mike.id]); return session(F.mike.id, G2); })());
+      const tok = F.probeTok;
       const { csv, expected } = buildCsv("B");
       const form = new FormData();
       form.append("file", new Blob([csv], { type: "text/csv" }), "greenery-tracker-export-as-is.csv");
@@ -329,12 +343,13 @@ function shape() {
       const landedOnLegacy = (await q("select u.unit_number from import_source_rows r join units u on u.id=r.produced_unit_id where u.property_id=$1 and u.unit_number = any($2::text[]) order by 1", [G2, S.legacy])).rows.map((r) => r.unit_number);
       const parentsTouched = await one("select count(*)::int n from import_source_rows r join units u on u.id=r.produced_unit_id where u.property_id=$1 and u.unit_number ~ '^1325-'", [G2]);
       observe("convention B (bare stems in the Unit column) read-source result", { status: read.status, counts: read.body && read.body.counts, receipt: read.body && (read.body.receipt || read.body.error) });
-      check(read.status === 201 && after.n === before.n + created.length && created.length > 0 && parentsTouched.n === 0, "finding: with bare stems the reader creates NEW units for every stem that has no legacy row of that exact text, and touches no prefixed parent", { units_before: before.n, units_after: after.n, created: created.length, created_sample: created.slice(0, 6), parents_touched: parentsTouched.n });
+      check(read.status === 201 && before.n === 171 && after.n === 217 && created.length === 46 && parentsTouched.n === 0, "finding: with bare stems the reader creates exactly 46 NEW units and touches no prefixed parent", { units_before: before.n, units_after: after.n, created: created.length, created_sample: created.slice(0, 6), parents_touched: parentsTouched.n });
       check(landedOnLegacy.length === 18 && landedOnLegacy.every((l) => /^\d{3}$/.test(l)), "finding: the 18 unsuffixed stems land on the legacy rows of that exact text (103, 104, …), not on their prefixed parents", { landed_on_legacy: landedOnLegacy });
       observe("nothing on the probe property was confirmed or established; it exists only to show what the export convention decides", { expected_rows: expected.rows });
     });
 
     await section("unresolved-mappings", async () => {
+      await preservedIdentity("after establishment, repeat refusals and separate convention probe");
       // QB's narrow textual rule, recomputed here from the retained labels: a numeric suffix N corresponds
       // to August RoomN under the same parent; an unsuffixed label corresponds to a sole Room1. Nothing is written.
       const roomsByParent = new Map(); for (const p of S.positions) roomsByParent.set(p.unit, (roomsByParent.get(p.unit) || 0) + 1);
