@@ -938,4 +938,4 @@ function makeTourAvailabilityService({ pool }) {
   return Object.freeze({ publishSlot, listSlots, getSchedulePolicy, publishSchedulePolicy, adjustDay, changeSlotStatus });
 }
 
-module.exports = { makeTourAvailabilityService, readTourScheduleStanding, commandError };
+module.exports = { makeTourAvailabilityService, readTourScheduleStanding, commandError, assertOptionalScope };

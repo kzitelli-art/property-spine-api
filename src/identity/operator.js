@@ -1382,6 +1382,53 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     }
   });
 
+  // Staff-session adapter; the native booking service remains the only writer.
+  router.post("/operator/leasing/conversations/:conversationId/book-tour", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const b = req.body || {};
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(b.slot_id||"")) || typeof b.idempotency_key !== "string" || !b.idempotency_key.trim() || b.idempotency_key.length > 200) {
+      return res.status(400).json({ receipt: "Choose a tour time and provide a booking request key." });
+    }
+    if (!leasingTourService || typeof leasingTourService.bookTourIntoSlot !== "function" || !tourAvailabilityService) {
+      return res.status(503).json({ receipt: "Tour booking is unavailable." });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const conv = await scopedConversation(client, req.params.conversationId, req.operator.property_id);
+      // Serialize this conversation's intent before replay or competing clicks.
+      await client.query("select id from conversations where id=$1 for update", [conv.id]);
+      const leads = (await client.query(
+        "select id, person_id from leasing_leads where person_id=$1 and property_id=$2 and status not in ('lost','leased') order by created_at limit 2 for update",
+        [conv.person_id, req.operator.property_id])).rows;
+      if (leads.length !== 1) throw httpErr(409, "This conversation needs one active inquiry before booking a tour.");
+      const lead = leads[0];
+      const key = 'staff-book-tour:' + crypto.createHash('sha256').update(JSON.stringify([req.operator.property_id, conv.id, lead.id, req.operator.id, b.idempotency_key])).digest('hex');
+      const prior = (await client.query("select * from leasing_tours where booking_idempotency_key=$1", [key])).rows[0];
+      if (prior && (String(prior.slot_id) !== b.slot_id || prior.lead_id !== lead.id || prior.property_id !== req.operator.property_id)) {
+        throw httpErr(409, "This booking request was already used for a different tour time. Start a new request.");
+      }
+      let tour, idempotent;
+      if (prior) { tour = prior; idempotent = true; }
+      else {
+        const slot = (await client.query("select * from tour_availability where id=$1 and property_id=$2 for update", [b.slot_id, req.operator.property_id])).rows[0];
+        if (!slot) throw httpErr(404, "Tour time not found at this property.");
+        const schedule = await tourAvailabilityService.getSchedulePolicy({ propertyId: req.operator.property_id, client });
+        if (!schedule.operating_timezone) throw httpErr(409, "The property timezone must be configured before booking.");
+        await require('../leasing/tour_availability_service').assertOptionalScope(client, { propertyId:req.operator.property_id, unitId:slot.unit_id, leasingAgentId:slot.leasing_agent_id });
+        const existing = (await client.query("select id from leasing_tours where lead_id=$1 and property_id=$2 and scheduled_for>now() and status in ('scheduled','confirmed','checked_in') limit 1", [lead.id,req.operator.property_id])).rows[0];
+        if (existing) throw httpErr(409, "This inquiry already has an upcoming tour. Review that appointment before booking another.");
+        const out = await leasingTourService.bookTourIntoSlot(client, { leadId:lead.id, slotId:slot.id, subjectPersonId:conv.person_id, idempotencyKey:key, via:'staff_conversation_booking', executionActorType:'human', executionActorId:req.operator.id });
+        tour=out.tour; idempotent=out.alreadyBooked;
+      }
+      await client.query("commit");
+      return res.json({ receipt:"Tour booked. No confirmation message was sent.", tour_id:tour.id, slot_id:tour.slot_id, scheduled_for:tour.scheduled_for, status:tour.status, idempotent });
+    } catch(e) {
+      try { await client.query("rollback"); } catch (_) {}
+      return res.status(e.httpStatus || 500).json({ receipt:e.publicMessage || "Could not book the tour." });
+    } finally { client.release(); }
+  });
+
   router.get("/operator/leasing/lease-configuration", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     if (!leasePacketsService || typeof leasePacketsService.propertyLeaseConfiguration !== "function") {
