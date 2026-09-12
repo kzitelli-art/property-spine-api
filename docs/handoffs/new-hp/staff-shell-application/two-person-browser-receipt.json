@@ -1,0 +1,149 @@
+{
+  "proof_kind": "actual staff shell, owned HTTP/database",
+  "complete": true,
+  "checks": 34,
+  "actor": {
+    "role": "property_manager",
+    "can_manage_roles": false,
+    "no_pricing_grants": true,
+    "synthetic_mike_shape": true
+  },
+  "author": {
+    "user_id": "f2e5d0b3-cc73-40a9-b24e-5b8eb133191c",
+    "role": "asset_manager",
+    "can_manage_roles": true,
+    "canonical_http_actions": [
+      "initial_draft",
+      "draft_correction"
+    ]
+  },
+  "sms_consent": "absent",
+  "property": "7909afb9-4865-4430-b824-0f6a05a5ac71",
+  "person": "f438b846-bf33-4e55-8149-48b1f4392cf6",
+  "conversion": "90d1e360-71f8-4861-920d-86c936386909",
+  "bed": "b953bac6-c190-4faf-a34f-b910d0f97f6a",
+  "authorized_offer_id": "9f57ff42-959c-49c0-b98e-4df04065c53a",
+  "sent": [
+    {
+      "id": "2e211c7d-06b7-48ba-96a5-696dc82bcddf",
+      "status": "manually_sent",
+      "space_id": "b953bac6-c190-4faf-a34f-b910d0f97f6a",
+      "sent_by_user_id": "a90f50cd-e282-4848-8722-ee7ec9b31528",
+      "recipient_snapshot": "9a1775fd-9e9e-475e-88f5-0e987e625933@example.invalid",
+      "dispatch_source": "manual",
+      "channel": "email"
+    }
+  ],
+  "writes": [
+    {
+      "path": "/operator/leasing/conversions/90d1e360-71f8-4861-920d-86c936386909/application-offer",
+      "request": {
+        "space_id": "b953bac6-c190-4faf-a34f-b910d0f97f6a",
+        "lease_start_date": "2026-10-12",
+        "lease_end_date": "2027-10-11",
+        "rent": "1025",
+        "security_deposit": "1025",
+        "fees": [],
+        "concessions": {
+          "status": "none"
+        },
+        "supersedes_application_offer_id": "be874228-bc3c-4297-a988-661c1f9ce667",
+        "idempotency_key": "application-offer-90d1e360-71f8-4861-920d-86c936386909-1789217802878"
+      },
+      "status": 403,
+      "body": {
+        "error": "NO_APPLICATION_OFFER_AUTHORITY",
+        "receipt": "application terms require server-established pricing authority or can_manage_roles."
+      }
+    },
+    {
+      "path": "/operator/leasing/conversions/90d1e360-71f8-4861-920d-86c936386909/send-application",
+      "request": {
+        "unit_id": "1f0f4b30-96c4-452c-956f-cd5b2a648cca",
+        "idempotency_key": "pslh_1789217804777_cnasrb",
+        "space_id": "b953bac6-c190-4faf-a34f-b910d0f97f6a",
+        "intended_move_in": "2026-10-12",
+        "application_offer_id": "9f57ff42-959c-49c0-b98e-4df04065c53a",
+        "delivery_method": "manual_email"
+      },
+      "status": 200,
+      "body": {
+        "prepared": true,
+        "sent": false,
+        "dispatched": false,
+        "delivery_method": "manual_email",
+        "conversion_id": "90d1e360-71f8-4861-920d-86c936386909",
+        "invitation_id": "54530414-6a5c-4099-ba6e-d979874a2716",
+        "send_obligation_id": "59f2e6bd-77aa-474f-8532-a97aefcdf80e",
+        "prepare_obligation_id": "45eed18d-3890-489a-88a0-aad8cc7d84e9",
+        "unit_id": "1f0f4b30-96c4-452c-956f-cd5b2a648cca",
+        "space_id": "b953bac6-c190-4faf-a34f-b910d0f97f6a",
+        "intended_move_in": "2026-10-12",
+        "link": "[owned test link omitted]",
+        "recipient_snapshot": "9a1775fd-9e9e-475e-88f5-0e987e625933@example.invalid",
+        "email": "9a1775fd-9e9e-475e-88f5-0e987e625933@example.invalid",
+        "receipt": "Application link prepared. Nothing was sent. Email it externally, then record that you sent it."
+      }
+    },
+    {
+      "path": "/operator/leasing/conversions/90d1e360-71f8-4861-920d-86c936386909/send-application",
+      "request": {
+        "unit_id": "1f0f4b30-96c4-452c-956f-cd5b2a648cca",
+        "idempotency_key": "pslh_1789217804777_cnasrb",
+        "space_id": "b953bac6-c190-4faf-a34f-b910d0f97f6a",
+        "intended_move_in": "2026-10-12",
+        "application_offer_id": "9f57ff42-959c-49c0-b98e-4df04065c53a",
+        "delivery_method": "manual_email"
+      },
+      "status": 409,
+      "body": {
+        "error": "APPLICATION_LINK_ALREADY_PREPARED",
+        "receipt": "The application link was already prepared and is returned only once. Use its existing recovery action if the link was lost.",
+        "invitation_id": "54530414-6a5c-4099-ba6e-d979874a2716",
+        "send_obligation_id": "59f2e6bd-77aa-474f-8532-a97aefcdf80e",
+        "conversion_id": "90d1e360-71f8-4861-920d-86c936386909",
+        "delivery_method": "manual_email",
+        "link": null,
+        "prepared": true,
+        "sent": false,
+        "dispatched": false,
+        "recipient_snapshot": "9a1775fd-9e9e-475e-88f5-0e987e625933@example.invalid",
+        "email": "9a1775fd-9e9e-475e-88f5-0e987e625933@example.invalid",
+        "invitation_status": "prepared",
+        "recovery_action": "regenerate"
+      }
+    }
+  ],
+  "external_email_sent": false,
+  "manual_attestation": "synthetic fixture user action",
+  "visible": "SKYLINE E2E\n‹\nBACK\nLEASING\n▾\nManagement\nLeasing\nMaintenance\nInvestor Relations\nReporting\nREFRESH\nTEAM\nSIGN OUT\n⚙\nLEASING PIPELINE\nFOLLOW UPS\nKeep every active lead moving toward an executed lease.\nActive Work 10\nApplication Records 0\n10\nactive relationships\nSend attested. The post-tour follow-up is closed and the applicant follow-up is open.\n01\nPost-tour\nCapture, then follow up\n5\n02\nApplication\nReview and prepare\n5\n03\nLease\nTerms to execution\n0\nCompleted tours — capture what happened where it is still owed, then move the prospect toward an application.\n5 RELATIONSHIPS\nBrowser Offer 367f6e3d\nTour follow-up — Browser Offer 367f6e3d — recommended: send the application\nBrowser authorized manager · eligible assignment\nSep 13 · 8:19 AM\nLast: obligation activity · Sep 12\nPrepare email\nMore\nBrowser Offer c2ca6f73\nTour follow-up — Browser Offer c2ca6f73 — recommended: send the application\nBrowser authorized manager · eligible assignment\nSep 13 · 8:23 AM\nLast: obligation activity · Sep 12\nPrepare email\nMore\nBrowser Offer b147f3ec\nTour follow-up — Browser Offer b147f3ec — recommended: send the application\nBrowser authorized manager · eligible assignment\nSep 13 · 8:31 AM\nLast: obligation activity · Sep 12\nPrepare email\nMore\nBrowser Offer 92dcc19d\nTour follow-up — Browser Offer 92dcc19d — recommended: send the application\nBrowser Mike-shaped manager · eligible assignment\nSep 13 · 8:49 AM\nLast: obligation activity · Sep 12\nPrepare email\nMore\nBrowser Offer 39fd8d53\nTour follow-up — Browser Offer 39fd8d53 — recommended: send the application\nBrowser Mike-shaped manager · eligible assignment\nSep 13 · 8:53 AM\nLast: obligation activity · Sep 12\nPrepare email\nMore\nRECENTLY CLOSED 5\nSkyline E2E",
+  "api_commit": "fd8fe0b72f670cb0e0be55b73930d51a81d61747",
+  "app_commit": "7ebbd3a0d61325b178709e96f5e03aba90f261d4",
+  "app_integrated_commit": "e5c6d8b6195064a6a05b1e8d53ec5b95e58f7feb",
+  "recorded_at": "2026-09-12T12:58:53.761Z",
+  "proof_sha256": "680eb40c02b427277976b2eeecfca0dae6b6e158101f04fcc091e52c9abbff13",
+  "app_product_sha256": {
+    "index.html": {
+      "run_bytes": "a2d12751569e058a8ed7539f81113d4c741309983fd39c21359bd855d0dc4984",
+      "lf_normalized": "7650ad87f23c648c970d44ccac6d81c95fc20819c31f07896c7bc235f083058f",
+      "integration_differs_only_by_crlf": true
+    },
+    "application-offer-review.js": {
+      "run_bytes": "7c19de3f726a427f8519f4c3f8e2da465c9e9d417a0afcec4dfc238f343a0c55",
+      "lf_normalized": "8a4eefb1d45d400d74f9723db0fb608fda7929b50ed461ab95d3a0e58b4e8934",
+      "integration_differs_only_by_crlf": true
+    },
+    "followups-door.js": {
+      "run_bytes": "7e609ae79742d06f8ff3dc115f14d7eaa896601c0ee511cf5c817303589ecb9e",
+      "lf_normalized": "9729b5f8f92a037a029dc0ce6de3418cf8d0bdc8e2f91b7b263dd1e6f413e42a",
+      "integration_differs_only_by_crlf": true
+    }
+  },
+  "cleanup": {
+    "owned_database": "spine_proof_d78eb2d6b5052de86b3166f4",
+    "canonical_drop_verified": true,
+    "postgres_55445_stopped": true,
+    "api_3346_stopped": true,
+    "static_app_5174_closed": true
+  }
+}
