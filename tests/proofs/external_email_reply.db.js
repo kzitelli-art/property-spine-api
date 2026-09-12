@@ -11,7 +11,8 @@ const {Pool}=require('pg'),sessions=require('../../src/identity/staff_session_se
  const log=p=>fs.existsSync(p)?fs.readFileSync(p,'utf8'):'';
  let checks=0; const check=(v,label)=>{assert(v,label);checks++;console.log('PASS '+label);};
  try {
-  const tag=randomUUID(),p=await one("select id from properties where name='Skyline E2E' order by created_at desc limit 1"),foreign=await one("select id from properties where name='Website inquiry inactive E2E' order by created_at desc limit 1");
+  assert(process.env.E2E_INTAKE_INACTIVE_PROPERTY_ID,'canonical runner foreign-property fixture is required');
+  const tag=randomUUID(),p=await one("select id from properties where name='Skyline E2E' order by created_at desc limit 1"),foreign=await one("select id from properties where id=$1",[process.env.E2E_INTAKE_INACTIVE_PROPERTY_ID]);
   assert(p&&foreign);
   const actor=async(label,property)=>{
    const phone='+1500'+String(parseInt(randomUUID().slice(0,6),16)).padStart(7,'0').slice(-7);
