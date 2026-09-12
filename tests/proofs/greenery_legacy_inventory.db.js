@@ -13,9 +13,8 @@
 // non-parent rows exceeding the 105 positions by one at 114 and one at 214,
 // and naming conflicts at "102 - 2" and "401 - 3".
 //
-// This proof reproduces that SHAPE with synthetic labels (the exact production
-// labels were not available to it; the assumption is stated in the receipt),
-// then walks the existing owners only: super-admin adoption, the super-admin
+// This proof reproduces that shape with the retained non-PII production,
+// tracker and workpaper labels (no ids, no residents), then walks the existing owners only: super-admin adoption, the super-admin
 // provisioning door for an organization-less existing account, Deal Setup
 // source upload, read-source with the bed basis, per-row confirmation and
 // establishment, then reads inventory, availability, occupancy and the rent
@@ -69,30 +68,24 @@ async function api(method, route, { token, key = false, body, form, query } = {}
   return { status: r.status, body: data };
 }
 
-// ── THE SYNTHETIC SHAPE ────────────────────────────────────────────────
-// 64 parents: 101–116, 201–216, 301–316, 401–416.
-// Tracker positions (105): 41 two-label parents (A/B), 23 single-label
-// parents, five of them A-suffixed (208A, 308A, 404A, 408A, 414A), the other
-// 18 named by the parent alone (rented whole).
-// Legacy non-parent rows (107): two-label parents carry "NNN - 1"/"NNN - 2"
-// except 401 which carries "401 - 1"/"401 - 3" (naming conflict); A-singles
-// carry "NNNA"; 102 carries "102 - 2" (naming conflict); the other 17 plain
-// singles carry "NNN - 1"; 114 and 214 each carry one extra "NNN - 3".
+// ── THE PRODUCTION SHAPE, LABELS ONLY ─────────────────────────────────
+// Non-PII labels retained from QB's read-only production read of
+// 2026-09-12 (tmp/greenery-legacy-space-shape-20260912.json), the current
+// Google tracker (Greenery 2026-2027 RR, D9:D113) and the August 31
+// workpaper hierarchy (unit-type codes per parent). No ids, no residents.
+const LEGACY_LABELS = ["101 - 1", "101 - 2", "102 - 2", "103", "104", "105", "106", "107 - 1", "107 - 2", "108", "109 - 1", "109 - 2", "110 - 1", "110 - 2", "111 - 1", "111 - 2", "112 - 1", "112 - 2", "113 - 1", "113 - 2", "114 - 1", "114 - C", "115 - 1", "115 - 2", "116", "1325-101", "1325-102", "1325-103", "1325-104", "1325-105", "1325-106", "1325-107", "1325-108", "1325-109", "1325-110", "1325-111", "1325-112", "1325-113", "1325-114", "1325-115", "1325-116", "1325-201", "1325-202", "1325-203", "1325-204", "1325-205", "1325-206", "1325-207", "1325-208", "1325-209", "1325-210", "1325-211", "1325-212", "1325-213", "1325-214", "1325-215", "1325-216", "1325-301", "1325-302", "1325-303", "1325-304", "1325-305", "1325-306", "1325-307", "1325-308", "1325-309", "1325-310", "1325-311", "1325-312", "1325-313", "1325-314", "1325-315", "1325-316", "1325-401", "1325-402", "1325-403", "1325-404", "1325-405", "1325-406", "1325-407", "1325-408", "1325-409", "1325-410", "1325-411", "1325-412", "1325-413", "1325-414", "1325-415", "1325-416", "201 - 1", "201 - 2", "202 - 1", "202 - 2", "203 - 1", "203 - 2", "204", "205", "206", "207 - 1", "207 - 2", "208", "209 - 1", "209 - 2", "210 - 1", "210 - 2", "211 - 1", "211 - 2", "212 - 1", "212 - 2", "213 - 1", "213 - 2", "214 - 1", "214 - 2", "215 - 1", "215 - 2", "216 - 1", "216 - 2", "301 - 1", "301 - B", "302 - 1", "302 - 2", "303 - 1", "303 - 2", "304", "305", "306 - 1", "307 - 1", "307 - 2", "308", "309 - 1", "309 - 2", "310 - 1", "310 - 2", "311 - 1", "311 - 2", "312 - 1", "312 - 2", "313 - 1", "313 - 2", "314", "315 - 1", "315 - 2", "316 - 1", "316 - 2", "401 - 1", "401 - 3", "402 - 1", "402 - 2", "403 - 1", "403 - 2", "404", "405", "406", "407 - 1", "407 - 2", "408", "409 - 1", "409 - 2", "410 - 1", "410 - 2", "411 - 1", "411 - 2", "412 - 1", "412 - 2", "413 - 1", "413 - 2", "414 - 1", "415 - 1", "415 - 2", "416 - 1", "416 - 2"];
+const TRACKER_LABELS = ["101A", "101B", "102", "103", "104", "105", "106", "107A", "107B", "108", "109A", "109B", "110A", "110B", "111A", "111B", "112A", "112B", "113A", "113B", "114", "115A", "115B", "116", "201A", "201B", "202A", "202B", "203A", "203B", "204", "205", "206", "207A", "207B", "208A", "209A", "209B", "210A", "210B", "211A", "211B", "212A", "212B", "213A", "213B", "214", "215A", "215B", "216A", "216B", "301A", "301B", "302A", "302B", "303A", "303B", "304", "305", "306", "307A", "307B", "308A", "309A", "309B", "310A", "310B", "311A", "311B", "312A", "312B", "313A", "313B", "314", "315A", "315B", "316A", "316B", "401A", "401B", "402A", "402B", "403A", "403B", "404A", "405", "406", "407A", "407B", "408A", "409A", "409B", "410A", "410B", "411A", "411B", "412A", "412B", "413A", "413B", "414A", "415A", "415B", "416A", "416B"];
+const AUGUST_UNIT_TYPES = {"1325-101": "STU00011", "1325-102": "STU00010", "1325-103": "STU00010", "1325-104": "STU00010", "1325-105": "STU00012", "1325-106": "STU00012", "1325-107": "STU00011", "1325-108": "STU00012", "1325-109": "STU00011", "1325-110": "STU00011", "1325-111": "STU00011", "1325-112": "STU00011", "1325-113": "STU00011", "1325-114": "STU00010", "1325-115": "STU00011", "1325-116": "STU00010", "1325-201": "STU00011", "1325-202": "STU00011", "1325-203": "STU00011", "1325-204": "STU00010", "1325-205": "STU00012", "1325-206": "STU00012", "1325-207": "STU00011", "1325-208": "STU00012", "1325-209": "STU00011", "1325-210": "STU00011", "1325-211": "STU00011", "1325-212": "STU00011", "1325-213": "STU00011", "1325-214": "STU00010", "1325-215": "STU00011", "1325-216": "STU00011", "1325-301": "STU00011", "1325-302": "STU00011", "1325-303": "STU00011", "1325-304": "STU00010", "1325-305": "STU00012", "1325-306": "STU00012", "1325-307": "STU00011", "1325-308": "STU00012", "1325-309": "STU00011", "1325-310": "STU00011", "1325-311": "STU00011", "1325-312": "STU00011", "1325-313": "STU00011", "1325-314": "STU00010", "1325-315": "STU00011", "1325-316": "STU00011", "1325-401": "STU00011", "1325-402": "STU00011", "1325-403": "STU00011", "1325-404": "STU00010", "1325-405": "STU00012", "1325-406": "STU00012", "1325-407": "STU00011", "1325-408": "STU00012", "1325-409": "STU00011", "1325-410": "STU00011", "1325-411": "STU00011", "1325-412": "STU00011", "1325-413": "STU00011", "1325-414": "STU00010", "1325-415": "STU00011", "1325-416": "STU00011"};
 function shape() {
-  const parents = [];
-  for (const f of [1, 2, 3, 4]) for (let n = 1; n <= 16; n++) parents.push(`${f}${String(n).padStart(2, "0")}`);
-  const aSingles = new Set(["208", "308", "404", "408", "414"]);
-  const plainSingles = new Set(["102", "103", "106", "110", "113", "116", "203", "206", "210", "213", "216", "303", "306", "310", "313", "316", "403", "411"]);
-  const positions = []; const legacy = []; const kind = {};
-  for (const p of parents) {
-    if (aSingles.has(p)) { kind[p] = "single_A"; positions.push({ unit: p, room: `${p}A` }); legacy.push(`${p}A`); }
-    else if (plainSingles.has(p)) { kind[p] = "single_plain"; positions.push({ unit: p, room: "" }); legacy.push(p === "102" ? "102 - 2" : `${p} - 1`); }
-    else { kind[p] = "two"; positions.push({ unit: p, room: `${p}A` }, { unit: p, room: `${p}B` }); legacy.push(`${p} - 1`, p === "401" ? "401 - 3" : `${p} - 2`); }
-    if (p === "114" || p === "214") legacy.push(`${p} - 3`);
-  }
-  return { parents, positions, legacy, kind };
+  const parents = LEGACY_LABELS.filter((l) => /^1325-/.test(l));
+  const legacy = LEGACY_LABELS.filter((l) => !/^1325-/.test(l));
+  const stem = (l) => String(l).match(/\d{3}/)[0];
+  const positions = TRACKER_LABELS.map((room) => ({ unit: `1325-${stem(room)}`, room, stem: stem(room) }));
+  const byParent = new Map();
+  for (const p of positions) byParent.set(p.unit, (byParent.get(p.unit) || 0) + 1);
+  const kind = {}; for (const [u, n] of byParent) kind[u] = n === 2 ? "two" : /A$/.test(positions.find((p) => p.unit === u).room) ? "single_A" : "single_plain";
+  return { parents, legacy, positions, kind, stem };
 }
-
 (async () => {
   await boundary.assertDatabase();
   const pool = new Pool({ connectionString: boundary.manifest().url, ssl: false });
@@ -150,6 +143,8 @@ function shape() {
       F.legacyUnitIds = new Map((await q("select id, unit_number from units where property_id=$1", [G])).rows.map((r) => [r.unit_number, r.id]));
       F.before = await inventory();
       const nonParent = S.legacy.length, parents = S.parents.length;
+      const groups = { unprefixed_with_suffix: S.legacy.filter((l) => / - /.test(l)).length, unprefixed_without_suffix: S.legacy.filter((l) => !/ - /.test(l)).length, prefixed_apartment: parents };
+      check(groups.unprefixed_with_suffix === 89 && groups.unprefixed_without_suffix === 18 && groups.prefixed_apartment === 64, "the label groups match the production read (89 suffixed, 18 unsuffixed, 64 prefixed)", groups);
       check(F.before.units === 171 && F.before.spaces === 171 && F.before.placeholders === 171 && F.before.use_configured === 0 && F.before.source_rows === 0 && F.before.leases === 0 && F.before.opening_positions === 0 && F.before.basis === "unknown" && F.before.organization_id === null && parents === 64 && nonParent === 107,
         "the rehearsal property reproduces the production read's shape: 64 parent and 107 other legacy units, one placeholder each, no use, no lineage, no organization, basis unknown", { ...F.before, parents, non_parent: nonParent, tracker_positions: S.positions.length });
       const m = await marketing();
@@ -199,22 +194,26 @@ function shape() {
 
     // ── source: 105 tracker positions under 64 parents, plus one labelled probe row ──
     const AS_OF = plusDays(-3);
-    function buildCsv({ probe }) {
+    // Convention A: Unit = the prefixed parent as production names it, Room = the tracker label.
+    // Convention B: Unit = the bare tracker stem, Room = the A/B letter (blank for singles) — the
+    // shape a tracker export would take if nobody adds the prefix.
+    function buildCsv(convention = "A") {
       let csv = "Unit,Room,Type,Resident,Market Rent,Actual Rent,Lease From,Lease To\n";
       const expected = { occupied: 0, vacant: 0, rows: 0 };
       S.positions.forEach((p, i) => {
         const occ = i % 5 !== 4;
-        const type = S.kind[p.unit] === "two" ? "2BR-SHARED" : "STUDIO";
-        if (occ) { expected.occupied++; csv += `${p.unit},${p.room},${type},Rehearsal Resident ${p.room || p.unit},1150,1100,${plusDays(-220)},${plusDays(145)}\n`; }
-        else { expected.vacant++; csv += `${p.unit},${p.room},${type},VACANT,1150,,,\n`; }
+        const type = AUGUST_UNIT_TYPES[p.unit] || "";
+        const unit = convention === "A" ? p.unit : p.stem;
+        const room = convention === "A" ? p.room : (p.room.replace(/^\d{3}/, "") || "");
+        if (occ) { expected.occupied++; csv += `${unit},${room},${type},Rehearsal Resident ${p.room},1150,1100,${plusDays(-220)},${plusDays(145)}\n`; }
+        else { expected.vacant++; csv += `${unit},${room},${type},VACANT,1150,,,\n`; }
         expected.rows++;
       });
-      if (probe) { csv += `114 - 3,,2BR-SHARED,VACANT,1150,,,\n`; expected.rows++; expected.probe = "114 - 3"; }
       return { csv, expected };
     }
 
     await section("read-source", async () => {
-      const { csv, expected } = buildCsv({ probe: true });
+      const { csv, expected } = buildCsv("A");
       F.expected = expected;
       const form = new FormData();
       form.append("file", new Blob([csv], { type: "text/csv" }), "greenery-legacy-rehearsal-rent-roll.csv");
@@ -233,13 +232,11 @@ function shape() {
       const twoLabel = Object.values(S.kind).filter((k) => k === "two").length; const aSingles = Object.values(S.kind).filter((k) => k === "single_A").length;
       check(F.afterRead.basis === "bed", "the leasing basis is recorded on the property", { basis: F.afterRead.basis });
       check(F.afterRead.units === 171, "no unit was created or removed: every legacy identity survives", { units: F.afterRead.units });
-      const expectedSpaces = 171 + twoLabel; // each two-label parent consumed its placeholder into A and created B
-      check(F.afterRead.spaces === expectedSpaces && F.afterRead.beds === twoLabel * 2 + aSingles, "parents' pristine placeholders became the first named bed and the second bed was created; nothing else changed", { spaces: F.afterRead.spaces, expected_spaces: expectedSpaces, beds: F.afterRead.beds, placeholders: F.afterRead.placeholders });
+      const expectedSpaces = 171 + twoLabel; // each two-label parent consumed its placeholder into its first label and created the second
+      check(F.afterRead.spaces === expectedSpaces && F.afterRead.beds === S.positions.length && F.afterRead.placeholders === S.legacy.length, "every parent's pristine placeholder became its first tracker label, second labels were created, and the 107 legacy placeholders are untouched", { spaces: F.afterRead.spaces, expected_spaces: expectedSpaces, beds: F.afterRead.beds, placeholders: F.afterRead.placeholders, aSingles });
       const untouched = await one(`select count(*)::int n from spaces s join units u on u.id=s.unit_id where u.property_id=$1 and s.space_label='(whole unit)' and u.unit_number = any($2::text[])`, [G, S.legacy]);
       const withLineage = await one(`select count(*)::int n from import_source_rows r join units u on u.id=r.produced_unit_id where u.property_id=$1 and u.unit_number = any($2::text[])`, [G, S.legacy]);
-      check(untouched.n === S.legacy.length && withLineage.n === 1, "all 107 legacy non-parent rows keep their placeholder label; exactly one (the probe) gained source lineage", { placeholders_kept: untouched.n, with_lineage: withLineage.n });
-      const probe = await one("select r.produced_unit_id, r.produced_space_id, u.unit_number from import_source_rows r join units u on u.id=r.produced_unit_id where u.property_id=$1 and u.unit_number='114 - 3'", [G]);
-      observe("finding: a source row whose Unit column carries a legacy room-style label resolves to that legacy record, not to its parent apartment; the reader matches unit_number text", { matched: !!probe, unit_number: probe && probe.unit_number });
+      check(untouched.n === S.legacy.length && withLineage.n === 0, "all 107 legacy non-parent rows keep their placeholder and gained no source lineage", { placeholders_kept: untouched.n, with_lineage: withLineage.n });
       const review = await api("GET", `/deal-setup/activations/${F.activation}`, { token: F.mikeTok });
       const proposals = review.body.proposals || [];
       const byStatus = {}; for (const p of proposals) byStatus[p.status] = (byStatus[p.status] || 0) + 1;
@@ -255,14 +252,14 @@ function shape() {
         if (c.status === 200) confirmed++; else refused.push({ key: p.natural_key, status: c.status, error: c.body && c.body.error, receipt: c.body && c.body.receipt });
       }
       observe("row confirmations", { confirmed, refused: refused.slice(0, 5), refused_total: refused.length });
-      check(confirmed === F.expected.rows, "every source row (105 positions plus the probe) confirms against the materialised inventory", { confirmed, expected: F.expected.rows });
+      check(confirmed === F.expected.rows, "every one of the 105 source positions confirms against the materialised inventory", { confirmed, expected: F.expected.rows });
       const est = await api("POST", `/deal-setup/activations/${F.activation}/establish`, { token: F.mikeTok, body: {} });
       need(est.status === 201 && est.body.opening_position, "the opening lease and occupancy position is established", { status: est.status, body: est.body && (est.body.receipt || est.body.error) });
       F.after = await inventory();
       check(F.after.leases === F.expected.occupied && F.after.opening_positions === 1 && F.after.units === 171, "leases exist only for the occupied source positions; one opening position; still 171 units", { leases: F.after.leases, occupied_rows: F.expected.occupied, opening_positions: F.after.opening_positions });
       const m = await marketing();
       observe("after: canonical availability by marketing state (beds carry no use type yet; legacy placeholders stay unknown)", m.by);
-      check((m.by.occupancy_unknown || 0) === S.legacy.length - 1 && (m.by.occupied || 0) === F.expected.occupied && (m.by.use_not_configured || 0) === F.expected.vacant + 1 && !m.by.marketable_now, "after: 106 legacy rows stay occupancy-unknown, every occupied source row reads occupied, every vacant one (plus the probe) reads use-not-configured, nothing is marketable", { unknown: m.by.occupancy_unknown, occupied: m.by.occupied, use_not_configured: m.by.use_not_configured, marketable_now: m.by.marketable_now || 0 });
+      check((m.by.occupancy_unknown || 0) === S.legacy.length && (m.by.occupied || 0) === F.expected.occupied && (m.by.use_not_configured || 0) === F.expected.vacant && !m.by.marketable_now, "after: the 107 legacy rows stay occupancy-unknown, every occupied source row reads occupied, every vacant one reads use-not-configured, nothing is marketable", { unknown: m.by.occupancy_unknown, occupied: m.by.occupied, use_not_configured: m.by.use_not_configured, marketable_now: m.by.marketable_now || 0 });
       const occ = await occupancyByBasis(pool, G).catch((e) => ({ error: e.message }));
       observe("after: occupancy by basis", occ && occ.error ? occ : { status: occ.status, basis: occ.basis, occupied_count: occ.occupied_count, rentable_count: occ.rentable_count, excluded_count: occ.excluded_count, occupancy_pct: occ.occupancy_pct });
       F.occ = occ;
@@ -270,7 +267,7 @@ function shape() {
       const t = rr.body && rr.body.totals || {};
       observe("after: canonical rent roll totals (HTTP)", { status: rr.status, totals: t });
       const co = t.confirmed_contractual_occupancy || {};
-      check(co.occupied === F.expected.occupied && (co.reported_beside || {}).unresolved_positions === S.legacy.length - 1, "the rent roll reads the occupied source positions and reports the 106 unresolved legacy rows beside them", { occupied: co.occupied, unresolved: co.reported_beside && co.reported_beside.unresolved_positions });
+      check(co.occupied === F.expected.occupied && (co.reported_beside || {}).unresolved_positions === S.legacy.length, "the rent roll reads the occupied source positions and reports the 107 unresolved legacy rows beside them", { occupied: co.occupied, unresolved: co.reported_beside && co.reported_beside.unresolved_positions });
       observe("finding: the legacy placeholders are counted in inventory and leasable totals, so the headline occupancy percentage is computed over " + t.leasable + " positions, not the " + S.positions.length + " the source establishes", { inventory: t.inventory, leasable: t.leasable, occupied: co.occupied, pct_reported: co.pct, pct_over_source_positions: Number((100 * co.occupied / S.positions.length).toFixed(2)), occupancy_by_basis_pct: F.occ && F.occ.occupancy_pct, occupancy_by_basis_rentable: F.occ && F.occ.rentable_count });
       const units = await api("GET", "/operator/rent-roll/units", { token: F.mikeTok });
       observe("after: rent roll units read (HTTP)", { status: units.status, units: Array.isArray(units.body && units.body.units) ? units.body.units.length : null, keys: Object.keys(units.body || {}).slice(0, 10) });
@@ -285,7 +282,7 @@ function shape() {
       const r = spawnSync(process.execPath, ["tools/apply_unit_type_mapping.js", "--property", G], { cwd: path.join(__dirname, "..", ".."), env: { ...process.env, DATABASE_URL: url, PGSSLMODE: "disable" }, encoding: "utf8", timeout: 60000 });
       const out = (r.stdout || "") + (r.stderr || "");
       observe("the reviewed classification tool, dry run, against the established rehearsal property", { exit: r.status, tail: out.trim().split("\n").slice(-6) });
-      check(r.status !== 0 && /unmapped|no ruling|refus|approved/i.test(out), "with no Greenery ruling block the tool refuses and names the unmapped source codes; nothing is classified", { exit: r.status });
+      check(r.status !== 0 && /REFUSING/.test(out) && /STU00010/.test(out) && /STU00011/.test(out) && /STU00012/.test(out), "with no Greenery ruling block the tool refuses and names the three August workpaper codes; nothing is classified", { exit: r.status });
       const after = await inventory();
       check(after.use_configured === 0, "no use type was written", { use_configured: after.use_configured });
     });
@@ -293,7 +290,7 @@ function shape() {
     await section("repeat-upload", async () => {
       const again = await api("POST", `/deal-setup/activations/${F.activation}/read-source`, { token: F.mikeTok, body: { source_artifact_id: F.artifact, source_as_of_date: AS_OF, leasing_basis: "bed" } });
       check(again.status === 409, "re-reading the same source into the established setup is refused", { status: again.status, error: again.body && again.body.error });
-      const { csv } = buildCsv({ probe: true });
+      const { csv } = buildCsv("A");
       const form = new FormData();
       form.append("file", new Blob([csv], { type: "text/csv" }), "greenery-legacy-rehearsal-rent-roll.csv");
       form.append("source_as_of_date", AS_OF);
@@ -309,19 +306,56 @@ function shape() {
       check(inv.units === F.after.units && inv.spaces === F.after.spaces && inv.leases === F.after.leases && inv.opening_positions === 1, "the repeat changed no inventory, lease or position", { units: inv.units, spaces: inv.spaces, leases: inv.leases });
     });
 
+    // ── convention B on a second property of the same shape: read only, never confirmed ──
+    await section("stem-convention-probe", async () => {
+      const G2 = randomUUID();
+      await one(`insert into properties (id,name,display_name,organization_id,leasing_basis) values ($1,'Greenery (convention probe)','Greenery (convention probe)',$2,'unknown') returning id`, [G2, F.org.id]);
+      for (const label of [...S.parents, ...S.legacy]) await q("insert into units (property_id,unit_number) values ($1,$2)", [G2, label]);
+      const added = await api("POST", `/deal-setup/deals/${F.deal}/properties`, { token: F.oaTok, body: { property_id: G2 } });
+      need(added.status === 201, "the second same-shaped property joins the deal", { status: added.status });
+      const tok = await session(F.sa.id, G2).catch(() => null) || (await (async () => { await q("insert into property_team_assignments (property_id,user_id,role_title,role_key,scope_type,allowed_modules,primary_for_modules,can_manage_roles,active) values ($1,$2,'property_admin','property_admin','property','{management,leasing}','{management}',true,true)", [G2, F.mike.id]); return session(F.mike.id, G2); })());
+      const { csv, expected } = buildCsv("B");
+      const form = new FormData();
+      form.append("file", new Blob([csv], { type: "text/csv" }), "greenery-tracker-export-as-is.csv");
+      form.append("source_as_of_date", AS_OF);
+      const up = await api("POST", `/deal-setup/deals/${F.deal}/properties/${G2}/source`, { token: tok, form });
+      need(up.status === 201, "the stem-convention export is uploaded", { status: up.status, body: up.body });
+      const opened = await api("POST", `/deal-setup/deals/${F.deal}/properties/${G2}/activation`, { token: tok, body: {} });
+      need(opened.status === 201, "a setup opens on the probe property", { status: opened.status });
+      const before = await one("select count(*)::int n from units where property_id=$1", [G2]);
+      const read = await api("POST", `/deal-setup/activations/${opened.body.activation.id}/read-source`, { token: tok, body: { source_artifact_id: up.body.artifact.id, source_as_of_date: AS_OF, leasing_basis: "bed" } });
+      const after = await one("select count(*)::int n, count(*) filter (where unit_number !~ '^1325-' and unit_number !~ ' - ' and unit_number ~ '^\\d{3}$')::int stems from units where property_id=$1", [G2]);
+      const created = (await q("select unit_number from units where property_id=$1 and unit_number <> all($2::text[]) order by unit_number", [G2, [...S.parents, ...S.legacy]])).rows.map((r) => r.unit_number);
+      const landedOnLegacy = (await q("select u.unit_number from import_source_rows r join units u on u.id=r.produced_unit_id where u.property_id=$1 and u.unit_number = any($2::text[]) order by 1", [G2, S.legacy])).rows.map((r) => r.unit_number);
+      const parentsTouched = await one("select count(*)::int n from import_source_rows r join units u on u.id=r.produced_unit_id where u.property_id=$1 and u.unit_number ~ '^1325-'", [G2]);
+      observe("convention B (bare stems in the Unit column) read-source result", { status: read.status, counts: read.body && read.body.counts, receipt: read.body && (read.body.receipt || read.body.error) });
+      check(read.status === 201 && after.n === before.n + created.length && created.length > 0 && parentsTouched.n === 0, "finding: with bare stems the reader creates NEW units for every stem that has no legacy row of that exact text, and touches no prefixed parent", { units_before: before.n, units_after: after.n, created: created.length, created_sample: created.slice(0, 6), parents_touched: parentsTouched.n });
+      check(landedOnLegacy.length === 18 && landedOnLegacy.every((l) => /^\d{3}$/.test(l)), "finding: the 18 unsuffixed stems land on the legacy rows of that exact text (103, 104, …), not on their prefixed parents", { landed_on_legacy: landedOnLegacy });
+      observe("nothing on the probe property was confirmed or established; it exists only to show what the export convention decides", { expected_rows: expected.rows });
+    });
+
     await section("unresolved-mappings", async () => {
-      // Computed from the fixture and the source: what a human still has to decide. Nothing is written.
-      const established = new Set((await q(`select u.unit_number||'|'||s.space_label k from import_source_rows r join spaces s on s.id=r.produced_space_id join units u on u.id=s.unit_id where u.property_id=$1`, [G])).rows.map((r) => r.k));
-      const report = {
-        legacy_non_parent_rows_without_established_counterpart: S.legacy.filter((l) => l !== "114 - 3").length,
-        extras_beyond_source_positions: ["114 - 3", "214 - 3"],
-        naming_conflicts: [{ legacy: "102 - 2", source: "102 (single position, no room named)" }, { legacy: "401 - 3", source: "401A / 401B" }],
-        suffix_equivalence_unestablished: { example: "301B", legacy_candidates: ["301 - 1", "301 - 2"], note: "B = Room 2 is not established by either label" },
-        a_suffixed_singles: ["208A", "308A", "404A", "408A", "414A"].map((l) => ({ label: l, legacy_row: l, established: established.has(`${l.slice(0, 3)}|${l}`), sibling_B_inferred: false })),
-        probe_row_landed_on_legacy_record: "114 - 3",
-      };
-      observe("decisions the owner must make before the legacy rows can be reconciled (computed, not written)", report);
-      check(report.a_suffixed_singles.every((x) => x.established && !x.sibling_B_inferred), "an A-suffixed single establishes exactly one bed; no B bed is inferred", report.a_suffixed_singles);
+      // QB's narrow textual rule, recomputed here from the retained labels: a numeric suffix N corresponds
+      // to August RoomN under the same parent; an unsuffixed label corresponds to a sole Room1. Nothing is written.
+      const roomsByParent = new Map(); for (const p of S.positions) roomsByParent.set(p.unit, (roomsByParent.get(p.unit) || 0) + 1);
+      const matched = [], unmatched = [];
+      for (const l of S.legacy) {
+        const parent = `1325-${S.stem(l)}`; const rooms = roomsByParent.get(parent) || 0;
+        const m = l.match(/ - (.+)$/); const suffix = m ? m[1] : null;
+        if (suffix === null) { (rooms === 1 ? matched : unmatched).push({ label: l, parent, rooms, rule: rooms === 1 ? "sole Room1" : "unsuffixed under a two-room parent" }); continue; }
+        if (/^\d+$/.test(suffix) && Number(suffix) <= rooms) matched.push({ label: l, parent, room: `Room${suffix}` });
+        else unmatched.push({ label: l, parent, rooms, suffix });
+      }
+      const coveredRooms = new Set(matched.map((x) => `${x.parent}|${x.room || "Room1"}`));
+      const roomsLackingCandidates = [];
+      for (const [parent, n] of roomsByParent) for (let i = 1; i <= n; i++) if (!coveredRooms.has(`${parent}|Room${i}`)) roomsLackingCandidates.push(`${parent}/Room${i}`);
+      const extras = ["1325-114", "1325-214"].map((p) => ({ parent: p, legacy_rows: S.legacy.filter((l) => S.stem(l) === p.slice(5)), tracker_labels: S.positions.filter((x) => x.unit === p).map((x) => x.room) }));
+      const report = { textual_correspondences: matched.length, unmatched_legacy_labels: unmatched.map((x) => x.label), source_rooms_lacking_candidates: roomsLackingCandidates, count_differences: extras, a_suffixed_singles: S.positions.filter((x) => S.kind[x.unit] === "single_A").map((x) => x.room), note: "correspondences are proposals for the existing recognition authority; none is an identity mapping and none was written" };
+      observe("decisions the owner must make before the 107 legacy rows can be reconciled (computed, not written)", report);
+      check(matched.length === 102 && unmatched.map((x) => x.label).sort().join(",") === ["102 - 2", "114 - C", "214 - 2", "301 - B", "401 - 3"].join(",") && roomsLackingCandidates.length === 3, "the retained labels reproduce QB's comparison: 102 textual correspondences, five unmatched legacy labels, three source rooms without a candidate", { unmatched: unmatched.map((x) => x.label), rooms_lacking: roomsLackingCandidates });
+      const aBeds = await q("select s.space_label from spaces s join units u on u.id=s.unit_id where u.property_id=$1 and s.space_label = any($2::text[])", [G, report.a_suffixed_singles]);
+      const bBeds = await q("select s.space_label from spaces s join units u on u.id=s.unit_id where u.property_id=$1 and s.space_label = any($2::text[])", [G, report.a_suffixed_singles.map((l) => l.replace(/A$/, "B"))]);
+      check(aBeds.rowCount === 5 && bBeds.rowCount === 0, "each A-suffixed single established exactly one bed; no B bed was inferred", { a_beds: aBeds.rowCount, b_beds: bBeds.rowCount });
     });
   } finally { await pool.end(); }
   const summary = { passed: results.filter((r) => r.ok && r.kind === "check").length, failed, observations: results.filter((r) => r.kind === "observe").length };
