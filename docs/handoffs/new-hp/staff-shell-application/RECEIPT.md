@@ -35,4 +35,4 @@ Cleanup verified: canonical nonce cleanup dropped `spine_proof_d78eb2d6b5052de86
 
 Actual-browser proof source is `tests/e2e/staff_application_send.browser.js` in the paired API. Workspace receipts and visually inspected screenshots are in `handoffs/new-hp/staff-shell-application/`. The same real browser proof's check-in and outcome steps enter canonical HTTP directly; those two staff actions were not clicked in this slice.
 
-This is not actual Mike acceptance, production acceptance, a complete no-consent applicant-to-lease proof, or evidence of email provider delivery. The proof actor has a manager override; actual Mike's narrower flags remain a separate operating decision. No deployment or production mutation occurred.
+This is not actual Mike acceptance, production acceptance, a complete no-consent applicant-to-lease proof, or evidence of email provider delivery. The earlier 28-check actor had a manager override. The final 34-check primary actor has Mike-shaped restricted assignments; a separate authorized fixture actor authors terms over HTTP. Actual deployed accounts remain untested in this slice. No deployment or production mutation occurred.
