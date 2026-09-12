@@ -72,6 +72,7 @@ async function waitSms(from, pred) {
 
 (async () => {
   await boundary.assertDatabase();
+  await boundary.waitServer(BASE);
   const pool = new Pool({ connectionString: boundary.manifest().url, ssl: false });
   const q = (sql, args = []) => pool.query(sql, args);
   const one = async (sql, args = []) => (await q(sql, args)).rows[0];
@@ -139,6 +140,8 @@ async function waitSms(from, pred) {
       F.oa2 = await staffUser(`Other Client Admin ${nonce}`, { platform_role: "org_admin", organization_id: F.org2.id, phone: num(14), email: `oa2-${nonce}@example.test` });
       F.s2 = await one("insert into properties (name,address,organization_id) values ($1,'2 Other St',$2) returning id", [`Other property ${nonce}`, F.org2.id]);
       await team(F.oa2, F.s2.id, "property_admin", "{management,leasing}", true);
+      await team(F.oa,F.g.id,"property_admin","{management,leasing,maintenance,reporting}",true);
+      await q('update property_team_assignments set active=false where user_id=$1 and property_id=$2',[F.oa.id,F.g.id]);
       F.saTok = await session(F.sa.id, F.s1.id);
       F.oaTok = await session(F.oa.id, F.s1.id);
       F.oaPhoneOnlyTok = await session(F.oaPhoneOnly.id, F.s1.id);
@@ -154,6 +157,22 @@ async function waitSms(from, pred) {
         && st.teams.length === 1 && st.teams[0].property_id === F.s1.id && st.identity.state === "resolved",
         "the account matches QB's read of the real one: human_staff, unique person bridge, verified phone, Skyline assignment and team, resolved there, no email", { platform_role: st.user.platform_role, identity: st.identity.state, contexts: st.contexts.length });
       F.before = await counts();
+    });
+    await section("existing-account-boundary", async () => {
+      for (const target of [F.oa2,F.sa]) {
+        for (const useEmail of [false,true]) {
+          const before=await one('select organization_id,platform_role,name,status,phone,email from users where id=$1',[target.id]);
+          const r=await api('POST','/org/users/invite',{token:F.oaTok,body:{name:'Unauthorized renamed target',phone:target.phone,...(useEmail?{email:target.email}:{}),property_id:F.s1.id,role_key:'leasing_agent'}});
+          const after=await one('select organization_id,platform_role,name,status,phone,email from users where id=$1',[target.id]);
+          const assignment=await one('select id from property_team_assignments where user_id=$1 and property_id=$2',[target.id,F.s1.id]);
+          check(r.status===409 && r.body.reason==='existing_account_authority_conflict' && JSON.stringify(before)===JSON.stringify(after), `${useEmail?'email':'phone'} refuses foreign or privileged identity without mutation`,{status:r.status,role:before.platform_role});
+          if(target.id===F.oa2.id) check(!assignment,'foreign user receives no assignment');
+        }
+      }
+      const before=await mikeState(F.s1.id);
+      const r=await api('POST','/org/users/invite',{token:F.oaTok,body:{name:'Unconfirmed existing person',phone:F.mikePhone,property_id:F.s1.id,role_key:'leasing_agent'}});
+      const after=await mikeState(F.s1.id);
+      check(r.status===409 && JSON.stringify(before.user)===JSON.stringify(after.user),'unaffiliated existing person uses governed Team confirmation, not organization claiming',{status:r.status});
     });
     need(F.mike, "existing staff account exists");
     const G = F.g.id;
@@ -174,11 +193,25 @@ async function waitSms(from, pred) {
       check(otherOrgInvite.status === 400 && /does not belong/.test(String(otherOrgInvite.body && otherOrgInvite.body.error)), "another client's org admin cannot provision staff at this property", { status: otherOrgInvite.status, error: otherOrgInvite.body && otherOrgInvite.body.error });
     });
 
+    await section("inactive-existing-assignment",async()=>{
+      const assignment=await one('select id,active from property_team_assignments where user_id=$1 and property_id=$2',[F.oa.id,G]);
+      need(assignment && !assignment.active,'existing inactive KZ-shaped assignment fixture');
+      const patch=await api('PATCH',`/admin/users/${F.oa.id}/assignments/${assignment.id}`,{token:F.saTok,body:{active:true}});
+      const after=await one('select id,active from property_team_assignments where user_id=$1 and property_id=$2',[F.oa.id,G]);
+      check(patch.status===200 && after.id===assignment.id && after.active,'existing super-admin PATCH reactivates same assignment',{status:patch.status});
+      const open=await api('POST','/operator/properties/select',{token:F.oaTok,body:{property_id:G}});
+      check(open.status===200&&!!open.body.session_token,'reactivated actor obtains property session',{status:open.status});
+      const invite=await api('POST',`/properties/${G}/team-invites`,{token:open.body.session_token,body:{invited_name:'Mike',phone_number:F.mikePhone,role_key:'leasing_agent',scope_type:'property',person_id:(await mikeState()).user.person_id}});
+      check(invite.status===200,'reactivated assignment can create governed existing-person Team invite',{status:invite.status});
+      const back=await api('POST','/operator/properties/select',{token:open.body.session_token,body:{property_id:F.s1.id}});
+      need(back.status===200&&!!back.body.session_token,'reactivated actor switches back with a fresh session',{status:back.status});
+      F.oaTok=back.body.session_token;
+    });
     await section("first-property-access", async () => {
       // The governed invite needs a session AT the property; a session needs an
-      // assignment there. The first assignment can only come from the two
-      // admin provisioning doors. Both are exercised for a phone-only account
-      // and for an email-bearing one.
+      // assignment there. An inactive existing assignment can be reactivated
+      // as above; these admin doors also provision staff who have no assignment.
+      // Both are exercised for a phone-only account and an email-bearing one.
       const roleBefore = (await one("select platform_role from users where id=$1", [F.oaPhoneOnly.id])).platform_role;
       const c0 = await counts();
       const phoneOnly = await api("POST", "/org/users/invite", { token: F.oaPhoneOnlyTok, body: { name: `Phone-only Org Admin ${nonce}`, phone: F.oaPhoneOnly.phone, property_id: G, role_key: "property_admin" } });
@@ -288,7 +321,8 @@ async function waitSms(from, pred) {
       // What acceptance looks like at a property whose line cannot send.
       const noLine = await one("insert into properties (name,address,organization_id) values ($1,'3 Silent St',$2) returning id", [`Silent property ${nonce}`, F.org.id]);
       const prov = await api("POST", `/admin/organizations/${F.org.id}/invite`, { token: F.saTok, body: { name: `Org Admin ${nonce}`, phone: F.oa.phone, email: F.oa.email, property_id: noLine.id, role_key: "property_admin", platform_role: "org_admin" } });
-      const open = await api("POST", "/operator/properties/select", { token: F.oaTok, body: { property_id: noLine.id } });
+      const open = await api("POST", "/operator/properties/select", { token: F.oaGTok, body: { property_id: noLine.id } });
+      need(prov.status === 201 && open.status === 200 && !!open.body.session_token, "no-line property opens through actual provisioning and selector", { provision: prov.status, select: open.status });
       if (prov.status === 201 && open.status === 200) {
         const person = (await one("select person_id from users where id=$1", [F.mike.id])).person_id;
         const r = await inviteAndAccept({ token: open.body.session_token, propertyId: noLine.id, phone: F.mikePhone, name: `Mike (rehearsal) ${nonce}`, role_key: "leasing_agent", person_id: person });

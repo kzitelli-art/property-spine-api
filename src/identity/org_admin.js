@@ -143,6 +143,7 @@ module.exports = function orgAdminModule({ pool }) {
   // ── POST /org/users/invite ───────────────────────────────────────────────
   // Body: { name, phone, email, property_id, role_key }
   router.post("/org/users/invite", requireOrgAdmin, async (req, res) => {
+    let client;
     try {
       const { name, phone, email, property_id, role_key } = req.body || {};
       if (!name || !phone) return res.status(400).json({ error: "name and phone are required." });
@@ -151,8 +152,9 @@ module.exports = function orgAdminModule({ pool }) {
         return res.status(400).json({ error: `role_key must be one of: ${Object.keys(ROLE_MODULE_MAP).join(", ")}` });
       }
 
+      client = await pool.connect();
       // Verify property belongs to this org
-      const prop = (await pool.query(
+      const prop = (await client.query(
         `select id, coalesce(display_name, name) as name from properties where id = $1 and organization_id = $2`,
         [property_id, req.orgId]
       )).rows[0];
@@ -162,21 +164,27 @@ module.exports = function orgAdminModule({ pool }) {
       const normalizedPhone = phone.replace(/\D/g, "").replace(/^1/, "");
       const e164 = "+1" + normalizedPhone;
 
+      await client.query('BEGIN');
+      // Existing accounts may only be provisioned within their own organization.
+      // Unaffiliated people use the governed Team invite/person confirmation path.
+      // The conflict WHERE is evaluated under the row lock, including concurrent inserts.
       // Upsert user — conflict on phone (unique) if no email, otherwise email
       let user;
       if (email && email.trim()) {
-        user = (await pool.query(
+        user = (await client.query(
           `insert into users (name, email, phone, role, auth_provider, platform_role, organization_id, is_active, status)
            values ($1, $2, $3, 'property_manager', 'phone_otp', 'member', $4, true, 'active')
            on conflict (email) do update
              set name = excluded.name, phone = excluded.phone,
                  organization_id = excluded.organization_id,
                  is_active = true, status = 'active', updated_at = now()
+           where users.organization_id = excluded.organization_id
+             and users.platform_role is distinct from 'super_admin'
            returning id, name, email, phone`,
           [name.trim(), email.trim(), e164, req.orgId]
         )).rows[0];
       } else {
-        user = (await pool.query(
+        user = (await client.query(
           //  Same index as the super-admin door: users has no plain UNIQUE
           //  (phone), only the partial expression index
           //  uq_users_phone_normalized, so the target must be that expression.
@@ -187,14 +195,21 @@ module.exports = function orgAdminModule({ pool }) {
            do update
              set name = excluded.name, organization_id = excluded.organization_id,
                  is_active = true, status = 'active', updated_at = now()
+           where users.organization_id = excluded.organization_id
+             and users.platform_role is distinct from 'super_admin'
            returning id, name, email, phone`,
           [name.trim(), e164, req.orgId]
         )).rows[0];
       }
 
+      if (!user) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'Existing account cannot be provisioned through this organization invite.', reason: 'existing_account_authority_conflict' });
+      }
+
       // Upsert property_team_assignments with canonical role preset
-      const roles = (await pool.query(`select label from staff_roles where key = $1`, [role_key])).rows[0];
-      await pool.query(
+      const roles = (await client.query(`select label from staff_roles where key = $1`, [role_key])).rows[0];
+      await client.query(
         `insert into property_team_assignments
            (property_id, user_id, role_title, role_key, scope_type, allowed_modules,
             primary_for_modules, can_manage_roles, active)
@@ -211,6 +226,7 @@ module.exports = function orgAdminModule({ pool }) {
          role_key, preset.allowed, preset.primary, preset.can_manage]
       );
 
+      await client.query('COMMIT');
       res.status(201).json({
         ok: true,
         user: { id: user.id, name: user.name, email: user.email, phone: user.phone },
@@ -219,8 +235,11 @@ module.exports = function orgAdminModule({ pool }) {
         note: "User provisioned. They can log in via phone OTP.",
       });
     } catch (e) {
+      if (client) await client.query('ROLLBACK').catch(() => {});
       console.error("org/users/invite error", e);
       res.status(500).json({ error: e.message });
+    } finally {
+      if (client) client.release();
     }
   });
 
