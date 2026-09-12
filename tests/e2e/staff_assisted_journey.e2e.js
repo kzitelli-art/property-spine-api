@@ -41,6 +41,7 @@ const staffIdentity = require("../../src/identity/staff_identity_resolver");
 const BASE = process.env.E2E_API_BASE;
 const SMS_LOG = process.env.E2E_SMS_LOG;
 const SHAPE = process.env.JOURNEY_SHAPE || "skyline";
+assert.ok(["skyline", "greenery"].includes(SHAPE), "JOURNEY_SHAPE must be skyline or greenery");
 assert.ok(BASE && SMS_LOG, "E2E_API_BASE and E2E_SMS_LOG are required");
 
 const results = [];
@@ -53,8 +54,8 @@ function record(ok, label, detail, kind = "check") {
 const check = (c, l, d) => { record(!!c, l, d); return !!c; };
 const observe = (l, d) => record(true, l, d, "observe");
 const need = (c, l, d) => { record(!!c, l, d); if (!c) throw new Error(`need: ${l}`); };
-// A configuration stop is not a failure: the chain ends where the property's
-// configuration ends, and every later section is recorded as not exercised.
+// The deliberately empty Greenery fixture may stop at configuration. A stop
+// records later sections as not exercised; Skyline must still complete below.
 let stopped = null;
 const DEPENDENT = new Set(["exact-home", "offer", "send", "application", "lease"]);
 const stop = (reason) => Object.assign(new Error(reason), { configuration_stop: true });
@@ -200,7 +201,8 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       F.prospect = { name: `Journey Prospect ${nonce}`, phone: num(2), email: `prospect-${nonce}@example.test` };
       await q("insert into lead_sources (name,source_type) values ($1,'website') on conflict do nothing", ["Website"]);
       const key = `form-${nonce}`;
-      const body = { property_id: P, name: F.prospect.name, email: F.prospect.email, phone: F.prospect.phone, source: "Website", source_lead_id: `sq-${nonce}`, attempt_sms: false, sms_consent: true };
+      F.inquiryMessage = `Can you send me the floor plan for journey ${nonce}?`;
+      const body = { property_id: P, name: F.prospect.name, email: F.prospect.email, phone: F.prospect.phone, source: "Website", source_lead_id: `sq-${nonce}`, response_channel: "website", message: F.inquiryMessage, attempt_sms: false, sms_consent: true };
       const first = await api("POST", "/leasing/intake", { headers: { "x-intake-secret": "e2e-intake", "Idempotency-Key": key }, body });
       need(first.status === 200 && first.body.person_id && first.body.lead_id && first.body.conversation_id, "the authenticated website inquiry is captured once", { status: first.status, body: first.body });
       F.person = first.body.person_id; F.lead = first.body.lead_id; F.conversation = first.body.conversation_id;
@@ -218,6 +220,9 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       need(take.status === 200, "the agent takes ownership of the inquiry", { status: take.status, body: take.body });
       const detail = await api("GET", `/operator/leasing/conversations/${F.conversation}`, { token: F.agent.tok });
       check(detail.status === 200 && detail.body.human_owner && detail.body.human_owner.user_id === F.agent.id, "the conversation detail names the agent as accountable owner", { owner: detail.body && detail.body.human_owner && detail.body.human_owner.user_id === F.agent.id });
+      check(detail.status === 200 && (detail.body.messages || []).some((m) => m.channel === "website" && m.direction === "inbound" && m.body === F.inquiryMessage), "the conversation reads the original website question from communications");
+      const inquiry = await api("POST", "/operator/ask-spine/ask", { token: F.agent.tok, body: { question: `Show website inquiries for ${F.prospect.name}.` } });
+      check(inquiry.status === 200 && inquiry.body.property_id === P && inquiry.body.grounded_on?.inquiry_read_state === "OK" && typeof inquiry.body.answer === "string" && inquiry.body.answer.includes(F.inquiryMessage), "Ask Spine reads the same original website question through its scoped inquiry read");
       const again = await api("POST", `/operator/conversations/${F.conversation}/take-over`, { token: F.agent.tok, body: {} });
       observe("repeating the take-over by the same owner", { status: again.status });
       const other = await api("POST", `/operator/conversations/${F.conversation}/take-over`, { token: F.managerTok, body: {} });
@@ -259,7 +264,11 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       const targets = await api("GET", "/operator/leasing/leaseable-units", { token: F.agent.tok });
       need(targets.status === 200, "leaseable targets read");
       const eligible = targets.body.eligible_targets || [];
-      if (!F.bedB) { observe("configuration stop: no established, use-configured position exists at this property, so nothing is offerable", { eligible: eligible.length }); throw stop("no established, use-configured position to offer"); }
+      if (!F.bedB) {
+        need(SHAPE === "greenery" && Array.isArray(targets.body.eligible_targets) && eligible.length === 0, "the deliberately empty Greenery fixture returns no eligible targets", { eligible: eligible.length });
+        observe("configuration stop: no established, use-configured position exists in this empty fixture, so nothing is offerable", { eligible: eligible.length });
+        throw stop("no established, use-configured position to offer");
+      }
       const chosen = eligible.find((t) => t.space_id === F.bedB.id);
       check(!!chosen && chosen.resolution_basis === "chosen_space" && chosen.marketing_state === "marketable_now", "the established vacant bed is offerable as an exact choice", chosen && { marketing_state: chosen.marketing_state, availability_confidence: chosen.availability_confidence });
       // A sibling apartment with an occupied Bed A and a free Bed B, and a home with unknown readiness.
@@ -427,14 +436,14 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       const lease = await one("select space_id, rent, lease_status, start_date, economic_tenancy_activated_at from leases where id=$1", [F.leaseId]);
       check(lease.space_id === F.bedB.id && Number(lease.rent) === 1100 && ymd(new Date(lease.start_date)) === dates.start, "the tenancy is anchored to the exact bed at the acknowledged rent and dates", { rent: lease.rent, lease_status: lease.lease_status });
       const possession = await one("select count(*)::int n from unit_events where space_id=$1 and event_type='move_in' and status not in ('cancelled','superseded')", [F.bedB.id]);
-      observe("distinct facts after execution: lease status, economic activation and possession are not claimed by signing alone", { lease_status: lease.lease_status, economic_tenancy_activated_at: lease.economic_tenancy_activated_at, move_in_events: possession.n });
+      check(lease.lease_status === "pending" && lease.economic_tenancy_activated_at === null && possession.n === 0, "execution leaves a pending lease without economic activation or possession", { lease_status: lease.lease_status, economic_tenancy_activated_at: lease.economic_tenancy_activated_at, move_in_events: possession.n });
       check((await one("select count(*)::int n from leases where property_id=$1 and space_id=$2 and lease_status not in ('cancelled','void','superseded')", [P, F.bedB.id])).n === 1, "exactly one lease exists on the bed");
       const targets = await api("GET", "/operator/leasing/leaseable-units", { token: F.agent.tok });
       check(!(targets.body.eligible_targets || []).some((t) => t.space_id === F.bedB.id), "the leased bed leaves the selector");
       const review = await api("GET", `/operator/leasing/application-review?application_id=${F.app}`, { token: F.agent.tok });
-      observe("staff review read after execution", { status: review.status, action: review.body && review.body.execution_primary_action && review.body.execution_primary_action.action });
+      check(review.status === 200 && review.body.application_id === F.app && review.body.applicant?.person_id === F.person && review.body.lease_id === F.leaseId && review.body.space?.space_id === F.bedB.id && review.body.packet?.id === F.packet, "Application Review reads the same application, person, exact bed, packet and tenancy", { status: review.status });
       const card = await api("GET", `/operator/leasing/person-card?person_id=${F.person}`, { token: F.agent.tok });
-      check(card.status === 200 && card.body.leasing_standing && card.body.leasing_standing.tenancy, "the Person Card reads the same tenancy", { status: card.status });
+      check(card.status === 200 && card.body.person?.id === F.person && card.body.leasing_standing?.tenancy?.lease_id === F.leaseId && card.body.leasing_standing.tenancy.space_id === F.bedB.id && card.body.leasing_standing.tenancy.state === "pending", "the Person Card reads the same pending tenancy on the exact bed", { status: card.status });
       const askSign = await api("POST", "/operator/ask-spine/message", { token: F.agent.tok, body: { message: `Has ${F.prospect.name}'s application link been sent?` } });
       observe("Ask Spine read of the same person after execution", { outcome: askSign.body && askSign.body.outcome, stage: askSign.body && askSign.body.grounded_on && askSign.body.grounded_on.leasing_opportunity_stage });
     });
@@ -453,6 +462,9 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       observe("access restored through the same door", { status: on.status });
     });
   } finally { await pool.end(); }
+  current = "completion";
+  if (SHAPE === "skyline") check(stopped === null && !!F.leaseId, "Skyline completes the chain with an executed lease and no configuration stop", { stopped_at: stopped, lease_created: !!F.leaseId });
+  else check(stopped?.section === "exact-home" && !!F.conversion && !F.leaseId, "the deliberately empty Greenery fixture reaches its exact-home boundary after the tour outcome", { stopped_at: stopped });
   const summary = { shape: SHAPE, stopped_at: stopped, passed: results.filter((r) => r.ok && r.kind === "check").length, failed, observations: results.filter((r) => r.kind === "observe").length };
   if (process.env.PROOF_OUTPUT_DIR) fs.writeFileSync(path.join(process.env.PROOF_OUTPUT_DIR, `staff_assisted_journey.${process.env.PROOF_EVIDENCE_LABEL || SHAPE}.json`), JSON.stringify({ server: process.env.PROOF_SERVER_SHA || null, summary, results }, null, 2));
   console.log(`\nstaff-assisted journey (${SHAPE}): ${summary.passed} passed, ${failed} failed, ${summary.observations} observations${stopped ? `; chain stopped at ${stopped.section}: ${stopped.reason}` : "; chain complete"}`);
