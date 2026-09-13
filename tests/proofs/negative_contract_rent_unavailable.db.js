@@ -15,10 +15,14 @@ const http = require("http");
 const express = require("express");
 const { Pool } = require("pg");
 const receipt = require("../_run_receipt.js");
+const boundary = require("../e2e/proof_boundary.js");
 
 const CONN = receipt.harnessConnectionString();
+boundary.manifest();
 const PORT = Number(process.env.PROOF_HTTP_PORT || 3353);
-const ORG = "Negative Contract Rent Reader Proof";
+const RUN_TAG = crypto.randomBytes(12).toString("hex");
+const ORG = `Negative Contract Rent Reader Proof ${RUN_TAG}`;
+const EMAIL = `negative-contract-rent-${RUN_TAG}@proof.test`;
 const digest = (value) => crypto.createHash("sha256").update(value).digest("hex");
 let passed = 0, failed = 0, ran = 0;
 
@@ -66,7 +70,7 @@ async function cleanup(pool) {
     await pool.query("delete from units where property_id=$1", [id]);
     await pool.query("delete from properties where id=$1", [id]);
   }
-  await pool.query("delete from users where email='negative-contract-rent@test'");
+  await pool.query("delete from users where email=$1", [EMAIL]);
   await pool.query("delete from organizations where name=$1", [ORG]);
 }
 
@@ -75,7 +79,7 @@ receipt.begin(__filename, { url: CONN, expected: 15 });
   const pool = new Pool({ connectionString: CONN });
   let server;
   try {
-    await cleanup(pool);
+    await boundary.assertDatabase();
     const today = new Date().toISOString().slice(0, 10);
     const org = (await pool.query("insert into organizations(name) values($1) returning id", [ORG])).rows[0].id;
     const property = (await pool.query(
@@ -102,7 +106,7 @@ receipt.begin(__filename, { url: CONN, expected: 15 });
       [property, space, today, "2099-12-31", batch]
     );
     const user = (await pool.query(
-      "insert into users(name,email,role,is_active,status,account_kind) values('Reader Operator','negative-contract-rent@test','property_manager',true,'active','human_staff') returning id"
+      "insert into users(name,email,role,is_active,status,account_kind) values('Reader Operator',$1,'property_manager',true,'active','human_staff') returning id", [EMAIL]
     )).rows[0].id;
     await pool.query(
       "insert into property_team_assignments(property_id,user_id,role_title,allowed_modules,active) values($1,$2,'Reader Operator','{leasing}'::text[],true)",
@@ -126,7 +130,7 @@ receipt.begin(__filename, { url: CONN, expected: 15 });
     const screenPosition = screen.units.flatMap((item) => item.positions).find((item) => String(item.space_id) === String(space));
 
     const retainedRaw = (await pool.query("select raw from import_source_rows where import_batch_id=$1 and row_index=1", [batch])).rows[0].raw;
-    check("the retained source artifact still carries its negative amount", Number(retainedRaw.actual_rent), -375);
+    check("the retained source row still carries its negative amount", Number(retainedRaw.actual_rent), -375);
     check("the retained source amount remains negative", row.current_rent, -375);
     check("physical inventory remains one unit and one position", [current.inventory, current.totals.leasable], [1, 1]);
     check("the lease still establishes contractual occupancy", row.tenancy_state, "contractually_occupied");
