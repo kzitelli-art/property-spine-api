@@ -84,7 +84,8 @@ const sourceRows = [{Unit:"101",Room:"Room1",Resident:"Synthetic Tenant (s123456
   const out = parent
     ? await activation.ingestRentRoll(pool,{...claims.args,rows:supplied})
     : await reviewedIngest(activation,pool,claims.args);
-  const proposals = (await pool.query("select * from proposed_records where activation_id=$1 order by normalized_json->>'section',natural_key",[claims.act.id])).rows;
+  const proposals = (await pool.query("select * from proposed_records where activation_id=$1 and target_type='lease' order by normalized_json->>'section',natural_key",[claims.act.id])).rows;
+  const identityDecisions = (await pool.query("select * from proposed_records where activation_id=$1 and target_type='inventory_identity' order by natural_key",[claims.act.id])).rows;
   if (parent) {
     check("parent evidence retains three but proposals drop assigned future",out.rows_read === 3 && proposals.length === 2);
     const current = proposals.find(p=>p.natural_key === "101|Room1");
@@ -93,6 +94,10 @@ const sourceRows = [{Unit:"101",Room:"Room1",Resident:"Synthetic Tenant (s123456
     check("parent actually creates a lease from missing actual rent",Number((await one("select rent from leases where property_id=$1",[claims.property.id])).rent) === 900);
   } else {
     check("every current future and unassigned claim retained",out.rows_read === 3 && proposals.length === 3);
+    check("reviewed home identity is accounted separately from source claims",
+      identityDecisions.length === 1 &&
+      proposals.filter(p=>p.inventory_identity_decision_id === identityDecisions[0].id).length === 2 &&
+      proposals.filter(p=>p.inventory_identity_decision_id == null).length === 1);
     check("two assigned claims retain the same spatial key",proposals.filter(p=>p.natural_key === "101|Room1").length === 2);
     check("source resident codes and future section survive",proposals.filter(p=>p.normalized_json.section === "future" && p.normalized_json.resident_id).length === 2);
     check("missing actual remains missing contract",proposals.every(p=>p.normalized_json.rent == null && p.normalized_json.actual_rent == null));
