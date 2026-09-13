@@ -469,18 +469,17 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       await q("update properties set operating_timezone=coalesce(operating_timezone,'America/New_York') where id=$1", [P]);
       observe("fixture: the property's operating timezone is set so tour times can be published (an owner input in production)");
       await q("insert into lead_sources (name,source_type) values ($1,'website') on conflict do nothing", ["Website"]);
-      //  Three genuinely separate beds, each established as the product does.
-      //  Bed B in 3B is the CI fixture's; the other two are added here, before
-      //  any action. Journey 2 never touches journey 1's bed.
-      F.unit3B = await one("select id, unit_number from units where property_id=$1 and unit_number='3B' limit 1", [P]);
-      F.bedB = await one("select id, space_label from spaces where unit_id=$1 and space_label='Bed B'", [F.unit3B.id]);
-      need(F.unit3B && F.bedB, "fixture unit 3B with established Bed B exists");
-      await q("update spaces set use_type='residential' where unit_id=$1", [F.unit3B.id]);
-      need((await one("select count(*)::int n from leases where space_id=$1 and lease_status not in ('cancelled','rescinded','void','superseded','terminated','expired')", [F.bedB.id])).n === 0, "Bed B carries no live lease at the start (fresh database; no reset performed)");
+      //  Four genuinely separate beds, each established as the product does,
+      //  all added here before any action. The CI fixture's Bed B in 3B is
+      //  deliberately NOT used: earlier suites in the same run lease it, and
+      //  this proof never cancels or resets a bed another proof leased.
+      const fixtureBedB = await one("select s.id from units u join spaces s on s.unit_id=u.id where u.property_id=$1 and u.unit_number='3B' and s.space_label='Bed B'", [P]);
+      need(!!fixtureBedB, "the CI fixture's established Bed B exists (left untouched by this proof)");
+      F.one = await establishBed(`C7-${nonce}`, "Bed A");
       F.two = await establishBed(`C8-${nonce}`, "Bed A");
       F.three = await establishBed(`C9-${nonce}`, "Bed A");
       F.four = await establishBed(`D1-${nonce}`, "Bed A");
-      observe("fixture: three further beds established under the fixture activation with confirmed-vacancy lineage", { units: [F.two.unit.unit_number, F.three.unit.unit_number, F.four.unit.unit_number] });
+      observe("fixture: four beds established under the fixture activation with confirmed-vacancy lineage", { units: [F.one.unit.unit_number, F.two.unit.unit_number, F.three.unit.unit_number, F.four.unit.unit_number] });
       F.other = await one("insert into properties (name,address,organization_id) values ($1,'2 Scope Wall',$2) returning id", [`TwoStep Other ${nonce}`, F.property.organization_id]);
       await q("insert into property_team_assignments (property_id,user_id,role_title,allowed_modules,primary_for_modules,active,can_manage_roles) values ($1,$2,'property_admin','{management,leasing}','{management}',true,true)", [F.other.id, F.kz.id]);
       F.kzTok = await session(F.kz.id, P);
@@ -513,7 +512,7 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
     });
     need(F.mike && F.kzTok && F.signerOnly && F.approverOnly, "actors ready");
 
-    const J1 = { label: "J1", index: 1, unit: F.unit3B, bed: F.bedB, rent: 1100, mode: "rollback" };
+    const J1 = { label: "J1", index: 1, unit: F.one.unit, bed: F.one.bed, rent: 1100, mode: "rollback" };
     const J2 = { label: "J2", index: 2, unit: F.two.unit, bed: F.two.bed, rent: 990, mode: "plain" };
     const J3 = { label: "J3", index: 3, unit: F.three.unit, bed: F.three.bed, rent: 1010, mode: "withdraw" };
     const J4 = { label: "J4", index: 4, unit: F.four.unit, bed: F.four.bed, rent: 1005, mode: "handoff" };
@@ -523,7 +522,7 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       need(J1.leaseId && J2.leaseId, "both journeys executed");
       const l1 = await one("select lease_status, space_id from leases where id=$1", [J1.leaseId]);
       const l2 = await one("select lease_status, space_id from leases where id=$1", [J2.leaseId]);
-      check(l1 && l1.lease_status === "pending" && l1.space_id === F.bedB.id && l2 && l2.lease_status === "pending" && l2.space_id === F.two.bed.id && l1.space_id !== l2.space_id, "two pending leases on two distinct beds; the first was never cancelled or reset");
+      check(l1 && l1.lease_status === "pending" && l1.space_id === F.one.bed.id && l2 && l2.lease_status === "pending" && l2.space_id === F.two.bed.id && l1.space_id !== l2.space_id, "two pending leases on two distinct beds; the first was never cancelled or reset");
       const total = await one("select count(*)::int n from leases where property_id=$1 and application_id in ($2,$3)", [P, J1.app, J2.app]);
       check(total.n === 2, "exactly two leases for the two applications");
     });

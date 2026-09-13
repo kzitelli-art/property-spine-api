@@ -41,9 +41,13 @@ EXECUTE   KZ approves the application AND signs for the company in one
   Everything before the packet — inquiry, ownership, email attestation, tour,
   authored offer with draft correction, manual-email preparation, attestation,
   acknowledged application — passes on the released source.
-- Successor on this branch, fresh owned database: **410 passed, 0 failed,
-  4 observations.** Four journeys on four separately established beds, one
-  database, first lease never cancelled, no shared bed reset.
+- Successor on this branch: **409 passed, 0 failed, 4 observations**, run in
+  CI order on one fresh owned database after the no-consent journey had
+  already leased the fixture's Bed B. Four journeys on four beds this proof
+  establishes itself (it never touches the shared Bed B), first lease never
+  cancelled, no shared bed reset. (An earlier local run before that change
+  read 410/0; CI run 486 caught the shared-bed dependency and it was
+  removed.)
 - Real Chromium against the actual staff shell (`apptwo` at this branch):
   **17/17** — a Mike-shaped session sees the server-authored Execute control
   and is refused through the real door with the server's own copy visible on
@@ -258,13 +262,13 @@ and the conflict is named, and resolving it is the released correction path.
 ## Evidence
 
 - `evidence.witness.json` — baseline `24007eb`, 134/32, scrubbed.
-- `evidence.successor.json` — this branch, 410/0, scrubbed.
+- `evidence.successor.json` — this branch, 409/0 in CI order, scrubbed.
 - `browser_execute.receipt.json` — real Chromium, 17/17, intercepted writes and
   the dialog text, scrubbed. Screenshots (`execute_mike_before`,
   `execute_mike_refused`, `execute_kz_before`, `execute_kz_after`) were
   inspected and are kept out of the repository (they carry runtime
   identifiers).
-- Owned databases: `spine_proof_*` created and dropped for runs 10–18 of this
+- Owned databases: `spine_proof_*` created and dropped for runs 10–19 of this
   session (`proof_boundary.js cleanup`); no shared database touched.
 
 ## Observations for QB (not changed)

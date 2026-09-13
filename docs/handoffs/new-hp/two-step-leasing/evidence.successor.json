@@ -1,7 +1,7 @@
 {
   "server": "<hash>-dirty",
   "summary": {
-    "passed": 410,
+    "passed": 409,
     "failed": 0,
     "observations": 4,
     "witness": false
@@ -30,28 +30,22 @@
     },
     {
       "section": "fixture · property, beds and the four actors",
-      "label": "fixture unit 3B with established Bed B exists",
+      "label": "the CI fixture's established Bed B exists (left untouched by this proof)",
       "ok": true,
       "kind": "check",
       "detail": null
     },
     {
       "section": "fixture · property, beds and the four actors",
-      "label": "Bed B carries no live lease at the start (fresh database; no reset performed)",
-      "ok": true,
-      "kind": "check",
-      "detail": null
-    },
-    {
-      "section": "fixture · property, beds and the four actors",
-      "label": "fixture: three further beds established under the fixture activation with confirmed-vacancy lineage",
+      "label": "fixture: four beds established under the fixture activation with confirmed-vacancy lineage",
       "ok": true,
       "kind": "observe",
       "detail": {
         "units": [
-          "C8-bf3302f8",
-          "C9-bf3302f8",
-          "D1-bf3302f8"
+          "C7-09eb35b6",
+          "C8-09eb35b6",
+          "C9-09eb35b6",
+          "D1-09eb35b6"
         ]
       }
     },
@@ -178,14 +172,14 @@
             "property_id": "<id-2>",
             "unit_id": "<id-3>",
             "leasing_agent_id": "<id-4>",
-            "starts_at": "2026-09-16T02:06:24.629Z",
-            "ends_at": "2026-09-16T03:06:24.629Z",
+            "starts_at": "2026-09-16T02:20:43.602Z",
+            "ends_at": "2026-09-16T03:20:43.602Z",
             "capacity": 1,
             "status": "open",
             "booked_tour_id": null,
             "created_by": "<id-4>",
-            "created_at": "2026-09-13T02:06:24.633Z",
-            "updated_at": "2026-09-13T02:06:24.633Z"
+            "created_at": "2026-09-13T02:20:43.605Z",
+            "updated_at": "2026-09-13T02:20:43.605Z"
           },
           "created": true
         }
@@ -202,7 +196,7 @@
           "receipt": "Tour booked. No confirmation message was sent.",
           "tour_id": "<id-5>",
           "slot_id": "<id-1>",
-          "scheduled_for": "2026-09-16T02:06:24.629Z",
+          "scheduled_for": "2026-09-16T02:20:43.602Z",
           "status": "scheduled",
           "idempotent": false
         }
@@ -247,7 +241,7 @@
     },
     {
       "section": "J1 · AUTHOR (decision 1)",
-      "label": "3B Bed B is offerable as an exact choice",
+      "label": "C7-09eb35b6 Bed A is offerable as an exact choice",
       "ok": true,
       "kind": "check",
       "detail": {
@@ -433,18 +427,18 @@
       "detail": {
         "status": 200,
         "body": {
-          "receipt": "Application submitted for TwoStep Prospect J1 bf3302f8. Now with leasing_manager for approval.",
+          "receipt": "Application submitted for TwoStep Prospect J1 09eb35b6. Now with leasing_manager for approval.",
           "application": {
             "id": "<id-15>",
             "property_id": "<id-2>",
             "unit_id": "<id-3>",
             "person_id": "<id-8>",
             "status": "submitted",
-            "applicant_name": "TwoStep Prospect J1 bf3302f8",
+            "applicant_name": "TwoStep Prospect J1 09eb35b6",
             "unit_label": null,
             "rent": "1100.00",
             "deposit": "1100.00",
-            "guarantor_name": "Guarantor J1 bf3302f8",
+            "guarantor_name": "Guarantor J1 09eb35b6",
             "captured": {
               "pets": "None",
               "email": "<email>",
@@ -473,7 +467,7 @@
               "income_frequency": "annual",
               "move_flexibility": "plus_minus_7",
               "guarantor_contact": {
-                "name": "Guarantor J1 bf3302f8",
+                "name": "Guarantor J1 09eb35b6",
                 "email": "<email>",
                 "phone": "<phone>"
               },
@@ -486,8 +480,8 @@
             "guarantor_signed_at": null,
             "countersigned_at": null,
             "activated_at": null,
-            "created_at": "2026-09-13T02:06:25.017Z",
-            "updated_at": "2026-09-13T02:06:25.017Z",
+            "created_at": "2026-09-13T02:20:44.012Z",
+            "updated_at": "2026-09-13T02:20:44.012Z",
             "conversion_id": "<id-6>",
             "source": "applicant",
             "decision_by_user_id": null,
@@ -504,7 +498,7 @@
             "proposed_terms_confirmation_id": null,
             "executed_lease_record_id": null,
             "leasing_lead_id": "<id-17>",
-            "submitted_at": "2026-09-13T02:06:25.017Z",
+            "submitted_at": "2026-09-13T02:20:44.012Z",
             "approved_at": null,
             "terminal_at": null,
             "terminal_code": null,
@@ -512,7 +506,7 @@
             "intended_move_in": "2026-10-13T00:00:00.000Z",
             "application_offer_id": "<id-10>",
             "application_terms_hash": "<hash>",
-            "application_terms_acknowledged_at": "2026-09-13T02:06:25.017Z"
+            "application_terms_acknowledged_at": "2026-09-13T02:20:44.012Z"
           },
           "approval_obligation_id": "<id-16>",
           "rung_closed": null
@@ -598,7 +592,7 @@
       "kind": "check",
       "detail": {
         "status": 200,
-        "receipt": "Lease package generated for TwoStep Prospect J1 bf3302f8. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms."
+        "receipt": "Lease package generated for TwoStep Prospect J1 09eb35b6. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms."
       }
     },
     {
@@ -694,12 +688,12 @@
           "signing_links": [
             {
               "signer_role": "tenant",
-              "display_name": "TwoStep Prospect J1 bf3302f8",
+              "display_name": "TwoStep Prospect J1 09eb35b6",
               "url": "http://127.0.0.1:3111/t/lease/<token>"
             },
             {
               "signer_role": "guarantor",
-              "display_name": "Guarantor J1 bf3302f8",
+              "display_name": "Guarantor J1 09eb35b6",
               "url": "http://127.0.0.1:3111/t/lease/<token>"
             }
           ],
@@ -797,7 +791,7 @@
       "detail": {
         "status": 409,
         "outstanding": [
-          "TwoStep Prospect J1 bf3302f8"
+          "TwoStep Prospect J1 09eb35b6"
         ]
       }
     },
@@ -823,8 +817,8 @@
             "proposed_terms_confirmation_id": "<id-19>",
             "application_offer_id": "<id-10>",
             "application_terms_hash": "<hash>",
-            "sent_at": "2026-09-13T02:06:25.291Z",
-            "tenant_token_expires_at": "2026-09-27T02:06:25.291Z",
+            "sent_at": "2026-09-13T02:20:44.298Z",
+            "tenant_token_expires_at": "2026-09-27T02:20:44.298Z",
             "is_placeholder": false,
             "is_demonstration_summary": false,
             "is_governing_lease_package": true,
@@ -842,14 +836,14 @@
               "fees": [],
               "unit_id": "<id-3>",
               "space_id": "<id-9>",
-              "unit_label": "3B",
-              "space_label": "Bed B",
-              "unit_number": "3B",
+              "unit_label": "C7-09eb35b6",
+              "space_label": "Bed A",
+              "unit_number": "C7-09eb35b6",
               "monthly_rent": "1100.00",
               "property_name": "Skyline E2E",
-              "guarantor_name": "Guarantor J1 bf3302f8",
+              "guarantor_name": "Guarantor J1 09eb35b6",
               "lease_end_date": "2027-10-12",
-              "resident_names": "TwoStep Prospect J1 bf3302f8",
+              "resident_names": "TwoStep Prospect J1 09eb35b6",
               "lease_start_date": "2026-10-13",
               "parking_interest": null,
               "property_address": "1400 Skyline Blvd, Austin, TX 78704",
@@ -862,10 +856,10 @@
             "rendered_snapshot": {
               "title": "Residential Lease Package",
               "summary": {
-                "unit": "3B",
+                "unit": "C7-09eb35b6",
                 "monthly_rent": "1100.00",
                 "lease_end_date": "2027-10-12",
-                "resident_names": "TwoStep Prospect J1 bf3302f8",
+                "resident_names": "TwoStep Prospect J1 09eb35b6",
                 "landlord_entity": "Skyline Owner LP (fixture)",
                 "lease_start_date": "2026-10-13",
                 "security_deposit": "1100.00",
@@ -877,9 +871,9 @@
                   "key": "parties",
                   "body": [
                     "Landlord: Skyline Owner LP (fixture).",
-                    "Resident(s): TwoStep Prospect J1 bf3302f8.",
-                    "Guarantor: Guarantor J1 bf3302f8.",
-                    "Home: 3B, Bed B, 1400 Skyline Blvd, Austin, TX 78704."
+                    "Resident(s): TwoStep Prospect J1 09eb35b6.",
+                    "Guarantor: Guarantor J1 09eb35b6.",
+                    "Home: C7-09eb35b6, Bed A, 1400 Skyline Blvd, Austin, TX 78704."
                   ],
                   "title": "Parties & Home"
                 },
@@ -942,15 +936,15 @@
                     "lease_start_date": "2026-10-13"
                   },
                   "parties": {
-                    "guarantor_name": "Guarantor J1 bf3302f8",
-                    "resident_names": "TwoStep Prospect J1 bf3302f8",
+                    "guarantor_name": "Guarantor J1 09eb35b6",
+                    "resident_names": "TwoStep Prospect J1 09eb35b6",
                     "landlord_entity": "Skyline Owner LP (fixture)"
                   },
                   "premises": {
                     "unit_id": "<id-3>",
                     "space_id": "<id-9>",
-                    "unit_label": "3B",
-                    "space_label": "Bed B",
+                    "unit_label": "C7-09eb35b6",
+                    "space_label": "Bed A",
                     "property_name": "Skyline E2E",
                     "property_address": "1400 Skyline Blvd, Austin, TX 78704"
                   },
@@ -994,7 +988,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:25.444Z",
+                "completed_at": "2026-09-13T02:20:44.476Z",
                 "display_order": 1
               },
               {
@@ -1006,7 +1000,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:25.454Z",
+                "completed_at": "2026-09-13T02:20:44.485Z",
                 "display_order": 2
               },
               {
@@ -1018,7 +1012,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:25.464Z",
+                "completed_at": "2026-09-13T02:20:44.494Z",
                 "display_order": 3
               },
               {
@@ -1030,7 +1024,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:25.474Z",
+                "completed_at": "2026-09-13T02:20:44.503Z",
                 "display_order": 4
               },
               {
@@ -1042,7 +1036,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:25.485Z",
+                "completed_at": "2026-09-13T02:20:44.515Z",
                 "display_order": 5
               },
               {
@@ -1054,7 +1048,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:25.496Z",
+                "completed_at": "2026-09-13T02:20:44.523Z",
                 "display_order": 6
               }
             ],
@@ -1090,27 +1084,27 @@
             "signing_parties": [
               {
                 "signer_role": "tenant",
-                "display_name": "TwoStep Prospect J1 bf3302f8",
-                "link_issued_at": "2026-09-13T02:06:25.291Z",
-                "token_expires_at": "2026-09-27T02:06:25.291Z",
-                "submitted_at": "2026-09-13T02:06:25.505Z",
-                "signature_completed_at": "2026-09-13T02:06:25.496Z",
+                "display_name": "TwoStep Prospect J1 09eb35b6",
+                "link_issued_at": "2026-09-13T02:20:44.298Z",
+                "token_expires_at": "2026-09-27T02:20:44.298Z",
+                "submitted_at": "2026-09-13T02:20:44.533Z",
+                "signature_completed_at": "2026-09-13T02:20:44.523Z",
                 "complete": true
               },
               {
                 "signer_role": "guarantor",
-                "display_name": "Guarantor J1 bf3302f8",
-                "link_issued_at": "2026-09-13T02:06:25.291Z",
-                "token_expires_at": "2026-09-27T02:06:25.291Z",
-                "submitted_at": "2026-09-13T02:06:25.422Z",
-                "signature_completed_at": "2026-09-13T02:06:25.414Z",
+                "display_name": "Guarantor J1 09eb35b6",
+                "link_issued_at": "2026-09-13T02:20:44.298Z",
+                "token_expires_at": "2026-09-27T02:20:44.298Z",
+                "submitted_at": "2026-09-13T02:20:44.449Z",
+                "signature_completed_at": "2026-09-13T02:20:44.437Z",
                 "complete": true
               }
             ],
             "current_signer": {
               "signer_role": "tenant",
-              "display_name": "TwoStep Prospect J1 bf3302f8",
-              "submitted_at": "2026-09-13T02:06:25.505Z"
+              "display_name": "TwoStep Prospect J1 09eb35b6",
+              "submitted_at": "2026-09-13T02:20:44.533Z"
             }
           }
         }
@@ -1381,14 +1375,14 @@
               "actor_user_id": "<id-29>",
               "authority_basis": "managed_role_override",
               "event_id": "<id-30>",
-              "at": "2026-09-13T02:06:25.780Z",
+              "at": "2026-09-13T02:20:44.876Z",
               "terms_review_obligation_id": "<id-31>"
             },
             {
               "decision": "company_signed",
               "actor_user_id": "<id-29>",
               "authority_basis": "configured_company_signer",
-              "at": "2026-09-13T02:06:25.780Z",
+              "at": "2026-09-13T02:20:44.876Z",
               "packet_id": "<id-18>"
             }
           ],
@@ -1410,7 +1404,7 @@
         "actor_user_id": "<id-29>",
         "authority_basis": "managed_role_override",
         "event_id": "<id-30>",
-        "at": "2026-09-13T02:06:25.780Z",
+        "at": "2026-09-13T02:20:44.876Z",
         "terms_review_obligation_id": "<id-31>"
       }
     },
@@ -1423,7 +1417,7 @@
         "decision": "company_signed",
         "actor_user_id": "<id-29>",
         "authority_basis": "configured_company_signer",
-        "at": "2026-09-13T02:06:25.780Z",
+        "at": "2026-09-13T02:20:44.876Z",
         "packet_id": "<id-18>"
       }
     },
@@ -1710,14 +1704,14 @@
             "property_id": "<id-2>",
             "unit_id": "<id-34>",
             "leasing_agent_id": "<id-4>",
-            "starts_at": "2026-09-17T02:06:26.088Z",
-            "ends_at": "2026-09-17T03:06:26.088Z",
+            "starts_at": "2026-09-17T02:20:45.220Z",
+            "ends_at": "2026-09-17T03:20:45.220Z",
             "capacity": 1,
             "status": "open",
             "booked_tour_id": null,
             "created_by": "<id-4>",
-            "created_at": "2026-09-13T02:06:26.090Z",
-            "updated_at": "2026-09-13T02:06:26.090Z"
+            "created_at": "2026-09-13T02:20:45.222Z",
+            "updated_at": "2026-09-13T02:20:45.222Z"
           },
           "created": true
         }
@@ -1734,7 +1728,7 @@
           "receipt": "Tour booked. No confirmation message was sent.",
           "tour_id": "<id-35>",
           "slot_id": "<id-33>",
-          "scheduled_for": "2026-09-17T02:06:26.088Z",
+          "scheduled_for": "2026-09-17T02:20:45.220Z",
           "status": "scheduled",
           "idempotent": false
         }
@@ -1779,7 +1773,7 @@
     },
     {
       "section": "J2 · AUTHOR (decision 1)",
-      "label": "C8-bf3302f8 Bed A is offerable as an exact choice",
+      "label": "C8-09eb35b6 Bed A is offerable as an exact choice",
       "ok": true,
       "kind": "check",
       "detail": {
@@ -1981,18 +1975,18 @@
       "detail": {
         "status": 200,
         "body": {
-          "receipt": "Application submitted for TwoStep Prospect J2 bf3302f8. Now with leasing_manager for approval.",
+          "receipt": "Application submitted for TwoStep Prospect J2 09eb35b6. Now with leasing_manager for approval.",
           "application": {
             "id": "<id-45>",
             "property_id": "<id-2>",
             "unit_id": "<id-34>",
             "person_id": "<id-38>",
             "status": "submitted",
-            "applicant_name": "TwoStep Prospect J2 bf3302f8",
+            "applicant_name": "TwoStep Prospect J2 09eb35b6",
             "unit_label": null,
             "rent": "990.00",
             "deposit": "990.00",
-            "guarantor_name": "Guarantor J2 bf3302f8",
+            "guarantor_name": "Guarantor J2 09eb35b6",
             "captured": {
               "pets": "None",
               "email": "<email>",
@@ -2021,7 +2015,7 @@
               "income_frequency": "annual",
               "move_flexibility": "plus_minus_7",
               "guarantor_contact": {
-                "name": "Guarantor J2 bf3302f8",
+                "name": "Guarantor J2 09eb35b6",
                 "email": "<email>",
                 "phone": "<phone>"
               },
@@ -2034,8 +2028,8 @@
             "guarantor_signed_at": null,
             "countersigned_at": null,
             "activated_at": null,
-            "created_at": "2026-09-13T02:06:26.379Z",
-            "updated_at": "2026-09-13T02:06:26.379Z",
+            "created_at": "2026-09-13T02:20:45.503Z",
+            "updated_at": "2026-09-13T02:20:45.503Z",
             "conversion_id": "<id-36>",
             "source": "applicant",
             "decision_by_user_id": null,
@@ -2052,7 +2046,7 @@
             "proposed_terms_confirmation_id": null,
             "executed_lease_record_id": null,
             "leasing_lead_id": "<id-47>",
-            "submitted_at": "2026-09-13T02:06:26.379Z",
+            "submitted_at": "2026-09-13T02:20:45.503Z",
             "approved_at": null,
             "terminal_at": null,
             "terminal_code": null,
@@ -2060,7 +2054,7 @@
             "intended_move_in": "2026-10-13T00:00:00.000Z",
             "application_offer_id": "<id-40>",
             "application_terms_hash": "<hash>",
-            "application_terms_acknowledged_at": "2026-09-13T02:06:26.379Z"
+            "application_terms_acknowledged_at": "2026-09-13T02:20:45.503Z"
           },
           "approval_obligation_id": "<id-46>",
           "rung_closed": null
@@ -2155,7 +2149,7 @@
       "kind": "check",
       "detail": {
         "status": 200,
-        "receipt": "Lease package generated for TwoStep Prospect J2 bf3302f8. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms."
+        "receipt": "Lease package generated for TwoStep Prospect J2 09eb35b6. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms."
       }
     },
     {
@@ -2251,12 +2245,12 @@
           "signing_links": [
             {
               "signer_role": "tenant",
-              "display_name": "TwoStep Prospect J2 bf3302f8",
+              "display_name": "TwoStep Prospect J2 09eb35b6",
               "url": "http://127.0.0.1:3111/t/lease/<token>"
             },
             {
               "signer_role": "guarantor",
-              "display_name": "Guarantor J2 bf3302f8",
+              "display_name": "Guarantor J2 09eb35b6",
               "url": "http://127.0.0.1:3111/t/lease/<token>"
             }
           ],
@@ -2363,7 +2357,7 @@
       "detail": {
         "status": 409,
         "outstanding": [
-          "TwoStep Prospect J2 bf3302f8"
+          "TwoStep Prospect J2 09eb35b6"
         ]
       }
     },
@@ -2389,8 +2383,8 @@
             "proposed_terms_confirmation_id": "<id-49>",
             "application_offer_id": "<id-40>",
             "application_terms_hash": "<hash>",
-            "sent_at": "2026-09-13T02:06:26.573Z",
-            "tenant_token_expires_at": "2026-09-27T02:06:26.573Z",
+            "sent_at": "2026-09-13T02:20:45.787Z",
+            "tenant_token_expires_at": "2026-09-27T02:20:45.787Z",
             "is_placeholder": false,
             "is_demonstration_summary": false,
             "is_governing_lease_package": true,
@@ -2408,14 +2402,14 @@
               "fees": [],
               "unit_id": "<id-34>",
               "space_id": "<id-39>",
-              "unit_label": "C8-bf3302f8",
+              "unit_label": "C8-09eb35b6",
               "space_label": "Bed A",
-              "unit_number": "C8-bf3302f8",
+              "unit_number": "C8-09eb35b6",
               "monthly_rent": "990.00",
               "property_name": "Skyline E2E",
-              "guarantor_name": "Guarantor J2 bf3302f8",
+              "guarantor_name": "Guarantor J2 09eb35b6",
               "lease_end_date": "2027-10-12",
-              "resident_names": "TwoStep Prospect J2 bf3302f8",
+              "resident_names": "TwoStep Prospect J2 09eb35b6",
               "lease_start_date": "2026-10-13",
               "parking_interest": null,
               "property_address": "1400 Skyline Blvd, Austin, TX 78704",
@@ -2428,10 +2422,10 @@
             "rendered_snapshot": {
               "title": "Residential Lease Package",
               "summary": {
-                "unit": "C8-bf3302f8",
+                "unit": "C8-09eb35b6",
                 "monthly_rent": "990.00",
                 "lease_end_date": "2027-10-12",
-                "resident_names": "TwoStep Prospect J2 bf3302f8",
+                "resident_names": "TwoStep Prospect J2 09eb35b6",
                 "landlord_entity": "Skyline Owner LP (fixture)",
                 "lease_start_date": "2026-10-13",
                 "security_deposit": "990.00",
@@ -2443,9 +2437,9 @@
                   "key": "parties",
                   "body": [
                     "Landlord: Skyline Owner LP (fixture).",
-                    "Resident(s): TwoStep Prospect J2 bf3302f8.",
-                    "Guarantor: Guarantor J2 bf3302f8.",
-                    "Home: C8-bf3302f8, Bed A, 1400 Skyline Blvd, Austin, TX 78704."
+                    "Resident(s): TwoStep Prospect J2 09eb35b6.",
+                    "Guarantor: Guarantor J2 09eb35b6.",
+                    "Home: C8-09eb35b6, Bed A, 1400 Skyline Blvd, Austin, TX 78704."
                   ],
                   "title": "Parties & Home"
                 },
@@ -2508,14 +2502,14 @@
                     "lease_start_date": "2026-10-13"
                   },
                   "parties": {
-                    "guarantor_name": "Guarantor J2 bf3302f8",
-                    "resident_names": "TwoStep Prospect J2 bf3302f8",
+                    "guarantor_name": "Guarantor J2 09eb35b6",
+                    "resident_names": "TwoStep Prospect J2 09eb35b6",
                     "landlord_entity": "Skyline Owner LP (fixture)"
                   },
                   "premises": {
                     "unit_id": "<id-34>",
                     "space_id": "<id-39>",
-                    "unit_label": "C8-bf3302f8",
+                    "unit_label": "C8-09eb35b6",
                     "space_label": "Bed A",
                     "property_name": "Skyline E2E",
                     "property_address": "1400 Skyline Blvd, Austin, TX 78704"
@@ -2560,7 +2554,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:26.711Z",
+                "completed_at": "2026-09-13T02:20:45.934Z",
                 "display_order": 1
               },
               {
@@ -2572,7 +2566,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:26.720Z",
+                "completed_at": "2026-09-13T02:20:45.940Z",
                 "display_order": 2
               },
               {
@@ -2584,7 +2578,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:26.726Z",
+                "completed_at": "2026-09-13T02:20:45.946Z",
                 "display_order": 3
               },
               {
@@ -2596,7 +2590,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:26.733Z",
+                "completed_at": "2026-09-13T02:20:45.954Z",
                 "display_order": 4
               },
               {
@@ -2608,7 +2602,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:26.741Z",
+                "completed_at": "2026-09-13T02:20:45.961Z",
                 "display_order": 5
               },
               {
@@ -2620,7 +2614,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:26.749Z",
+                "completed_at": "2026-09-13T02:20:45.969Z",
                 "display_order": 6
               }
             ],
@@ -2656,27 +2650,27 @@
             "signing_parties": [
               {
                 "signer_role": "tenant",
-                "display_name": "TwoStep Prospect J2 bf3302f8",
-                "link_issued_at": "2026-09-13T02:06:26.573Z",
-                "token_expires_at": "2026-09-27T02:06:26.573Z",
-                "submitted_at": "2026-09-13T02:06:26.757Z",
-                "signature_completed_at": "2026-09-13T02:06:26.749Z",
+                "display_name": "TwoStep Prospect J2 09eb35b6",
+                "link_issued_at": "2026-09-13T02:20:45.787Z",
+                "token_expires_at": "2026-09-27T02:20:45.787Z",
+                "submitted_at": "2026-09-13T02:20:45.975Z",
+                "signature_completed_at": "2026-09-13T02:20:45.969Z",
                 "complete": true
               },
               {
                 "signer_role": "guarantor",
-                "display_name": "Guarantor J2 bf3302f8",
-                "link_issued_at": "2026-09-13T02:06:26.573Z",
-                "token_expires_at": "2026-09-27T02:06:26.573Z",
-                "submitted_at": "2026-09-13T02:06:26.691Z",
-                "signature_completed_at": "2026-09-13T02:06:26.683Z",
+                "display_name": "Guarantor J2 09eb35b6",
+                "link_issued_at": "2026-09-13T02:20:45.787Z",
+                "token_expires_at": "2026-09-27T02:20:45.787Z",
+                "submitted_at": "2026-09-13T02:20:45.917Z",
+                "signature_completed_at": "2026-09-13T02:20:45.907Z",
                 "complete": true
               }
             ],
             "current_signer": {
               "signer_role": "tenant",
-              "display_name": "TwoStep Prospect J2 bf3302f8",
-              "submitted_at": "2026-09-13T02:06:26.757Z"
+              "display_name": "TwoStep Prospect J2 09eb35b6",
+              "submitted_at": "2026-09-13T02:20:45.975Z"
             }
           }
         }
@@ -2929,14 +2923,14 @@
               "actor_user_id": "<id-29>",
               "authority_basis": "managed_role_override",
               "event_id": "<id-59>",
-              "at": "2026-09-13T02:06:26.896Z",
+              "at": "2026-09-13T02:20:46.117Z",
               "terms_review_obligation_id": "<id-60>"
             },
             {
               "decision": "company_signed",
               "actor_user_id": "<id-29>",
               "authority_basis": "configured_company_signer",
-              "at": "2026-09-13T02:06:26.896Z",
+              "at": "2026-09-13T02:20:46.117Z",
               "packet_id": "<id-48>"
             }
           ],
@@ -2958,7 +2952,7 @@
         "actor_user_id": "<id-29>",
         "authority_basis": "managed_role_override",
         "event_id": "<id-59>",
-        "at": "2026-09-13T02:06:26.896Z",
+        "at": "2026-09-13T02:20:46.117Z",
         "terms_review_obligation_id": "<id-60>"
       }
     },
@@ -2971,7 +2965,7 @@
         "decision": "company_signed",
         "actor_user_id": "<id-29>",
         "authority_basis": "configured_company_signer",
-        "at": "2026-09-13T02:06:26.896Z",
+        "at": "2026-09-13T02:20:46.117Z",
         "packet_id": "<id-48>"
       }
     },
@@ -3288,14 +3282,14 @@
             "property_id": "<id-2>",
             "unit_id": "<id-63>",
             "leasing_agent_id": "<id-4>",
-            "starts_at": "2026-09-18T02:06:27.170Z",
-            "ends_at": "2026-09-18T03:06:27.170Z",
+            "starts_at": "2026-09-18T02:20:46.390Z",
+            "ends_at": "2026-09-18T03:20:46.390Z",
             "capacity": 1,
             "status": "open",
             "booked_tour_id": null,
             "created_by": "<id-4>",
-            "created_at": "2026-09-13T02:06:27.172Z",
-            "updated_at": "2026-09-13T02:06:27.172Z"
+            "created_at": "2026-09-13T02:20:46.393Z",
+            "updated_at": "2026-09-13T02:20:46.393Z"
           },
           "created": true
         }
@@ -3312,7 +3306,7 @@
           "receipt": "Tour booked. No confirmation message was sent.",
           "tour_id": "<id-64>",
           "slot_id": "<id-62>",
-          "scheduled_for": "2026-09-18T02:06:27.170Z",
+          "scheduled_for": "2026-09-18T02:20:46.390Z",
           "status": "scheduled",
           "idempotent": false
         }
@@ -3357,7 +3351,7 @@
     },
     {
       "section": "J3 · AUTHOR (decision 1)",
-      "label": "C9-bf3302f8 Bed A is offerable as an exact choice",
+      "label": "C9-09eb35b6 Bed A is offerable as an exact choice",
       "ok": true,
       "kind": "check",
       "detail": {
@@ -3575,18 +3569,18 @@
       "detail": {
         "status": 200,
         "body": {
-          "receipt": "Application submitted for TwoStep Prospect J3 bf3302f8. Now with leasing_manager for approval.",
+          "receipt": "Application submitted for TwoStep Prospect J3 09eb35b6. Now with leasing_manager for approval.",
           "application": {
             "id": "<id-74>",
             "property_id": "<id-2>",
             "unit_id": "<id-63>",
             "person_id": "<id-67>",
             "status": "submitted",
-            "applicant_name": "TwoStep Prospect J3 bf3302f8",
+            "applicant_name": "TwoStep Prospect J3 09eb35b6",
             "unit_label": null,
             "rent": "1010.00",
             "deposit": "1010.00",
-            "guarantor_name": "Guarantor J3 bf3302f8",
+            "guarantor_name": "Guarantor J3 09eb35b6",
             "captured": {
               "pets": "None",
               "email": "<email>",
@@ -3615,7 +3609,7 @@
               "income_frequency": "annual",
               "move_flexibility": "plus_minus_7",
               "guarantor_contact": {
-                "name": "Guarantor J3 bf3302f8",
+                "name": "Guarantor J3 09eb35b6",
                 "email": "<email>",
                 "phone": "<phone>"
               },
@@ -3628,8 +3622,8 @@
             "guarantor_signed_at": null,
             "countersigned_at": null,
             "activated_at": null,
-            "created_at": "2026-09-13T02:06:27.433Z",
-            "updated_at": "2026-09-13T02:06:27.433Z",
+            "created_at": "2026-09-13T02:20:46.647Z",
+            "updated_at": "2026-09-13T02:20:46.647Z",
             "conversion_id": "<id-65>",
             "source": "applicant",
             "decision_by_user_id": null,
@@ -3646,7 +3640,7 @@
             "proposed_terms_confirmation_id": null,
             "executed_lease_record_id": null,
             "leasing_lead_id": "<id-76>",
-            "submitted_at": "2026-09-13T02:06:27.433Z",
+            "submitted_at": "2026-09-13T02:20:46.647Z",
             "approved_at": null,
             "terminal_at": null,
             "terminal_code": null,
@@ -3654,7 +3648,7 @@
             "intended_move_in": "2026-10-13T00:00:00.000Z",
             "application_offer_id": "<id-69>",
             "application_terms_hash": "<hash>",
-            "application_terms_acknowledged_at": "2026-09-13T02:06:27.433Z"
+            "application_terms_acknowledged_at": "2026-09-13T02:20:46.647Z"
           },
           "approval_obligation_id": "<id-75>",
           "rung_closed": null
@@ -3758,7 +3752,7 @@
       "kind": "check",
       "detail": {
         "status": 200,
-        "receipt": "Lease package generated for TwoStep Prospect J3 bf3302f8. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms."
+        "receipt": "Lease package generated for TwoStep Prospect J3 09eb35b6. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms."
       }
     },
     {
@@ -3854,12 +3848,12 @@
           "signing_links": [
             {
               "signer_role": "tenant",
-              "display_name": "TwoStep Prospect J3 bf3302f8",
+              "display_name": "TwoStep Prospect J3 09eb35b6",
               "url": "http://127.0.0.1:3111/t/lease/<token>"
             },
             {
               "signer_role": "guarantor",
-              "display_name": "Guarantor J3 bf3302f8",
+              "display_name": "Guarantor J3 09eb35b6",
               "url": "http://127.0.0.1:3111/t/lease/<token>"
             }
           ],
@@ -3975,7 +3969,7 @@
       "detail": {
         "status": 409,
         "outstanding": [
-          "TwoStep Prospect J3 bf3302f8"
+          "TwoStep Prospect J3 09eb35b6"
         ]
       }
     },
@@ -4001,8 +3995,8 @@
             "proposed_terms_confirmation_id": "<id-78>",
             "application_offer_id": "<id-69>",
             "application_terms_hash": "<hash>",
-            "sent_at": "2026-09-13T02:06:27.613Z",
-            "tenant_token_expires_at": "2026-09-27T02:06:27.613Z",
+            "sent_at": "2026-09-13T02:20:46.852Z",
+            "tenant_token_expires_at": "2026-09-27T02:20:46.852Z",
             "is_placeholder": false,
             "is_demonstration_summary": false,
             "is_governing_lease_package": true,
@@ -4020,14 +4014,14 @@
               "fees": [],
               "unit_id": "<id-63>",
               "space_id": "<id-68>",
-              "unit_label": "C9-bf3302f8",
+              "unit_label": "C9-09eb35b6",
               "space_label": "Bed A",
-              "unit_number": "C9-bf3302f8",
+              "unit_number": "C9-09eb35b6",
               "monthly_rent": "1010.00",
               "property_name": "Skyline E2E",
-              "guarantor_name": "Guarantor J3 bf3302f8",
+              "guarantor_name": "Guarantor J3 09eb35b6",
               "lease_end_date": "2027-10-12",
-              "resident_names": "TwoStep Prospect J3 bf3302f8",
+              "resident_names": "TwoStep Prospect J3 09eb35b6",
               "lease_start_date": "2026-10-13",
               "parking_interest": null,
               "property_address": "1400 Skyline Blvd, Austin, TX 78704",
@@ -4040,10 +4034,10 @@
             "rendered_snapshot": {
               "title": "Residential Lease Package",
               "summary": {
-                "unit": "C9-bf3302f8",
+                "unit": "C9-09eb35b6",
                 "monthly_rent": "1010.00",
                 "lease_end_date": "2027-10-12",
-                "resident_names": "TwoStep Prospect J3 bf3302f8",
+                "resident_names": "TwoStep Prospect J3 09eb35b6",
                 "landlord_entity": "Skyline Owner LP (fixture)",
                 "lease_start_date": "2026-10-13",
                 "security_deposit": "1010.00",
@@ -4055,9 +4049,9 @@
                   "key": "parties",
                   "body": [
                     "Landlord: Skyline Owner LP (fixture).",
-                    "Resident(s): TwoStep Prospect J3 bf3302f8.",
-                    "Guarantor: Guarantor J3 bf3302f8.",
-                    "Home: C9-bf3302f8, Bed A, 1400 Skyline Blvd, Austin, TX 78704."
+                    "Resident(s): TwoStep Prospect J3 09eb35b6.",
+                    "Guarantor: Guarantor J3 09eb35b6.",
+                    "Home: C9-09eb35b6, Bed A, 1400 Skyline Blvd, Austin, TX 78704."
                   ],
                   "title": "Parties & Home"
                 },
@@ -4120,14 +4114,14 @@
                     "lease_start_date": "2026-10-13"
                   },
                   "parties": {
-                    "guarantor_name": "Guarantor J3 bf3302f8",
-                    "resident_names": "TwoStep Prospect J3 bf3302f8",
+                    "guarantor_name": "Guarantor J3 09eb35b6",
+                    "resident_names": "TwoStep Prospect J3 09eb35b6",
                     "landlord_entity": "Skyline Owner LP (fixture)"
                   },
                   "premises": {
                     "unit_id": "<id-63>",
                     "space_id": "<id-68>",
-                    "unit_label": "C9-bf3302f8",
+                    "unit_label": "C9-09eb35b6",
                     "space_label": "Bed A",
                     "property_name": "Skyline E2E",
                     "property_address": "1400 Skyline Blvd, Austin, TX 78704"
@@ -4172,7 +4166,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:27.731Z",
+                "completed_at": "2026-09-13T02:20:46.978Z",
                 "display_order": 1
               },
               {
@@ -4184,7 +4178,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:27.738Z",
+                "completed_at": "2026-09-13T02:20:46.984Z",
                 "display_order": 2
               },
               {
@@ -4196,7 +4190,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:27.744Z",
+                "completed_at": "2026-09-13T02:20:46.990Z",
                 "display_order": 3
               },
               {
@@ -4208,7 +4202,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:27.749Z",
+                "completed_at": "2026-09-13T02:20:46.996Z",
                 "display_order": 4
               },
               {
@@ -4220,7 +4214,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:27.755Z",
+                "completed_at": "2026-09-13T02:20:47.002Z",
                 "display_order": 5
               },
               {
@@ -4232,7 +4226,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:27.760Z",
+                "completed_at": "2026-09-13T02:20:47.009Z",
                 "display_order": 6
               }
             ],
@@ -4268,27 +4262,27 @@
             "signing_parties": [
               {
                 "signer_role": "tenant",
-                "display_name": "TwoStep Prospect J3 bf3302f8",
-                "link_issued_at": "2026-09-13T02:06:27.613Z",
-                "token_expires_at": "2026-09-27T02:06:27.613Z",
-                "submitted_at": "2026-09-13T02:06:27.766Z",
-                "signature_completed_at": "2026-09-13T02:06:27.760Z",
+                "display_name": "TwoStep Prospect J3 09eb35b6",
+                "link_issued_at": "2026-09-13T02:20:46.852Z",
+                "token_expires_at": "2026-09-27T02:20:46.852Z",
+                "submitted_at": "2026-09-13T02:20:47.016Z",
+                "signature_completed_at": "2026-09-13T02:20:47.009Z",
                 "complete": true
               },
               {
                 "signer_role": "guarantor",
-                "display_name": "Guarantor J3 bf3302f8",
-                "link_issued_at": "2026-09-13T02:06:27.613Z",
-                "token_expires_at": "2026-09-27T02:06:27.613Z",
-                "submitted_at": "2026-09-13T02:06:27.715Z",
-                "signature_completed_at": "2026-09-13T02:06:27.708Z",
+                "display_name": "Guarantor J3 09eb35b6",
+                "link_issued_at": "2026-09-13T02:20:46.852Z",
+                "token_expires_at": "2026-09-27T02:20:46.852Z",
+                "submitted_at": "2026-09-13T02:20:46.963Z",
+                "signature_completed_at": "2026-09-13T02:20:46.957Z",
                 "complete": true
               }
             ],
             "current_signer": {
               "signer_role": "tenant",
-              "display_name": "TwoStep Prospect J3 bf3302f8",
-              "submitted_at": "2026-09-13T02:06:27.766Z"
+              "display_name": "TwoStep Prospect J3 09eb35b6",
+              "submitted_at": "2026-09-13T02:20:47.016Z"
             }
           }
         }
@@ -4524,11 +4518,11 @@
             "unit_id": "<id-63>",
             "person_id": "<id-67>",
             "status": "withdrawn",
-            "applicant_name": "TwoStep Prospect J3 bf3302f8",
+            "applicant_name": "TwoStep Prospect J3 09eb35b6",
             "unit_label": null,
             "rent": "1010.00",
             "deposit": "1010.00",
-            "guarantor_name": "Guarantor J3 bf3302f8",
+            "guarantor_name": "Guarantor J3 09eb35b6",
             "captured": {
               "pets": "None",
               "email": "<email>",
@@ -4557,7 +4551,7 @@
               "income_frequency": "annual",
               "move_flexibility": "plus_minus_7",
               "guarantor_contact": {
-                "name": "Guarantor J3 bf3302f8",
+                "name": "Guarantor J3 09eb35b6",
                 "email": "<email>",
                 "phone": "<phone>"
               },
@@ -4570,33 +4564,33 @@
             "guarantor_signed_at": null,
             "countersigned_at": null,
             "activated_at": null,
-            "created_at": "2026-09-13T02:06:27.433Z",
-            "updated_at": "2026-09-13T02:06:27.884Z",
+            "created_at": "2026-09-13T02:20:46.647Z",
+            "updated_at": "2026-09-13T02:20:47.136Z",
             "conversion_id": "<id-65>",
             "source": "applicant",
             "decision_by_user_id": "<id-4>",
             "decision_reason": "applicant withdrew by phone",
-            "decided_at": "2026-09-13T02:06:27.884Z",
+            "decided_at": "2026-09-13T02:20:47.136Z",
             "approval_obligation_id": "<id-75>",
             "lease_start_date": "2026-10-13T00:00:00.000Z",
             "lease_end_date": "2027-10-12T00:00:00.000Z",
             "term_source": "authored_offer_acknowledged",
-            "terms_completed_at": "2026-09-13T02:06:27.557Z",
+            "terms_completed_at": "2026-09-13T02:20:46.800Z",
             "terms_completed_by": "<id-29>",
             "concession_status": "none",
             "terms_review_obligation_id": null,
             "proposed_terms_confirmation_id": "<id-78>",
             "executed_lease_record_id": null,
             "leasing_lead_id": "<id-76>",
-            "submitted_at": "2026-09-13T02:06:27.433Z",
+            "submitted_at": "2026-09-13T02:20:46.647Z",
             "approved_at": null,
-            "terminal_at": "2026-09-13T02:06:27.884Z",
+            "terminal_at": "2026-09-13T02:20:47.136Z",
             "terminal_code": "withdrawn",
             "space_id": "<id-68>",
             "intended_move_in": "2026-10-13T00:00:00.000Z",
             "application_offer_id": "<id-69>",
             "application_terms_hash": "<hash>",
-            "application_terms_acknowledged_at": "2026-09-13T02:06:27.433Z"
+            "application_terms_acknowledged_at": "2026-09-13T02:20:46.647Z"
           }
         }
       }
@@ -4762,14 +4756,14 @@
             "property_id": "<id-2>",
             "unit_id": "<id-89>",
             "leasing_agent_id": "<id-4>",
-            "starts_at": "2026-09-19T02:06:28.016Z",
-            "ends_at": "2026-09-19T03:06:28.016Z",
+            "starts_at": "2026-09-19T02:20:47.280Z",
+            "ends_at": "2026-09-19T03:20:47.280Z",
             "capacity": 1,
             "status": "open",
             "booked_tour_id": null,
             "created_by": "<id-4>",
-            "created_at": "2026-09-13T02:06:28.018Z",
-            "updated_at": "2026-09-13T02:06:28.018Z"
+            "created_at": "2026-09-13T02:20:47.282Z",
+            "updated_at": "2026-09-13T02:20:47.282Z"
           },
           "created": true
         }
@@ -4786,7 +4780,7 @@
           "receipt": "Tour booked. No confirmation message was sent.",
           "tour_id": "<id-90>",
           "slot_id": "<id-88>",
-          "scheduled_for": "2026-09-19T02:06:28.016Z",
+          "scheduled_for": "2026-09-19T02:20:47.280Z",
           "status": "scheduled",
           "idempotent": false
         }
@@ -4831,7 +4825,7 @@
     },
     {
       "section": "J4 · AUTHOR (decision 1)",
-      "label": "D1-bf3302f8 Bed A is offerable as an exact choice",
+      "label": "D1-09eb35b6 Bed A is offerable as an exact choice",
       "ok": true,
       "kind": "check",
       "detail": {
@@ -5049,18 +5043,18 @@
       "detail": {
         "status": 200,
         "body": {
-          "receipt": "Application submitted for TwoStep Prospect J4 bf3302f8. Now with leasing_manager for approval.",
+          "receipt": "Application submitted for TwoStep Prospect J4 09eb35b6. Now with leasing_manager for approval.",
           "application": {
             "id": "<id-100>",
             "property_id": "<id-2>",
             "unit_id": "<id-89>",
             "person_id": "<id-93>",
             "status": "submitted",
-            "applicant_name": "TwoStep Prospect J4 bf3302f8",
+            "applicant_name": "TwoStep Prospect J4 09eb35b6",
             "unit_label": null,
             "rent": "1005.00",
             "deposit": "1005.00",
-            "guarantor_name": "Guarantor J4 bf3302f8",
+            "guarantor_name": "Guarantor J4 09eb35b6",
             "captured": {
               "pets": "None",
               "email": "<email>",
@@ -5089,7 +5083,7 @@
               "income_frequency": "annual",
               "move_flexibility": "plus_minus_7",
               "guarantor_contact": {
-                "name": "Guarantor J4 bf3302f8",
+                "name": "Guarantor J4 09eb35b6",
                 "email": "<email>",
                 "phone": "<phone>"
               },
@@ -5102,8 +5096,8 @@
             "guarantor_signed_at": null,
             "countersigned_at": null,
             "activated_at": null,
-            "created_at": "2026-09-13T02:06:28.271Z",
-            "updated_at": "2026-09-13T02:06:28.271Z",
+            "created_at": "2026-09-13T02:20:47.520Z",
+            "updated_at": "2026-09-13T02:20:47.520Z",
             "conversion_id": "<id-91>",
             "source": "applicant",
             "decision_by_user_id": null,
@@ -5120,7 +5114,7 @@
             "proposed_terms_confirmation_id": null,
             "executed_lease_record_id": null,
             "leasing_lead_id": "<id-102>",
-            "submitted_at": "2026-09-13T02:06:28.271Z",
+            "submitted_at": "2026-09-13T02:20:47.520Z",
             "approved_at": null,
             "terminal_at": null,
             "terminal_code": null,
@@ -5128,7 +5122,7 @@
             "intended_move_in": "2026-10-13T00:00:00.000Z",
             "application_offer_id": "<id-95>",
             "application_terms_hash": "<hash>",
-            "application_terms_acknowledged_at": "2026-09-13T02:06:28.271Z"
+            "application_terms_acknowledged_at": "2026-09-13T02:20:47.520Z"
           },
           "approval_obligation_id": "<id-101>",
           "rung_closed": null
@@ -5232,7 +5226,7 @@
       "kind": "check",
       "detail": {
         "status": 200,
-        "receipt": "Lease package generated for TwoStep Prospect J4 bf3302f8. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms."
+        "receipt": "Lease package generated for TwoStep Prospect J4 09eb35b6. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms."
       }
     },
     {
@@ -5328,12 +5322,12 @@
           "signing_links": [
             {
               "signer_role": "tenant",
-              "display_name": "TwoStep Prospect J4 bf3302f8",
+              "display_name": "TwoStep Prospect J4 09eb35b6",
               "url": "http://127.0.0.1:3111/t/lease/<token>"
             },
             {
               "signer_role": "guarantor",
-              "display_name": "Guarantor J4 bf3302f8",
+              "display_name": "Guarantor J4 09eb35b6",
               "url": "http://127.0.0.1:3111/t/lease/<token>"
             }
           ],
@@ -5449,7 +5443,7 @@
       "detail": {
         "status": 409,
         "outstanding": [
-          "TwoStep Prospect J4 bf3302f8"
+          "TwoStep Prospect J4 09eb35b6"
         ]
       }
     },
@@ -5475,8 +5469,8 @@
             "proposed_terms_confirmation_id": "<id-104>",
             "application_offer_id": "<id-95>",
             "application_terms_hash": "<hash>",
-            "sent_at": "2026-09-13T02:06:28.469Z",
-            "tenant_token_expires_at": "2026-09-27T02:06:28.469Z",
+            "sent_at": "2026-09-13T02:20:47.742Z",
+            "tenant_token_expires_at": "2026-09-27T02:20:47.742Z",
             "is_placeholder": false,
             "is_demonstration_summary": false,
             "is_governing_lease_package": true,
@@ -5494,14 +5488,14 @@
               "fees": [],
               "unit_id": "<id-89>",
               "space_id": "<id-94>",
-              "unit_label": "D1-bf3302f8",
+              "unit_label": "D1-09eb35b6",
               "space_label": "Bed A",
-              "unit_number": "D1-bf3302f8",
+              "unit_number": "D1-09eb35b6",
               "monthly_rent": "1005.00",
               "property_name": "Skyline E2E",
-              "guarantor_name": "Guarantor J4 bf3302f8",
+              "guarantor_name": "Guarantor J4 09eb35b6",
               "lease_end_date": "2027-10-12",
-              "resident_names": "TwoStep Prospect J4 bf3302f8",
+              "resident_names": "TwoStep Prospect J4 09eb35b6",
               "lease_start_date": "2026-10-13",
               "parking_interest": null,
               "property_address": "1400 Skyline Blvd, Austin, TX 78704",
@@ -5514,10 +5508,10 @@
             "rendered_snapshot": {
               "title": "Residential Lease Package",
               "summary": {
-                "unit": "D1-bf3302f8",
+                "unit": "D1-09eb35b6",
                 "monthly_rent": "1005.00",
                 "lease_end_date": "2027-10-12",
-                "resident_names": "TwoStep Prospect J4 bf3302f8",
+                "resident_names": "TwoStep Prospect J4 09eb35b6",
                 "landlord_entity": "Skyline Owner LP (fixture)",
                 "lease_start_date": "2026-10-13",
                 "security_deposit": "1005.00",
@@ -5529,9 +5523,9 @@
                   "key": "parties",
                   "body": [
                     "Landlord: Skyline Owner LP (fixture).",
-                    "Resident(s): TwoStep Prospect J4 bf3302f8.",
-                    "Guarantor: Guarantor J4 bf3302f8.",
-                    "Home: D1-bf3302f8, Bed A, 1400 Skyline Blvd, Austin, TX 78704."
+                    "Resident(s): TwoStep Prospect J4 09eb35b6.",
+                    "Guarantor: Guarantor J4 09eb35b6.",
+                    "Home: D1-09eb35b6, Bed A, 1400 Skyline Blvd, Austin, TX 78704."
                   ],
                   "title": "Parties & Home"
                 },
@@ -5594,14 +5588,14 @@
                     "lease_start_date": "2026-10-13"
                   },
                   "parties": {
-                    "guarantor_name": "Guarantor J4 bf3302f8",
-                    "resident_names": "TwoStep Prospect J4 bf3302f8",
+                    "guarantor_name": "Guarantor J4 09eb35b6",
+                    "resident_names": "TwoStep Prospect J4 09eb35b6",
                     "landlord_entity": "Skyline Owner LP (fixture)"
                   },
                   "premises": {
                     "unit_id": "<id-89>",
                     "space_id": "<id-94>",
-                    "unit_label": "D1-bf3302f8",
+                    "unit_label": "D1-09eb35b6",
                     "space_label": "Bed A",
                     "property_name": "Skyline E2E",
                     "property_address": "1400 Skyline Blvd, Austin, TX 78704"
@@ -5646,7 +5640,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:28.589Z",
+                "completed_at": "2026-09-13T02:20:47.879Z",
                 "display_order": 1
               },
               {
@@ -5658,7 +5652,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:28.595Z",
+                "completed_at": "2026-09-13T02:20:47.886Z",
                 "display_order": 2
               },
               {
@@ -5670,7 +5664,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:28.602Z",
+                "completed_at": "2026-09-13T02:20:47.893Z",
                 "display_order": 3
               },
               {
@@ -5682,7 +5676,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:28.610Z",
+                "completed_at": "2026-09-13T02:20:47.900Z",
                 "display_order": 4
               },
               {
@@ -5694,7 +5688,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:28.616Z",
+                "completed_at": "2026-09-13T02:20:47.908Z",
                 "display_order": 5
               },
               {
@@ -5706,7 +5700,7 @@
                 "signer_role": "tenant",
                 "required": true,
                 "completed": true,
-                "completed_at": "2026-09-13T02:06:28.624Z",
+                "completed_at": "2026-09-13T02:20:47.915Z",
                 "display_order": 6
               }
             ],
@@ -5742,27 +5736,27 @@
             "signing_parties": [
               {
                 "signer_role": "tenant",
-                "display_name": "TwoStep Prospect J4 bf3302f8",
-                "link_issued_at": "2026-09-13T02:06:28.469Z",
-                "token_expires_at": "2026-09-27T02:06:28.469Z",
-                "submitted_at": "2026-09-13T02:06:28.632Z",
-                "signature_completed_at": "2026-09-13T02:06:28.624Z",
+                "display_name": "TwoStep Prospect J4 09eb35b6",
+                "link_issued_at": "2026-09-13T02:20:47.742Z",
+                "token_expires_at": "2026-09-27T02:20:47.742Z",
+                "submitted_at": "2026-09-13T02:20:47.922Z",
+                "signature_completed_at": "2026-09-13T02:20:47.915Z",
                 "complete": true
               },
               {
                 "signer_role": "guarantor",
-                "display_name": "Guarantor J4 bf3302f8",
-                "link_issued_at": "2026-09-13T02:06:28.469Z",
-                "token_expires_at": "2026-09-27T02:06:28.469Z",
-                "submitted_at": "2026-09-13T02:06:28.572Z",
-                "signature_completed_at": "2026-09-13T02:06:28.565Z",
+                "display_name": "Guarantor J4 09eb35b6",
+                "link_issued_at": "2026-09-13T02:20:47.742Z",
+                "token_expires_at": "2026-09-27T02:20:47.742Z",
+                "submitted_at": "2026-09-13T02:20:47.862Z",
+                "signature_completed_at": "2026-09-13T02:20:47.856Z",
                 "complete": true
               }
             ],
             "current_signer": {
               "signer_role": "tenant",
-              "display_name": "TwoStep Prospect J4 bf3302f8",
-              "submitted_at": "2026-09-13T02:06:28.632Z"
+              "display_name": "TwoStep Prospect J4 09eb35b6",
+              "submitted_at": "2026-09-13T02:20:47.922Z"
             }
           }
         }
@@ -5992,7 +5986,7 @@
       "kind": "observe",
       "detail": {
         "status": 200,
-        "body": "{\"configuration\":{\"property\":{\"id\":\"<id-114>\",\"name\":\"TwoStep Other bf3302f8\",\"address\":\"2 Scope Wall\"},\"terms\":{\"landlord_entity\":\"\",\"application_fee\":\"\",\"amenity_fee\":\"\",\"utility_responsibility\":\"\",\"late_fee\":\"\",\"notice_requirement\":\"\",\"rent_payment_location\":\"\",\"insura"
+        "body": "{\"configuration\":{\"property\":{\"id\":\"<id-114>\",\"name\":\"TwoStep Other 09eb35b6\",\"address\":\"2 Scope Wall\"},\"terms\":{\"landlord_entity\":\"\",\"application_fee\":\"\",\"amenity_fee\":\"\",\"utility_responsibility\":\"\",\"late_fee\":\"\",\"notice_requirement\":\"\",\"rent_payment_location\":\"\",\"insura"
       }
     },
     {
