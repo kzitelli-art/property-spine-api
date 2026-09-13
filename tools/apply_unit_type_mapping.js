@@ -58,6 +58,9 @@ const RULINGS = [
   {
     receipt: "reviewed_mapping_receipt_2026-07-27",
     note: "Eight residential floorplan codes plus commercial. See header.",
+    //  Structural grain is part of the reviewed ruling. A source-code map
+    //  without this field is incomplete and must refuse before any write.
+    position_kind: "unit",
     //  This property's source codes ARE its canonical codes — that is how it
     //  was approved and nothing here changes it. source_code is stated
     //  explicitly so the two roles are visible even where they coincide.
@@ -97,6 +100,9 @@ const RULINGS = [
     //  evidence, the evidence is not in the rent roll.
     receipt: "skyline_owner_statement_2026-08-20_source_silent_on_bath_distinction",
     note: "Skyline (1417 N 15th), bed-grained. Room grain corroborated by source; bath distinction CONTRADICTS the source and comes from physical inspection.",
+    //  The reviewed Skyline property leases by the bed. Keep this beside the
+    //  mapping so the tool cannot silently turn a bed ruling into unit grain.
+    position_kind: "bed",
     //  ── OUR VOCABULARY, NOT THE VENDOR'S ──────────────────────────
     //  STU00015/16/17 are Yardi's "Unit/Room Type" strings. They are how the
     //  SOURCE names a floorplan; they are not how Spine should. A canonical
@@ -196,7 +202,8 @@ function arg(name) {
 
   // ── what the source deterministically says, via the durable relationship ──
   const src = (await c.query(
-    `select r.raw->>'unit_type' as code, s.id as space_id, u.id as unit_id, u.unit_number
+    `select r.raw->>'unit_type' as code, s.id as space_id, s.space_label,
+            u.id as unit_id, u.unit_number
        from import_source_rows r
        join import_batches b on b.id = r.import_batch_id
        join spaces s on s.id = r.produced_space_id
@@ -249,8 +256,40 @@ function arg(name) {
   }
 
   const allSpaces = (await c.query(
-    `select s.id, u.unit_number, u.bedrooms from spaces s join units u on u.id=s.unit_id where u.property_id=$1`,
+    `select s.id, s.space_label, s.position_kind, s.use_type,
+            u.unit_number, u.bedrooms
+       from spaces s join units u on u.id=s.unit_id where u.property_id=$1`,
     [propertyId])).rows;
+
+  //  A source-code coverage match is not enough to establish physical grain.
+  //  The approved ruling must say which kind it governs, and the source shape
+  //  must be compatible with that ruling. Refuse before the first write when
+  //  the ruling is incomplete or the rows contradict it.
+  const approvedKind = RULING.position_kind;
+  if (!["unit", "bed"].includes(approvedKind)) {
+    console.error("\nREFUSING: the selected ruling has no approved position_kind (unit or bed). Grain is unreviewed; nothing was written.");
+    await c.end(); process.exit(1);
+  }
+  const sourceSpaceIds = new Set(src.map((r) => String(r.space_id)));
+  const sourceUnitSpaces = new Map();
+  for (const r of src) {
+    const key = String(r.unit_id);
+    if (!sourceUnitSpaces.has(key)) sourceUnitSpaces.set(key, new Set());
+    sourceUnitSpaces.get(key).add(String(r.space_id));
+  }
+  if (approvedKind === "unit") {
+    const contradictory = [...sourceUnitSpaces.entries()].filter(([, spaces]) => spaces.size > 1);
+    if (contradictory.length) {
+      console.error(`\nREFUSING: ruling declares unit grain but ${contradictory.length} unit(s) carry multiple coded positions. Grain is contradictory; nothing was written.`);
+      await c.end(); process.exit(1);
+    }
+  } else {
+    const unlabeled = src.filter((r) => !String(r.space_label || "").trim());
+    if (unlabeled.length) {
+      console.error(`\nREFUSING: ruling declares bed grain but ${unlabeled.length} coded position(s) have no source position label. Grain is incomplete; nothing was written.`);
+      await c.end(); process.exit(1);
+    }
+  }
   const unmapped = allSpaces.filter((s) => !bySpace.has(s.id));
 
   for (const m of MAPPING) {
@@ -260,6 +299,13 @@ function arg(name) {
   console.log(`\n  positions with a deterministic code : ${bySpace.size}`);
   console.log(`  positions left "Not configured"      : ${unmapped.length}`
     + (unmapped.length ? "  → " + unmapped.map((u) => `${u.unit_number} (${u.bedrooms} bed)`).join(", ") : ""));
+  const proposedDiff = allSpaces.filter((s) => {
+    if (!sourceSpaceIds.has(String(s.id))) return false;
+    const code = [...bySpace.get(s.id)][0];
+    return s.position_kind !== approvedKind || s.use_type !== MAPPING.find((m) => m.source_code === code)?.use;
+  });
+  console.log(`  approved structural grain            : ${approvedKind}`);
+  console.log(`  proposed position_kind changes       : ${proposedDiff.filter((s) => s.position_kind !== approvedKind).length}`);
 
   // The model unit: reported, never auto-classified from its status string.
   const model = (await c.query(
@@ -366,13 +412,12 @@ function arg(name) {
             where id=$4 and (unit_type_id is distinct from $1)`,
           [typeId, `${RECEIPT}: ${code}`, actor, row.unit_id]);
         assigned += u.rowCount;
-        // position_kind: structural receipt — one canonical space per unit and
-        // no bed labels anywhere in the source.
+        // position_kind: the explicit structural grain in the approved ruling.
         const s = await c.query(
-          `update spaces set position_kind='unit', use_type=$1,
-                             classification_source=$2, classified_by_user_id=$3, classified_at=now()
-            where id=$4 and (position_kind is distinct from 'unit' or use_type is distinct from $1)`,
-          [use, `${RECEIPT}: ${code}`, actor, row.space_id]);
+          `update spaces set position_kind=$1, use_type=$2,
+                             classification_source=$3, classified_by_user_id=$4, classified_at=now()
+            where id=$5 and (position_kind is distinct from $1 or use_type is distinct from $2)`,
+          [RULING.position_kind, use, `${RECEIPT}: ${code}`, actor, row.space_id]);
         kinded += s.rowCount; used += s.rowCount;
       }
     }
