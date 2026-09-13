@@ -203,7 +203,9 @@ async function falsify(admin, exact198, suffix, statement, pattern) {
     succeeds("exact 195 resumes explicitly through 198", wrapper(fail196, ["--resume195"]), /RELEASE VERIFIED/);
 
     const fail197 = await cloneDatabase(admin, exact195, "fail197");
-    await heldFailure(fail197, "spaces", "ROW EXCLUSIVE", ["--resume195"], "197_inventory_correction_hardening.sql");
+    // spaces is a 196 FK target, so a conflicting lock there would fail the
+    // preceding migration. money_events is first touched only by 197.
+    await heldFailure(fail197, "money_events", "ROW EXCLUSIVE", ["--resume195"], "197_inventory_correction_hardening.sql");
     await partialRefusal(fail197, 196);
     refuses("wrong --resume197 refuses exact 196", wrapper(fail197, ["--resume197"]), /requires exact 197, observed exact 196/i);
     const exact196 = await cloneDatabase(admin, fail197, "exact196");
