@@ -89,6 +89,7 @@ step "historical pending offer read locks" node tests/unit/proposed_terms_read_l
 step "two-step packet eligibility basis" node tests/unit/two_step_packet_eligibility.test.js
 step "terms preparation attribution" node tests/unit/terms_confirmation_attribution.test.js
 step "current packet execution decision attribution" node tests/unit/execution_decision_read.test.js
+step "terms attribution model boundary" node tests/unit/terms_attribution_model_boundary.test.js
 step "leasing knowledge coverage" node tests/unit/leasing_knowledge_coverage.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
 step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js
