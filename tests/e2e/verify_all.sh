@@ -87,6 +87,7 @@ step "application offer writer and read locks" node tests/unit/application_offer
 step "application review offer projection" node tests/unit/application_review_offer.test.js
 step "historical pending offer read locks" node tests/unit/proposed_terms_read_lock.test.js
 step "two-step packet eligibility basis" node tests/unit/two_step_packet_eligibility.test.js
+step "migration 194-198 release contract" node tests/unit/migration_194_198_predeploy_contract.test.js
 step "inventory correction door contract" node tests/unit/inventory_correction_contract.test.js
 step "terms preparation attribution" node tests/unit/terms_confirmation_attribution.test.js
 step "current packet execution decision attribution" node tests/unit/execution_decision_read.test.js

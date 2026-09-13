@@ -465,6 +465,21 @@ const LETTER = ["A", "B", "C"];
       r = await confirm(F.mikeTok, cp.p.id);
       ok("D5 a signed row over overlapping pending rights is refused and held for review", r.status === 409 && r.body.error === "overlapping_operative_lease", { status: r.status, error: r.body && r.body.error });
 
+      // Picking a resident establishes person identity, not which of two
+      // competing lease rights wins. The delivered .find() branch silently
+      // promoted this source row against the first matching right.
+      const cpExisting = proposalFor("conflict_overlapping_pending", 1);
+      const cpRights = F.pendingBySpace.get(cpExisting.sid);
+      await confirm(F.mikeTok, cpExisting.p.id);
+      const cpRecognition = await resolveResident(F.mikeTok, cpExisting.p.id, "resolved_existing", cpRights[0].person);
+      r = await confirm(F.mikeTok, cpExisting.p.id);
+      const cpAfter = await one(`select status,promoted_record_id from proposed_records where id=$1`, [cpExisting.p.id]);
+      ok("D5b recognising one resident cannot pick a winner among competing rights",
+        cpRecognition.status === 200 && r.status === 409 && r.body.error === "overlapping_operative_lease" &&
+        cpAfter.status === "needs_review" && cpAfter.promoted_record_id == null &&
+        (await one(`select count(*)::int n from leases where space_id=$1`, [cpExisting.sid])).n === cpRights.length,
+        { status: r.status, outcome: r.body && r.body.outcome, proposal_status: cpAfter.status, rights: cpRights.length });
+
       //  6. BLANK ROWS: never vacancy; one of them sits on a pending right.
       const bp = proposalFor("blank_with_pending_right");
       r = await confirm(F.mikeTok, bp.p.id);
@@ -537,14 +552,20 @@ const LETTER = ["A", "B", "C"];
       const expectOccupiedByClaim = F.after.positions.filter((x) => x.basis_type === "opening_claim_occupied").length;
       const notEstablished = F.after.positions.filter((x) => x.basis_state !== "established");
       observe("canonical dated rent roll after establishing (buckets)", { total: F.after.total, occupied: F.after.occupied, activation_pending: F.after.activation_pending, open: F.after.open, needs_review: F.after.needs_review, not_established: F.after.not_established, occupied_by_accepted_claim_terms_unknown: expectOccupiedByClaim });
-      ok("beds accepted from the current source read Occupied with contractual terms unknown; leases in force keep their own basis", expectOccupiedByClaim > 0 && F.after.positions.filter((x) => x.basis_type === "operative_lease").length === 31 - 0 || expectOccupiedByClaim > 0, { occupied_by_claim: expectOccupiedByClaim, by_lease: F.after.positions.filter((x) => x.basis_type === "operative_lease").length });
+      ok("beds accepted from the current source read Occupied with contractual terms unknown; leases in force keep their own basis", expectOccupiedByClaim === 92 && F.after.positions.filter((x) => x.basis_type === "operative_lease").length === 31, { occupied_by_claim: expectOccupiedByClaim, by_lease: F.after.positions.filter((x) => x.basis_type === "operative_lease").length });
+      ok("the reviewed fixture establishes exact counts without turning 148 signed claims into 148 occupied leases",
+        F.after.total === 160 && F.after.occupied === 122 && F.after.activation_pending === 12 &&
+        F.after.open === 0 && F.after.needs_review === 26 && F.after.not_established === 0);
       const blankIds = new Set([...F.blankRows]);
       const blankReads = F.after.positions.filter((x) => blankIds.has(String(x.space_id)) && !(F.pendingBySpace.has(String(x.space_id))));
       ok("the blank rows' beds are NOT open: their unresolved current rows read needs review (never vacancy by omission)", blankReads.length > 0 && blankReads.every((x) => x.bucket !== "open" && x.tenancy_state !== "vacant"), blankReads.map((x) => [x.unit_number, x.space_label, x.basis_type, x.bucket]).slice(0, 4));
       const av = await readers.availability.availabilityRead(pool, { property_id: F.p });
-      const avBlank = av.rows.filter((x) => blankIds.has(String(x.space_id)));
-      ok("availability offers none of the unresolved or conflicting beds (occupancy_unknown / not marketable)", avBlank.every((x) => x.state !== "marketable_now") && av.headline.marketable_now === 0, { marketable_now: av.headline.marketable_now, occupancy_unknown: av.headline.occupancy_unknown, blank_states: [...new Set(avBlank.map((x) => x.state))] });
-      const rr = await readers.rentRoll.unitRentRoll ? null : null;
+      const unresolvedIds = new Set([...blankIds, ...[...F.expect].filter(([,kind]) => kind.startsWith("conflict_")).map(([id]) => id)]);
+      const avUnresolved = av.rows.filter((x) => unresolvedIds.has(String(x.space_id)));
+      ok("availability accounts for every unresolved or conflicting bed and offers none",
+        avUnresolved.length === unresolvedIds.size && avUnresolved.every((x) =>
+          typeof x.marketing_state === "string" && x.marketing_state !== "marketable_now" && x.available_from == null) && av.headline.marketable_now === 0,
+        { expected: unresolvedIds.size, observed: avUnresolved.length, marketable_now: av.headline.marketable_now, states: [...new Set(avUnresolved.map((x) => x.marketing_state))] });
       const view = await request("GET", "/operator/rent-roll/units", F.mikeTok, undefined, { "x-operator-key": "e2e-key" });
       const standing = await readers.standing.readTenancyStanding(pool, { property_id: F.p, as_of: AS_OF_NOW });
       ok("Rent Roll unit view, tenancy standing and the dated read agree on occupied / open / needs review / not established", view.status === 200 && view.body.totals.occupied === F.after.occupied && view.body.totals.open === F.after.open && view.body.totals.needs_review === F.after.needs_review && standing.position.occupied === F.after.occupied && standing.position.not_established === F.after.not_established, { view: view.body && view.body.totals, standing: standing.position });

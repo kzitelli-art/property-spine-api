@@ -931,6 +931,10 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     //  row is evidence about THAT tenancy — it is tied to the lease and
     //  creates nothing. A pending lease stays pending: a later as-of date
     //  activates nothing and records no possession.
+    // Recognising a resident does not resolve conflicting rights on the
+    // home. Keep every competing lease visible for the governed correction;
+    // source acceptance cannot choose a winner by query order.
+    if (competing.length > 1) await holdForOverlap();
     const tied = competing.find((l) => (l.tenant_ids || []).map(String).includes(String(person.id)));
     if (tied) {
       if (p.import_source_row_id) {
