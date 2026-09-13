@@ -238,5 +238,15 @@ the list is server-paged with whole-property totals (browser: 1–100 of
 `gate.successor.txt` — scrubbed of identifiers; the original three
 evidence files kept. Screenshots inspected, kept out of the repository.
 Owned databases for runs 25–28 dropped with `proof_boundary.js cleanup`;
-the baseline worktree removed. CI: see the line appended below after the
-run completes.
+the baseline worktree removed.
+
+## CI
+
+- Run 500 on `87be4bd` (the receipt commit directly over the code commit
+  `e65dfb2`; no source changed between them): **success** — full
+  `verify_all.sh`, including `inventory relationship policy coverage`
+  (gate PASS, 61/61/24/25), `governed inventory correction` (85/0) and
+  `inventory correction hardening` (101/0); the browser step is reported
+  as skipped by name in CI (no operator-app checkout there) and was run
+  locally against app `0d035c8` (29/29).
+  https://github.com/kzitelli-art/property-spine-api/actions/runs/34760921299
