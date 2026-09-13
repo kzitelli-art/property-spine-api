@@ -97,7 +97,7 @@ data directory and manifest remain as evidence; no owned runtime remains.
 Supplemental verification after review used the retained fresh database and
 packet only; the 508-check fixture was not rerun and no pre-stop state was
 recreated. After a verify-only start (PID 22396, exact detached 7cb checkout,
-health `ok: true`),
+listener confirmed),
 `node tests/e2e/schema195_recovery_fresh_assert.js` ran two further replay
 requests and saved raw output at
 `tmp/schema195-fresh-evidence/schema195_recovery_fresh_replay_raw.json`.
