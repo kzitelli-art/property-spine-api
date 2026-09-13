@@ -1432,5 +1432,5 @@ admits it is written as system-derived, never as a human confirmation. The
 one new door: Execute, which needs approval authority AND signer standing
 and records two distinct decisions in one transaction. Nothing grants Mike
 more than `property_manager`. Full receipt and scrubbed evidence under
-`docs/handoffs/new-hp/two-step-leasing/`. CI on the exact final commit is
-recorded in the receipt once the run completes.
+`docs/handoffs/new-hp/two-step-leasing/`. CI run 487 (`5ba2885`) passed the full
+`verify_all.sh`; the browser slice ran locally against app `9ce6fc0`.

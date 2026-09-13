@@ -281,4 +281,14 @@ and the conflict is named, and resolving it is the released correction path.
 - `staff_invite_acceptance.browser.js` failed only in this container's
   mixed-port harness run (join URL built for the server's configured base);
   it is unrelated to this change and runs unchanged in CI.
-- CI: recorded below once the run on the exact final commit completes.
+## CI
+
+- Run 486 on `76ab684` (first push): **failed** at this proof's fixture step —
+  the no-consent journey runs earlier in `verify_all.sh` on the same database
+  and had already leased the fixture's Bed B, which this proof wrongly
+  assumed free. Fixed by establishing all four beds inside the proof.
+- Run 487 on `5ba2885` (the exact final API commit): **success** — full
+  `verify_all.sh` including the two-step proof after the no-consent journey.
+  https://github.com/kzitelli-art/property-spine-api/actions/runs/34732837611
+- The browser slice is reported as skipped by name in CI (no operator-app
+  checkout there); it ran locally on app `9ce6fc0` in real Chromium, 17/17.
