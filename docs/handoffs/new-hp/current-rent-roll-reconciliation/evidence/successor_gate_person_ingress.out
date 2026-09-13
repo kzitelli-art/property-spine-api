@@ -1,0 +1,61 @@
+
+════════════════════════════════════════════════════════════════
+  PERSON-INGRESS BOUNDARY GATE
+════════════════════════════════════════════════════════════════
+
+  scanned 663 files across src, tools, seeds, migrations and server.js
+  files that write a person: 10
+
+  ok    the ingress module exists and holds the authority
+  FAIL  NO UNDECLARED PATH MINTS A HUMAN
+          These write `insert into persons` outside the ingress boundary:
+          src/baseline/baseline_routes.js
+
+          Call personIngress.ingestPerson() instead. If this genuinely
+          belongs outside the boundary, add it to DECLARED with a channel,
+          a reason and a removal condition — and expect to defend it.
+  ok    converted, and stays converted: src/shared/snapshot_loader.js
+  ok    converted, and stays converted: src/identity/activation.js
+  ok    converted, and stays converted: src/onboarding/activation_service.js
+  ok    converted, and stays converted: src/shared/seed_snapshot.js
+  FAIL  the register is still accurate (paid-off entries removed)
+          No longer writes a person; delete from DECLARED:
+          server.js
+  ok    every declared entry carries a channel, a reason and a removal condition
+  ok    lease identity does not use a display name
+  ok    the detector finds a real write PAST an unbalanced /* in a literal
+
+  ── the register ──
+     src/leasing/leasing_leads.js
+        channel: leasing_intake
+        removes: Route resolveOrCreatePerson through personIngress.ingestPerson({channel:'leasing_intake'}) and delete the local copy, once the leasing browser proofs cover it.
+     src/leasing/leasing_shadow_import.js
+        channel: leasing_intake
+        removes: Same conversion as leasing_leads.js; its states map onto the ingress dispositions.
+     src/identity/staff_bridge.js
+        channel: staff_bridge
+        removes: Convert when the staff_bridge profile is exercised by a proof.
+     server.js
+        channel: leasing_intake
+        removes: Fold into the leasing_intake profile with leasing_leads.js.
+     src/shared/no076_failclosed_check.js
+        channel: harness
+        removes: Not product. Remove with the check itself.
+     tools/harness/mkfixture.js
+        channel: harness
+        removes: Remove with the harness.
+     tools/ask_spine_e2e_seed.js
+        channel: harness
+        removes: Remove with the seed.
+     tools/demo_run_ops.js
+        channel: demo
+        removes: Remove with the demo runner.
+     seeds/seed_demo_live_tour.js
+        channel: demo
+        removes: Remove with the seed.
+
+  10 run · 8 passed · 2 failed
+  FAILED: NO UNDECLARED PATH MINTS A HUMAN | the register is still accurate (paid-off entries removed)
+
+  ✗ FAIL — gate_person_ingress.js
+

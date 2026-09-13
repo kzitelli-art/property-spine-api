@@ -1,0 +1,89 @@
+OWNED_API_READY
+
+════════════════════════════════════════════════════════════════
+  HARNESS   confirm_proposal_operative_overlap.db.js
+  COMMIT    <hash>
+  BRANCH    claude/current-rent-roll-reconciliation-20260913
+  DATABASE  <proof-db>  @  127.0.0.1:5432  (user spine)
+  ENDPOINT  (not a Neon endpoint host)
+  ISOLATED  yes — target differs from DATABASE_URL (which is unset here)
+  EXPECTED  48 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+  ── the shared predicate ──
+  ok    'cancelled' is retired in the shared list
+  ok    'terminated' is retired in the shared list
+  ok    'rescinded' is retired in the shared list
+  ok    'void' is retired in the shared list
+  ok    'expired' is retired in the shared list
+  ok    'superseded' is retired in the shared list
+  ok    the SQL denies exactly that list, and is not an allow-list
+  ok    'pending' is NOT retired — it is operative
+  ok    'signed' is NOT retired — the allow-list bug, pinned
+  ok    a real activation opened through the canonical writer
+
+  ── operative statuses block ──
+  FAIL  active: confirm refuses  →  actual_rent_required
+  FAIL  active: proposal is needs_review  →  staged
+  FAIL  active: the reason names the competing lease id
+  FAIL  active: the reason names its status and term
+  ok    active: NO lease was created
+  FAIL  pending: confirm refuses  →  actual_rent_required
+  FAIL  pending: proposal is needs_review  →  staged
+  FAIL  pending: the reason names the competing lease id
+  FAIL  pending: the reason names its status and term
+  ok    pending: NO lease was created
+  FAIL  signed: confirm refuses  →  actual_rent_required
+  FAIL  signed: proposal is needs_review  →  staged
+  FAIL  signed: the reason names the competing lease id
+  FAIL  signed: the reason names its status and term
+  ok    signed: NO lease was created
+
+  ── retired statuses do not block ──
+  FAIL  cancelled: confirm proceeds  →  The source has no actual rent for this resident. Asking rent cannot establish their contract rent.
+  FAIL  cancelled: the bed now holds the new lease
+  FAIL  expired: confirm proceeds  →  The source has no actual rent for this resident. Asking rent cannot establish their contract rent.
+  FAIL  expired: the bed now holds the new lease
+
+  ── dates are half the rule ──
+  FAIL  an ACTIVE lease with disjoint dates does not block  →  actual_rent_required
+  FAIL  …and the confirm really wrote a second, non-overlapping lease
+
+  ── more than one competing claim ──
+  FAIL  both competing leases are named, not just the first
+  FAIL  the refusal carries both competing leases structurally  →  null
+  FAIL  the reason counts them in plain words
+
+  ── a refused row leaves nothing behind ──
+  ok    the refused row created no Person
+  FAIL  …and the refusal is a sentence an operator can act on  →  The source has no actual rent for this resident. Asking rent cannot establish their contract rent.
+  FAIL  …and it names the bed, not an internal id  →  The source has no actual rent for this resident. Asking rent cannot establish their contract rent.
+
+  ── a vacancy contradicted by a lease in force ──
+  FAIL  a vacant row on an OCCUPIED bed is REFUSED, not promoted  →  inventory_identity_review_required
+  FAIL  …it is needs_review, not promoted
+  ok    …and it still created no lease
+
+  ── a vacancy nobody contradicts is untouched ──
+  FAIL  a vacant row on a FREE bed still promotes  →  inventory_identity_review_required
+  FAIL  …and creates no lease
+  FAIL  …and is 'promoted', so it counts as established
+
+  ── establishOpeningPosition can see the held rows ──
+  FAIL  every blocked row is counted as unresolved, none invisible  →  {"established":0,"unresolved":0,"staged":10,"total":10}
+  FAIL  no row was left 'staged' by a refusal  →  {"established":0,"unresolved":0,"staged":10,"total":10}
+  FAIL  established + unresolved accounts for every proposal  →  {"established":0,"unresolved":0,"staged":10,"total":10}
+
+  ── retrying without resolving anything still refuses ──
+  FAIL  re-confirming a held row refuses identically  →  actual_rent_required
+  ok    …and still created no lease
+
+  FAILURES PRESENT   16/48
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 48 run · 16 passed · 32 failed
+  ✗ FAIL — confirm_proposal_operative_overlap.db.js
+  EXIT      1
+════════════════════════════════════════════════════════════════
+
