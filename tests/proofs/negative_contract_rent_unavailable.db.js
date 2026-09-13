@@ -77,9 +77,10 @@ async function cleanup(pool) {
 receipt.begin(__filename, { url: CONN, expected: 15 });
 (async () => {
   const pool = new Pool({ connectionString: CONN });
-  let server;
+  let server, owned = false;
   try {
     await boundary.assertDatabase();
+    owned = true;
     const today = new Date().toISOString().slice(0, 10);
     const org = (await pool.query("insert into organizations(name) values($1) returning id", [ORG])).rows[0].id;
     const property = (await pool.query(
@@ -163,7 +164,7 @@ receipt.begin(__filename, { url: CONN, expected: 15 });
     check("the configured local model stub is the only model transport invoked", calls.length, 1);
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
-    await cleanup(pool);
+    if (owned) await cleanup(pool);
     await pool.end();
   }
   process.exit(receipt.complete({ harness: __filename, passed, failed, expectedAtLeast: 15 }));
