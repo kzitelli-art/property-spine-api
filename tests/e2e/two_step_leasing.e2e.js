@@ -406,8 +406,8 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       const app = await one("select status, approved_at, terms_review_obligation_id, activation_obligation_id, proposed_terms_confirmation_id from lease_applications where id=$1", [J.app]);
       check(!!app.approved_at && !!app.terms_review_obligation_id, "the application carries an approval instant and its terms-review gate", { status: app.status, approved_at: !!app.approved_at });
       const gate = await one("select status, assigned_role from obligations where id=$1", [app.terms_review_obligation_id]);
-      const proof = await one("select count(*)::int n from obligation_input_events e where e.obligation_id=$1 and e.input='terms_acknowledged'", [app.terms_review_obligation_id]).catch(() => null);
-      check(gate && ["complete", "completed"].includes(gate.status), "the terms-review obligation spawned by approval is complete, satisfied from the packet's frozen acknowledgment", { gate: gate && gate.status, proof_rows: proof && proof.n });
+      const proof = await one("select count(*)::int n from events where property_id=$1 and person_id=$2 and type='input_satisfied:terms_acknowledged' and note like '%' || $3::text || '%'", [P, J.person, app.terms_review_obligation_id]);
+      check(gate && gate.status === "complete" && proof.n === 1, "the terms-review obligation spawned by approval is complete with exactly one canonical frozen-acknowledgment event", { gate: gate && gate.status, proof_rows: proof.n });
       const approvalGate = await one("select o.status from lease_applications a join obligations o on o.id=a.approval_obligation_id where a.id=$1", [J.app]);
       check(approvalGate && ["complete", "completed", "closed"].includes(approvalGate.status), "the approval obligation born at submission is closed by the decision", approvalGate);
       const audit = await one("select event_json from lease_packet_audit_events where lease_packet_id=$1 and event_type='executed_by_decision'", [J.packet]);

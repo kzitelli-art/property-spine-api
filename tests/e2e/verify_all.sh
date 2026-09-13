@@ -87,6 +87,8 @@ step "application offer writer and read locks" node tests/unit/application_offer
 step "application review offer projection" node tests/unit/application_review_offer.test.js
 step "historical pending offer read locks" node tests/unit/proposed_terms_read_lock.test.js
 step "two-step packet eligibility basis" node tests/unit/two_step_packet_eligibility.test.js
+step "terms preparation attribution" node tests/unit/terms_confirmation_attribution.test.js
+step "current packet execution decision attribution" node tests/unit/execution_decision_read.test.js
 step "leasing knowledge coverage" node tests/unit/leasing_knowledge_coverage.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
 step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js
@@ -293,6 +295,7 @@ if [ "$FAILED" = "0" ]; then
   step "historical application projections" node tests/proofs/proposed_terms_read_lock.db.js
   step "no-consent two-person journey" node tests/e2e/no_consent_two_person_journey.e2e.js
   step "two-step leasing: author and execute" node tests/e2e/two_step_leasing.e2e.js
+  step "two-step preparation and execution attribution" node tests/proofs/two_step_attribution_read.db.js
   #  The operator app is a separate repository; CI has no checkout of it, so
   #  this rung runs where E2E_APP_ROOT names one (local / release rehearsal)
   #  and is reported as skipped, by name, everywhere else.
