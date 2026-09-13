@@ -59,3 +59,31 @@ The required remaining release evidence is still the decision memo's: a fresh
 read-only target ledger and affected-row/constraint preflight, real locking
 timing, a pinned schema-195-compatible recovery build, exact API/app deploy and
 health evidence, served assets, and signed-in canonical workflow reconciliation.
+
+## Owned rehearsal receipt — September 13
+
+This evidence used a local PostgreSQL 17.11 cluster owned by this rehearsal on
+port 55453 and nonce-named databases only. It did not contact production or a
+provider.
+
+- The exact 194 fixture had 182 ledger entries. The operation accepted it in
+  verify-only mode with the full local build SHA and reviewed migration SHA-256.
+- After that preflight, a separately invoked real `migrations/migrate.js`
+  release was run with a positively observed `ACCESS EXCLUSIVE` lock on
+  `public.application_proposed_terms_confirmations` and
+  `MIGRATION_LOCK_TIMEOUT=500ms`. It exited 1 in 2,163 ms with lock timeout;
+  ledger remained 182/194 and `aptc_derived_names_offer_ck` remained absent.
+- Once the lock was released, the bounded operation applied 195 through that
+  same runner and reread the exact 183/195 post-state. Both ordinary verify and
+  repeated `--apply` then succeeded without a write.
+- A `dab19b6` baseline API checkout refused normal startup against that
+  195-ledger database because it lacks the 195 migration file. This is the
+  expected refusal, not a recovery procedure.
+- A hostile post-195 database whose derived-confirmation CHECK was changed to
+  `... OR true` was refused by the exact physical-definition comparison. A
+  fixture-only untracked 196 file was also refused before any runner invocation.
+
+This rehearsal does **not** pin or prove a schema-195-compatible recovery
+artifact, deployed API/app health, a production row preflight, provider effects,
+or a continuing leasing workflow. Those are separate release evidence and must
+not be inferred from this local schema rehearsal.
