@@ -154,13 +154,10 @@ step "parent onboarding snapshot defects" env HARNESS_DATABASE_URL="$E2E_DATABAS
 git worktree remove --force "$PARENT_WORKTREE" || exit 1
 PARENT_WORKTREE=""
 
-# This pending schema belongs only to the owned disposable proof database.
-# Reassert the marker immediately before applying it; it is not in the
-# production migration chain yet.
-step "owned DB before pending claim DDL" node tests/e2e/proof_boundary.js check
-step "ceiling192 claim index dependency" env PROOF_CLAIM_INDEX=released node tests/proofs/onboarding_claim_index_dependency.db.js
-step "pending source claim identity" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f migrations/pending/proposed_source_claim_identity.sql
-step "pending claim index successor" env PROOF_CLAIM_INDEX=pending node tests/proofs/onboarding_claim_index_dependency.db.js
+# Migration 198 owns the claim-index policy in the numbered chain. Its witness
+# reconstructs 197 only inside this nonce database, then drives the real runner
+# through lock-failure, apply and repeat branches. No pending schema is applied.
+step "numbered source claim-index migration" node tests/proofs/onboarding_claim_index_dependency.db.js
 
 # ── lease / guarantor database proofs ───────────────────────────────
 # These use the repository's production-refusing harness boundary. CI's
