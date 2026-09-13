@@ -68,6 +68,7 @@ function runTool(args) {
      returning id`, [prop])).rows[0].id;
 
   let n = 0, rowIx = 0;
+  let firstSourceSpaceId = null;
   for (const g of PLAN) {
     for (let i = 0; i < g.units; i++) {
       n++;
@@ -81,8 +82,10 @@ function runTool(args) {
       await pool.query(`delete from spaces where unit_id=$1 and space_label='(whole unit)'`, [u]);
       for (let b = 0; b < g.beds; b++) {
         const s = (await pool.query(
-          `insert into spaces (unit_id, space_label) values ($1,$2) returning id`,
-          [u, `Bed ${String.fromCharCode(65 + b)}`])).rows[0].id;
+        `insert into spaces (unit_id, space_label) values ($1,$2) returning id`,
+        [u, `Bed ${String.fromCharCode(65 + b)}`])).rows[0].id;
+        await pool.query("update spaces set position_kind='unit', use_type='residential' where id=$1", [s]);
+        if (!firstSourceSpaceId) firstSourceSpaceId = s;
         //  THE DURABLE RELATIONSHIP the tool reads. Not a unit_number match.
         await pool.query(
           `insert into import_source_rows (import_batch_id, row_index, raw, produced_unit_id, produced_space_id)
@@ -95,6 +98,24 @@ function runTool(args) {
       }
     }
   }
+  const existingLease = (await pool.query(
+    `insert into leases (property_id, space_id, tenant_ids, rent, start_date, end_date, lease_status)
+     values ($1,$2,'{}'::uuid[],1234,'2026-01-01','2027-07-31','active')
+     returning id`, [prop, firstSourceSpaceId])).rows[0].id;
+  const identityBefore = (await pool.query(
+    `select u.id as unit_id, s.id as space_id, r.id as source_id,
+            r.produced_unit_id, r.produced_space_id,
+            l.id as lease_id, l.property_id as lease_property_id,
+            l.space_id as lease_space_id, l.rent, l.start_date, l.end_date, l.lease_status
+       from leases l
+       join spaces s on s.id=l.space_id
+       join units u on u.id=s.unit_id
+       join import_source_rows r on r.produced_space_id=s.id
+      where l.id=$1
+      order by r.id limit 1`, [existingLease])).rows[0];
+  identityBefore && identityBefore.unit_id && identityBefore.source_id
+    ? ok("fixture captures an existing lease and source-link identity")
+    : bad("fixture identity snapshot missing", JSON.stringify(identityBefore));
   //  ── THE DECOYS PRODUCTION ACTUALLY CARRIES ────────────────────────
   //  Alongside `1417-116` the live database holds separate rows named
   //  "116 - A", "116 - B", "116 - C" — legacy units shaped like beds, 159 of
@@ -192,6 +213,21 @@ function runTool(args) {
   }
   distOk ? ok("distribution matches production exactly") : bad("distribution differs");
 
+  const identityAfter = (await pool.query(
+    `select u.id as unit_id, s.id as space_id, r.id as source_id,
+            r.produced_unit_id, r.produced_space_id,
+            l.id as lease_id, l.property_id as lease_property_id,
+            l.space_id as lease_space_id, l.rent, l.start_date, l.end_date, l.lease_status
+       from leases l
+       join spaces s on s.id=l.space_id
+       join units u on u.id=s.unit_id
+       join import_source_rows r on r.produced_space_id=s.id
+      where l.id=$1
+      order by r.id limit 1`, [existingLease])).rows[0];
+  JSON.stringify(identityAfter) === JSON.stringify(identityBefore)
+    ? ok("existing lease, unit, space and source-link identity are unchanged")
+    : bad("mapping changed durable lease/source identity", JSON.stringify({ identityBefore, identityAfter }));
+
   const pos = await datedPropertyPositions(pool, { property_id: prop });
   pos.count === 160 && (pos.retired_excluded || {}).units === 0
     ? ok("canonical loader still sees 160, no retired inventory reintroduced")
@@ -218,6 +254,20 @@ function runTool(args) {
   again.ok && Number(cov2.types) === 3 && Number(cov2.beds) === Number(beforeRepeat.beds) && Number(cov2.residential) === Number(beforeRepeat.residential)
     ? ok("re-apply is a no-op", "types, grain and use unchanged")
     : bad("re-apply changed classification", JSON.stringify({ beforeRepeat, cov2 }));
+  const identityAfterRepeat = (await pool.query(
+    `select u.id as unit_id, s.id as space_id, r.id as source_id,
+            r.produced_unit_id, r.produced_space_id,
+            l.id as lease_id, l.property_id as lease_property_id,
+            l.space_id as lease_space_id, l.rent, l.start_date, l.end_date, l.lease_status
+       from leases l
+       join spaces s on s.id=l.space_id
+       join units u on u.id=s.unit_id
+       join import_source_rows r on r.produced_space_id=s.id
+      where l.id=$1
+      order by r.id limit 1`, [existingLease])).rows[0];
+  JSON.stringify(identityAfterRepeat) === JSON.stringify(identityBefore)
+    ? ok("re-apply preserves the original lease/source identity")
+    : bad("re-apply changed durable lease/source identity", JSON.stringify({ identityBefore, identityAfterRepeat }));
 
   console.log("\n── 5 · structural grain refusals ──");
   // A unit ruling cannot consume two coded positions under one parent.
@@ -283,6 +333,7 @@ function runTool(args) {
   //  cleanup
   await pool.query("delete from import_source_rows where import_batch_id=$1", [batch]);
   await pool.query("delete from import_batches where id=$1", [batch]);
+  await pool.query("delete from leases where property_id=$1", [prop]);
   await pool.query("update units set unit_type_id=null where property_id=$1", [prop]);
   await pool.query("delete from property_unit_types where property_id=$1", [prop]);
   await pool.query("delete from spaces where unit_id in (select id from units where property_id=$1)", [prop]);
