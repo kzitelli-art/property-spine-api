@@ -16,12 +16,23 @@ claim.
 
 The exact detached product checkout was clean at API
 `7cb245ead0ad02e35e29b7adebde05b2c10d1e25` before the run. A fresh owned
-database was migrated from ledger 000 through migration 195 using the exact
-candidate release runner, with `MIGRATION_RELEASE=1`,
-`EXPECTED_LEDGER_CEILING=000`, and `EXPECTED_SHA=7cb245ead0ad02e35e29b7adebde05b2c10d1e25`.
-The runner applied all 183 migration files, including
-`195_two_step_leasing_authored_offer_basis.sql`; subsequent verify-only runs
-reported `SCHEMA VERIFIED — 183 migrations, all applied. Ledger ceiling 195.`
+database was migrated from ledger 000 through migration 195 by a bounded
+owned setup helper executing the exact candidate migration files in order
+(including the required 087 and 110 fixture preconditions). The exact
+candidate `migrations/migrate.js` was then run verify-only with
+`EXPECTED_SHA=7cb245ead0ad02e35e29b7adebde05b2c10d1e25`; it reported
+`SCHEMA VERIFIED — 183 migrations, all applied. Ledger ceiling 195.` The
+applied final file was `195_two_step_leasing_authored_offer_basis.sql`.
+
+The setup command was:
+
+`node tmp/apply_fresh195.js "two-step-review-20260913/api-fable-review-20260907"`
+
+with `DATABASE_URL` pointed at the manifest database and `NODE_PATH` pointed
+at the workspace dependency `node_modules`; it is fixture setup only and is
+not a product migration path. The candidate verifier command was:
+
+`Remove-Item Env:MIGRATION_RELEASE; $env:EXPECTED_SHA="7cb245ead0ad02e35e29b7adebde05b2c10d1e25"; node migrations/migrate.js`
 
 Runtime manifest: `tmp/schema195-fresh-manifest.json`; nonce
 `7f20677e9fac4734867f1b61941d545e`; owned database
