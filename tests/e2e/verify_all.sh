@@ -93,6 +93,7 @@ step "current packet execution decision attribution" node tests/unit/execution_d
 step "terms attribution model boundary" node tests/unit/terms_attribution_model_boundary.test.js
 step "leasing knowledge coverage" node tests/unit/leasing_knowledge_coverage.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
+step "institutional rent projection" node tests/unit/rent_roll_institutional_projection.test.js
 step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js
 step "availability occupancy basis" node --test tests/unit/availability_occupancy_basis.test.js
 
