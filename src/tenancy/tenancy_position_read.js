@@ -130,6 +130,16 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
     unattached_source_rows: unattached.source_rows || [],
     unattached_source_rows_truncated: unattached.truncated === true,
   };
+  //  A READ THAT EXCLUDES ROWS SAYS SO, one level up: the loader reports
+  //  what it hid (retired inventory), and the standing carries it so a
+  //  sentence can say "N unit records are retired from current inventory"
+  //  instead of reading a smaller building. Tenancy attached to retired
+  //  inventory is a conflict, not a count.
+  const retired = dp.retired_excluded || { units: 0, leases_on_retired_inventory: 0, conflict: false };
+  const retiredExclusion = {
+    unit_records_retired_from_current_inventory: retired.units || 0,
+    tenancy_attached_to_retired_inventory: retired.leases_on_retired_inventory || 0,
+  };
 
   const base = {
     contract_version: CONTRACT_VERSION,
@@ -151,7 +161,7 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
         why: "no rentable position is recorded for this property in Spine" },
       established_from: null,
       position: null,
-      unknowns: unattached.read === "ok" ? retainedUnknowns : null,
+      unknowns: unattached.read === "ok" ? { ...retainedUnknowns, ...retiredExclusion } : { ...retiredExclusion },
       ...retainedRows,
       next_milestone: null,
       does_not_establish: [
@@ -254,6 +264,7 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
       //  say not established. Named here so the two numbers can be
       //  reconciled by a person instead of silently disagreeing.
       ...retainedUnknowns,
+      ...retiredExclusion,
     },
     //  By the key the source gave each row — a label, never a record id.
     ...retainedRows,
