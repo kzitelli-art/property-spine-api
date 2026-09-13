@@ -606,15 +606,17 @@ function contractualTermsState(p) {
 }
 
 // AXIS 3 — ECONOMICS COMPLETENESS. Independent of whether it is occupied.
-//   available      a spanning lease with populated contractual rent.
-//   unavailable    a spanning lease whose rent is missing. The position is
-//                  still occupied; the rent is simply not known, and is
-//                  never coerced to $0 at the row level.
+//   available      a spanning lease with a finite, strictly positive
+//                  contractual rent.
+//   unavailable    a spanning lease whose amount cannot support that claim.
+//                  The position is still occupied; retain the source amount
+//                  for inspection, but never coerce it to $0 or trust it.
 //   not_applicable no spanning lease, so there is no contractual rent to have.
 function economicsState(p) {
   const lease = p.current_lease_position;
   if (!lease) return "not_applicable";
-  return (lease.rent == null || Number(lease.rent) === 0) ? "unavailable" : "available";
+  const rent = Number(lease.rent);
+  return Number.isFinite(rent) && rent > 0 ? "available" : "unavailable";
 }
 
 // AXIS 4 — proof_basis, already decided by the classifier.

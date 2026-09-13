@@ -214,6 +214,9 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
   //  let a confident sentence be built on top of 120 positions whose
   //  economics Spine cannot state.
   const rentUnknown = occupied.filter((p) => !p.lease || p.lease.rent == null);
+  // economics_state arrives from dated_positions. This projection counts it;
+  // it does not decide a second time which source amount is trustworthy.
+  const unavailableContractEconomics = occupied.filter((p) => p.economics_state === "unavailable");
   const evidenceUnresolved = positions.filter((p) => p.evidence_state === "inconclusive");
   const contested = positions.filter((p) => p.conflict_state === "conflicted");
   const importedOnly = occupied.filter((p) => p.proof_basis === "confirmed_opening_import");
@@ -267,6 +270,7 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
     //  WHAT SPINE DOES NOT KNOW, in numbers a sentence can carry.
     unknowns: {
       occupied_positions_with_no_recorded_rent: rentUnknown.length,
+      occupied_positions_with_unavailable_contract_economics: unavailableContractEconomics.length,
       positions_with_unresolved_occupancy_evidence: evidenceUnresolved.length,
       positions_with_overlapping_lease_claims: contested.length,
       occupied_positions_proven_only_by_the_opening_import: importedOnly.length,

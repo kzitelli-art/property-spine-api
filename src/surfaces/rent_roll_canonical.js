@@ -23,8 +23,9 @@
 //                               The numerator counts occupied within this same
 //                               set; full tenancy and rent totals remain intact.
 //
-//  economics_unavailable increments its own count and adds zero to rent —
-//  a missing rent is never coerced to $0 at the row level.
+//  economics_unavailable increments its own count and adds no rent — an
+//  unavailable amount is never coerced to $0, including an all-unknown
+//  property total.
 //
 //  WRITES NOTHING.
 // ════════════════════════════════════════════════════════════════════
@@ -82,8 +83,10 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
   // TRUSTED RENT — every uncontested spanning lease with populated rent,
   // whatever the opening evidence says. Opening evidence being inconclusive
   // or in disagreement does not un-occupy a position that holds a real lease.
-  const contractual_rent_trusted = money(
-    rows.filter((r) => r.contributes_trusted_rent).reduce((s, r) => s + Number(r.current_rent || 0), 0));
+  const rentBearing = rows.filter((r) => r.contributes_trusted_rent);
+  const contractual_rent_trusted = rentBearing.length
+    ? money(rentBearing.reduce((s, r) => s + Number(r.current_rent), 0))
+    : null;
 
   // The disputed claims, with the rent they implicate. Never counted.
   const contestedSpaceIds = contested.map((r) => r.space_id);
@@ -178,7 +181,7 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
 
       contractual_rent_trusted,
       contractual_rent_excluded_contested: contested_claims.implicated_rent,
-      positions_contributing_rent: rows.filter((r) => r.contributes_trusted_rent).length,
+      positions_contributing_rent: rentBearing.length,
       occupied_without_known_rent: noEconomics.length,
     },
 

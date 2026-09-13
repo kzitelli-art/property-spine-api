@@ -154,7 +154,9 @@ async function institutionalRentRoll(pool, { property_id, as_of = null } = {}) {
     // report an owner expects.
     reconciliation: {
       statements: [
-        `Trusted monthly contractual rent: $${Number(t.contractual_rent_trusted).toLocaleString()} from ${t.positions_contributing_rent} positions.`,
+        t.contractual_rent_trusted == null
+          ? "Trusted monthly contractual rent is unavailable: no position has a trusted contractual amount."
+          : `Trusted monthly contractual rent: $${Number(t.contractual_rent_trusted).toLocaleString()} from ${t.positions_contributing_rent} positions.`,
         `Contested rent claims excluded: $${Number(t.contractual_rent_excluded_contested).toLocaleString()} across ${rr.exceptions.contested} positions with overlapping lease claims.`,
         `${t.occupied_without_known_rent} occupied position(s) have unavailable contractual economics and contribute no rent.`,
         `${rr.exceptions.evidence_disagrees} position(s) have conflicting occupancy evidence between the opening source and canonical lease records.`,
@@ -186,7 +188,7 @@ function institutionalCsv(report) {
   const t = report.totals;
   lines.push("Total canonical rentable positions," + t.total_positions);
   lines.push("Confirmed contractual occupancy," + t.confirmed_contractual_occupancy + " of " + t.occupancy_denominator);
-  lines.push("Trusted monthly contractual rent," + t.trusted_monthly_contractual_rent);
+  lines.push("Trusted monthly contractual rent," + (t.trusted_monthly_contractual_rent == null ? "" : t.trusted_monthly_contractual_rent));
   lines.push("Positions contributing known rent," + t.positions_contributing_rent);
   lines.push("Contested rent excluded," + t.contested_rent_excluded);
   lines.push("Positions with unavailable economics," + t.positions_economics_unavailable);

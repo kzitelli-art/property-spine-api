@@ -41,6 +41,7 @@ const boundary = require("./proof_boundary");
 require("./proof_fence_preload");
 const { Pool } = require("pg");
 const staffSessions = require("../../src/identity/staff_session_service");
+const { reviewedHttp } = require("../helpers/reviewed_source");
 
 const BASE = process.env.E2E_API_BASE;
 assert.ok(BASE, "E2E_API_BASE is required");
@@ -100,6 +101,8 @@ async function api(method, route, { token, key = false, body, form } = {}) {
   const review = (tok, unitId) => api("GET", `/operator/inventory/corrections/review?unit_id=${unitId}`, { token: tok });
   const retire = (tok, body) => api("POST", "/operator/inventory/corrections/retire", { token: tok, body });
   const reinstate = (tok, body) => api("POST", "/operator/inventory/corrections/reinstate", { token: tok, body });
+  const setupRequest = (method, route, { headers = {}, body } = {}) =>
+    api(method, route, { token: headers["x-staff-session"], body });
   const RATIONALE = `Rehearsal-designated example: this record modelled a bed as a unit under an older representation; the corrected bed-basis source supersedes it. (${nonce})`;
   async function retireNow(tok, unit, { key = null, batch = null, rationale = RATIONALE } = {}) {
     const r = await review(tok, unit.id);
@@ -161,9 +164,12 @@ async function api(method, route, { token, key = false, body, form } = {}) {
       const added = await api("POST", `/deal-setup/deals/${F.deal}/properties`, { token: F.oaTok, body: { property_id: F.h.id } });
       need(added.status === 201, "the property joins the deal", { status: added.status, body: added.body });
       const AS_OF = plusDays(-3);
+      // The retained source's parent labels deliberately differ from the
+      // selected canonical parents. Only the explicit reviewed decision can
+      // connect SOURCE-P1/P2 to H-P1/P2; a matching label is never identity.
       const csv = "Unit,Room,Type,Resident,Market Rent,Actual Rent,Lease From,Lease To\n" +
-        `H-P1,H-P1-A,,Rehearsal Resident One,1150,1100,${plusDays(-200)},${plusDays(165)}\n` +
-        "H-P2,H-P2-A,,VACANT,1150,,,\n";
+        `SOURCE-P1,H-P1-A,,Rehearsal Resident One,1150,1100,${plusDays(-200)},${plusDays(165)}\n` +
+        "SOURCE-P2,H-P2-A,,VACANT,1150,,,\n";
       const form = new FormData();
       form.append("file", new Blob([csv], { type: "text/csv" }), "hardening-bed-basis-rehearsal.csv");
       form.append("source_as_of_date", AS_OF);
@@ -172,8 +178,18 @@ async function api(method, route, { token, key = false, body, form } = {}) {
       const opened = await api("POST", `/deal-setup/deals/${F.deal}/properties/${F.h.id}/activation`, { token: F.mikeTok, body: {} });
       need(opened.status === 201 && opened.body.activation, "a governed setup opens", { status: opened.status, body: opened.body });
       F.activation = opened.body.activation.id;
-      const read = await api("POST", `/deal-setup/activations/${F.activation}/read-source`, { token: F.mikeTok, body: { source_artifact_id: up.body.artifact.id, source_as_of_date: AS_OF, leasing_basis: "bed" } });
-      need(read.status === 201, "the retained source is read with the bed basis", { status: read.status, body: read.body && (read.body.error ? { error: read.body.error, receipt: read.body.receipt } : read.body.receipt) });
+      const reviewed = await reviewedHttp(setupRequest, F.activation, { "x-staff-session": F.mikeTok }, {
+        source_artifact_id: up.body.artifact.id, source_as_of_date: AS_OF, leasing_basis: "bed",
+      }, (identity, preview) => {
+        const selectedLabel = identity.source.unit_number === "SOURCE-P1" ? "H-P1" : "H-P2";
+        const selected = preview.available_units.find((candidate) => candidate.label === selectedLabel);
+        if (!selected || !selected.parent_choice_fingerprint) throw new Error(`missing explicit selected parent: ${selectedLabel}`);
+        return { action: "create_children", unit_id: selected.id, fingerprint: selected.parent_choice_fingerprint };
+      });
+      const read = reviewed.applied;
+      need(reviewed.preview.status === 200 && read && read.status === 201,
+        "the retained source is previewed and explicitly mapped to the reviewed bed parents",
+        { preview: reviewed.preview.status, status: read && read.status, body: read && read.body && (read.body.error ? { error: read.body.error, receipt: read.body.receipt } : read.body.receipt) });
       const rv = await api("GET", `/deal-setup/activations/${F.activation}`, { token: F.mikeTok });
       const proposals = (rv.body && rv.body.proposals) || [];
       need(proposals.length === 2, "one proposal per source row: one occupied, one vacant", { proposals: proposals.length, statuses: proposals.map((p) => p.status) });
@@ -183,13 +199,27 @@ async function api(method, route, { token, key = false, body, form } = {}) {
       need(est.status === 201, "the opening position is established", { status: est.status, body: est.body && (est.body.receipt || est.body.error) });
       const promoted = (await q("select pr.natural_key, pr.status, pr.normalized_json->>'is_vacant' as is_vacant, r.produced_unit_id, r.produced_space_id, u.unit_number as produced_unit, s.space_label as produced_space from proposed_records pr join import_source_rows r on r.id=pr.import_source_row_id left join units u on u.id=r.produced_unit_id left join spaces s on s.id=r.produced_space_id where pr.activation_id=$1 order by pr.natural_key", [F.activation])).rows;
       check(promoted.length === 2 && promoted.every((p) => p.status === "promoted") && promoted.some((p) => p.is_vacant === "true") && promoted.some((p) => p.is_vacant === "false"), "BOTH shapes wrote status='promoted' (occupied and vacant), each with a produced unit and position", promoted.map((p) => ({ key: p.natural_key, status: p.status, vacant: p.is_vacant, unit: p.produced_unit, space: p.produced_space })));
+      const lineage = (await q(`select l.id as lease_proposal_id,l.inventory_identity_decision_id,
+          d.selected_unit_id,d.selected_space_id,r.produced_unit_id,r.produced_space_id,
+          r.raw->'_source_cells'->>'Unit' as source_parent,u.unit_number as selected_parent
+        from proposed_records l
+        join import_source_rows r on r.id=l.import_source_row_id
+        join proposed_records d on d.id=l.inventory_identity_decision_id
+        join units u on u.id=d.selected_unit_id
+        where l.activation_id=$1 and l.target_type='lease'
+        order by source_parent`, [F.activation])).rows;
+      check(lineage.length === 2
+        && lineage.every((row) => row.inventory_identity_decision_id && row.selected_unit_id === row.produced_unit_id && row.selected_space_id === row.produced_space_id)
+        && lineage.map((row) => `${row.source_parent}:${row.selected_parent}`).join("|") === "SOURCE-P1:H-P1|SOURCE-P2:H-P2",
+      "each confirmed source lease traces through its reviewed identity decision to selected durable parent and position IDs despite different source labels", lineage);
       const leases = await one("select count(*)::int n from leases l join spaces s on s.id=l.space_id join units u on u.id=s.unit_id where u.property_id=$1 and u.unit_number='H-P1'", [F.h.id]);
       check(leases.n === 1, "the occupied shape produced a lease on H-P1's position; the vacant shape produced none", leases);
       F.batch = (await one("select import_batch_id from opening_tenancy_positions where property_id=$1 and status='established' order by established_at desc limit 1", [F.h.id]) || {}).import_batch_id;
       need(F.batch, "the established opening position names its source batch");
       for (const l of ["H-P1", "H-P2"]) {
+        const sourceParent = l === "H-P1" ? "SOURCE-P1" : "SOURCE-P2";
         const r = await review(F.adminTok, F.U[l].id);
-        check(r.status === 200 && r.body.eligibility.eligible === false && r.body.eligibility.blockers.some((b) => b.code === "claimed_by_current_representation"), `${l} is claimed by the current representation through its produced link (${l === "H-P1" ? "occupied" : "vacant"} shape) and cannot be retired`, { blockers: r.body && r.body.eligibility && r.body.eligibility.blockers.map((b) => b.code) });
+        check(r.status === 200 && r.body.eligibility.eligible === false && r.body.eligibility.blockers.some((b) => b.code === "claimed_by_current_representation"), `${l} remains protected from retirement through its selected durable home despite raw source parent ${sourceParent} (${l === "H-P1" ? "occupied" : "vacant"} shape)`, { blockers: r.body && r.body.eligibility && r.body.eligibility.blockers.map((b) => b.code) });
       }
       F.readersBefore = await readers(F.adminTok, F.h.id);
       observe("readers before any retirement", { occupancy: { rentable: F.readersBefore.occupancy.rentable_count, occupied: F.readersBefore.occupancy.occupied_count }, availability_count: F.readersBefore.availability.count, unit_view_units: F.readersBefore.unit_view.totals && F.readersBefore.unit_view.totals.units, standing_units: F.readersBefore.standing.position && F.readersBefore.standing.position.units });
