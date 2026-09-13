@@ -31,6 +31,7 @@ const originalLoad = Module._load;
 Module._load = function patchedLoad(request, parent, isMain) {
   if (request === "./proposed_terms_service") {
     return {
+      readCurrentTermsConfirmation: originalLoad(request, parent, isMain).readCurrentTermsConfirmation,
       readBoundApplicationOffer: async (client, app, options) => {
         boundReaderCalls.push({ client, app, options });
         if (!app.application_offer_id) {

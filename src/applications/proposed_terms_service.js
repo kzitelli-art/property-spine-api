@@ -443,7 +443,52 @@ async function deriveConfirmationFromAuthoredOffer(client, { app, offer, actorUs
 }
 
 
+async function readCurrentTermsConfirmation(client, app) {
+  if (!app || !app.proposed_terms_confirmation_id) return null;
+  const row = (
+    await client.query(
+      `select c.*, o.authority_basis_snapshot as offer_authority,
+            o.created_at as offer_authored_at
+       from application_proposed_terms_confirmations c
+       left join lease_offers o on o.id=c.application_offer_id
+         and o.property_id=c.property_id and o.person_id=$4
+         and o.space_id=$5 and o.source='application_proposal'
+      where c.id=$1 and c.application_id=$2 and c.property_id=$3`,
+      [
+        app.proposed_terms_confirmation_id,
+        app.id,
+        app.property_id,
+        app.person_id || null,
+        app.space_id || null,
+      ],
+    )
+  ).rows[0];
+  if (!row)
+    throw conflict(
+      "application_terms_lineage_missing",
+      "The application's current terms record cannot be read in its property scope.",
+    );
+  const derived = row.source === "authored_offer_acknowledged";
+  const authority = row.offer_authority;
+  return {
+    ...row,
+    confirmed_by: derived ? null : row.actor_user_id || null,
+    confirmed_at: derived ? null : row.created_at || null,
+    prepared_by: derived ? row.actor_user_id || null : null,
+    prepared_at: derived ? row.created_at || null : null,
+    offer_author:
+      authority && authority.actor_user_id
+        ? {
+            user_id: authority.actor_user_id,
+            authored_at: row.offer_authored_at || null,
+            authority,
+          }
+        : null,
+  };
+}
+
 module.exports = {
+  readCurrentTermsConfirmation,
   deriveConfirmationFromAuthoredOffer,
   confirmProposedTerms,
   resolveObligationAuthority,

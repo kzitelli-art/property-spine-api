@@ -28,7 +28,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 const { applicationTermsComplete, structuredTerms } = require("./application_terms");
-const { readBoundApplicationOffer } = require("./proposed_terms_service");
+const { readBoundApplicationOffer, readCurrentTermsConfirmation } = require("./proposed_terms_service");
 
 // Pure compute functions — operator.js owns the two thin session-scoped routes
 // and calls these (same pattern as turn_priority.js). Keeps operator.js session
@@ -185,14 +185,32 @@ function packetSigningStanding(packet) {
 
 // The proposed-terms confirmation the application currently points at.
 async function loadConfirmation(client, app) {
-  const cid = app && app.proposed_terms_confirmation_id;
-  if (!cid) return null;
-  const q = await client.query(
-    `select id, source, rent, security_deposit, lease_start_date, lease_end_date,
-            concession_status, actor_user_id, created_at
-       from application_proposed_terms_confirmations
-      where id = $1`, [cid]);
-  return q.rows[0] || null;
+  return readCurrentTermsConfirmation(client, app);
+}
+
+async function loadExecutionDecision(client, packet, app) {
+  if (!packet) return null;
+  const row = (
+    await client.query(
+      `select e.id, e.lease_packet_id, e.created_at, e.event_json
+       from lease_packet_audit_events e
+       join lease_packets p on p.id=e.lease_packet_id
+      where e.lease_packet_id=$1 and p.application_id=$2 and p.property_id=$3
+        and p.superseded_at is null and e.event_type='executed_by_decision'
+      order by e.created_at desc, e.id desc limit 1`,
+      [packet.id, app.id, app.property_id],
+    )
+  ).rows[0];
+  if (!row) return null;
+  const event = row.event_json || {};
+  return {
+    packet_id: row.lease_packet_id,
+    event_id: row.id,
+    actor_user_id: event.actor_user_id || null,
+    at: row.created_at,
+    application_decision: event.application_decision || null,
+    decisions: Array.isArray(event.decisions) ? event.decisions : null,
+  };
 }
 
 function mainBlocker(complete, missing, currency) {
@@ -420,6 +438,7 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
   const currency = packetCurrency(app, packet);
   const concession = await concessionDetail(client, app);
   const confirmation = await loadConfirmation(client, app);
+  const execution_decision = await loadExecutionDecision(client, packet, app);
   const executed_lease = await loadExecutedLease(client, app);
 
   // 089: the lease this application produced, if confirm-term has run. The
@@ -541,9 +560,15 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
       lease_start_date: nDate(confirmation.lease_start_date),
       lease_end_date: nDate(confirmation.lease_end_date),
       concession_status: confirmation.concession_status || null,
-      confirmed_by: confirmation.actor_user_id || null,
-      confirmed_at: confirmation.created_at || null,
+      confirmed_by: confirmation.confirmed_by,
+      confirmed_at: confirmation.confirmed_at,
+      prepared_by: confirmation.prepared_by,
+      prepared_at: confirmation.prepared_at,
+      offer_author: confirmation.offer_author,
+      application_offer_id: confirmation.application_offer_id || null,
+      application_terms_hash: confirmation.application_terms_hash || null,
     } : null,
+    execution_decision,
     packet: {
       id: packet ? packet.id : null,
       version: packet ? packet.version : null,
@@ -583,5 +608,5 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
 
 module.exports = {
   buildReviewList, buildReviewDetail, packetCurrency, concessionDetail, mainBlocker,
-  packetSigningStanding,
+  packetSigningStanding, loadExecutionDecision,
 };

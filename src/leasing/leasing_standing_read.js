@@ -47,7 +47,7 @@ const externalEmailReply = require("./external_email_reply");
 
 const { resolveRelationshipStage } = require("../shared/relationship_stage");
 const { resolveSpaceEconomics } = require("../money/effective_pricing");
-const { readBoundApplicationOffer } = require("../applications/proposed_terms_service");
+const { readBoundApplicationOffer, readCurrentTermsConfirmation } = require("../applications/proposed_terms_service");
 const { normalizeStanding } = require("./tour_outcome");
 
 //  A source that could not be read is reported, never silently emptied.
@@ -166,7 +166,7 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
             a.property_id, a.person_id,
             a.application_offer_id, a.application_terms_hash,
             a.application_terms_acknowledged_at,
-            a.terms_review_obligation_id, a.executed_lease_record_id, a.created_at,
+            a.terms_review_obligation_id, a.proposed_terms_confirmation_id, a.executed_lease_record_id, a.created_at,
             u.unit_number, s.space_label
        from lease_applications a
        left join units  u on u.id = a.unit_id
@@ -252,15 +252,8 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
   //  term is a governed fact — it is whatever the current proposed-terms
   //  confirmation named — so it is READ, and when nothing has been confirmed
   //  the answer stays honestly unresolved.
-  const confirmation = app ? await attempt("proposed_terms", async () => (await db.query(
-    //  `id` is SELECTED. Lineage is compared on it, and without it every
-    //  packet looked like a lineage mismatch — this read reported a blocked
-    //  next action where the review reported an available one, which is the
-    //  exact two-surfaces-disagree failure this projection exists to remove.
-    //  Caught by running both surfaces against the same application.
-    `select id, rent, security_deposit, lease_start_date, lease_end_date, concession_status
-       from application_proposed_terms_confirmations
-      where application_id=$1 order by created_at desc limit 1`, [app.id])).rows[0] || null, notes) : null;
+  const confirmation = app ? await attempt("proposed_terms",
+    () => readCurrentTermsConfirmation(db, app), notes) : null;
 
   //  THE ONE PIECE OF ARITHMETIC IN THIS FILE, AND WHY IT IS SAFE.
   //  The confirmation stores DATES, not a term length, so asking the pricing
@@ -426,6 +419,14 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
       id: app.id, status: app.status, applied_at: app.created_at,
       selection: {basis:"latest_created", candidate_count:Number(app.application_count)},
       terms_review: termsReview,
+      proposed_terms_confirmation: confirmation ? {
+        id: confirmation.id, source: confirmation.source,
+        confirmed_by: confirmation.confirmed_by, confirmed_at: confirmation.confirmed_at,
+        prepared_by: confirmation.prepared_by, prepared_at: confirmation.prepared_at,
+        offer_author: confirmation.offer_author,
+        application_offer_id: confirmation.application_offer_id || null,
+        application_terms_hash: confirmation.application_terms_hash || null,
+      } : null,
     } : null,
     lease: leaseBand,
     tenancy: lease

@@ -25,6 +25,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
   }
   if (request === "../applications/proposed_terms_service") {
     return {
+      readCurrentTermsConfirmation: originalLoad(request, parent, isMain).readCurrentTermsConfirmation,
       readBoundApplicationOffer: async (db, app, options) => {
         offerCalls.push({ db, app, options });
         if (offerState instanceof Error) throw offerState;
