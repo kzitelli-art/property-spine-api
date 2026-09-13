@@ -1,0 +1,1 @@
+gate_inventory_relationship_policy: PASS {"referencing_columns":61,"policy_entries":61,"blocking_tables":24,"triggers_found":25}

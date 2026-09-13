@@ -322,6 +322,80 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     return res.status(403).json({ error: "not_permitted" });
   }
 
+  // ═══════════════════════════════════════════════════════════════════
+  //  INVENTORY CORRECTION — review, retire, reinstate, history.
+  //  The door over src/tenancy/inventory_correction.js, which is itself the
+  //  door over the existing retirement owner (inventory_retirement.js).
+  //  Reads need a management-module session at the property; writes need
+  //  the governed override (can_manage_roles) — the SAME condition the
+  //  ai-rules governance routes enforce, re-verified inside the
+  //  transaction. A leasing assignment alone is not correction authority,
+  //  and knowledge of a unit id is not custody: the unit's own property_id
+  //  is compared with the session's property on every call.
+  // ═══════════════════════════════════════════════════════════════════
+  const inventoryCorrection = require("../tenancy/inventory_correction");
+  const sendCorrectionError = (res, e, label) => {
+    if (e && e.httpStatus && e.body) return res.status(e.httpStatus).json(e.body);
+    if (e && e.httpStatus) return res.status(e.httpStatus).json({ error: e.code || "refused", receipt: e.publicMessage || e.message, ...(e.refused ? { refused: e.refused } : {}), ...(e.held ? { held: e.held } : {}), ...(e.already ? { already: e.already } : {}) });
+    console.error(label, e);
+    return res.status(500).json({ error: "internal", receipt: "The inventory correction could not be completed." });
+  };
+  router.get("/operator/inventory/corrections", requireOperator, requireManagementModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const out = await inventoryCorrection.listUnits(pool, {
+        property_id: req.operator.property_id,
+        limit: req.query.limit, offset: req.query.offset, state: req.query.state, q: req.query.q,
+      });
+      return res.json({ ...out, may_correct: req.operator.can_manage_roles === true });
+    } catch (e) { return sendCorrectionError(res, e, "inventory corrections list:"); }
+  });
+  router.get("/operator/inventory/corrections/review", requireOperator, requireManagementModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const out = await inventoryCorrection.reviewUnit(pool, { property_id: req.operator.property_id, unit_id: req.query.unit_id });
+      return res.json({ ...out, may_correct: req.operator.can_manage_roles === true });
+    } catch (e) { return sendCorrectionError(res, e, "inventory correction review:"); }
+  });
+  router.get("/operator/inventory/corrections/history", requireOperator, requireManagementModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      return res.json(await inventoryCorrection.history(pool, { property_id: req.operator.property_id, limit: req.query.limit, offset: req.query.offset }));
+    } catch (e) { return sendCorrectionError(res, e, "inventory correction history:"); }
+  });
+  router.post("/operator/inventory/corrections/retire", requireOperator, requireManagementModuleAccess, requireGovernanceAuthority, async (req, res) => {
+    const b = req.body || {};
+    try {
+      const out = await inventoryCorrection.applyRetirement(pool, {
+        property_id: req.operator.property_id,
+        actor: { user_id: req.operator.id },                 // SERVER-DERIVED
+        unit_ids: Array.isArray(b.unit_ids) ? b.unit_ids : [],
+        review_tokens: b.review_tokens && typeof b.review_tokens === "object" ? b.review_tokens : {},
+        rationale: b.rationale, reason_code: b.reason_code === undefined ? undefined : b.reason_code,
+        superseded_by_import_batch_id: b.superseded_by_import_batch_id || null,
+        confirmed: b.confirmed === true, idempotency_key: b.idempotency_key || null,
+      });
+      //  A replayed command answers 200 with the recorded result and the
+      //  current state; a new decision answers 201.
+      if (out.idempotent === true) return res.status(200).json({ receipt: `This retirement was already recorded (${out.retired} unit record(s)). Nothing new was written.`, ...out });
+      return res.status(201).json({ receipt: `Retired ${out.retired} unit record(s) from current inventory. Identity and history are retained.`, ...out });
+    } catch (e) { return sendCorrectionError(res, e, "inventory retire:"); }
+  });
+  router.post("/operator/inventory/corrections/reinstate", requireOperator, requireManagementModuleAccess, requireGovernanceAuthority, async (req, res) => {
+    const b = req.body || {};
+    try {
+      const out = await inventoryCorrection.applyReinstatement(pool, {
+        property_id: req.operator.property_id, actor: { user_id: req.operator.id },
+        unit_id: b.unit_id, review_token: b.review_token, reason: b.reason, confirmed: b.confirmed === true,
+        idempotency_key: b.idempotency_key || null,
+        identity_decision: b.identity_decision == null ? null : String(b.identity_decision),
+        identity_reason: b.identity_reason == null ? null : String(b.identity_reason),
+      });
+      if (out.idempotent === true) return res.status(200).json({ receipt: "This reinstatement was already recorded. Nothing new was written.", ...out });
+      return res.status(201).json({ receipt: "Reinstated to current inventory. The retirement stays as history and names who reversed it.", ...out });
+    } catch (e) { return sendCorrectionError(res, e, "inventory reinstate:"); }
+  });
+
   router.get("/operator/leasing/ai-settings", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {

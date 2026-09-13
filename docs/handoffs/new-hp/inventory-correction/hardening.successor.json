@@ -1,0 +1,1235 @@
+{
+  "server": "e65dfb2",
+  "summary": {
+    "passed": 101,
+    "failed": 0,
+    "observations": 2,
+    "witness": false
+  },
+  "results": [
+    {
+      "section": "fixture · a synthetic bed-basis property, an unrelated property, six actors, an older bed-as-unit source",
+      "label": "22 synthetic unit records with one placeholder each",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "units": 22,
+        "spaces": 22
+      }
+    },
+    {
+      "section": "fixture · a synthetic bed-basis property, an unrelated property, six actors, an older bed-as-unit source",
+      "label": "designations are fixture choices: parents H-P1..3, legacy bed-as-unit records H-P1-A..H-P3-A, legacy H-L01..H-L16; H-L06 declined application, H-L07 open application, H-L16 expired lease",
+      "ok": true,
+      "kind": "observe",
+      "detail": {
+        "parents": [
+          "H-P1",
+          "H-P2",
+          "H-P3"
+        ],
+        "legacyBeds": [
+          "H-P1-A",
+          "H-P2-A",
+          "H-P3-A"
+        ],
+        "legacy": [
+          "H-L01",
+          "H-L02",
+          "H-L03",
+          "H-L04",
+          "H-L05",
+          "H-L06",
+          "H-L07",
+          "H-L08",
+          "H-L09",
+          "H-L10",
+          "H-L11",
+          "H-L12",
+          "H-L13",
+          "H-L14",
+          "H-L15",
+          "H-L16"
+        ]
+      }
+    },
+    {
+      "section": "fixture · a synthetic bed-basis property, an unrelated property, six actors, an older bed-as-unit source",
+      "label": "fixture ready",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "the organization admin creates the deal container",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201,
+        "body": {
+          "deal": {
+            "id": "<id-1>",
+            "deal_name": "Hardening Deal 5adc82b6",
+            "onboarding_type": "existing_asset",
+            "status": "created",
+            "organization_id": "<id-2>",
+            "organization_absent_reason": null,
+            "created_at": "2026-09-13T13:45:50.057Z",
+            "authority_basis": "platform_role:org_admin"
+          },
+          "receipt": "Deal \"Hardening Deal 5adc82b6\" created."
+        }
+      }
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "the property joins the deal",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201,
+        "body": {
+          "already_member": false,
+          "property": {
+            "id": "<id-3>",
+            "name": "Hardening 5adc82b6",
+            "display_name": "Hardening (rehearsal)",
+            "address": "1 Rehearsal Way",
+            "city": null,
+            "state": null,
+            "organization_id": "<id-2>"
+          },
+          "receipt": "Hardening 5adc82b6 is now part of \"Hardening Deal 5adc82b6\"."
+        }
+      }
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "the rent roll is uploaded",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201,
+        "body": {
+          "artifact": {
+            "id": "<id-4>",
+            "filename": "hardening-bed-basis-rehearsal.csv",
+            "byte_size": 164,
+            "uploaded_at": "2026-09-13T13:45:50.098Z"
+          },
+          "receipt": "hardening-bed-basis-rehearsal.csv is on file. Spine keeps it so it can always show what this position came from."
+        }
+      }
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "a governed setup opens",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201,
+        "body": {
+          "activation": {
+            "id": "<id-5>",
+            "deal_id": "<id-1>",
+            "property_id": "<id-3>",
+            "source_label": "Hardening 5adc82b6 rent roll",
+            "status": "open",
+            "created_at": "2026-09-13T13:45:50.107Z"
+          },
+          "reopened": false,
+          "receipt": "Setup started for Hardening 5adc82b6."
+        }
+      }
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "the retained source is read with the bed basis",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201,
+        "body": "Read 2 rows from hardening-bed-basis-rehearsal.csv, dated 2026-09-10. 2 ready, 0 need a look, 0 unassigned or blocked, 0 conflicting. Nothing is live yet."
+      }
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "one proposal per source row: one occupied, one vacant",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "proposals": 2,
+        "statuses": [
+          "staged",
+          "staged"
+        ]
+      }
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "both shapes confirm",
+      "ok": true,
+      "kind": "check",
+      "detail": [
+        {
+          "status": 200
+        },
+        {
+          "status": 200
+        }
+      ]
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "the opening position is established",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201,
+        "body": "Lease & occupancy established as of 2026-09-10: 2 units, nothing outstanding."
+      }
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "BOTH shapes wrote status='promoted' (occupied and vacant), each with a produced unit and position",
+      "ok": true,
+      "kind": "check",
+      "detail": [
+        {
+          "key": "H-P1|H-P1-A",
+          "status": "promoted",
+          "vacant": "false",
+          "unit": "H-P1",
+          "space": "H-P1-A"
+        },
+        {
+          "key": "H-P2|H-P2-A",
+          "status": "promoted",
+          "vacant": "true",
+          "unit": "H-P2",
+          "space": "H-P2-A"
+        }
+      ]
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "the occupied shape produced a lease on H-P1's position; the vacant shape produced none",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "n": 1
+      }
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "the established opening position names its source batch",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "H-P1 is claimed by the current representation through its produced link (occupied shape) and cannot be retired",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "blockers": [
+          "unit_carries_leases",
+          "claimed_by_current_representation"
+        ]
+      }
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "H-P2 is claimed by the current representation through its produced link (vacant shape) and cannot be retired",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "blockers": [
+          "claimed_by_current_representation"
+        ]
+      }
+    },
+    {
+      "section": "deal setup · both confirmation shapes (occupied and vacant) through the real door, followed by produced links",
+      "label": "readers before any retirement",
+      "ok": true,
+      "kind": "observe",
+      "detail": {
+        "occupancy": {
+          "rentable": 22,
+          "occupied": 1
+        },
+        "availability_count": 22,
+        "unit_view_units": 22,
+        "standing_units": 22
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "review names the covering record: a current position under H-P1 carries the label H-P1-A",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "identity": {
+          "label": "H-P1-A",
+          "own_claim_by_current_representation": false,
+          "cited_superseding_source": null,
+          "covering_records": [
+            {
+              "evidence": "promoted_claim_under_current_representation",
+              "key": "H-P1|H-P1-A",
+              "produced_unit_label": "H-P1",
+              "produced_space_label": "H-P1-A"
+            },
+            {
+              "evidence": "current_position_carrying_this_label",
+              "key": "H-P1 | H-P1-A",
+              "produced_unit_label": "H-P1",
+              "produced_space_label": "H-P1-A"
+            }
+          ],
+          "reinstatement": null,
+          "settles_by": null
+        }
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "H-P1-A is retired citing the bed-basis source",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201,
+        "body": 1
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "the retired record's identity reads COVERED; reinstatement is not offered",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "identity": "covered",
+        "eligible": false
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "reinstating over a covering record is refused by name with the covering records (no double count)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "error": "identity_covered"
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "an explicit correction cannot override a covered identity — the covering record must be corrected first",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "error": "identity_covered"
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "H-P3-A is retired citing the bed-basis source",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "identity reads UNRESOLVED: the cited source neither names the record nor claims it",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "identity": {
+          "label": "H-P3-A",
+          "own_claim_by_current_representation": false,
+          "cited_superseding_source": {
+            "source_file": "hardening-bed-basis-rehearsal.csv",
+            "source_as_of": "2026-09-10T00:00:00.000Z"
+          },
+          "covering_records": [],
+          "reinstatement": "unresolved",
+          "settles_by": "an explicit authorized correction: identity_decision 'position_not_covered_by_current_representation' with a reason of at least 20 characters"
+        }
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "without an explicit correction, an unresolved identity refuses reinstatement and says what would settle it",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "error": "identity_unresolved"
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "a correction with no real reason does not settle it",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "refused reinstatements leave no command receipt",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "with the explicit authorized correction, the reinstatement proceeds and records the identity decision",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201,
+        "identity": {
+          "read": "unresolved",
+          "decision": "position_not_covered_by_current_representation",
+          "reason": "Rehearsal: the bed-basis source covered H-P1 and H-P2 only; H-P3's positions were not in it.",
+          "covering_records": []
+        }
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "the reversing decision names the identity read, the correction and its reason; the original decision stays",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "note": "reinstated to current inventory by user <id-6> (assignment <id-7>; identity unresolved → position_not_covered_by_current_representation: Reh"
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "original and reversing decisions are both preserved on the owner's row",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "reversed": true,
+        "reversal_reason": "Rehearsal: H-P3-A is being put back pending a physical walk.",
+        "superseded_rationale": "Rehearsal-designated example: this record modelled a bed as a unit under an older representation; the corrected bed-basis source supersedes it. (5adc82b6)"
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "reinstating established no availability: the position is back in the reads with its own (unestablished) state",
+      "ok": true,
+      "kind": "check",
+      "detail": {}
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "H-L01 is retired without a cited source",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201
+      }
+    },
+    {
+      "section": "identity · covered, unresolved and clear reinstatements",
+      "label": "identity reads CLEAR: nothing covers it and no superseding source was cited",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "identity": "clear"
+      }
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "H-L02 reviews as eligible",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "ORDER A (application): the retirement waits on the in-flight application writer",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "settled": false
+      }
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "ORDER A (application): after the writer commits the retirement is refused; nothing written",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "code": "stale_review"
+      }
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "H-L03 is retired",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201
+      }
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "ORDER B (application): the real internal-application door refuses; no application attached",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "error": "This unit cannot be offered right now.",
+        "receipt": "This unit cannot be offered right now.",
+        "rows": 0
+      }
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "H-L04 reviews as eligible",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "ORDER A (work): the retirement waits on the in-flight work-order writer (unit-row KEY SHARE vs FOR UPDATE)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "settled": false
+      }
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "ORDER A (work): refused after the writer commits",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "code": "stale_review"
+      }
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "H-L05 is retired",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201
+      }
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "ORDER B (work/obligation): the real work-order door refuses; no work order and no obligation attached",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "error": "retired_inventory",
+        "rows": {
+          "work_orders": 0,
+          "obligations": 0
+        }
+      }
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "a NEW child position under a retired unit is refused",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "message": "Unit H-L05 is retired from current inventory; spaces cannot attach operative work to it (new attachment). Reinstate the unit first if this i"
+      }
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "H-L06 (declined application only) is retired: a terminal row does not block",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "REOPENING a terminal row on a retired unit is refused",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "message": "Unit H-L06 is retired from current inventory; lease_applications cannot attach operative work to it (reopen). Reinstate the unit first if th"
+      }
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "RE-TARGETING an operative row onto a retired unit is refused",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "message": "Unit H-L05 is retired from current inventory; lease_applications cannot attach operative work to it (re-target). Reinstate the unit first if"
+      }
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "audit recording (events) on retired inventory is allowed — history keeps its identity",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "audit": {
+          "ok": true
+        },
+        "observation": false
+      }
+    },
+    {
+      "section": "wall · operative writes cannot attach to retired inventory; history, audit and closing still can",
+      "label": "the any-lease wall (180) still stands",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "message": "Unit H-L05 is retired from current inventory; a lease attached here would be invisible in every cano"
+      }
+    },
+    {
+      "section": "legacy conflict · an attachment that pre-dates the wall is named in every read, closable, never zeroed and never repaired",
+      "label": "the staff history names the scoped conflict: H-L05 · application × 1",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "conflict": true,
+        "conf": {
+          "label": "H-L05",
+          "attachments": [
+            {
+              "kind": "application",
+              "code": "open_applications",
+              "count": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "section": "legacy conflict · an attachment that pre-dates the wall is named in every read, closable, never zeroed and never repaired",
+      "label": "the tenancy standing (Ask Spine's read) carries the same named conflict",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "conflict": true
+      }
+    },
+    {
+      "section": "legacy conflict · an attachment that pre-dates the wall is named in every read, closable, never zeroed and never repaired",
+      "label": "staff history and standing carry the SAME explanation object",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "legacy conflict · an attachment that pre-dates the wall is named in every read, closable, never zeroed and never repaired",
+      "label": "the record's own review reports the conflict as a blocker-shaped fact on a retired unit",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "blockers": [
+          "open_applications"
+        ]
+      }
+    },
+    {
+      "section": "legacy conflict · an attachment that pre-dates the wall is named in every read, closable, never zeroed and never repaired",
+      "label": "CLOSING the existing conflict (withdrawing the application) is allowed on the retired unit",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "ok": true
+      }
+    },
+    {
+      "section": "legacy conflict · an attachment that pre-dates the wall is named in every read, closable, never zeroed and never repaired",
+      "label": "after closing, the conflict is gone from the read — resolved by the writer, not repaired by SQL",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "conflict": false
+      }
+    },
+    {
+      "section": "authority race · revoked while the correction waits for its inventory lock; actor disablement",
+      "label": "H-L08 reviews as eligible",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "authority race · revoked while the correction waits for its inventory lock; actor disablement",
+      "label": "the correction is blocked on its inventory lock (external transaction holds the unit row)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "settled": false
+      }
+    },
+    {
+      "section": "authority race · revoked while the correction waits for its inventory lock; actor disablement",
+      "label": "admin2 revokes admin's governed override through the governed door while the correction waits",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "authority race · revoked while the correction waits for its inventory lock; actor disablement",
+      "label": "after the lock is released the correction re-reads authority AFTER the lock and refuses; nothing written",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403,
+        "error": "authority_changed",
+        "rows": 0
+      }
+    },
+    {
+      "section": "authority race · revoked while the correction waits for its inventory lock; actor disablement",
+      "label": "authority restored",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "authority race · revoked while the correction waits for its inventory lock; actor disablement",
+      "label": "H-L09 reviews as eligible for admin3",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "authority race · revoked while the correction waits for its inventory lock; actor disablement",
+      "label": "admin3's correction is blocked on its inventory lock",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "settled": false
+      }
+    },
+    {
+      "section": "authority race · revoked while the correction waits for its inventory lock; actor disablement",
+      "label": "the organization admin suspends admin3 through the org door while the correction waits",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "id": "<id-8>",
+          "name": "Admin Three 5adc82b6",
+          "email": null,
+          "phone": "<phone>",
+          "platform_role": "member",
+          "status": "suspended"
+        }
+      }
+    },
+    {
+      "section": "authority race · revoked while the correction waits for its inventory lock; actor disablement",
+      "label": "a suspended actor's in-flight correction is refused after the wait; nothing written",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403,
+        "error": "actor_disabled",
+        "rows": 0
+      }
+    },
+    {
+      "section": "authority race · revoked while the correction waits for its inventory lock; actor disablement",
+      "label": "admin3 restored",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "authority race · revoked while the correction waits for its inventory lock; actor disablement",
+      "label": "revoke again for the replay-entitlement check",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "authority race · revoked while the correction waits for its inventory lock; actor disablement",
+      "label": "a replay of a recorded command is refused when the actor no longer holds authority (entitlement before replay)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403,
+        "error": "not_permitted"
+      }
+    },
+    {
+      "section": "authority race · revoked while the correction waits for its inventory lock; actor disablement",
+      "label": "authority restored again",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "command identity · replay, changed payload, independent identities, concurrent duplicates, no receipt on refusal",
+      "label": "H-L10 reviews as eligible",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "command identity · replay, changed payload, independent identities, concurrent duplicates, no receipt on refusal",
+      "label": "the retirement is recorded",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201,
+        "body": 1
+      }
+    },
+    {
+      "section": "command identity · replay, changed payload, independent identities, concurrent duplicates, no receipt on refusal",
+      "label": "the command has a durable identity",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "command_identity": "recorded"
+      }
+    },
+    {
+      "section": "command identity · replay, changed payload, independent identities, concurrent duplicates, no receipt on refusal",
+      "label": "same key + same payload REPLAYS the recorded result (200) and separately reports the CURRENT state",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "idempotent": true,
+        "current": {
+          "as_of": "2026-09-13T13:45:55.354Z",
+          "units": [
+            {
+              "unit_id": "<id-9>",
+              "unit_number": "H-L10",
+              "state": "retired"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "section": "command identity · replay, changed payload, independent identities, concurrent duplicates, no receipt on refusal",
+      "label": "same key + different payload is a conflict, not a silent replay",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "error": "command_payload_conflict"
+      }
+    },
+    {
+      "section": "command identity · replay, changed payload, independent identities, concurrent duplicates, no receipt on refusal",
+      "label": "a DIFFERENT key for the same unit is a new command and is refused by name (ALREADY_RETIRED)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "code": "ALREADY_RETIRED"
+      }
+    },
+    {
+      "section": "command identity · replay, changed payload, independent identities, concurrent duplicates, no receipt on refusal",
+      "label": "the same key string under the REINSTATE identity is independent of the retire identity",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201
+      }
+    },
+    {
+      "section": "command identity · replay, changed payload, independent identities, concurrent duplicates, no receipt on refusal",
+      "label": "a lost response after the reinstatement commit replays it instead of becoming NOT_RETIRED or stale_review",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "idempotent": true
+      }
+    },
+    {
+      "section": "command identity · replay, changed payload, independent identities, concurrent duplicates, no receipt on refusal",
+      "label": "two receipts under one key string: one retire, one reinstate",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "kinds": [
+          "retire",
+          "reinstate"
+        ]
+      }
+    },
+    {
+      "section": "command identity · replay, changed payload, independent identities, concurrent duplicates, no receipt on refusal",
+      "label": "concurrent duplicates: one 201 decision, one 200 replay, one retirement row, one receipt",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "statuses": [
+          200,
+          201
+        ],
+        "rows": {
+          "retirements": 1,
+          "commands": 1
+        }
+      }
+    },
+    {
+      "section": "command identity · replay, changed payload, independent identities, concurrent duplicates, no receipt on refusal",
+      "label": "a mixed selection is refused whole: the eligible unit is not retired and no receipt is written",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "rows": {
+          "l12": 0,
+          "commands": 0
+        }
+      }
+    },
+    {
+      "section": "command identity · replay, changed payload, independent identities, concurrent duplicates, no receipt on refusal",
+      "label": "Mike cannot replay a recorded command either",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "occupancyByBasis: rentable_count dropped by exactly the retired positions (6); occupied unchanged",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "before": 22,
+        "after": 16,
+        "occupied": 1
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "availabilityRead: count dropped by the retired positions; no retired unit appears; the parent still does",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "before": 22,
+        "after": 16,
+        "retired": [
+          "H-L01",
+          "H-L03",
+          "H-L05",
+          "H-L06",
+          "H-L11",
+          "H-P1-A"
+        ]
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "rent-roll unit view: units dropped by the retired count; retired_excluded names the count and no tenancy conflict; no retired unit listed",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "units_before": 22,
+        "units_after": 16,
+        "retired_excluded": {
+          "units": 6,
+          "leases_on_retired_inventory": 0,
+          "conflict": false
+        }
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "tenancy standing: position.units dropped by the retired count; the exclusion unknowns carry the exact count and zero attached tenancy",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "units_before": 22,
+        "units_after": 16,
+        "unknowns": {
+          "retired": 6,
+          "attached": 0
+        }
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "standing.inventory_correction: which records are excluded (by label), why, provenance, conflicts — and the reinstated decisions",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "excluded": [
+          [
+            "H-L11",
+            "superseded_by_corrected_inventory_grain",
+            "staff decision",
+            null
+          ],
+          [
+            "H-L06",
+            "superseded_by_corrected_inventory_grain",
+            "staff decision",
+            null
+          ],
+          [
+            "H-L05",
+            "superseded_by_corrected_inventory_grain",
+            "staff decision",
+            null
+          ],
+          [
+            "H-L03",
+            "superseded_by_corrected_inventory_grain",
+            "staff decision",
+            null
+          ],
+          [
+            "H-L01",
+            "superseded_by_corrected_inventory_grain",
+            "staff decision",
+            null
+          ],
+          [
+            "H-P1-A",
+            "superseded_by_corrected_inventory_grain",
+            "staff decision",
+            "hardening-bed-basis-rehearsal.csv"
+          ]
+        ],
+        "reinstated": 2
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "every excluded record carries its reason meaning, rationale and date; the explanation carries no record or actor ids",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "sample": {
+          "label": "H-L11",
+          "retired_on": "2026-09-13T00:00:00.000Z",
+          "reason": "superseded_by_corrected_inventory_grain",
+          "reason_meaning": "the record modelled a position the corrected inventory grain represents elsewhere; it was never separate real inventory",
+          "rationale": "Rehearsal-designated example: this record modelled a bed as a unit under an older representation; the corrected bed-basis source supersedes it. (5adc82b6)",
+          "superseding_source": null,
+          "decided_by": "staff decision"
+        }
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "the unrelated property's admin retires Apt 2F (no citation)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "the unrelated property's standing reads",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "truth_state": "NOT_ESTABLISHED"
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "with no opening position the correction explanation still names the excluded record and its missing citation",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "ic": [
+          {
+            "label": "Apt 2F",
+            "retired_on": "2026-09-13T00:00:00.000Z",
+            "reason": "superseded_by_corrected_inventory_grain",
+            "reason_meaning": "the record modelled a position the corrected inventory grain represents elsewhere; it was never separate real inventory",
+            "rationale": "Rehearsal-designated example: this record modelled a bed as a unit under an older representation; the corrected bed-basis source supersedes it. (5adc82b6)",
+            "superseding_source": null,
+            "decided_by": "staff decision"
+          }
+        ]
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "unknowns stay null when no baseline read completed, or carry the exact count — never a bag of zeroes",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "unknowns": {
+          "occupied_positions_with_no_recorded_rent": 0,
+          "positions_with_unresolved_occupancy_evidence": 1,
+          "positions_with_overlapping_lease_claims": 0,
+          "occupied_positions_proven_only_by_the_opening_import": 0,
+          "occupied_positions_with_no_linked_resident": 0,
+          "confirmed_source_rows_not_attached_to_a_position": 0,
+          "held_source_rows_not_attached_to_a_position": 0,
+          "unit_records_retired_from_current_inventory": 1,
+          "tenancy_attached_to_retired_inventory": 0
+        }
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "the unrelated property's history explains only its own record",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "labels": [
+          "Apt 2F"
+        ]
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "list: bounded page of retired records with whole-property totals",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "page": {
+          "limit": 2,
+          "offset": 0,
+          "returned": 2,
+          "filtered_total": 6,
+          "state": "retired",
+          "q": null
+        },
+        "units_total": 22
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "list: the second page differs",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "returned": 2
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "list: a label search filters and reports its own total",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "filtered": 6
+      }
+    },
+    {
+      "section": "readers · exact contracts after the corrections, and the unrelated property's silence",
+      "label": "history: bounded rows with whole-property totals (retired now, reversed)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "page": {
+          "limit": 2,
+          "offset": 0,
+          "returned": 2,
+          "total": 8
+        },
+        "retired_now": 6,
+        "reversed": 2
+      }
+    },
+    {
+      "section": "ask spine · the entitled gather and answer path carries the same bounded explanation as the staff view",
+      "label": "gatherFacts (tenancy, management-entitled) carries the excluded records by label",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "labels": [
+          "H-L11",
+          "H-L06",
+          "H-L05",
+          "H-L03",
+          "H-L01",
+          "H-P1-A"
+        ]
+      }
+    },
+    {
+      "section": "ask spine · the entitled gather and answer path carries the same bounded explanation as the staff view",
+      "label": "Ask Spine's gathered explanation is byte-identical to the staff history's explanation (same read, two projections)",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "ask spine · the entitled gather and answer path carries the same bounded explanation as the staff view",
+      "label": "no record, actor or property id survives sanitization in the tenancy facts",
+      "ok": true,
+      "kind": "check",
+      "detail": {}
+    },
+    {
+      "section": "ask spine · the entitled gather and answer path carries the same bounded explanation as the staff view",
+      "label": "a session without leasing/management entitlement gathers no tenancy explanation",
+      "ok": true,
+      "kind": "check",
+      "detail": {}
+    },
+    {
+      "section": "ask spine · the entitled gather and answer path carries the same bounded explanation as the staff view",
+      "label": "the answer names every excluded record and its reason from the gathered facts",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "answer": "6 unit records are retired from current inventory: H-L11 (superseded_by_corrected_inventory_grain), H-L06 (superseded_by_corrected_inventory_grain), H-L05 (superseded_by_corrected_inventory_grain), H-L03 (superseded_by_corrected_inventory_grain), H-L01 (superseded_by_corrected_inventory_grain), H-P1-A (superseded_by_corrected_inventory_grain). No operative work is attached to them."
+      }
+    },
+    {
+      "section": "ask spine · the entitled gather and answer path carries the same bounded explanation as the staff view",
+      "label": "the model payload carried the explanation with labels and no internal ids",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "bytes": 8162
+      }
+    },
+    {
+      "section": "ask spine · the entitled gather and answer path carries the same bounded explanation as the staff view",
+      "label": "an unentitled session gets no retired-record names",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "outcome": "not_authorized",
+        "answer": "The rent roll is not available in your current access for this property."
+      }
+    },
+    {
+      "section": "completion",
+      "label": "hardening: wall → concurrency → authority → identity → command identity → readers → Ask completed",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "done": true
+      }
+    }
+  ]
+}

@@ -1,0 +1,847 @@
+{
+  "server": "<hash>-dirty",
+  "summary": {
+    "passed": 82,
+    "failed": 0,
+    "observations": 4,
+    "witness": false
+  },
+  "results": [
+    {
+      "section": "fixture · Greenery-shaped property, an unrelated property, four actors",
+      "label": "the retained legacy vocabulary is the production shape (64 parents, 107 other)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "parents": 64,
+        "legacy": 107
+      }
+    },
+    {
+      "section": "fixture · Greenery-shaped property, an unrelated property, four actors",
+      "label": "171 legacy unit records with one placeholder each, identities retained",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "units": 171,
+        "spaces": 171
+      }
+    },
+    {
+      "section": "fixture · Greenery-shaped property, an unrelated property, four actors",
+      "label": "a future tour slot names the tour-example unit",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Tour time published.",
+          "slot": {
+            "id": "<id-1>",
+            "property_id": "<id-2>",
+            "unit_id": "<id-3>",
+            "leasing_agent_id": "<id-4>",
+            "starts_at": "2026-09-16T12:33:00.513Z",
+            "ends_at": "2026-09-16T13:33:00.513Z",
+            "capacity": 1,
+            "status": "open",
+            "booked_tour_id": null,
+            "created_by": "<id-4>",
+            "created_at": "2026-09-13T12:33:00.562Z",
+            "updated_at": "2026-09-13T12:33:00.562Z"
+          },
+          "created": true
+        }
+      }
+    },
+    {
+      "section": "fixture · Greenery-shaped property, an unrelated property, four actors",
+      "label": "designations are fixture choices: E1/E2 retirable examples, E3 stale-review example, five blocked examples, one parent claimed by the current representation, 100+ legacy records left unresolved",
+      "ok": true,
+      "kind": "observe",
+      "detail": {
+        "E1": "101 - 1",
+        "E2": "101 - 2",
+        "E3": "107 - 1",
+        "blocked": {
+          "leased": "102 - 2",
+          "work": "109 - 1",
+          "tour": "107 - 2",
+          "application": "110 - 1",
+          "possession": "109 - 2"
+        },
+        "parent": "1325-101"
+      }
+    },
+    {
+      "section": "fixture · Greenery-shaped property, an unrelated property, four actors",
+      "label": "fixture ready",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "witness · what an authorized person meets on the unchanged baseline",
+      "label": "the staff door exists on this tree",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "list": 200,
+        "review": 200
+      }
+    },
+    {
+      "section": "witness · what an authorized person meets on the unchanged baseline",
+      "label": "a retirement without a review token is refused before any write",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 400,
+        "error": "review_required"
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "the review reads the exact unit",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "canonical label, property and space hierarchy are shown",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "label": "101 - 1",
+        "spaces": 1
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "source lineage names the older bed-as-unit source; the current representation does not claim this record",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "source_rows": 1
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "not retired, no history",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "eligible: no relationship stands, and the read says eligibility is not a finding about physical reality",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "action": "retire",
+        "eligible": true,
+        "reason_code": "eligible",
+        "blockers": [],
+        "message": "No lease, possession, application, offer, work, tour or current-source claim references this unit. It MAY be retired as an obsolete representation if a person decides it never was separate real inventory and says why."
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "a review token, the proposed governed reason and the actor's authority are carried",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "an unresolved legacy record with no lineage is shown with unknown lineage visible; nothing about it is decided",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "lineage_known": false
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "blocked: leased → unit_carries_leases",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "blockers": [
+          "unit_carries_leases"
+        ]
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "blocked: work → open_work_orders",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "blockers": [
+          "open_work_orders"
+        ]
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "blocked: tour → future_tours",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "blockers": [
+          "future_tours"
+        ]
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "blocked: application → open_applications",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "blockers": [
+          "open_applications"
+        ]
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "blocked: possession → possession_recorded",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "blockers": [
+          "possession_recorded"
+        ]
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "blocked: parent claimed by current representation → claimed_by_current_representation",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "blockers": [
+          "claimed_by_current_representation"
+        ]
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "a unit at another property is not reviewable from this session (custody from the unit's own row)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "an unknown unit id is not found",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 404
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "Mike (management module, no override) can read the list; it offers no authority and pre-selects nothing",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "may_correct": false,
+        "units": 171
+      }
+    },
+    {
+      "section": "review · the record, its lineage, its state and why it is or is not eligible",
+      "label": "a leasing-only assignment cannot even read the correction list",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403
+      }
+    },
+    {
+      "section": "authority · who may decide",
+      "label": "Mike (property_manager, management module, no override) cannot retire",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403
+      }
+    },
+    {
+      "section": "authority · who may decide",
+      "label": "a leasing assignment alone is not correction authority",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403
+      }
+    },
+    {
+      "section": "authority · who may decide",
+      "label": "an admin of another property cannot retire this property's unit (custody, not id knowledge)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403
+      }
+    },
+    {
+      "section": "authority · who may decide",
+      "label": "nor reinstate it",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403
+      }
+    },
+    {
+      "section": "authority · who may decide",
+      "label": "explicit confirmation is required",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 400
+      }
+    },
+    {
+      "section": "authority · who may decide",
+      "label": "an unsupported reason (demolition/conversion/vacancy) is refused by the owner's vocabulary wall",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 400,
+        "error": "UNKNOWN_RETIREMENT_REASON"
+      }
+    },
+    {
+      "section": "authority · who may decide",
+      "label": "a rationale that explains nothing is refused",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "error": "RETIREMENT_RATIONALE_REQUIRED"
+      }
+    },
+    {
+      "section": "authority · who may decide",
+      "label": "a superseding source cited from another property (or nowhere) is refused",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "error": "superseding_batch_not_at_property"
+      }
+    },
+    {
+      "section": "authority · who may decide",
+      "label": "no refusal above wrote a retirement",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "mixed selection · one blocked unit refuses the whole submission, no partial write",
+      "label": "the refusal names the leased unit and its blocker",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "refused": [
+          {
+            "unit_id": "<id-5>",
+            "unit_number": "102 - 2",
+            "code": "blocked",
+            "blockers": [
+              {
+                "code": "unit_carries_leases",
+                "count": 1,
+                "detail": "A lease is attached at some grain of this unit. The retirement owner refuses this; resolve the tenancy first."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "section": "mixed selection · one blocked unit refuses the whole submission, no partial write",
+      "label": "the eligible unit in the same selection was NOT retired (all or nothing)",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "mixed selection · one blocked unit refuses the whole submission, no partial write",
+      "label": "a unit the current representation itself produced cannot be 'superseded' by it",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409
+      }
+    },
+    {
+      "section": "mixed selection · one blocked unit refuses the whole submission, no partial write",
+      "label": "active relationship refuses: open_work_orders",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409
+      }
+    },
+    {
+      "section": "mixed selection · one blocked unit refuses the whole submission, no partial write",
+      "label": "active relationship refuses: future_tours",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409
+      }
+    },
+    {
+      "section": "mixed selection · one blocked unit refuses the whole submission, no partial write",
+      "label": "active relationship refuses: open_applications",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409
+      }
+    },
+    {
+      "section": "mixed selection · one blocked unit refuses the whole submission, no partial write",
+      "label": "active relationship refuses: possession_recorded",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409
+      }
+    },
+    {
+      "section": "mixed selection · one blocked unit refuses the whole submission, no partial write",
+      "label": "still nothing written",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "stale review · a decision is bound to what was reviewed",
+      "label": "E3 reviews as eligible",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "stale review · a decision is bound to what was reviewed",
+      "label": "a slot is published on E3 after the review",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "stale review · a decision is bound to what was reviewed",
+      "label": "the old review token is refused as stale; nothing is written",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "code": "stale_review"
+      }
+    },
+    {
+      "section": "stale review · a decision is bound to what was reviewed",
+      "label": "re-reviewing names the new blocker with a new token",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "blockers": [
+          "future_tours"
+        ]
+      }
+    },
+    {
+      "section": "stale review · a decision is bound to what was reviewed",
+      "label": "a token that does not match the reviewed facts is refused",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409
+      }
+    },
+    {
+      "section": "concurrent writer · a lease landing while the decision is in flight",
+      "label": "E2 reviews as eligible before the concurrent writer",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "concurrent writer · a lease landing while the decision is in flight",
+      "label": "the retirement WAITS on the in-flight writer instead of racing past it",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "settled": false
+      }
+    },
+    {
+      "section": "concurrent writer · a lease landing while the decision is in flight",
+      "label": "after the writer commits, the decision is refused (stale review or lease blocker), never applied over the new lease",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "code": "stale_review"
+      }
+    },
+    {
+      "section": "concurrent writer · a lease landing while the decision is in flight",
+      "label": "no retirement row was written for E2",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "concurrent writer · a lease landing while the decision is in flight",
+      "label": "E2 stays leased by the concurrent writer; E4 is designated for the second retirement",
+      "ok": true,
+      "kind": "observe",
+      "detail": {
+        "E4": "111 - 1"
+      }
+    },
+    {
+      "section": "retire · the authorized decision, recorded through the existing owner",
+      "label": "E1 and E4 review as eligible",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "retire · the authorized decision, recorded through the existing owner",
+      "label": "two designated records are retired in one decision",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201,
+        "body": {
+          "retired": 2
+        }
+      }
+    },
+    {
+      "section": "retire · the authorized decision, recorded through the existing owner",
+      "label": "the owner's rows name the admin, the governed reason and the cited superseding source",
+      "ok": true,
+      "kind": "check",
+      "detail": [
+        "101 - 1",
+        "111 - 1"
+      ]
+    },
+    {
+      "section": "retire · the authorized decision, recorded through the existing owner",
+      "label": "one decision event per retired unit",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "retire · the authorized decision, recorded through the existing owner",
+      "label": "identity retained: no unit was deleted, merged, reparented or relabelled",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "units": 171
+      }
+    },
+    {
+      "section": "retire · the authorized decision, recorded through the existing owner",
+      "label": "a repeat submission (same key, same body) is refused by name and writes nothing",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "codes": [
+          "ALREADY_RETIRED",
+          "ALREADY_RETIRED"
+        ]
+      }
+    },
+    {
+      "section": "retire · the authorized decision, recorded through the existing owner",
+      "label": "still exactly two retirement rows",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "retire · the authorized decision, recorded through the existing owner",
+      "label": "a lease can no longer attach to the retired record (the owner's trigger)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "message": "Unit 101 - 1 is retired from current inventory; a lease attached here would be invisible in every canonical read. Reinst"
+      }
+    },
+    {
+      "section": "retire · the authorized decision, recorded through the existing owner",
+      "label": "rent roll before retirement",
+      "ok": true,
+      "kind": "observe",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "reads · every canonical reader agrees, and says what it excluded",
+      "label": "the Rent Roll unit view no longer lists the retired records and still lists the parent",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "listed": 169
+      }
+    },
+    {
+      "section": "reads · every canonical reader agrees, and says what it excluded",
+      "label": "the unit view reports what it excluded (2 units, no tenancy conflict)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "units": 2,
+        "leases_on_retired_inventory": 0,
+        "conflict": false
+      }
+    },
+    {
+      "section": "reads · every canonical reader agrees, and says what it excluded",
+      "label": "the correction list labels raw retained records (171) and current inventory (169) separately",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "total": 171,
+        "retired": 2,
+        "current": 169
+      }
+    },
+    {
+      "section": "reads · every canonical reader agrees, and says what it excluded",
+      "label": "the tenancy standing projection (Ask Spine's read) carries the exclusion",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "unknowns": {
+          "occupied_positions_with_no_recorded_rent": 0,
+          "positions_with_unresolved_occupancy_evidence": 169,
+          "positions_with_overlapping_lease_claims": 0,
+          "occupied_positions_proven_only_by_the_opening_import": 0,
+          "occupied_positions_with_no_linked_resident": 0,
+          "confirmed_source_rows_not_attached_to_a_position": 0,
+          "held_source_rows_not_attached_to_a_position": 0,
+          "unit_records_retired_from_current_inventory": 2,
+          "tenancy_attached_to_retired_inventory": 0
+        }
+      }
+    },
+    {
+      "section": "reads · every canonical reader agrees, and says what it excluded",
+      "label": "occupancy by basis after retirement (denominator excludes retired records)",
+      "ok": true,
+      "kind": "observe",
+      "detail": {}
+    },
+    {
+      "section": "reads · every canonical reader agrees, and says what it excluded",
+      "label": "the Ask Spine door answers without a read failure (model sentinel refuses the wording step in this harness)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "outcome": "unavailable",
+        "answer": "I couldn't reach the assistant just then. Try again in a moment."
+      }
+    },
+    {
+      "section": "reads · every canonical reader agrees, and says what it excluded",
+      "label": "the unrelated property is untouched and its labels are its own",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "total": 3
+      }
+    },
+    {
+      "section": "removed assignment · authority that was taken away does not carry a decision",
+      "label": "E1 reviews as retired (action: reinstate)",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "removed assignment · authority that was taken away does not carry a decision",
+      "label": "admin2 removes admin's assignment through the governed door",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "removed assignment · authority that was taken away does not carry a decision",
+      "label": "the removed assignment cannot reinstate",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 401
+      }
+    },
+    {
+      "section": "removed assignment · authority that was taken away does not carry a decision",
+      "label": "restored",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "E1's live retirement is shown with its history",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "a reinstatement must say why",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409,
+        "error": "REINSTATEMENT_REASON_REQUIRED"
+      }
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "Mike cannot reinstate either",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403
+      }
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "the admin reinstates E1 with a reason",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 201,
+        "body": {
+          "receipt": "Reinstated to current inventory. The retirement stays as history and names who reversed it.",
+          "reinstated": true,
+          "retirement_id": "<id-6>",
+          "unit_id": "<id-7>",
+          "assignment_id": "<id-8>",
+          "restores": "current inventory participation only — no opening position, use, availability or readiness is established by this act",
+          "tenancy_attached_while_retired": 0
+        }
+      }
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "the receipt says reinstatement restores participation only, establishing nothing",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "the original decision is retained and records who reversed it, when and why",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "the pre-reinstatement token is now stale",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409
+      }
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "a unit with no live retirement cannot be reinstated twice",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 409
+      }
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "E1 is current again with one history row and may be reviewed for retirement again",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "history: one live retirement (E4), one reversed (E1), identity preserved, no conflict",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "retired_now": 1,
+        "reversed": 1
+      }
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "Mike can read the history (management module)",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "the list reflects the reinstatement",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "retired": 1,
+        "current": 170
+      }
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "the Rent Roll unit view lists E1 again and still excludes E4",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "reinstate · reversal as history, identity revalidated",
+      "label": "the standing projection says one record remains retired",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "completion",
+      "label": "review → governed retirement → reads → reinstatement completed with history retained",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "done": true
+      }
+    }
+  ]
+}

@@ -259,6 +259,10 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
     //  reading the right month.
     opening_baseline: dp.opening_baseline,
     opening_truth: dp.opening_truth,
+    //  A READ THAT EXCLUDES ROWS SAYS SO: the loader's retirement exclusion
+    //  rides with the unit view so the screen can label "current inventory"
+    //  and "retained records" as two different counts.
+    retired_excluded: dp.retired_excluded || null,
     totals: {
       units: units.length,
       rentable_positions: positions.length,

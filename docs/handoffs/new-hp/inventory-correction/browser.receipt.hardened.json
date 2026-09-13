@@ -1,0 +1,38 @@
+{
+  "proof_kind": "actual staff shell, owned HTTP/database",
+  "complete": true,
+  "checks": 29,
+  "writes": [
+    {
+      "dialog": "Retire 101 - 1 from current inventory as an obsolete representation?\n\nThe record, its identity and its history are retained; it stops counting as current inventory everywhere. This can be reversed, as history."
+    },
+    {
+      "path": "/operator/inventory/corrections/retire",
+      "status": "dropped",
+      "idempotency_key_present": true
+    },
+    {
+      "dialog": "Retire 101 - 1 from current inventory as an obsolete representation?\n\nThe record, its identity and its history are retained; it stops counting as current inventory everywhere. This can be reversed, as history."
+    },
+    {
+      "path": "/operator/inventory/corrections/retire",
+      "status": 201,
+      "idempotency_key_present": true
+    },
+    {
+      "dialog": "Reinstate 111 - 1 to current inventory?\n\nThe original retirement stays as history and records who reversed it. Nothing about its opening position, use, availability or readiness is established by this."
+    },
+    {
+      "path": "/operator/inventory/corrections/reinstate",
+      "status": 201,
+      "idempotency_key_present": true
+    }
+  ],
+  "screenshots": [
+    "inventory_mike_review.png",
+    "inventory_admin_before_retire.png",
+    "inventory_admin_after_retire.png",
+    "inventory_admin_identity_decision.png",
+    "inventory_admin_after_reinstate.png"
+  ]
+}
