@@ -15,11 +15,13 @@ const path = require("path");
 const { execFileSync, spawnSync } = require("child_process");
 const { Client } = require("pg");
 const { databaseSsl } = require("../../src/shared/database_ssl");
-const { classifyLedger, normalizeName } = require("../../migrations/ledger_verdict");
+const { classifyLedger } = require("../../migrations/ledger_verdict");
+const {
+  FILE_195, PRE_CONTRACT, POST_CONTRACT, constraintKey, requiredConstraint, decideState,
+} = require("./migration_195_contract");
 
 const ROOT = path.join(__dirname, "..", "..");
 const MIGRATIONS = path.join(ROOT, "migrations");
-const FILE_195 = "195_two_step_leasing_authored_offer_basis.sql";
 // SHA-256 of the reviewed migration source at 7cb245e.  A changed file needs
 // a new review; this command must never silently bless a look-alike 195.
 const REVIEWED_195_SHA256 = "e5c8f9bdb382b3a36e56e9b514db25734639500be9579171762d37c7e28b02bb";
@@ -68,10 +70,6 @@ function reviewedFile() {
   }
 }
 
-function stripped(definition) {
-  return String(definition).toLowerCase().replace(/[\s\"]/g, "");
-}
-
 function interval(name, fallback) {
   const value = (process.env[name] || fallback).trim().toLowerCase();
   if (!/^\d+(ms|s|min)?$/.test(value)) die(`${name} is malformed.`, "Use a PostgreSQL interval such as 500ms, 10s or 2min.");
@@ -89,30 +87,6 @@ async function boundPreflight(client) {
   }
 }
 
-function required(defs, name, table, definition) {
-  const row = defs.get(name);
-  if (!row) return `${name} is absent`;
-  if (row.schema_name !== "public" || row.table_name !== table || row.contype !== "c" || !row.convalidated) {
-    return `${name} is not a validated public CHECK on ${table}`;
-  }
-  if (stripped(row.definition) !== definition) {
-    return `${name} differs from the reviewed definition: ${row.definition}`;
-  }
-  return null;
-}
-
-const PRE_CONTRACT = [
-  ["aptc_source_ck", "application_proposed_terms_confirmations", "check(source='operator_proposed_terms'::text)"],
-  ["aptc_authority_ck", "application_proposed_terms_confirmations", "check(authority_basis=any(array['owner'::text,'role_authority'::text,'managed_role_override'::text]))"],
-  ["la_term_source_ck", "lease_applications", "check(term_sourceisnullor(term_source=any(array['application_capture'::text,'confirm_term_repair'::text,'operator_proposed_terms'::text])))"],
-];
-const POST_CONTRACT = [
-  ["aptc_source_ck", "application_proposed_terms_confirmations", "check(source=any(array['operator_proposed_terms'::text,'authored_offer_acknowledged'::text]))"],
-  ["aptc_authority_ck", "application_proposed_terms_confirmations", "check(authority_basis=any(array['owner'::text,'role_authority'::text,'managed_role_override'::text,'authored_offer'::text]))"],
-  ["aptc_derived_names_offer_ck", "application_proposed_terms_confirmations", "check(source<>'authored_offer_acknowledged'::textorapplication_offer_idisnotnullandapplication_terms_hashisnotnull)"],
-  ["la_term_source_ck", "lease_applications", "check(term_sourceisnullor(term_source=any(array['application_capture'::text,'confirm_term_repair'::text,'operator_proposed_terms'::text,'authored_offer_acknowledged'::text])))"],
-];
-
 async function physicalContract(client, contract) {
   const { rows } = await client.query(`
     select n.nspname as schema_name, c.conname, cl.relname as table_name, c.contype, c.convalidated,
@@ -122,8 +96,8 @@ async function physicalContract(client, contract) {
       join pg_namespace n on n.oid=cl.relnamespace
      where n.nspname='public' and c.conname = any($1::text[])
   `, [contract.map(([name]) => name)]);
-  const defs = new Map(rows.map((row) => [row.conname, row]));
-  const failures = contract.map(([name, table, definition]) => required(defs, name, table, definition)).filter(Boolean);
+  const defs = new Map(rows.map((row) => [constraintKey(row.schema_name, row.table_name, row.conname), row]));
+  const failures = contract.map(([name, table, definition]) => requiredConstraint(defs, name, table, definition)).filter(Boolean);
   const columns = await client.query(`
     select table_name, column_name from information_schema.columns
      where table_schema='public'
@@ -139,36 +113,16 @@ async function physicalContract(client, contract) {
   return failures;
 }
 
-function expectedRows(files) {
-  return files.map((file) => ({ version: file.slice(0, 3), name: file.slice(4, -4) }));
-}
-
-function exactVersions(rows, expected) {
-  const got = new Map(rows.filter((row) => row.version !== "000").map((row) => [String(row.version), row.name]));
-  if (got.size !== expected.length) return false;
-  return expected.every((want) => got.has(want.version) &&
-    (normalizeName(got.get(want.version)) === normalizeName(want.name) || want.version === "012"));
-}
-
 async function inspect(client) {
   const { rows } = await client.query("select version, name from schema_migrations order by version");
   const files = migrationFiles();
   const verdict = classifyLedger({ files, ledgerRows: rows });
   if (!verdict.structurallySound) die("the migration ledger is malformed or disagrees with this build.", JSON.stringify(verdict, null, 2));
-  const pre = expectedRows(files.filter((file) => Number(file.slice(0, 3)) <= 194));
-  const post = expectedRows(files);
-  const state = exactVersions(rows, pre) ? "pre" : exactVersions(rows, post) ? "post" : null;
-  if (!state) die("ledger is neither the exact reviewed 194 pre-state nor the exact 195 post-state.", `ceiling ${verdict.ceiling}; expected ${pre.length} pre rows or ${post.length} post rows (excluding 000).`);
-  const pending = verdict.fileMissingFromLedger;
-  if (state === "pre" && (pending.length !== 1 || pending[0] !== FILE_195)) {
-    die("the reviewed 194 pre-state has pending migrations other than exactly 195.", pending.join(", ") || "none");
-  }
-  if (state === "post" && pending.length !== 0) {
-    die("the 195 post-state still has pending migrations.", pending.join(", "));
-  }
-  const physical = await physicalContract(client, state === "pre" ? PRE_CONTRACT : POST_CONTRACT);
-  if (physical.length) die(`ledger ${state === "pre" ? "194" : "195"} does not carry its required physical schema.`, physical.map((line) => `- ${line}`).join("\n"));
-  return { state, entries: rows.filter((row) => row.version !== "000").length, ceiling: verdict.ceiling };
+  const decision = decideState({ files, rows, verdict });
+  if (!decision.ok) die("ledger/build is not an exact reviewed 194 or 195 state.", decision.reason);
+  const physical = await physicalContract(client, decision.state === "pre" ? PRE_CONTRACT : POST_CONTRACT);
+  if (physical.length) die(`ledger ${decision.state === "pre" ? "194" : "195"} does not carry its required physical schema.`, physical.map((line) => `- ${line}`).join("\n"));
+  return decision;
 }
 
 function runMigration(pin) {

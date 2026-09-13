@@ -10,12 +10,15 @@ The executable entry is `tools/release/migration_195_predeploy.js`. It checks:
 - a full exact `EXPECTED_SHA` against the build running the command;
 - the SHA-256 of the reviewed `195_two_step_leasing_authored_offer_basis.sql`;
 - the complete ledger set, not only its ceiling, for precisely 194 or 195;
-- the four complete, normalized PostgreSQL CHECK definitions on the named
-  `public` relations and the prerequisite lineage columns;
+- the four complete PostgreSQL CHECK definitions on their exact named `public`
+  relations and the prerequisite lineage columns. Token case and formatting are
+  normalized only outside quoted SQL content; quoted literals and identifiers
+  must match exactly;
 - a post-195 ledger whose checks remain stale is refused.
 
-It does not accept another pending migration, an unknown ledger row, a changed
-195 file, a short SHA, a dirty non-Render checkout, or a stale post-state.
+It does not accept another pending migration, any local migration beyond 195,
+an unknown ledger row, a changed 195 file, a short SHA, a dirty non-Render
+checkout, or a stale post-state.
 
 ## Predeploy operation
 
