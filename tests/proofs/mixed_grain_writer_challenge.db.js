@@ -97,7 +97,7 @@ const evidence = { mode: parent ? "positive_parent_defect" : "successor", sectio
           spaceIds[`${number}|${label}`] = s.id;
         }
       }
-      return { id: p.id, deal: deal.id, token, name, unitIds, spaceIds };
+      return { id: p.id, deal: deal.id, token, name, basis, unitIds, spaceIds };
     }
 
     async function http(token, url, { method = "GET", body = null, form = null } = {}) {
@@ -128,7 +128,7 @@ const evidence = { mode: parent ? "positive_parent_defect" : "successor", sectio
     async function readSource(p, prepared) {
       try {
         if (api) {
-          const body={ source_artifact_id: prepared.artifact.id, source_as_of_date: AS_OF, leasing_basis:"bed" };
+          const body={ source_artifact_id: prepared.artifact.id, source_as_of_date: AS_OF, leasing_basis:p.basis };
           const preview=await http(p.token, `/deal-setup/activations/${prepared.activation}/preview-source`, { method:"POST",body });
           if(preview.status!==200)return{ok:false,error:{status:preview.status,code:preview.body&&preview.body.error,message:String(preview.body&&(preview.body.receipt||preview.body.message)||"")},http:preview};
           const r = await http(p.token, `/deal-setup/activations/${prepared.activation}/read-source`, { method: "POST", body: {
@@ -137,7 +137,7 @@ const evidence = { mode: parent ? "positive_parent_defect" : "successor", sectio
           const review = await http(p.token, `/deal-setup/activations/${prepared.activation}`);
           return { ok: true, act: prepared.activation, proposals: (review.body && review.body.proposals) || [], http: r };
         }
-        const out = await reviewedIngest(activation,pool,{ user_id: user.id, deal_intake_id: p.deal, property_id: p.id, activation_id: prepared.activation, source_artifact_id: prepared.artifact.id, source_as_of_date: AS_OF,leasing_basis:"bed" });
+        const out = await reviewedIngest(activation,pool,{ user_id: user.id, deal_intake_id: p.deal, property_id: p.id, activation_id: prepared.activation, source_artifact_id: prepared.artifact.id, source_as_of_date: AS_OF,leasing_basis:p.basis });
         return { ok: true, act: prepared.activation, proposals: (await activation.readActivation(pool, { user_id: user.id, activation_id: prepared.activation })).proposals, service: out };
       } catch (e) { return { ok: false, error: errOf(e) }; }
     }
@@ -342,8 +342,12 @@ const evidence = { mode: parent ? "positive_parent_defect" : "successor", sectio
 
     // 3. Legitimate controls through the same retained-source writer.
     const S3 = evidence.sections.controls = {};
-    const run = async (name, basis, csv, preexisting = {}, { confirm = true } = {}) => {
+    const run = async (name, basis, csv, preexisting = {}, { confirm = true, classifyExistingBeds = false } = {}) => {
       const p = await property(name, basis, preexisting);
+      if (classifyExistingBeds) await pool.query(
+        `update spaces set position_kind='bed'
+          where unit_id in (select id from units where property_id=$1)
+            and space_label <> '(whole unit)'`, [p.id]);
       const prep = await prepare(p, csv);
       const ing = await readSource(p, prep);
       const r = { ingest_error: ing.error, proposals: ing.proposals ? ing.proposals.length : 0, spaces: await spacesOf(p), lineage: (await lineageOf(p)).map(l => ({ label: l.label, unit: l.unit_number, produced: l.produced_space, note: l.parse_note })) };
@@ -354,7 +358,7 @@ const evidence = { mode: parent ? "positive_parent_defect" : "successor", sectio
     ok("3 C1: valid by-unit inventory remains one whole-unit position", S3.single_whole_unit.spaces.length === 1 && S3.single_whole_unit.spaces[0].space_label === "(whole unit)" && S3.single_whole_unit.confirm.every(c => c.status === 200));
     S3.sole_bed_ledger_label = await run("c2-sole-bed", "bed", HEADER + "3B,Bed B,VACANT,900,,,\n");
     ok("3 C2: sole ledger-style bed still consumes the placeholder", S3.sole_bed_ledger_label.spaces.length === 1 && S3.sole_bed_ledger_label.spaces[0].space_label === "Bed B" && S3.sole_bed_ledger_label.spaces[0].position_kind === "bed" && S3.sole_bed_ledger_label.confirm[0].status === 200);
-    S3.fixture_shape_reread = await run("c2b-fixture-shape", "bed", HEADER + "3B,Bed B,VACANT,900,,,\n", { "3B": ["(whole unit)", "Bed B"] });
+    S3.fixture_shape_reread = await run("c2b-fixture-shape", "bed", HEADER + "3B,Bed B,VACANT,900,,,\n", { "3B": ["(whole unit)", "Bed B"] }, { classifyExistingBeds: true });
     { const rd = await reads(S3.fixture_shape_reread.property, "3B"); S3.fixture_shape_reread.reads = rd; const ph = rd.availability.find(r => /whole/.test(r.label)), bed = rd.availability.find(r => r.label === "Bed B"); ok("3 C2b: existing placeholder beside a bed remains an explicit unresolved read", S3.fixture_shape_reread.spaces.length === 2 && bed && bed.marketing_state === "marketable_now" && ph && ph.marketing_state === "occupancy_unknown"); }
     S3.multi_bed = await run("c3-multi-bed", "bed", HEADER + ["701,Room1,VACANT,900,,,", "701,Room2,VACANT,900,,,", "701,Room3,VACANT,900,,,"].join("\n") + "\n");
     ok("3 C3: three named beds remain three positions", S3.multi_bed.spaces.map(s => s.space_label).join("|") === "Room1|Room2|Room3" && S3.multi_bed.spaces.every(s => s.position_kind === "bed") && S3.multi_bed.confirm.every(c => c.status === 200));
@@ -362,9 +366,26 @@ const evidence = { mode: parent ? "positive_parent_defect" : "successor", sectio
     { const u801 = S3.mixed_property.spaces.filter(s => s.unit_number === "801"), u802 = S3.mixed_property.spaces.filter(s => s.unit_number === "802"); ok("3 C4: whole-unit and bed units in one property remain valid", u801.length === 1 && u802.length === 2 && S3.mixed_property.confirm.every(c => c.status === 200)); }
     const c5 = await property("c5-history-real", "bed", { "901": ["(whole unit)"] });
     await pool.query("insert into leases(property_id,space_id,tenant_ids,rent,start_date,end_date,lease_status) values($1,$2,$3,850,'2026-01-01','2027-12-31','active')", [c5.id, c5.spaceIds["901|(whole unit)"], [person.id]]);
-    const c5ing = await readSource(c5, await prepare(c5, HEADER + "901,Room1,VACANT,900,,,\n"));
-    S3.history_blocks_conversion = c5ing;
-    ok("3 C5: retained whole-unit history still refuses conversion", !c5ing.ok && /PLACEHOLDER_NOT_PRISTINE|whole-unit grain/i.test(JSON.stringify(c5ing.error)) && (await spacesOf(c5)).length === 1);
+    const c5prep = await prepare(c5, HEADER + "901,Room1,VACANT,900,,,\n");
+    const c5preview = api
+      ? await http(c5.token, `/deal-setup/activations/${c5prep.activation}/preview-source`, { method:"POST", body:{ source_artifact_id:c5prep.artifact.id, source_as_of_date:AS_OF, leasing_basis:c5.basis } })
+      : { status:200, body:await activation.previewRentRoll(pool, { user_id:user.id, deal_intake_id:c5.deal,
+          property_id:c5.id, activation_id:c5prep.activation, source_artifact_id:c5prep.artifact.id,
+          source_as_of_date:AS_OF, leasing_basis:c5.basis }) };
+    const c5identity = c5preview.body && c5preview.body.identities && c5preview.body.identities[0];
+    S3.history_blocks_conversion = { preview_status:c5preview.status, identity:c5identity || null };
+    ok("3 C5: reviewed source exposes retained whole-unit history and offers no conversion",
+      c5preview.status === 200 && c5identity && c5identity.status === "existing_parent_needs_review"
+      && !c5identity.suggested_decision && c5identity.existing_parent_new_children
+      && c5identity.existing_parent_new_children.placeholder_references.some(x => /leases\.space_id/.test(x))
+      && (await spacesOf(c5)).length === 1);
+    let c5materialize;
+    try { await tx(c => materializeRentableSpaces(c, { unit_id:c5.unitIds["901"], labels:["Room1"], kind:"bed", use_type:"residential" })); c5materialize={ok:true}; }
+    catch (e) { c5materialize={ok:false,error:errOf(e)}; }
+    S3.history_blocks_conversion.materialize = c5materialize;
+    ok("3 C5 control: canonical materializer still refuses the held placeholder without mutation",
+      !c5materialize.ok && c5materialize.error.code === "PLACEHOLDER_NOT_PRISTINE"
+      && (await spacesOf(c5)).length === 1);
     S3.future_only_rooms = await run("c6-future-rooms", "bed", HEADER + "1001,Room1,VACANT,900,,,\nFuture Residents/Applicants\n1001,Room9,Future Person,900,900,2026-09-01,2027-08-31\n1002,Room1,Future Person Two,900,900,2026-09-01,2027-08-31\n", {}, { confirm: false });
     ok("3 C6: future-only rooms and units create no current inventory", S3.future_only_rooms.spaces.length === 1 && S3.future_only_rooms.spaces[0].space_label === "Room1" && S3.future_only_rooms.lineage.filter(x => /discrepancy/.test(x.note || "")).length === 2);
     for (const k of Object.keys(S3)) if (S3[k].property) delete S3[k].property;
