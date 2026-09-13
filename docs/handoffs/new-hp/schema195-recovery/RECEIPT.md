@@ -94,6 +94,20 @@ The owned API and PostgreSQL processes were stopped after the final replay.
 `Get-NetTCPConnection -LocalPort 55454,3354` returned no rows. The disposable
 data directory and manifest remain as evidence; no owned runtime remains.
 
+Supplemental verification after review used the retained fresh database and
+packet only; the 508-check fixture was not rerun and no pre-stop state was
+recreated. After a verify-only start (PID 22396, exact detached 7cb checkout,
+health `ok: true`),
+`node tests/e2e/schema195_recovery_fresh_assert.js` ran two further replay
+requests and saved raw output at
+`tmp/schema195-fresh-evidence/schema195_recovery_fresh_replay_raw.json`.
+It asserted original-before snapshot offer/hash/package, signatures and
+fields, exact lease identity, sole two-decision audit event, and canonical
+Review/desk/Card lease IDs; it then took a final after-replay snapshot and
+asserted one pending lease, unchanged audit count 16, unchanged signatures and
+decision history, and zero fake-provider log delta. This supplemental process
+was stopped and the owned runtime was cleaned again.
+
 ## Superseded failed first attempt (retained for audit)
 
 The first attempt below used the same owned boundary but started its initial
