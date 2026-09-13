@@ -536,7 +536,15 @@ function withoutDatabaseIds(value) {
      *  runs and so never passes through this function at all. See the
      *  model call site: ONE sanitizer, applied twice — per domain as
      *  readers return, and once over the whole envelope on the way out.  */
-    if (key === "id" || /_id$/.test(key) || (/_identifier$/.test(key) && !/_masked$/.test(key))
+    // Authored-offer provenance includes plural event references and request
+    // identities; confirmation/preparation actor columns use the older `_by`
+    // vocabulary. Keep their dates/source/basis, not internal references. A
+    // narrative name in an older `_by` field remains narrative, not an ID.
+    const actorReference = ["confirmed_by", "prepared_by"].includes(key)
+      && typeof child === "string"
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(child);
+    if (actorReference || key === "id" || /_ids?$/.test(key) || key === "idempotency_key"
+        || (/_identifier$/.test(key) && !/_masked$/.test(key))
         || /_sha256$/.test(key) || /(^|_)(hash|token|secret)$/.test(key)) {
       continue;
     }
