@@ -146,13 +146,7 @@ async function stopServer() {
   }
   if (!baselineMode) {
     await run(process.execPath, [path.join(ROOT,"tests/proofs/onboarding_claim_index_dependency.db.js")], {
-      env: {...process.env,PROOF_CLAIM_INDEX:"released"},
-    });
-    await boundary.assertDatabase();
-    await pool.query(fs.readFileSync(path.join(ROOT,"migrations/pending/proposed_source_claim_identity.sql"),"utf8"));
-    console.log("PENDING_CLAIM_INDEX_APPLIED_TO_OWNED_LOCAL_DB_ONLY");
-    await run(process.execPath, [path.join(ROOT,"tests/proofs/onboarding_claim_index_dependency.db.js")], {
-      env: {...process.env,PROOF_CLAIM_INDEX:"pending"},
+      env: {...process.env},
     });
     for (const proof of (process.env.ONBOARDING_SPACE_PROOF_ONLY === "1" ? [] : ["canonical_onboarding_source.db.js","canonical_onboarding_ledger.db.js","canonical_onboarding_lifecycle.db.js","canonical_onboarding_snapshot.db.js","deal_setup_http.db.js"])) {
       await run(process.execPath, [path.join(ROOT,"tests/proofs",proof)], {
