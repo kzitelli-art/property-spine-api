@@ -10,7 +10,8 @@ The executable entry is `tools/release/migration_195_predeploy.js`. It checks:
 - a full exact `EXPECTED_SHA` against the build running the command;
 - the SHA-256 of the reviewed `195_two_step_leasing_authored_offer_basis.sql`;
 - the complete ledger set, not only its ceiling, for precisely 194 or 195;
-- the four checked physical definitions and the prerequisite lineage columns;
+- the four complete, normalized PostgreSQL CHECK definitions on the named
+  `public` relations and the prerequisite lineage columns;
 - a post-195 ledger whose checks remain stale is refused.
 
 It does not accept another pending migration, an unknown ledger row, a changed
@@ -32,7 +33,9 @@ node tools/release/migration_195_predeploy.js --apply
 
 The command accepts only the exact 194 pre-state, applies only through the
 governed runner with ceiling `194`, then rereads the ledger and physical schema
-as the 195 post-state. A repeat without `--apply` is deliberately verify-only:
+as the 195 post-state. It refuses if any pending file besides 195 exists. A
+repeat with or without `--apply` at an already validated 195 is verify-only and
+does not write:
 
 ```sh
 DATABASE_URL="<reviewed target>" \

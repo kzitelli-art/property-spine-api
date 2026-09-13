@@ -80,6 +80,8 @@ const GATES = [
   //  failure this harness was written for; it does not get to be the third.
   { file: "unit/migration_release_gate.test.js",
     what: "EXPECTED_LEDGER_CEILING and EXPECTED_SHA are enforced, on Render and off it" },
+  { file: "unit/migration_195_predeploy_contract.test.js",
+    what: "migration 195 predeploy: reviewed source, exact physical checks, sole pending file and repeat boundary" },
   { file: "gate_completion_writers.js",
     what: "exactly the expected work-order completion writers; no third writer" },
   //  Boundary 8a lands the activation service and 8b turns the guard on.
