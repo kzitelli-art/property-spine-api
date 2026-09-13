@@ -72,8 +72,11 @@ Then:
 returned HTTP 201 for Execute and HTTP 200 for its same-key replay. It created
 exactly two decisions and one pending lease
 `04dad58b-09ae-442c-9ae8-8dd0dde99cae`, then reread Application Review, the
-Leasing desk, and Person Card. The pre-stop signer/field snapshot and all
-immutable packet identity fields were compared before this action.
+Leasing desk, and Person Card. The pre-stop signer/field snapshot and application
+offer ID were compared before this action. The full immutable application,
+packet and offer comparison against the original pre-stop snapshot was verified
+in the supplemental phase below and independently checked by QB against the
+retained original and final JSON. It was not fully asserted before Execute.
 
 PID 23424 was then stopped. Verify-only migration was run a third time with
 apply disabled. Exact 7cb restarted as PID 31700; its cwd was the detached
