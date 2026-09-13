@@ -407,7 +407,7 @@ const evidence = { mode: parent ? "positive_parent_defect" : "successor", sectio
     const c5ArtifactAfter = await artifactMeta(c5prep.artifact.id);
     S3.history_blocks_conversion.forced_read_source = c5forced;
     ok("3 C5 hostile control: read-source refuses a forced existing-parent/new-children decision",
-      c5forced.status === 409 && (api ? c5forced.code === "refused" : c5forced.code === "inventory_target_changed"));
+      c5forced.status === 409 && c5forced.code === "inventory_target_changed");
     ok("3 C5 hostile control: refusal preserves inventory, lease, source confirmation and retained artifact",
       sameState(c5Before,c5After) && sameActivation(c5ActivationBefore,c5ActivationAfter)
       && c5ArtifactBefore && c5ArtifactAfter && c5ArtifactBefore.sha256 === c5ArtifactAfter.sha256
