@@ -1434,3 +1434,17 @@ and records two distinct decisions in one transaction. Nothing grants Mike
 more than `property_manager`. Full receipt and scrubbed evidence under
 `docs/handoffs/new-hp/two-step-leasing/`. CI run 487 (`5ba2885`) passed the full
 `verify_all.sh`; the browser slice ran locally against app `9ce6fc0`.
+
+## Schema 195 recovery artifact — 2026-09-13
+
+The isolated API candidate `7cb245e` was verified against an owned PostgreSQL
+55454 database at ledger ceiling 195, then restarted twice on the same retained
+state with migration apply disabled. The current two-step fixture left one
+resident-executed packet; canonical HTTP Execute created exactly one pending
+tenancy with two decisions, and a later restart replayed the executed packet
+with HTTP 200 while preserving application, packet, exact-bed, offer/hash,
+attribution, signatures, and audit history. Evidence and the proof-only
+continuation are in `docs/handoffs/new-hp/schema195-recovery/RECEIPT.md` and
+`tests/e2e/schema195_recovery_continuation.js`. This is local owned-artifact
+recovery evidence only; it makes no production rollback, deployment, provider,
+or property-acceptance claim.
