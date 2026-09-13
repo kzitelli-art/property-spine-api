@@ -18,7 +18,7 @@
 
 const assert = require("node:assert/strict");
 const path = require("path");
-const { execFileSync, spawnSync } = require("child_process");
+const { execFileSync, spawn, spawnSync } = require("child_process");
 const { Client } = require("pg");
 
 const ROOT = path.join(__dirname, "..", "..");
@@ -77,6 +77,35 @@ function wrapper(database, args = [], environment = {}) {
     },
   });
   return { status: result.status, out: `${result.stdout || ""}\n${result.stderr || ""}`, elapsed: Date.now() - started };
+}
+
+function startWrapper(database, args = []) {
+  const child = spawn(process.execPath, [WRAPPER, ...args], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      DATABASE_URL: dbUrl(database), EXPECTED_SHA: pin,
+      MIGRATION_PREFLIGHT_LOCK_TIMEOUT: "2s",
+      MIGRATION_PREFLIGHT_STATEMENT_TIMEOUT: "5s",
+      MIGRATION_APPLY_LOCK_TIMEOUT: "500ms",
+      MIGRATION_APPLY_STATEMENT_TIMEOUT: "5s",
+    },
+  });
+  let out = "";
+  child.stdout.on("data", (chunk) => { out += chunk; });
+  child.stderr.on("data", (chunk) => { out += chunk; });
+  return {
+    done: new Promise((resolve) => child.on("close", (status) => resolve({ status, out }))),
+  };
+}
+
+async function waitUntil(label, probe, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await probe()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for ${label}`);
 }
 
 function succeeds(label, result, pattern) {
@@ -142,6 +171,35 @@ async function heldFailure(database, table, mode, args, expectedFile) {
   } finally {
     await blocker.query("rollback");
     await blocker.end();
+  }
+}
+
+async function fullApplyFailureAt198(database) {
+  const block197 = await connect(dbUrl(database));
+  const block198 = await connect(dbUrl(database));
+  try {
+    await block197.query("begin");
+    await block197.query("lock table money_events in row exclusive mode");
+    const running = startWrapper(database, ["--apply"]);
+    await waitUntil("the full apply to commit 196", async () => (await ceiling(database)).ceiling === 196);
+    await waitUntil("migration 197 to wait on its dedicated barrier", async () => {
+      const result = await block198.query(`
+        select exists(select 1 from pg_stat_activity
+          where datname=current_database() and wait_event_type='Lock') as waiting
+      `);
+      return result.rows[0].waiting;
+    });
+    await block198.query("begin");
+    await block198.query("lock table proposed_records in row exclusive mode");
+    await block197.query("rollback");
+    const result = await running.done;
+    refuses("one full --apply from 194 can commit 195-197 then fail real 198", result,
+      /198_proposed_source_claim_identity.sql[\s\S]*FAILED/i);
+  } finally {
+    await block197.query("rollback").catch(() => {});
+    await block198.query("rollback").catch(() => {});
+    await block197.end();
+    await block198.end();
   }
 }
 
@@ -216,6 +274,12 @@ async function falsify(admin, exact198, suffix, statement, pattern) {
     await partialRefusal(fail198, 197);
     refuses("wrong --resume196 refuses exact 197", wrapper(fail198, ["--resume196"]), /requires exact 196, observed exact 197/i);
     succeeds("exact 197 resumes explicitly through 198", wrapper(fail198, ["--resume197"]), /RELEASE VERIFIED/);
+
+    const fullFail198 = await cloneDatabase(admin, sourceDatabase, "fullfail198");
+    await fullApplyFailureAt198(fullFail198);
+    await partialRefusal(fullFail198, 197);
+    succeeds("full-apply 198 failure resumes explicitly from exact 197",
+      wrapper(fullFail198, ["--resume197"]), /RELEASE VERIFIED/);
 
     const clean = await cloneDatabase(admin, sourceDatabase, "clean");
     succeeds("clean exact 194 applies the reviewed 195-198 suffix", wrapper(clean, ["--apply"]), /RELEASE VERIFIED/);

@@ -31,11 +31,12 @@ const REVIEWED_HASHES = Object.freeze({
   "197_inventory_correction_hardening.sql": "83d878dc556687e0d5771a4317330f6ebeafe6376a363b590b47578d83bb33a9",
   "198_proposed_source_claim_identity.sql": "0185b55e8ad6ae6b3763296f1136d82064a1f2effc0944e32f32f974c1699556",
 });
-// SHA-256 of pg_get_functiondef() on PostgreSQL 17 for the reviewed migration
-// 197 body. The source-file hash above proves the input; this proves that the
-// function installed under the expected signature is the reviewed function,
-// rather than a same-name weakened replacement.
-const REVIEWED_197_FUNCTION_SHA256 = "38b5167ee65f9706cafee4e069dacfb3b89b2005d9ac95c5fd487f0dc042facf";
+// SHA-256 of normalized pg_get_functiondef() for the reviewed migration 197
+// body. Normalization removes server formatting differences outside quotes;
+// body literals and identifiers stay byte-sensitive. The source-file hash
+// proves the input and this proves that the installed same-signature function
+// was not replaced by weaker code.
+const REVIEWED_197_FUNCTION_SHA256 = "ac63979747bc83b85649301594c3bb1a4339570b30a92b92e0624adc7f9208e5";
 
 const CHECK_195_PRE = [
   ["aptc_source_ck", "application_proposed_terms_confirmations", "CHECK (source = 'operator_proposed_terms'::text)"],
@@ -323,7 +324,8 @@ async function inspect197(client, ceiling) {
   if (functionResult.rowCount !== 1 || functionResult.rows[0].lanname !== "plpgsql" ||
       functionResult.rows[0].result_type !== "trigger") failures.push("197 policy function signature differs");
   if (functionResult.rowCount === 1) {
-    const functionHash = crypto.createHash("sha256").update(functionResult.rows[0].definition).digest("hex");
+    const functionHash = crypto.createHash("sha256")
+      .update(normalizeDefinition(functionResult.rows[0].definition)).digest("hex");
     if (functionHash !== REVIEWED_197_FUNCTION_SHA256) {
       failures.push(`197 policy function body differs from reviewed pg_get_functiondef hash: ${functionHash}`);
     }
