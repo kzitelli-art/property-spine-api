@@ -321,6 +321,12 @@ async function falsify(admin, exact198, suffix, statement, pattern) {
       create trigger trg_retired_inventory_spaces after insert or update on spaces
       for each row execute function refuse_operative_attachment_to_retired_inventory('', '', 'operative')
     `, /trg_retired_inventory_spaces relation, timing/i);
+    await falsify(admin, clean, "trigger197when", `
+      drop trigger trg_retired_inventory_spaces on spaces;
+      create trigger trg_retired_inventory_spaces before insert or update on spaces
+      for each row when (false)
+      execute function refuse_operative_attachment_to_retired_inventory('', '', 'operative')
+    `, /trg_retired_inventory_spaces relation, timing/i);
     await falsify(admin, clean, "index198", `
       drop index uq_proposed_natural;
       create unique index uq_proposed_natural on proposed_records(activation_id,target_type,natural_key)

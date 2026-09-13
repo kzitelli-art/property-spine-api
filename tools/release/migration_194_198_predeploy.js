@@ -297,11 +297,14 @@ async function inspect197(client, ceiling) {
   const triggerResult = await client.query(`
     select ns.nspname as schema_name, tbl.relname as table_name, trg.tgname,
            trg.tgenabled, pg_get_triggerdef(trg.oid, true) as definition,
-           fn.proname as function_name
+           fn.oid as function_oid, fns.nspname as function_schema_name,
+           fn.proname as function_name, trg.tgoldtable, trg.tgnewtable,
+           to_regprocedure('public.refuse_operative_attachment_to_retired_inventory()')::oid as expected_function_oid
       from pg_trigger trg
       join pg_class tbl on tbl.oid = trg.tgrelid
       join pg_namespace ns on ns.oid = tbl.relnamespace
       join pg_proc fn on fn.oid = trg.tgfoid
+      join pg_namespace fns on fns.oid = fn.pronamespace
      where not trg.tgisinternal and trg.tgname = any($1::text[])
   `, [expectedTriggerNames]);
   if (ceiling < 197) {
@@ -337,10 +340,13 @@ async function inspect197(client, ceiling) {
     const row = byName.get(name);
     if (!row) { failures.push(`${name} is absent from public.${entry.table}`); continue; }
     const call = `EXECUTE FUNCTION refuse_operative_attachment_to_retired_inventory('${entry.status_column || ""}', '${entry.terminal.join(",")}', '${entry.null_means}')`;
+    const expectedDefinition = `CREATE TRIGGER ${name} BEFORE INSERT OR UPDATE ON ${entry.table} FOR EACH ROW ${call}`;
     if (row.schema_name !== "public" || row.table_name !== entry.table || row.tgenabled !== "O" ||
+        row.function_schema_name !== "public" ||
         row.function_name !== "refuse_operative_attachment_to_retired_inventory" ||
-        !row.definition.includes("BEFORE INSERT OR UPDATE ON") ||
-        !row.definition.includes("FOR EACH ROW") || !row.definition.includes(call)) {
+        String(row.function_oid) !== String(row.expected_function_oid) ||
+        row.tgoldtable !== null || row.tgnewtable !== null ||
+        normalizeDefinition(row.definition) !== normalizeDefinition(expectedDefinition)) {
       failures.push(`${name} relation, timing, enabled state, function, or arguments differ: ${row.definition}`);
     }
   }
