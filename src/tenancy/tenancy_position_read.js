@@ -161,7 +161,9 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
         why: "no rentable position is recorded for this property in Spine" },
       established_from: null,
       position: null,
-      unknowns: unattached.read === "ok" ? { ...retainedUnknowns, ...retiredExclusion } : { ...retiredExclusion },
+      //  No baseline remains an unknown (null), never a bag of zeroes — the
+      //  retirement exclusion rides only with a completed retained-claims read.
+      unknowns: unattached.read === "ok" ? { ...retainedUnknowns, ...retiredExclusion } : null,
       ...retainedRows,
       next_milestone: null,
       does_not_establish: [
