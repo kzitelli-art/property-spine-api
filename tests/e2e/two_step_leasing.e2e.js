@@ -374,39 +374,11 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
     if (J.mode === "rollback") {
       await section(`${J.label} · rollback of a failing composition boundary`, async () => {
         need(J.packet, "packet exists");
-        const leasePacketsModule = require("../../src/applications/lease_packets");
-        const engine = require("../../src/shared/obligation_engine");
-        const svc = leasePacketsModule({ pool, satisfyObligation: engine.satisfyObligation, completeObligation: engine.completeObligation, executionServices: () => ({}) })._service;
-        const before = await decisionCount(J);
-        const beforeAudit = (await one("select count(*)::int n from lease_packet_audit_events where lease_packet_id=$1", [J.packet])).n;
-        const operator = { id: F.kz.id, property_id: P, can_manage_roles: true, name: "KZ (rehearsal signer)", allowed_modules: ["leasing", "management"] };
-        const probeNote = `rollback-probe-${nonce}`;
-        //  The failing dependency: a company-sign stage that writes, then throws.
-        //  Approval (decision 1) is the REAL service; the failure is injected
-        //  at the second boundary, after the first decision's rows exist.
-        const failingApplications = {
-          approveApplication: async (client, args) => {
-            const real = require("../../src/applications/applications");
-            void real;
-            await client.query("insert into events (property_id, person_id, type, note) values ($1,$2,'application_approved',$3)", [P, J.person, probeNote]);
-            throw Object.assign(new Error("injected failure at the approval→signature boundary"), { injected: true });
-          },
-        };
-        const client = await pool.connect();
-        let thrown = null;
-        try {
-          await client.query("begin");
-          await svc.executeLeasePacketDecision(client, { packetId: J.packet, operator, req: { headers: {} }, decision: "approve", idempotencyKey: `probe-${nonce}` }, { applications: failingApplications });
-          await client.query("commit");
-        } catch (e) { thrown = e; await client.query("rollback").catch(() => {}); } finally { client.release(); }
-        check(thrown && thrown.injected === true, "the composition surfaces the boundary failure instead of swallowing it", { message: thrown && thrown.message });
-        const after = await decisionCount(J);
-        const probe = await one("select count(*)::int n from events where note=$1", [probeNote]);
-        const afterAudit = (await one("select count(*)::int n from lease_packet_audit_events where lease_packet_id=$1", [J.packet])).n;
-        const pk = await one("select status, company_executed_at from lease_packets where id=$1", [J.packet]);
-        const app = await one("select status, approved_at, terms_review_obligation_id from lease_applications where id=$1", [J.app]);
-        check(probe.n === 0 && JSON.stringify(after) === JSON.stringify(before) && afterAudit === beforeAudit && pk.status === "resident_executed" && !pk.company_executed_at && app.status === "submitted" && !app.approved_at && !app.terms_review_obligation_id,
-          "ROLLBACK: the partial write from the failing boundary is gone; packet still resident_executed, application still submitted, no lease", { probe_rows: probe.n, packet: pk.status, application: app.status });
+        await require("./two_step_execute_rollback")({
+          pool, J, check, key: `probe-${nonce}`,
+          operator: { id: F.kz.id, property_id: P, can_manage_roles: true,
+            name: "KZ (rehearsal signer)", allowed_modules: ["leasing", "management"] },
+        });
       });
     }
 
