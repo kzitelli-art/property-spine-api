@@ -20,7 +20,7 @@ confirmation and no actual 148-bed acceptance was performed in this lane.
 | repo | commit | what |
 |---|---|---|
 | API | `be9ae71` | confirm accepts a dateless signed row as current occupancy with terms unknown, offers the home's right-holders as identity candidates, ties a recognised resident to the lease in force / pending without a second lease; ingress `home_tenant` candidates; `Pending` is not signed; unit-basis placeholder grain; tracker column spellings; proof `tests/proofs/current_rent_roll_reconciliation.db.js` (59) registered in `verify_all.sh` |
-| API | this commit | receipt, scrubbed evidence, CURRENT_STATE row 74 |
+| API | this commit | receipt, scrubbed evidence, CURRENT_STATE row 73 |
 | app | `4558460` | five isolated blocks in `index.html` (listed below), unit-test pin, browser proof `current_rent_roll_reconciliation.browser.js` (13) |
 
 ## The mechanism (nothing new was written beside it)
@@ -157,7 +157,7 @@ database at `be9ae71`.
 | `source_home_identity_review.db.js` · `deal_setup_http.db.js` · `canonical_onboarding_ledger.db.js` | PASS · PASS · PASS |
 | `opening_claim_identity` · `relay_edges` · `unattached` | 17/0 · 12/0 · 14/0 |
 | `onboarding_claim_index_dependency.db.js` (`PROOF_CLAIM_INDEX=pending`) | PASS |
-| CI at the delivered API commit | recorded in CURRENT_STATE row 74 |
+| CI at the delivered API commit | recorded in CURRENT_STATE row 73 |
 
 Pre-existing failures, **identical on the baseline** (witness pairs in
 `evidence/`), none caused here and none of them registered in `verify_all.sh`:
@@ -216,3 +216,11 @@ check on both trees); `person_ingress_hostile.db.js` 4 and
 9. **Authority is per-user assignment**, not session property: a session
    scoped to another property, held by a user assigned at this one, can
    preview this setup (existing design; recorded, unchanged).
+
+10. **CURRENT_STATE numbering.** The dated section already carried a
+    "Row 73" paragraph (the inventory-correction final review,
+    `FINAL_REVIEW_20260913.md` lane) with no matching table row; the
+    coverage gate requires contiguous table numbers, so this lane's table
+    row is 73 and its dated paragraph is labelled "Row 73 (current
+    rent-roll reconciliation)". The other paragraph is left as written
+    for its owner to reconcile.
