@@ -20,7 +20,7 @@ confirmation and no actual 148-bed acceptance was performed in this lane.
 | repo | commit | what |
 |---|---|---|
 | API | `be9ae71` | confirm accepts a dateless signed row as current occupancy with terms unknown, offers the home's right-holders as identity candidates, ties a recognised resident to the lease in force / pending without a second lease; ingress `home_tenant` candidates; `Pending` is not signed; unit-basis placeholder grain; tracker column spellings; proof `tests/proofs/current_rent_roll_reconciliation.db.js` (59) registered in `verify_all.sh` |
-| API | this commit | receipt, scrubbed evidence, CURRENT_STATE row 73 |
+| API | `0cce880` · `2de77a8` · `e067069` · this commit | receipt, scrubbed evidence, CURRENT_STATE row 73, CI record |
 | app | `4558460` | five isolated blocks in `index.html` (listed below), unit-test pin, browser proof `current_rent_roll_reconciliation.browser.js` (13) |
 
 ## The mechanism (nothing new was written beside it)
@@ -157,7 +157,7 @@ database at `be9ae71`.
 | `source_home_identity_review.db.js` · `deal_setup_http.db.js` · `canonical_onboarding_ledger.db.js` | PASS · PASS · PASS |
 | `opening_claim_identity` · `relay_edges` · `unattached` | 17/0 · 12/0 · 14/0 |
 | `onboarding_claim_index_dependency.db.js` (`PROOF_CLAIM_INDEX=pending`) | PASS |
-| CI at the delivered API commit | recorded in CURRENT_STATE row 73 |
+| CI at the delivered API commits | run 519 `e067069` (docs over `be9ae71`): success, proof executed 59/0 — https://github.com/kzitelli-art/property-spine-api/actions/runs/34782433780 (runs 517/518 red on the coverage gate only, before any proof ran) |
 
 Pre-existing failures, **identical on the baseline** (witness pairs in
 `evidence/`), none caused here and none of them registered in `verify_all.sh`:
