@@ -281,8 +281,13 @@ function legacyLabels() {
       check(ev.n === 2, "one decision event per retired unit");
       const still = await one("select count(*)::int n from units where property_id=$1", [F.g.id]);
       check(still.n === 171 && (await one("select id from units where id=$1", [F.E1.id])) && F.identity.get(F.E1.unit_number) === F.E1.id, "identity retained: no unit was deleted, merged, reparented or relabelled", { units: still.n });
+      //  SUCCESSOR: the same key with the same payload is the SAME command and
+      //  replays the recorded decision (200, idempotent); a new command for
+      //  units already retired is refused by the owner's own word.
       const repeat = await retire(F.adminTok, body);
-      check(repeat.status === 409 && repeat.body.refused && repeat.body.refused.every((x) => x.code === "ALREADY_RETIRED"), "a repeat submission (same key, same body) is refused by name and writes nothing", { status: repeat.status, codes: repeat.body && repeat.body.refused && repeat.body.refused.map((x) => x.code) });
+      check(repeat.status === 200 && repeat.body.idempotent === true && repeat.body.retired === 2 && repeat.body.current_state && repeat.body.current_state.units.every((u) => u.state === "retired"), "a repeat submission (same key, same body) replays the recorded decision and writes nothing", { status: repeat.status, idempotent: repeat.body && repeat.body.idempotent });
+      const repeat2 = await retire(F.adminTok, { ...body, idempotency_key: `retire-again-${nonce}` });
+      check(repeat2.status === 409 && repeat2.body.refused && repeat2.body.refused.every((x) => x.code === "ALREADY_RETIRED"), "a new command (different key) for already-retired units is refused by name and writes nothing", { status: repeat2.status, codes: repeat2.body && repeat2.body.refused && repeat2.body.refused.map((x) => x.code) });
       check((await retirementRows(F.g.id)).length === 2, "still exactly two retirement rows");
       const trigger = await q("insert into leases (property_id,space_id,start_date,end_date,lease_status,rent) values ($1,$2,$3,$4,'pending',900)", [F.g.id, F.E1.space_id, plusDays(30), plusDays(395)]).then(() => ({ ok: true })).catch((e) => ({ ok: false, message: e.message }));
       check(trigger.ok === false && /retired/.test(trigger.message), "a lease can no longer attach to the retired record (the owner's trigger)", { message: trigger.message && trigger.message.slice(0, 120) });
@@ -331,16 +336,23 @@ function legacyLabels() {
     await section("reinstate · reversal as history, identity revalidated", async () => {
       const r1 = await review(F.adminTok, F.E1.id);
       need(r1.status === 200 && r1.body.retirement.state === "retired" && r1.body.retirement.live && r1.body.retirement.live.id === F.retirementE1, "E1's live retirement is shown with its history");
-      const noReason = await reinstate(F.adminTok, { unit_id: F.E1.id, review_token: r1.body.review_token, reason: "", confirmed: true });
+      //  SUCCESSOR: E1 was retired citing the bed-basis source, which does not
+      //  name it — its identity reads UNRESOLVED and only an explicit
+      //  authorized correction settles it.
+      check(r1.body.identity && r1.body.identity.reinstatement === "unresolved", "E1's identity reads unresolved (cited source does not name it)", { identity: r1.body.identity && r1.body.identity.reinstatement });
+      const unresolved = await reinstate(F.adminTok, { unit_id: F.E1.id, review_token: r1.body.review_token, reason: "Rehearsal: put back.", confirmed: true });
+      check(unresolved.status === 409 && unresolved.body.error === "identity_unresolved", "without the explicit correction, reinstatement is refused as unresolved", { status: unresolved.status, error: unresolved.body && unresolved.body.error });
+      const IDENT = { identity_decision: "position_not_covered_by_current_representation", identity_reason: "Rehearsal: the bed-basis source established the first parent's bed only; this legacy record's position was not in it." };
+      const noReason = await reinstate(F.adminTok, { unit_id: F.E1.id, review_token: r1.body.review_token, reason: "", confirmed: true, ...IDENT });
       check(noReason.status === 409 && noReason.body.error === "REINSTATEMENT_REASON_REQUIRED", "a reinstatement must say why", { status: noReason.status, error: noReason.body && noReason.body.error });
-      const mike = await reinstate(F.mikeTok, { unit_id: F.E1.id, review_token: r1.body.review_token, reason: "rehearsal", confirmed: true });
+      const mike = await reinstate(F.mikeTok, { unit_id: F.E1.id, review_token: r1.body.review_token, reason: "rehearsal", confirmed: true, ...IDENT });
       check(mike.status === 403, "Mike cannot reinstate either", { status: mike.status });
-      const ok = await reinstate(F.adminTok, { unit_id: F.E1.id, review_token: r1.body.review_token, reason: `Rehearsal: the designation of ${F.E1.unit_number} as obsolete was withdrawn pending physical verification.`, confirmed: true });
+      const ok = await reinstate(F.adminTok, { unit_id: F.E1.id, review_token: r1.body.review_token, reason: `Rehearsal: the designation of ${F.E1.unit_number} as obsolete was withdrawn pending physical verification.`, confirmed: true, ...IDENT });
       need(ok.status === 201 && ok.body.reinstated === true && ok.body.retirement_id === F.retirementE1, "the admin reinstates E1 with a reason", { status: ok.status, body: ok.body });
       check(/no opening position, use, availability or readiness/.test(ok.body.restores), "the receipt says reinstatement restores participation only, establishing nothing");
       const row = await one("select reversed_at, reversed_by_user_id, reversal_reason, retired_by_user_id from inventory_retirements where id=$1", [F.retirementE1]);
       check(row.reversed_at && row.reversed_by_user_id === F.admin.id && /physical verification/.test(row.reversal_reason) && row.retired_by_user_id === F.admin.id, "the original decision is retained and records who reversed it, when and why");
-      const stale = await reinstate(F.adminTok, { unit_id: F.E1.id, review_token: r1.body.review_token, reason: "again", confirmed: true });
+      const stale = await reinstate(F.adminTok, { unit_id: F.E1.id, review_token: r1.body.review_token, reason: "again", confirmed: true, ...IDENT });
       check(stale.status === 409 && stale.body.error === "stale_review", "the pre-reinstatement token is now stale", { status: stale.status });
       const r1b = await review(F.adminTok, F.E1.id);
       const notRetired = await reinstate(F.adminTok, { unit_id: F.E1.id, review_token: r1b.body.review_token, reason: "again", confirmed: true });

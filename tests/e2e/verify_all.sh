@@ -298,6 +298,8 @@ if [ "$FAILED" = "0" ]; then
   step "no-consent two-person journey" node tests/e2e/no_consent_two_person_journey.e2e.js
   step "two-step leasing: author and execute" node tests/e2e/two_step_leasing.e2e.js
   step "governed inventory correction" node tests/e2e/inventory_correction.e2e.js
+  step "inventory relationship policy coverage" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/gates/gate_inventory_relationship_policy.db.js
+  step "inventory correction hardening" node tests/e2e/inventory_correction_hardening.e2e.js
   if [ -x "${CHROMIUM:-/opt/pw-browsers/chromium-1194/chrome-linux/chrome}" ] && [ -f "${E2E_APP_ROOT:-../property-spine-app}/index.html" ]; then
     step "browser: inventory correction" node tests/e2e/inventory_correction.browser.js
   else

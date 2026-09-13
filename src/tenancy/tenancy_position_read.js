@@ -51,6 +51,10 @@
 
 const { datedPropertyPositions, intervalPropertyPositions, rentRollBuckets } =
   require("./dated_positions");
+//  The bounded correction explanation is ONE read for two audiences: the
+//  staff history view and this standing projection (which Ask Spine
+//  gathers). Labels only, so the sanitizer changes nothing.
+const { correctionStanding } = require("./inventory_correction");
 const readerCapabilities = require("../shared/reader_capability_contract.js");
 
 const CONTRACT_VERSION = "tenancy_standing.v1";
@@ -140,6 +144,13 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
     unit_records_retired_from_current_inventory: retired.units || 0,
     tenancy_attached_to_retired_inventory: retired.leases_on_retired_inventory || 0,
   };
+  //  WHICH records are excluded, why, on whose decision, and what operative
+  //  work is attached to them — the same bounded explanation the staff
+  //  history view renders. A failed read is a visible silence, never an
+  //  empty list.
+  let inventoryCorrection;
+  try { inventoryCorrection = await correctionStanding(pool, { property_id }); }
+  catch (e) { inventoryCorrection = { read_state: "READ_FAILED", excluded_from_current_inventory: null, excluded_records: null, operative_work_on_retired_inventory: null, conflict: null }; }
 
   const base = {
     contract_version: CONTRACT_VERSION,
@@ -165,6 +176,7 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
       //  retirement exclusion rides only with a completed retained-claims read.
       unknowns: unattached.read === "ok" ? { ...retainedUnknowns, ...retiredExclusion } : null,
       ...retainedRows,
+      inventory_correction: inventoryCorrection,
       next_milestone: null,
       does_not_establish: [
         "Anything about occupancy, rent or commitments — tenancy has no inventory " +
@@ -270,6 +282,7 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
     },
     //  By the key the source gave each row — a label, never a record id.
     ...retainedRows,
+    inventory_correction: inventoryCorrection,
 
     next_milestone: nextMilestone(positions, dp.as_of),
 

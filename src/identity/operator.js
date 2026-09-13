@@ -343,7 +343,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   router.get("/operator/inventory/corrections", requireOperator, requireManagementModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      const out = await inventoryCorrection.listUnits(pool, { property_id: req.operator.property_id });
+      const out = await inventoryCorrection.listUnits(pool, {
+        property_id: req.operator.property_id,
+        limit: req.query.limit, offset: req.query.offset, state: req.query.state, q: req.query.q,
+      });
       return res.json({ ...out, may_correct: req.operator.can_manage_roles === true });
     } catch (e) { return sendCorrectionError(res, e, "inventory corrections list:"); }
   });
@@ -357,7 +360,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   router.get("/operator/inventory/corrections/history", requireOperator, requireManagementModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      return res.json(await inventoryCorrection.history(pool, { property_id: req.operator.property_id }));
+      return res.json(await inventoryCorrection.history(pool, { property_id: req.operator.property_id, limit: req.query.limit, offset: req.query.offset }));
     } catch (e) { return sendCorrectionError(res, e, "inventory correction history:"); }
   });
   router.post("/operator/inventory/corrections/retire", requireOperator, requireManagementModuleAccess, requireGovernanceAuthority, async (req, res) => {
@@ -372,6 +375,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         superseded_by_import_batch_id: b.superseded_by_import_batch_id || null,
         confirmed: b.confirmed === true, idempotency_key: b.idempotency_key || null,
       });
+      //  A replayed command answers 200 with the recorded result and the
+      //  current state; a new decision answers 201.
+      if (out.idempotent === true) return res.status(200).json({ receipt: `This retirement was already recorded (${out.retired} unit record(s)). Nothing new was written.`, ...out });
       return res.status(201).json({ receipt: `Retired ${out.retired} unit record(s) from current inventory. Identity and history are retained.`, ...out });
     } catch (e) { return sendCorrectionError(res, e, "inventory retire:"); }
   });
@@ -381,7 +387,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const out = await inventoryCorrection.applyReinstatement(pool, {
         property_id: req.operator.property_id, actor: { user_id: req.operator.id },
         unit_id: b.unit_id, review_token: b.review_token, reason: b.reason, confirmed: b.confirmed === true,
+        idempotency_key: b.idempotency_key || null,
+        identity_decision: b.identity_decision == null ? null : String(b.identity_decision),
+        identity_reason: b.identity_reason == null ? null : String(b.identity_reason),
       });
+      if (out.idempotent === true) return res.status(200).json({ receipt: "This reinstatement was already recorded. Nothing new was written.", ...out });
       return res.status(201).json({ receipt: "Reinstated to current inventory. The retirement stays as history and names who reversed it.", ...out });
     } catch (e) { return sendCorrectionError(res, e, "inventory reinstate:"); }
   });

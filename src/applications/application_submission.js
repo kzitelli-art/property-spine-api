@@ -38,6 +38,7 @@
 // =============================================================
 
 const express = require("express");
+const { isRetiredInventoryRefusal } = require("../tenancy/inventory_retirement");
 const crypto = require("crypto");
 const { readApplicationOffer, assertCurrentApplicationOffer, resolveApplicationOffer } = require("../money/application_offer_terms");
 const dateOnly = value => value == null ? null
@@ -87,8 +88,10 @@ module.exports = function applicationSubmissionModule(deps) {
       res.json(out);
     } catch (e) {
       await client.query("rollback");
-      const code = e.httpStatus || 500;
-      res.status(code).json({ receipt: e.publicMessage || "Could not complete the request.", error: e.message });
+      //  The retired-inventory wall (180/197 triggers) is a refusal, not a fault.
+      const retired = isRetiredInventoryRefusal(e);
+      const code = e.httpStatus || (retired ? 409 : 500);
+      res.status(code).json({ receipt: e.publicMessage || (retired ? e.message : "Could not complete the request."), error: retired ? "retired_inventory" : e.message });
     } finally {
       client.release();
     }

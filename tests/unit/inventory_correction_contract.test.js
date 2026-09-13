@@ -22,9 +22,36 @@ assert.doesNotMatch(S, /update inventory_retirements/, "no second reversal write
 assert.doesNotMatch(S, /delete from/, "nothing is deleted");
 assert.doesNotMatch(S, /update units set|update spaces set|update leases set/, "identity is not relabelled, reparented or moved");
 
-// 2 — authority is re-verified inside the transaction, from the assignment row, requiring the override AND the management module.
+// 2 — authority is re-verified inside the transaction, from the assignment row, requiring the override AND the management module,
+//     AFTER the inventory locks, with FOR SHARE on the assignment and the user row (the delivered candidate read it first and never rechecked).
 assert.match(S, /can_manage_roles !== true \|\| !\(a\.allowed_modules \|\| \[\]\)\.includes\("management"\)/, "live authority = override + management module");
 assert.match(S, /await assertLiveAuthority\(client/, "authority is asserted on the transaction client");
+assert.match(S, /and active order by created_at desc limit 1 for share/, "the assignment row is share-locked");
+assert.match(S, /select is_active, status from users where id = \$1 for share/, "the user row is share-locked and disablement refuses");
+for (const fn of ["applyRetirement", "applyReinstatement"]) {
+  const body = S.slice(S.indexOf(`async function ${fn}(`));
+  const locks = body.indexOf("order by id for update");
+  const auth = body.indexOf("await assertLiveAuthority(client");
+  assert.ok(locks > 0 && auth > locks, `${fn}: authority is read after the inventory locks`);
+  const lookup = body.indexOf("await findCommand(client");
+  const stale = body.indexOf('"stale_review"');
+  assert.ok(lookup > auth && stale > lookup, `${fn}: retry identity is resolved after authority and before the stale-review check`);
+}
+
+// 2b — the relationship policy is the one source of blockers; nothing here hand-writes a relationship table list.
+assert.match(S, /require\("\.\/inventory_relationship_policy"\)/, "the door reads the policy");
+assert.match(S, /operativeSql\(entry\)/, "relationship and conflict counts use the policy predicate");
+assert.doesNotMatch(S, /from lease_applications a where/, "no hand-written relationship subquery survives");
+
+// 2c — command identity: same key+payload replays, different payload conflicts, retire and reinstate are separate identities.
+assert.match(S, /command_type: "retire"/, "retire commands have their own identity");
+assert.match(S, /command_type: "reinstate"/, "reinstate commands have their own identity");
+assert.match(S, /"command_payload_conflict"/, "a changed payload under the same key is refused by name");
+assert.match(S, /idempotent: true/, "a replay says it is one");
+
+// 2d — reinstatement is an identity decision.
+assert.match(S, /"identity_covered"/, "a covered position refuses reinstatement");
+assert.match(S, /"identity_unresolved"/, "an unsettled identity refuses without an explicit correction");
 
 // 3 — the decision is bound to the reviewed facts, and the review token covers every relationship count.
 assert.match(S, /relationships: facts\.relationships/, "the token covers relationship counts");
@@ -54,8 +81,14 @@ assert.doesNotMatch(O, /inventoryCorrection\.\w+\(pool, \{[^}]*property_id: (req
 assert.doesNotMatch(S, /REASONS_DATE_SENSITIVE\s*=|physically_removed|converted_to/, "no new reason vocabulary");
 assert.match(S, /ALL_REASONS\.includes\(reason_code\)/, "reasons are validated against the owner's list");
 
-// 8 — the standing read carries the exclusion for Ask Spine.
+// 8 — the standing read carries the exclusion AND the bounded explanation for Ask Spine, from the same read the staff history uses.
 assert.match(strip(standing), /unit_records_retired_from_current_inventory/, "tenancy standing names retired records");
 assert.match(strip(standing), /tenancy_attached_to_retired_inventory/, "tenancy standing names tenancy attached to retired inventory");
+assert.match(strip(standing), /correctionStanding\(pool, \{ property_id \}\)/, "tenancy standing carries the correction explanation");
+assert.match(S, /explanation \}/, "the staff history carries the same explanation object");
+const corrFn = S.slice(S.indexOf("async function correctionStanding("), S.indexOf("async function assertLiveAuthority("));
+const corrOut = corrFn.slice(corrFn.indexOf("return {"));
+assert.doesNotMatch(corrOut, /\b\w*_ids?\b|\bid:/, "the explanation's output carries labels, never record or actor ids");
+assert.doesNotMatch(corrFn, /select ir\.id|ir\.unit_id as|user_id as|batch_id as/, "the explanation's queries alias no ids into the output");
 
 console.log("inventory_correction_contract: PASS (source contracts)");
