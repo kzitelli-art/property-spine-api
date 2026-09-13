@@ -148,9 +148,45 @@ git worktree add --detach "$PARENT_WORKTREE" "$ONBOARDING_PARENT" >"$RUN_DIR/onb
   exit 1
 }
 ln -s "$ROOT/node_modules" "$PARENT_WORKTREE/node_modules" || exit 1
+# The parent onboarding witnesses intentionally run against the exact physical
+# 197 claim index. The normal chain is already at 198 here, so reconstruct only
+# that historical index/ledger state for the parent run. Restore 198 through
+# the numbered migration runner immediately afterwards; do not hide successor
+# DDL in this compatibility witness.
+step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
+  do \$\$ begin
+    if not exists (select 1 from schema_migrations where version='198' and name='proposed_source_claim_identity') then
+      raise exception 'expected numbered 198 ledger row before parent witness';
+    end if;
+    if not exists (select 1 from pg_indexes where schemaname='public' and indexname='uq_proposed_natural'
+                   and indexdef ilike '%where%natural_key%is not null%'
+                   and indexdef ilike '%import_source_row_id%is null%') then
+      raise exception 'expected exact 198 natural-key index before parent witness';
+    end if;
+  end \$\$;
+  delete from schema_migrations where version='198';
+  drop index uq_proposed_natural;
+  create unique index uq_proposed_natural
+    on proposed_records (activation_id, target_type, natural_key)
+    where natural_key is not null;
+"
 step "parent onboarding source defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_source.db.js
 step "parent onboarding lifecycle defect" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_lifecycle.db.js
 step "parent onboarding snapshot defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_snapshot.db.js
+step "restore numbered 198 claim index" env DATABASE_URL="$E2E_DATABASE_URL" MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=197 node migrations/migrate.js --apply
+step "verify restored 198 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
+  do \$\$ begin
+    if not exists (select 1 from schema_migrations where version='198' and name='proposed_source_claim_identity') then
+      raise exception 'numbered 198 ledger row was not restored';
+    end if;
+    if (select pg_get_indexdef(i.indexrelid) from pg_index i
+        join pg_class c on c.oid=i.indexrelid
+       where c.relname='uq_proposed_natural') <>
+       'CREATE UNIQUE INDEX uq_proposed_natural ON public.proposed_records USING btree (activation_id, target_type, natural_key) WHERE ((natural_key IS NOT NULL) AND (import_source_row_id IS NULL))' then
+      raise exception 'restored 198 index definition is not exact';
+    end if;
+  end \$\$;
+"
 git worktree remove --force "$PARENT_WORKTREE" || exit 1
 PARENT_WORKTREE=""
 
