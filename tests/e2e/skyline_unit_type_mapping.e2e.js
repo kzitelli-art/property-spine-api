@@ -68,6 +68,7 @@ function runTool(args) {
      returning id`, [prop])).rows[0].id;
 
   let n = 0, rowIx = 0;
+  let firstSourceSpaceId = null;
   for (const g of PLAN) {
     for (let i = 0; i < g.units; i++) {
       n++;
@@ -81,8 +82,10 @@ function runTool(args) {
       await pool.query(`delete from spaces where unit_id=$1 and space_label='(whole unit)'`, [u]);
       for (let b = 0; b < g.beds; b++) {
         const s = (await pool.query(
-          `insert into spaces (unit_id, space_label) values ($1,$2) returning id`,
-          [u, `Bed ${String.fromCharCode(65 + b)}`])).rows[0].id;
+        `insert into spaces (unit_id, space_label) values ($1,$2) returning id`,
+        [u, `Bed ${String.fromCharCode(65 + b)}`])).rows[0].id;
+        await pool.query("update spaces set position_kind='unit', use_type='residential' where id=$1", [s]);
+        if (!firstSourceSpaceId) firstSourceSpaceId = s;
         //  THE DURABLE RELATIONSHIP the tool reads. Not a unit_number match.
         await pool.query(
           `insert into import_source_rows (import_batch_id, row_index, raw, produced_unit_id, produced_space_id)
@@ -95,6 +98,24 @@ function runTool(args) {
       }
     }
   }
+  const existingLease = (await pool.query(
+    `insert into leases (property_id, space_id, tenant_ids, rent, start_date, end_date, lease_status)
+     values ($1,$2,'{}'::uuid[],1234,'2026-01-01','2027-07-31','active')
+     returning id`, [prop, firstSourceSpaceId])).rows[0].id;
+  const identityBefore = (await pool.query(
+    `select u.id as unit_id, s.id as space_id, r.id as source_id,
+            r.produced_unit_id, r.produced_space_id,
+            l.id as lease_id, l.property_id as lease_property_id,
+            l.space_id as lease_space_id, l.rent, l.start_date, l.end_date, l.lease_status
+       from leases l
+       join spaces s on s.id=l.space_id
+       join units u on u.id=s.unit_id
+       join import_source_rows r on r.produced_space_id=s.id
+      where l.id=$1
+      order by r.id limit 1`, [existingLease])).rows[0];
+  identityBefore && identityBefore.unit_id && identityBefore.source_id
+    ? ok("fixture captures an existing lease and source-link identity")
+    : bad("fixture identity snapshot missing", JSON.stringify(identityBefore));
   //  ── THE DECOYS PRODUCTION ACTUALLY CARRIES ────────────────────────
   //  Alongside `1417-116` the live database holds separate rows named
   //  "116 - A", "116 - B", "116 - C" — legacy units shaped like beds, 159 of
@@ -129,6 +150,12 @@ function runTool(args) {
   /ruling: skyline_owner_statement/.test(dry.out)
     ? ok("selected the Skyline ruling by coverage")
     : bad("wrong or no ruling selected");
+  /approved structural grain\s+: bed/.test(dry.out)
+    ? ok("dry run reports the approved bed grain")
+    : bad("dry run omitted approved structural grain");
+  /proposed position_kind changes\s+: 160/.test(dry.out)
+    ? ok("dry run reports the 160-position kind diff")
+    : bad("dry run omitted position_kind diff", dry.out.match(/proposed position_kind changes.*$/m)?.[0] || "none");
   const after0 = (await pool.query(
     "select count(*)::int n from property_unit_types where property_id=$1", [prop])).rows[0].n;
   after0 === 0 ? ok("dry run wrote nothing", "property_unit_types still empty")
@@ -146,6 +173,8 @@ function runTool(args) {
              where u.property_id=$1 and u.unit_type_id is not null) as positions_typed,
            (select count(*)::int from spaces s join units u on u.id=s.unit_id
              where u.property_id=$1) as positions_total,
+           (select count(*)::int from spaces s join units u on u.id=s.unit_id
+             where u.property_id=$1 and u.unit_type_id is not null and s.position_kind='bed') as bed_positions_typed,
            (select count(*)::int from property_unit_types where property_id=$1) as types`, [prop])).rows[0];
   //  ── "COVERED" MEANS EVERY REAL UNIT, NOT EVERY ROW ────────────────
   //  This asserted 0 unmapped when the replica held only real units. Now it
@@ -159,6 +188,7 @@ function runTool(args) {
   //  criterion is that every CODED position is typed and nothing else is.
   cov.units_typed === 72 ? ok("all 72 real units covered") : bad("unit coverage", JSON.stringify(cov));
   cov.positions_typed === 160 ? ok("160 positions covered") : bad("position coverage", JSON.stringify(cov));
+  cov.bed_positions_typed === 160 ? ok("all 160 coded positions retain bed grain") : bad("position grain overwritten", JSON.stringify(cov));
   (cov.units_total - cov.units_typed) === 6
     ? ok("exactly the 6 legacy rows unmapped", "uncoded inventory is left alone, not typed")
     : bad("wrong number unmapped", String(cov.units_total - cov.units_typed));
@@ -183,6 +213,21 @@ function runTool(args) {
   }
   distOk ? ok("distribution matches production exactly") : bad("distribution differs");
 
+  const identityAfter = (await pool.query(
+    `select u.id as unit_id, s.id as space_id, r.id as source_id,
+            r.produced_unit_id, r.produced_space_id,
+            l.id as lease_id, l.property_id as lease_property_id,
+            l.space_id as lease_space_id, l.rent, l.start_date, l.end_date, l.lease_status
+       from leases l
+       join spaces s on s.id=l.space_id
+       join units u on u.id=s.unit_id
+       join import_source_rows r on r.produced_space_id=s.id
+      where l.id=$1
+      order by r.id limit 1`, [existingLease])).rows[0];
+  JSON.stringify(identityAfter) === JSON.stringify(identityBefore)
+    ? ok("existing lease, unit, space and source-link identity are unchanged")
+    : bad("mapping changed durable lease/source identity", JSON.stringify({ identityBefore, identityAfter }));
+
   const pos = await datedPropertyPositions(pool, { property_id: prop });
   pos.count === 160 && (pos.retired_excluded || {}).units === 0
     ? ok("canonical loader still sees 160, no retired inventory reintroduced")
@@ -196,14 +241,99 @@ function runTool(args) {
     : bad("A LEGACY BED-SHAPED ROW RECEIVED A UNIT TYPE", String(decoyTyped));
 
   console.log("\n── 4 · idempotence ──");
+  const beforeRepeat = (await pool.query(
+    `select count(*) filter (where position_kind='bed')::int as beds,
+            count(*) filter (where use_type='residential')::int as residential
+       from spaces s join units u on u.id=s.unit_id where u.property_id=$1`, [prop])).rows[0];
   const again = runTool(["--property", prop, "--apply"]);
   const cov2 = (await pool.query(
-    "select count(*)::int n from property_unit_types where property_id=$1", [prop])).rows[0].n;
-  again.ok && cov2 === 3 ? ok("re-apply is a no-op", "still 3 types") : bad("re-apply changed things", `types=${cov2}`);
+    `select (select count(*)::int from property_unit_types where property_id=$1) as types,
+            count(*) filter (where position_kind='bed')::int as beds,
+            count(*) filter (where use_type='residential')::int as residential
+       from spaces s join units u on u.id=s.unit_id where u.property_id=$1`, [prop])).rows[0];
+  again.ok && Number(cov2.types) === 3 && Number(cov2.beds) === Number(beforeRepeat.beds) && Number(cov2.residential) === Number(beforeRepeat.residential)
+    ? ok("re-apply is a no-op", "types, grain and use unchanged")
+    : bad("re-apply changed classification", JSON.stringify({ beforeRepeat, cov2 }));
+  const identityAfterRepeat = (await pool.query(
+    `select u.id as unit_id, s.id as space_id, r.id as source_id,
+            r.produced_unit_id, r.produced_space_id,
+            l.id as lease_id, l.property_id as lease_property_id,
+            l.space_id as lease_space_id, l.rent, l.start_date, l.end_date, l.lease_status
+       from leases l
+       join spaces s on s.id=l.space_id
+       join units u on u.id=s.unit_id
+       join import_source_rows r on r.produced_space_id=s.id
+      where l.id=$1
+      order by r.id limit 1`, [existingLease])).rows[0];
+  JSON.stringify(identityAfterRepeat) === JSON.stringify(identityBefore)
+    ? ok("re-apply preserves the original lease/source identity")
+    : bad("re-apply changed durable lease/source identity", JSON.stringify({ identityBefore, identityAfterRepeat }));
+
+  console.log("\n── 5 · structural grain refusals ──");
+  // A unit ruling cannot consume two coded positions under one parent.
+  const contradictoryProp = (await pool.query(
+    `insert into properties (name, address, leasing_basis) values ($1,'1 Unit Way','unit') returning id`, [tag + " contradictory"])).rows[0].id;
+  const contradictoryBatch = (await pool.query(
+    `insert into import_batches (property_id, source_type, source_file, status) values ($1,'rent_roll_ledger','unit.csv','committed') returning id`, [contradictoryProp])).rows[0].id;
+  const contradictoryUnit = (await pool.query(
+    `insert into units (property_id, unit_number) values ($1,'U-1') returning id`, [contradictoryProp])).rows[0].id;
+  for (const [i, label] of ["Room1", "Room2"].entries()) {
+    const sid = (await pool.query(
+      `insert into spaces (unit_id, space_label) values ($1,$2) returning id`, [contradictoryUnit, label])).rows[0].id;
+    await pool.query(
+      `insert into import_source_rows (import_batch_id,row_index,raw,produced_unit_id,produced_space_id)
+       values ($1,$2,$3,$4,$5)`, [contradictoryBatch, i + 1,
+        JSON.stringify({ unit_type: "S.1UN_02", unit_number: "U-1", space_label: label }), contradictoryUnit, sid]);
+  }
+  const contradiction = runTool(["--property", contradictoryProp]);
+  !contradiction.ok && /multiple coded positions|contradictory/i.test(contradiction.out)
+    ? ok("unit ruling refuses contradictory multi-position source")
+    : bad("contradictory unit grain was accepted", (contradiction.out || "").slice(-300));
+  const contradictionTypes = (await pool.query(
+    "select count(*)::int n from property_unit_types where property_id=$1", [contradictoryProp])).rows[0].n;
+  contradictionTypes === 0 ? ok("contradictory refusal wrote no governed type") : bad("contradictory refusal wrote data", String(contradictionTypes));
+
+  // A bed ruling needs a source position label; an unlabeled coded row is incomplete.
+  const incompleteProp = (await pool.query(
+    `insert into properties (name, address, leasing_basis) values ($1,'2 Bed Way','bed') returning id`, [tag + " incomplete"])).rows[0].id;
+  const incompleteBatch = (await pool.query(
+    `insert into import_batches (property_id, source_type, source_file, status) values ($1,'rent_roll_ledger','bed.csv','committed') returning id`, [incompleteProp])).rows[0].id;
+  const incompleteRows = [
+    ["1417-116", "STU00017", "Room1"], ["1417-216", "STU00016", null],
+    ["1417-316", "STU00015", "Room1"], ["1417-416", "STU00017", "Room1"],
+  ];
+  for (let i = 0; i < incompleteRows.length; i++) {
+    const [number, code, label] = incompleteRows[i];
+    const uid = (await pool.query(
+      `insert into units (property_id, unit_number) values ($1,$2) returning id`, [incompleteProp, number])).rows[0].id;
+    const sid = (await pool.query(
+      `insert into spaces (unit_id, space_label) values ($1,$2) returning id`, [uid, label])).rows[0].id;
+    await pool.query(
+      `insert into import_source_rows (import_batch_id,row_index,raw,produced_unit_id,produced_space_id)
+       values ($1,$2,$3,$4,$5)`, [incompleteBatch, i + 1,
+        JSON.stringify({ unit_type: code, unit_number: number, space_label: label }), uid, sid]);
+  }
+  const incomplete = runTool(["--property", incompleteProp]);
+  !incomplete.ok && /no source position label|incomplete/i.test(incomplete.out)
+    ? ok("bed ruling refuses incomplete unlabeled source")
+    : bad("incomplete bed grain was accepted", (incomplete.out || "").slice(-300));
+  const incompleteTypes = (await pool.query(
+    "select count(*)::int n from property_unit_types where property_id=$1", [incompleteProp])).rows[0].n;
+  incompleteTypes === 0 ? ok("incomplete refusal wrote no governed type") : bad("incomplete refusal wrote data", String(incompleteTypes));
+
+  for (const [p, b] of [[contradictoryProp, contradictoryBatch], [incompleteProp, incompleteBatch]]) {
+    await pool.query("delete from import_source_rows where import_batch_id=$1", [b]);
+    await pool.query("delete from import_batches where id=$1", [b]);
+    await pool.query("delete from spaces where unit_id in (select id from units where property_id=$1)", [p]);
+    await pool.query("delete from units where property_id=$1", [p]);
+    await pool.query("delete from property_unit_types where property_id=$1", [p]);
+    await pool.query("delete from properties where id=$1", [p]);
+  }
 
   //  cleanup
   await pool.query("delete from import_source_rows where import_batch_id=$1", [batch]);
   await pool.query("delete from import_batches where id=$1", [batch]);
+  await pool.query("delete from leases where property_id=$1", [prop]);
   await pool.query("update units set unit_type_id=null where property_id=$1", [prop]);
   await pool.query("delete from property_unit_types where property_id=$1", [prop]);
   await pool.query("delete from spaces where unit_id in (select id from units where property_id=$1)", [prop]);
