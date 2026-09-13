@@ -7,6 +7,7 @@ const boundary = require("../e2e/proof_boundary");
 require("../e2e/proof_fence_preload");
 const {Pool} = require("pg");
 const activation = require("../../src/onboarding/activation_service");
+const { reviewedIngest } = require("../helpers/reviewed_source.js");
 const artifacts = require("../../src/onboarding/source_artifact_service");
 const deals = require("../../src/onboarding/deal_service");
 const sessions = require("../../src/identity/staff_session_service");
@@ -41,14 +42,14 @@ let pool;
       const initial=await one("select id from spaces where unit_id=$1",[unit.id]);
       for(const label of (preexisting==="single"?["Room1"]:["Room1","Room2"])) {
         const space=label==="Room1" && initial
-          ? await one("update spaces set space_label=$2 where id=$1 returning id",[initial.id,label])
-          : await one("insert into spaces(unit_id,space_label) values($1,$2) returning id",[unit.id,label]);
+          ? await one("update spaces set space_label=$2,position_kind='bed',use_type='residential' where id=$1 returning id",[initial.id,label])
+          : await one("insert into spaces(unit_id,space_label,position_kind,use_type) values($1,$2,'bed','residential') returning id",[unit.id,label]);
         if(label==="Room1" && preexisting!=="single") await pool.query("insert into leases(property_id,space_id,tenant_ids,rent,start_date,end_date,lease_status) values($1,$2,$3,850,'2026-01-01','2027-12-31','active')",[property.id,space.id,[person.id]]);
       }
     }
     const act=(await activation.openActivation(pool,{user_id:user.id,deal_intake_id:deal.id,property_id:property.id})).activation;
     const artifact=await artifacts.store(pool,{scope_type:"property",scope_id:property.id,filename:"synthetic-space.csv",mimetype:"text/csv",buffer:Buffer.from(csv),uploaded_by_user_id:user.id,source_as_of_date:"2026-07-31"});
-    await activation.ingestRentRoll(pool,{user_id:user.id,deal_intake_id:deal.id,property_id:property.id,activation_id:act.id,source_artifact_id:artifact.id,source_as_of_date:"2026-07-31"});
+    await reviewedIngest(activation,pool,{user_id:user.id,deal_intake_id:deal.id,property_id:property.id,activation_id:act.id,source_artifact_id:artifact.id,source_as_of_date:"2026-07-31"});
     const proposals=(await activation.readActivation(pool,{user_id:user.id,activation_id:act.id})).proposals;
     return {property,act,proposals,token};
   }

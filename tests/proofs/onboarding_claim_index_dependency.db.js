@@ -10,6 +10,7 @@ require("../e2e/proof_fence_preload.js");
 const { Pool } = require("pg");
 const activation = require("../../src/onboarding/activation_service.js");
 const artifacts = require("../../src/onboarding/source_artifact_service.js");
+const { reviewedIngest } = require("../helpers/reviewed_source.js");
 const deals = require("../../src/onboarding/deal_service.js");
 let pool;
 (async () => {
@@ -35,13 +36,13 @@ let pool;
     uploaded_by_user_id:user.id,source_as_of_date:"2026-07-31"});
   const args = {user_id:user.id,deal_intake_id:deal.id,property_id:property.id,activation_id:act.id,source_artifact_id:artifact.id,source_as_of_date:"2026-07-31"};
   if (mode === "released") {
-    await assert.rejects(()=>activation.ingestRentRoll(pool,args),error=>error.code === "23505" && error.constraint === "uq_proposed_natural");
+    await assert.rejects(()=>reviewedIngest(activation,pool,args),error=>error.code === "23505" && error.constraint === "uq_proposed_natural");
     assert.equal(Number((await one("select count(*) from import_batches where property_id=$1",[property.id])).count),0);
     assert.equal(Number((await one("select count(*) from proposed_records where activation_id=$1",[act.id])).count),0);
     assert.deepEqual((await one("select content from source_artifacts where id=$1",[artifact.id])).content,bytes);
     console.log("PASS ceiling192: raw23505 on natural-key index; stage transaction rolled back; original retained");
   } else {
-    const result = await activation.ingestRentRoll(pool,args);
+    const result = await reviewedIngest(activation,pool,args);
     const review = await activation.readActivation(pool,{user_id:user.id,activation_id:act.id});
     assert.equal(result.rows_read,2);
     assert.equal(review.proposals.length,2);

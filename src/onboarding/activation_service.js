@@ -56,10 +56,8 @@ const personIngress = require("../identity/person_ingress.js"); // the ONE door 
 
 "use strict";
 
-const { mapRows, describePlan, planFor } = require("./rent_roll_field_map.js");
+const { describePlan, planFor } = require("./rent_roll_field_map.js");
 const artifacts = require("./source_artifact_service.js");
-const { parseRentRollSource } = require("./rent_roll_source_adapter.js");
-const { createHash } = require("node:crypto");
 const dealService = require("./deal_service.js");
 const { competingOperativeLeases, describeCompeting, asDate } =
   require("../tenancy/operative_overlap.js");
@@ -68,31 +66,13 @@ const { competingOperativeLeases, describeCompeting, asDate } =
 //  temporal dead zone — the vacant-path guard above it would have thrown
 //  ReferenceError before it could refuse anything. snapshot_loader does
 //  not require this module back, so there is no cycle to avoid here.
-const { resolveCurrentUnitId } = require("../shared/snapshot_loader.js");
+const homeIdentity = require("./source_home_identity_review.js");
 
 function refusal(status, reason, receipt, extra = {}) {
   const e = new Error(receipt);
   e.httpStatus = status; e.reason = reason; e.receipt = receipt;
   Object.assign(e, extra);
   return e;
-}
-
-function sourceDate(value) {
-  if (value == null || value === "") return null;
-  const text = value instanceof Date ? value.toISOString().slice(0, 10) : String(value);
-  const parsed = new Date(text + "T00:00:00Z");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0,10) !== text) {
-    throw refusal(400, "invalid_source_date", "Use a valid rent-roll date in YYYY-MM-DD form.");
-  }
-  return text;
-}
-
-function rowClaims(mapped) {
-  // Compare normalized facts, not object-key order or client column spelling.
-  // The retained rows remain authoritative even when a legacy caller supplies
-  // an identical copy. Source row number and section are part of the claim.
-  return JSON.stringify(mapped.map(row => Object.fromEntries(Object.keys(row)
-    .filter(key => key !== "_raw" && row[key] != null).sort().map(key => [key,row[key]]))));
 }
 
 /*  Can this actor operate this property's lease and occupancy setup?
@@ -214,6 +194,113 @@ async function openActivation(db, { user_id, deal_intake_id, property_id, source
     receipt: `Setup started for ${scope.property.name || scope.property.address}.` };
 }
 
+/* Hold every row whose mutable fields grant this operation, then resolve the
+ * authority from those locked rows.  FOR SHARE conflicts with authority
+ * updates.  A revocation that was already waiting wins before this read; a
+ * later revocation waits until the transaction has committed or rolled back. */
+async function lockAndResolveActivationScope(client, { user_id, deal_intake_id, property_id } = {}) {
+  await client.query("select id from users where id=$1 for share", [user_id]);
+  await client.query("select id from deal_intakes where id=$1 for share", [deal_intake_id]);
+  await client.query(
+    `select property_id from deal_intake_properties
+      where intake_id=$1 and property_id=$2 and status='current' for share`,
+    [deal_intake_id, property_id]);
+  await client.query("select id from properties where id=$1 for share", [property_id]);
+  await client.query(
+    `select property_id from property_team_assignments
+      where user_id=$1 and property_id=$2 for share`, [user_id, property_id]);
+  return resolveActivationScope(client, { user_id, deal_intake_id, property_id });
+}
+
+async function lockReviewedInventory(client, { property_id, prepared, inventory_decisions } = {}) {
+  // Serialize every proposed source unit label, including approved-new labels,
+  // without locking unrelated inventory for the property.
+  const labels = [...new Set((prepared.mapped || []).map(r => r.unit_number).filter(Boolean)
+    .map(v => String(v).trim().toLocaleLowerCase("en-US")))].sort();
+  for (const label of labels) {
+    await client.query("select pg_advisory_xact_lock(hashtextextended($1,0))",
+      [`source-home:${property_id}:${label}`]);
+  }
+  const decisions = Array.isArray(inventory_decisions) ? inventory_decisions : [];
+  const unitIds = [...new Set(decisions.map(d => d && d.unit_id).filter(Boolean))];
+  const spaceIds = [...new Set(decisions.map(d => d && d.space_id).filter(Boolean))];
+  const reuseIds = [...new Set(decisions.map(d => d && d.decision_id).filter(Boolean))];
+  if (reuseIds.length) {
+    const reused = (await client.query(
+      `select selected_unit_id,selected_space_id from proposed_records
+        where id=any($1::uuid[]) for share`, [reuseIds])).rows;
+    reused.forEach(r => { if (r.selected_unit_id) unitIds.push(r.selected_unit_id); if (r.selected_space_id) spaceIds.push(r.selected_space_id); });
+  }
+  if (unitIds.length) await client.query(
+    `select id from units where property_id=$1 and id=any($2::uuid[]) for update`,
+    [property_id, [...new Set(unitIds)]]);
+  if (spaceIds.length) await client.query(
+    `select s.id from spaces s join units u on u.id=s.unit_id
+      where u.property_id=$1 and s.id=any($2::uuid[]) for update of s`,
+    [property_id, [...new Set(spaceIds)]]);
+}
+
+/* Parse retained bytes and compare source identities with current inventory.
+ * This is deliberately read-only: it does not set leasing_basis, create an
+ * import batch, source rows, proposals, units, or spaces. */
+async function previewRentRoll(db, {
+  user_id, deal_intake_id, property_id, activation_id,
+  rows, source_artifact_id, source_as_of_date, leasing_basis = null,
+} = {}) {
+  const scope = await resolveActivationScope(db, { user_id, deal_intake_id, property_id });
+  const act = (await db.query(
+    `select deal_id,property_id,status,import_batch_id from activations where id=$1`,
+    [activation_id])).rows[0];
+  if (!act || act.deal_id !== deal_intake_id || act.property_id !== property_id) {
+    throw refusal(403, "activation_out_of_scope", "This setup does not belong to the requested property and deal.");
+  }
+  if (act.status !== "open" || act.import_batch_id) throw refusal(409, "setup_already_read_source",
+    "This setup already has retained review. Start a new setup to review a correction.");
+  const basis = ["unit", "bed"].includes(leasing_basis)
+    ? leasing_basis : (scope.property.leasing_basis === "bed" ? "bed" : "unit");
+  const prepared = await homeIdentity.prepareSource(db, { property_id, rows,
+    source_artifact_id, source_as_of_date, leasing_basis: basis, refusal });
+  const review = await homeIdentity.planReview(db, { property_id, activation_id, prepared });
+  return { ...review,
+    receipt: `Read ${review.rows_read} source rows without changing inventory. Review each grouped source home before applying it.` };
+}
+
+/* Pre-196 staged claims have retained evidence but no approved home decision.
+ * They are never back-labelled.  Restart closes that open setup as history and
+ * opens a clean review that points at the same immutable artifact bytes. */
+async function restartSourceIdentityReview(db, { user_id, activation_id } = {}) {
+  const client = await db.connect();
+  try {
+    await client.query("begin");
+    const old = (await client.query(`select * from activations where id=$1 for update`, [activation_id])).rows[0];
+    if (!old) throw refusal(404, "activation_not_found", "That setup is no longer on record.");
+    if (old.status !== "open" || !old.source_artifact_id || !old.import_batch_id) {
+      throw refusal(409, "source_review_restart_unavailable", "This setup has no staged retained source that needs a new identity review.");
+    }
+    const unbound = (await client.query(
+      `select count(*)::int n from proposed_records
+        where activation_id=$1 and target_type='lease' and inventory_identity_decision_id is null`,
+      [activation_id])).rows[0].n;
+    if (!unbound) throw refusal(409, "source_review_already_bound", "This setup already carries reviewed source-to-home decisions.");
+    const scope = await lockAndResolveActivationScope(client, {
+      user_id, deal_intake_id: old.deal_id, property_id: old.property_id,
+    });
+    await client.query(`update activations set status='abandoned',updated_at=now() where id=$1`, [old.id]);
+    const next = (await client.query(
+      `insert into activations(deal_id,property_id,source_label,status,opened_by_user_id,authority_basis)
+       values($1,$2,$3,'open',$4,$5) returning *`,
+      [old.deal_id,old.property_id,old.source_label,user_id,scope.authority_basis || null])).rows[0];
+    const artifact = await artifacts.describe(client, old.source_artifact_id);
+    await client.query("commit");
+    return { activation: next, retained_source: { artifact_id:old.source_artifact_id,
+      source_as_of_date:old.source_as_of_date, leasing_basis:scope.property.leasing_basis,
+      filename:artifact && artifact.original_filename, sha256:artifact && artifact.sha256 },
+      prior_activation_id:old.id,
+      receipt:`The earlier staged claims remain on record. A new review is ready from the same retained source; no historical claim was relabelled.` };
+  } catch (e) { await client.query("rollback").catch(()=>{}); throw e; }
+  finally { client.release(); }
+}
+
 /*  ── ingestRentRoll ────────────────────────────────────────────────
  *  ONE transaction: evidence, units, spaces and proposals commit together
  *  or not at all. A batch that survived a failed staging would be evidence
@@ -227,16 +314,17 @@ async function openActivation(db, { user_id, deal_intake_id, property_id, source
 async function ingestRentRoll(db, {
   user_id, deal_intake_id, property_id, activation_id,
   rows, source_artifact_id, source_as_of_date, leasing_basis = null, force = false,
+  source_token, inventory_decisions,
 } = {}) {
-  const scope = await resolveActivationScope(db, { user_id, deal_intake_id, property_id });
-
-  if (!source_artifact_id) {
-    throw refusal(400, "source_artifact_required",
-      "Upload the file itself before establishing a position from it. Spine keeps the " +
-      "source so it can always show what a position came from.");
-  }
-  const artifact = await artifacts.describe(db, source_artifact_id);
-  if (!artifact) throw refusal(404, "artifact_not_found", "That uploaded file is no longer on record.");
+  // Early scope and source validation make preview/apply errors useful.  The
+  // authority is deliberately resolved again under the activation lock below
+  // before leasing basis or inventory can change.
+  const initialScope = await resolveActivationScope(db, { user_id, deal_intake_id, property_id });
+  const reviewedBasis = ["unit", "bed"].includes(leasing_basis)
+    ? leasing_basis : (initialScope.property.leasing_basis === "bed" ? "bed" : "unit");
+  const prepared = await homeIdentity.prepareSource(db, { property_id, rows,
+    source_artifact_id, source_as_of_date, leasing_basis: reviewedBasis, refusal });
+  const { artifact, asOf, parsed, plan, mapped, ledgerRows } = prepared;
 
   //  ── ONE SETUP READS ONE SOURCE ────────────────────────────────────
   //  V1 scope: one property-specific rent roll per property. Letting a
@@ -262,54 +350,6 @@ async function ingestRentRoll(db, {
     }
   }
 
-  // A rent roll must be retained for THIS property. Deal membership alone
-  // cannot say which property's rows an artifact describes.
-  const artifactInScope = artifact.scope_type === "property" && artifact.scope_id === property_id;
-  if (!artifactInScope) {
-    throw refusal(403, "artifact_out_of_scope",
-      "That file was uploaded for something else. Upload it here to use it here.");
-  }
-
-  if (artifact.artifact_kind !== "rent_roll") {
-    throw refusal(422, "artifact_kind_mismatch", "This source is not held as a rent roll. Choose the rent roll uploaded for this property.");
-  }
-  const held = await artifacts.read(db, source_artifact_id);
-  if (!held || !Buffer.isBuffer(held.content) || held.content.length !== Number(artifact.byte_size)
-      || createHash("sha256").update(held.content).digest("hex") !== artifact.sha256) {
-    throw refusal(409, "source_integrity_mismatch", "The retained file could not be verified. Nothing was interpreted or established.");
-  }
-  let parsed;
-  try { parsed = parseRentRollSource({ buffer: held.content, filename: artifact.original_filename, mime_type: artifact.mime_type }); }
-  catch (error) {
-    throw refusal(422, error.code || "unsupported_rent_roll_source", "Spine could not interpret this rent-roll layout safely. The original file remains on record; check its headers, sections and source date.");
-  }
-  const dates = [sourceDate(source_as_of_date), sourceDate(artifact.source_as_of_date), sourceDate(parsed.source_as_of_date)].filter(Boolean);
-  if (new Set(dates).size > 1) {
-    throw refusal(409, "source_date_mismatch", "The requested date, retained source date and date inside the file disagree. Nothing was read into a position.");
-  }
-  const asOf = dates[0];
-  if (!asOf) {
-    throw refusal(400, "source_as_of_date_required",
-      "What date is this rent roll as of? A position without a date cannot be compared " +
-      "to any other, and a position dated by the upload is dated wrong.");
-  }
-
-  if (!parsed.rows.length) throw refusal(422, "no_rows", "No source records were found in the retained rent roll.");
-  if (parsed.rows.length > 5000) throw refusal(413, "too_many_rows", "Spine reads up to 5,000 source records at a time.");
-  const { plan, mapped } = mapRows(parsed.rows);
-  if (rows !== undefined && (!Array.isArray(rows) || rowClaims(mapRows(rows).mapped) !== rowClaims(mapped))) {
-    throw refusal(409, "source_rows_mismatch", "The submitted rows disagree with the retained file. Read the retained source again; no position was changed.");
-  }
-  if (!plan.mapped.unit_number) {
-    throw refusal(422, "no_unit_column",
-      `Spine could not find a unit column in that file. It read these columns: ` +
-      `${plan.headers.slice(0, 12).join(", ")}${plan.headers.length > 12 ? "…" : ""}.`,
-      { columns: plan.headers });
-  }
-
-  //  Carry the original cells into evidence alongside the mapped shape.
-  const ledgerRows = mapped.map((m) => ({ ...m, _source_cells: m._raw }));
-
   const client = await db.connect();
   try {
     await client.query("begin");
@@ -322,6 +362,117 @@ async function ingestRentRoll(db, {
     if (lockedActivation.status !== "open") throw refusal(409, "setup_not_open", "This setup is no longer open for reading a source.");
     if (lockedActivation.import_batch_id) throw refusal(409, "already_established_from_this_file", "This setup has already read its source. Return to its retained review.");
 
+    // Two disjoint source groups can still update the same property's
+    // leasing basis. Serialize applies for this property before taking the
+    // shared authority/property locks, so concurrent activations cannot both
+    // hold FOR SHARE and deadlock while upgrading that row for the write.
+    await client.query(`select pg_advisory_xact_lock(hashtextextended($1,196))`,
+      [`source-home-identity:${property_id}`]);
+
+    // Authorization can disappear between preview and apply.  Re-resolve it
+    // on this transaction before the first operating write, including the
+    // leasing-basis update that used to happen before inventory was loaded.
+    // Target locks come first. If this transaction waits behind inventory
+    // work, authority is read only after that wait, never before it.
+    await lockReviewedInventory(client, { property_id, prepared, inventory_decisions });
+    const applyScope = await lockAndResolveActivationScope(client, {
+      user_id, deal_intake_id, property_id,
+    });
+    const reviewed = await homeIdentity.resolveDecisions(client, {
+      property_id, activation_id, prepared, source_token,
+      decisions: inventory_decisions, refusal,
+    });
+
+    const { materializeRentableSpaces } = require("../shared/snapshot_loader.js");
+    const resolvedByKey = reviewed.resolved;
+    const childrenByUnit = new Map();
+    for (const entry of resolvedByKey.values()) {
+      if (entry.action !== "create_children") continue;
+      if (!childrenByUnit.has(entry.unit_id)) childrenByUnit.set(entry.unit_id, entry);
+    }
+    for (const [unitId, exemplar] of childrenByUnit) {
+      // The approval covers the complete child set for this source parent.
+      // The canonical materializer rechecks placeholder references and keeps
+      // the pristine placeholder's identity when it becomes the first bed.
+      await materializeRentableSpaces(client, {
+        unit_id: unitId, labels: exemplar.child_plan.labels, kind: "bed",
+      });
+      const spaces = (await client.query(
+        `select id,space_label from spaces where unit_id=$1`, [unitId])).rows;
+      for (const entry of resolvedByKey.values()) {
+        if (entry.action !== "create_children" || entry.unit_id !== unitId) continue;
+        const space = spaces.find(s => String(s.space_label).trim().toLocaleLowerCase("en-US")
+          === String(entry.group.source.space_label).trim().toLocaleLowerCase("en-US"));
+        if (!space) throw refusal(409, "approved_space_not_materialized",
+          "The reviewed child set did not produce the approved rentable space. Nothing was loaded.");
+        entry.space_id = space.id;
+        entry.selected = await homeIdentity.currentSelection(client, property_id, unitId, space.id);
+      }
+    }
+    const createByUnit = new Map();
+    for (const entry of resolvedByKey.values()) {
+      if (entry.action !== "create_new") continue;
+      const unitKey = String(entry.group.source.unit_number).trim().toLocaleLowerCase("en-US");
+      if (!createByUnit.has(unitKey)) createByUnit.set(unitKey, []);
+      createByUnit.get(unitKey).push(entry);
+    }
+    for (const entries of createByUnit.values()) {
+      const sourceUnit = entries[0].group.source.unit_number;
+      const unit = (await client.query(
+        `insert into units (property_id,unit_number) values ($1,$2) returning id,unit_number`,
+        [property_id, sourceUnit])).rows[0];
+      const labels = [...new Set(entries.map(e => e.group.source.space_label).filter(Boolean))];
+      await materializeRentableSpaces(client, {
+        unit_id: unit.id, labels, kind: prepared.basis === "bed" ? "bed" : "unit",
+      });
+      const madeSpaces = (await client.query(
+        `select id,space_label,position_kind as space_kind from spaces where unit_id=$1`, [unit.id])).rows;
+      for (const entry of entries) {
+        const space = madeSpaces.find(s => String(s.space_label).trim().toLocaleLowerCase("en-US")
+          === String(entry.group.source.space_label).trim().toLocaleLowerCase("en-US"));
+        if (!space) throw refusal(409, "approved_space_not_materialized",
+          "The approved new rentable space could not be materialized. Nothing was loaded.");
+        entry.unit_id = unit.id;
+        entry.space_id = space.id;
+        entry.selected = await homeIdentity.currentSelection(client, property_id, unit.id, space.id);
+      }
+    }
+
+    // The approved decision is stored in the existing proposal ledger.  One
+    // grouped decision may serve several rows that name the same source home.
+    for (const entry of resolvedByKey.values()) {
+      if (entry.action === "reuse") continue;
+      const confirmationFingerprint = entry.selected.fingerprint;
+      const evidenceRefs = entry.group.row_indices.map(row => ({
+        source: artifact.original_filename, artifact_id: source_artifact_id, row,
+      }));
+      const payload = {
+        source: { artifact_id: source_artifact_id, sha256: artifact.sha256,
+          as_of: asOf, rows: entry.group.row_indices },
+        source_claim: entry.group.source,
+        decision: { action: entry.action },
+        review_fingerprint: entry.review_fingerprint,
+        confirmation_fingerprint: confirmationFingerprint,
+        authority: { actor: String(user_id), basis: applyScope.authority_basis || null },
+      };
+      const normalized = { identity_key: entry.group.key,
+        leasing_basis: prepared.basis,
+        source_unit_number: entry.group.source.unit_number,
+        source_space_label: entry.group.source.space_label,
+        canonical_unit_id: entry.unit_id, canonical_space_id: entry.space_id };
+      const decision = (await client.query(
+        `insert into proposed_records
+           (activation_id,property_id,module,target_type,natural_key,payload_json,
+            normalized_json,evidence_refs,confidence,status,promoted_record_id,
+            confirmed_by,confirmed_at,resolution_kind,selected_unit_id,selected_space_id)
+         values ($1,$2,'leasing','inventory_identity',$3,$4,$5,$6,1,'promoted',$7,$8,now(),$9,$10,$11)
+         returning id`,
+        [activation_id,property_id,entry.group.key,JSON.stringify(payload),JSON.stringify(normalized),
+         JSON.stringify(evidenceRefs),entry.space_id || entry.unit_id,String(user_id),
+         ["create_new","create_children"].includes(entry.action) ? "created" : "resolved_existing",entry.unit_id,entry.space_id])).rows[0];
+      entry.decision_id = decision.id;
+    }
+
     if (["unit", "bed"].includes(leasing_basis)) {
       await client.query("update properties set leasing_basis=$1 where id=$2",
         [leasing_basis, property_id]);
@@ -333,6 +484,12 @@ async function ingestRentRoll(db, {
     //  THE EXISTING LEDGER IMPORTER. Not reimplemented, not forked —
     //  called, inside this transaction.
     const { loadLedgerSnapshot } = require("../shared/snapshot_loader.js");
+    const reviewedRepeat = Boolean((await client.query(
+      "select 1 from activations prior " +
+      "join proposed_records d on d.activation_id=prior.id " +
+      "where prior.property_id=$1 and prior.source_artifact_id=$2 and prior.id<>$3 " +
+      "and d.target_type='inventory_identity' and d.status='promoted' limit 1",
+      [property_id, source_artifact_id, activation_id])).rows[0]);
     const ledger = await loadLedgerSnapshot(db, ledgerRows, {
       client,
       targetPropertyId: property_id,
@@ -341,9 +498,18 @@ async function ingestRentRoll(db, {
       leasingModel: basis === "bed" ? "bed" : "unit",
       confidence: "extracted",
       sourceArtifactId: source_artifact_id,
-      force,
+      // A later activation may explicitly reuse or correct a prior reviewed
+      // mapping for these immutable bytes. It records new evidence lineage;
+      // same-activation duplicate clicks remain refused above.
+      force: force || reviewedRepeat,
       notes: `Established through Asset Management activation ${activation_id || "(new)"} ` +
              `by user ${user_id}. Evidence only at this stage: no person or lease was created here.`,
+      identityBindings: new Map(mapped.map(row => {
+        const key = homeIdentity.positionKey(row.unit_number,
+          homeIdentity.canonicalSpaceLabel(row, prepared.basis), prepared.basis);
+        const entry = resolvedByKey.get(key);
+        return [Number(row.row_index), entry ? { unit_id: entry.unit_id, space_id: entry.space_id } : null];
+      }).filter(([, binding]) => binding)),
     });
     if (ledger && ledger.error) {
       await client.query("rollback");
@@ -423,9 +589,9 @@ async function ingestRentRoll(db, {
       const inserted = await client.query(
         `insert into proposed_records
            (activation_id, property_id, module, target_type, natural_key,
-            payload_json, normalized_json, evidence_refs, confidence,
-            status, status_reason, import_source_row_id)
-         values ($1,$2,'leasing','lease',$3,$4,$5,$6,$7,$8,$9,$10)
+             payload_json, normalized_json, evidence_refs, confidence,
+             status, status_reason, import_source_row_id, inventory_identity_decision_id)
+         values ($1,$2,'leasing','lease',$3,$4,$5,$6,$7,$8,$9,$10,$11)
          on conflict (import_source_row_id, target_type)
            where import_source_row_id is not null do nothing returning id`,
         [activation_id, property_id,
@@ -444,7 +610,9 @@ async function ingestRentRoll(db, {
          naturalKeyFor(m),
          JSON.stringify(m._raw), JSON.stringify(normalized),
          JSON.stringify(evidenceRefs), c.confidence,
-         c.status, c.reason, ev ? ev.id : null]);
+         c.status, c.reason, ev ? ev.id : null,
+         (resolvedByKey.get(homeIdentity.positionKey(m.unit_number,
+           homeIdentity.canonicalSpaceLabel(m, prepared.basis), prepared.basis)) || {}).decision_id || null]);
       if (inserted.rowCount !== 1) throw refusal(409, "source_claim_already_staged", "This evidence row already has a claim. Nothing was staged twice.");
       if (c.vacant) counts.vacant++;
       counts[c.status] = (counts[c.status] || 0) + inserted.rowCount;
@@ -519,12 +687,6 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
         "This row cannot be used as it stands.");
     }
 
-    //  Authority is re-resolved here, not trusted from staging time. A
-    //  proposal can sit for days; the actor confirming it is not
-    //  necessarily the actor who staged it.
-    const scope = await resolveActivationScope(client, {
-      user_id, deal_intake_id: p.deal_id, property_id: p.property_id || p.activation_property_id });
-
     const n = p.normalized_json || {};
     const propertyId = p.property_id || p.activation_property_id;
     if (p.target_type !== "lease" || p.status === "rejected") {
@@ -543,89 +705,49 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
       throw refusal(422, "actual_rent_required", "The source has no actual rent for this resident. Asking rent cannot establish their contract rent.");
     }
 
-    //  1) the unit — created by the evidence pass already, but resolved
-    //     rather than assumed, because a human may have renamed it.
-    //  CURRENT inventory only, through the SAME resolver the evidence pass
-    //  uses. Without it, staging was retirement-aware and promotion could
-    //  still land on an obsolete representation whenever a current and a
-    //  retired unit share a unit number.
-    const currentUnitId = await resolveCurrentUnitId(client, propertyId, String(n.unit_number));
-    let unit = currentUnitId
-      ? (await client.query(`select * from units where id=$1`, [currentUnitId])).rows[0]
-      : undefined;
-    if (!unit) {
-      if (n.is_vacant || !n.tenant_name) {
-        await client.query(
-          `update proposed_records set status='needs_review', status_reason=$2, updated_at=now() where id=$1`,
-          [proposed_id, "The source unit is no longer in current inventory. Review its position before confirming vacancy."]);
-        await client.query("commit");
-        throw refusal(422, "current_unit_unavailable",
-          "The source unit is no longer in current inventory. Review its position before confirming vacancy.");
-      }
-      unit = (await client.query(
-        `insert into units (property_id, unit_number, market_rent)
-         values ($1,$2,$3) returning *`,
-        [propertyId, String(n.unit_number), n.market_rent ?? n.rent ?? null])).rows[0];
+    // 1–2) Consume the exact durable attachment approved before the source
+    // materialized.  Confirmation never resolves the immutable source label
+    // again and never creates a replacement when the selected target moved.
+    if (!p.inventory_identity_decision_id) throw refusal(409, "inventory_identity_review_required",
+      "Review where this source home belongs before confirming occupancy or vacancy.");
+    const identity = (await client.query(
+      `select d.*,da.property_id as decision_property_id,dsa.sha256 as decision_artifact_sha256,
+              csa.sha256 as claim_artifact_sha256
+         from proposed_records d
+         join activations da on da.id=d.activation_id
+         join source_artifacts dsa on dsa.id=da.source_artifact_id
+         join activations ca on ca.id=$2
+         join source_artifacts csa on csa.id=ca.source_artifact_id
+        where d.id=$1 and d.target_type='inventory_identity' and d.status='promoted'`,
+      [p.inventory_identity_decision_id,p.activation_id])).rows[0];
+    const claimedHash = identity && identity.payload_json && identity.payload_json.source
+      && identity.payload_json.source.sha256;
+    if (identity) {
+      await client.query(`select id from units where id=$1 and property_id=$2 for update`,
+        [identity.selected_unit_id, propertyId]);
+      await client.query(`select id from spaces where id=$1 and unit_id=$2 for update`,
+        [identity.selected_space_id, identity.selected_unit_id]);
     }
-
-    //  2) the space — the rentable position this lease actually attaches to.
-    //
-    //     A by-the-bed unit has many. The source usually SAYS which one, and
-    //     that name survived into the proposal as normalized.space_label; the
-    //     confirm step simply never read it, so every multi-bed unit was
-    //     refused as ambiguous even when the export named the room on every
-    //     row. The refusal was right about the danger and wrong about the
-    //     facts available.
-    //
-    //     So: use the named room when there is one. Refuse ONLY when the
-    //     source genuinely did not say and the unit has more than one
-    //     position. Tying to "the first one" would put roommates on one bed,
-    //     and that has not changed.
-    const spaces = (await client.query(
-      "select * from spaces where unit_id=$1 order by created_at", [unit.id])).rows;
-    if (spaces.length === 0) {
-      await client.query("rollback");
-      throw refusal(500, "no_space_for_unit",
-        "That unit has no space record, which should be impossible. Nothing was written.");
+    // Re-read and hold authority after every lifecycle/target lock wait. A
+    // proposal can sit for days, and the confirmer need not be its stager.
+    const scope = await lockAndResolveActivationScope(client, {
+      user_id, deal_intake_id: p.deal_id, property_id: propertyId,
+    });
+    const selected = identity && await homeIdentity.currentSelection(client, propertyId,
+      identity.selected_unit_id, identity.selected_space_id);
+    if (!identity || identity.decision_property_id !== propertyId
+        || identity.decision_artifact_sha256 !== identity.claim_artifact_sha256
+        || claimedHash !== identity.claim_artifact_sha256
+        || !selected || selected.retired
+        || identity.payload_json.confirmation_fingerprint !== selected.fingerprint) {
+      throw refusal(409, "inventory_identity_target_changed",
+        "The approved home, its parent hierarchy, retirement state, or source binding changed. Review the source identity again; nothing was confirmed.");
     }
-
-    const namedLabel = n.space_label ? String(n.space_label).trim() : "";
-    let space = null;
-
-    if (namedLabel) {
-      space = spaces.find((s) => String(s.space_label || "").trim().toLowerCase()
-                                 === namedLabel.toLowerCase()) || null;
-      if (!space) {
-        //  The source named a room this unit does not have. That is a
-        //  DISCREPANCY between the export and the established inventory —
-        //  never something to resolve by picking a neighbour.
-        await client.query(
-          `update proposed_records set status='needs_review', status_reason=$2, updated_at=now()
-            where id=$1`,
-          [proposed_id,
-           `The source says unit ${n.unit_number} has a position called "${namedLabel}", ` +
-           `but this unit's established positions are: ` +
-           `${spaces.map((s) => s.space_label).join(", ")}.`]);
-        await client.query("commit");
-        throw refusal(422, "unknown_space_label",
-          `Unit ${n.unit_number} has no position called "${namedLabel}". Spine will not ` +
-          `attach this claim to a different one.`,
-          { named: namedLabel, available: spaces.map((s) => s.space_label) });
-      }
-    } else if (spaces.length > 1) {
-      await client.query(
-        `update proposed_records set status='needs_review', status_reason=$2, updated_at=now()
-          where id=$1`,
-        [proposed_id,
-         `Unit ${n.unit_number} has ${spaces.length} beds and this row does not say which one ` +
-         `this claim is for. It has to be confirmed by bed.`]);
-      await client.query("commit");
-      throw refusal(422, "ambiguous_bed",
-        `Unit ${n.unit_number} leases by the bed. This row does not say which bed, so Spine ` +
-        `will not guess.`, { space_count: spaces.length });
-    } else {
-      space = spaces[0];
-    }
+    const unit = (await client.query(`select * from units where id=$1`, [identity.selected_unit_id])).rows[0];
+    const space = (await client.query(`select * from spaces where id=$1 and unit_id=$2`,
+      [identity.selected_space_id, identity.selected_unit_id])).rows[0];
+    if (!unit || !space) throw refusal(409, "inventory_identity_target_changed",
+      "The approved rentable home no longer has the reviewed hierarchy. Nothing was confirmed.");
 
     //  A vacant row establishes a resolved rentable position and no lease. That is a real
     //  position — a vacancy is part of an opening position, not an
@@ -670,11 +792,15 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
 
       // Close the same source-to-position lineage as occupied confirmation.
       if (p.import_source_row_id) {
-        await client.query(
+        const attached = await client.query(
           `update import_source_rows
-              set produced_unit_id=coalesce(produced_unit_id,$2),
-                  produced_space_id=coalesce(produced_space_id,$3)
-            where id=$1`, [p.import_source_row_id, unit.id, space.id]);
+              set produced_unit_id=$2, produced_space_id=$3
+            where id=$1
+              and (produced_unit_id is null or produced_unit_id=$2)
+              and (produced_space_id is null or produced_space_id=$3)`,
+          [p.import_source_row_id, unit.id, space.id]);
+        if (attached.rowCount !== 1) throw refusal(409, "source_home_attachment_changed",
+          "This evidence row is attached to a different reviewed home. Nothing was confirmed.");
       }
       await client.query(
         `update proposed_records
@@ -813,14 +939,17 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     //     it deliberately creates neither. This is the step that was
     //     missing: the evidence row now names every object it produced.
     if (p.import_source_row_id) {
-      await client.query(
+      const attached = await client.query(
         `update import_source_rows
             set produced_person_id=$2, produced_lease_id=$3,
-                produced_unit_id=coalesce(produced_unit_id,$4),
-                produced_space_id=coalesce(produced_space_id,$5),
+                produced_unit_id=$4, produced_space_id=$5,
                 parse_note='current ledger row — confirmed into canonical truth'
-          where id=$1`,
+          where id=$1
+            and (produced_unit_id is null or produced_unit_id=$4)
+            and (produced_space_id is null or produced_space_id=$5)`,
         [p.import_source_row_id, person ? person.id : null, lease.id, unit.id, space.id]);
+      if (attached.rowCount !== 1) throw refusal(409, "source_home_attachment_changed",
+        "This evidence row is attached to a different reviewed home. Nothing was confirmed.");
     }
 
     await client.query(
@@ -1050,6 +1179,10 @@ async function readActivation(db, { user_id, activation_id } = {}) {
     `select pr.id, pr.natural_key, pr.status, pr.status_reason, pr.confidence,
             pr.normalized_json, pr.promoted_record_id, pr.confirmed_at,
             pr.import_source_row_id, isr.row_index,
+            (select jsonb_build_object('decision_id',d.id,'resolution_kind',d.resolution_kind,
+                       'selected_unit_id',d.selected_unit_id,'selected_space_id',d.selected_space_id,
+                       'source_claim',d.payload_json->'source_claim')
+               from proposed_records d where d.id=pr.inventory_identity_decision_id) as home_identity_review,
             (select jsonb_build_object('status',ip.status,'candidates',ip.payload_json->'candidates',
                'person_id',ip.promoted_record_id,'resolution_kind',ip.resolution_kind)
              from proposed_records ip where ip.activation_id=pr.activation_id
@@ -1060,6 +1193,7 @@ async function readActivation(db, { user_id, activation_id } = {}) {
       order by isr.row_index nulls last, pr.natural_key`, [activation_id])).rows;
 
   const counts = proposals.reduce((a, p) => { a[p.status] = (a[p.status] || 0) + 1; return a; }, {});
+  const source_home_review_required = proposals.filter(p => !p.home_identity_review).length;
   const review_counts = proposals.reduce((a,p) => {
     const n = p.normalized_json || {};
     const future = n.section === "future";
@@ -1102,7 +1236,8 @@ async function readActivation(db, { user_id, activation_id } = {}) {
 
   return {
     activation: act, property: scope.property, deal: scope.deal,
-    proposals, counts, review_counts, opening_position: position, mapping,
+    proposals, counts, review_counts, source_home_review_required,
+    opening_position: position, mapping,
     source: artifact ? {
       filename: artifact.original_filename, byte_size: artifact.byte_size,
       uploaded_at: artifact.uploaded_at, as_of: act.source_as_of_date,
@@ -1112,7 +1247,7 @@ async function readActivation(db, { user_id, activation_id } = {}) {
 }
 
 module.exports = {
-  openActivation, ingestRentRoll, confirmProposal, rejectProposal,
+  openActivation, previewRentRoll, restartSourceIdentityReview, ingestRentRoll, confirmProposal, rejectProposal,
   establishOpeningPosition, readActivation, resolveActivationScope, classify, refusal,
   resolveResidentIdentity,
 };

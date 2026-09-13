@@ -257,7 +257,7 @@ else
   step "turn expected date stays on its exact home" node tests/proofs/availability_turn_date_scope.db.js
   step "legacy decision writes closed" node tests/e2e/legacy_decision_writes_disabled.e2e.js
   step "greenery staff onboarding" node tests/proofs/greenery_staff_onboarding.db.js
-  step "greenery legacy inventory establishment" node tests/proofs/greenery_legacy_inventory.db.js
+  step "source-to-home identity review and Greenery inventory contract" node tests/proofs/source_home_identity_review.db.js
   stop_owned_server || exit 1
 fi
 fi

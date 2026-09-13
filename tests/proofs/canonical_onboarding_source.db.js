@@ -14,6 +14,7 @@ const parent = process.env.PROOF_EXPECT_DEFECT === "1";
 const activation = require(path.join(root, "src/onboarding/activation_service.js"));
 const artifacts = require(path.join(root, "src/onboarding/source_artifact_service.js"));
 const deals = require(path.join(root, "src/onboarding/deal_service.js"));
+const { reviewedIngest } = require("../helpers/reviewed_source.js");
 let pool;
 let assertions = 0;
 function check(label, condition) { assert.ok(condition, label); assertions++; console.log(`PASS ${label}`); }
@@ -80,7 +81,9 @@ const sourceRows = [{Unit:"101",Room:"Room1",Resident:"Synthetic Tenant (s123456
   const supplied = [...sourceRows,
     {...sourceRows[0],Resident:"Synthetic Future (s654321)","Market Rent":"950","Lease From":"2027-07-01","Lease To":"2028-06-30",__row_number:4,__section:"future"},
     {Unit:"",Room:"",Resident:"Synthetic Applicant (s654322)","Market Rent":"950","Actual Rent":"","Lease From":"","Lease To":"",__row_number:5,__section:"future"}];
-  const out = await activation.ingestRentRoll(pool,{...claims.args,...(parent ? {rows:supplied} : {})});
+  const out = parent
+    ? await activation.ingestRentRoll(pool,{...claims.args,rows:supplied})
+    : await reviewedIngest(activation,pool,claims.args);
   const proposals = (await pool.query("select * from proposed_records where activation_id=$1 order by normalized_json->>'section',natural_key",[claims.act.id])).rows;
   if (parent) {
     check("parent evidence retains three but proposals drop assigned future",out.rows_read === 3 && proposals.length === 2);
@@ -114,12 +117,12 @@ const sourceRows = [{Unit:"101",Room:"Room1",Resident:"Synthetic Tenant (s123456
     // Retain the ledger's no-inventory refusal: an assigned structural row
     // accompanies the current evidence whose assignment is unknown.
     const unassigned = await setup(Buffer.from("Unit,Room,Resident,Actual Rent\n101,Room1,VACANT,\n,,Synthetic Unassigned,850\n"));
-    await activation.ingestRentRoll(pool, unassigned.args);
+    await reviewedIngest(activation,pool,unassigned.args);
     const unassignedReview = await activation.readActivation(pool,{user_id:user.id,activation_id:unassigned.act.id});
     check("current resident without a unit remains one blocked review claim",unassignedReview.proposals.length === 2 && unassignedReview.counts.blocked === 1);
     check("canonical assignment summary includes current unknown unit",unassignedReview.review_counts.total === 2 && unassignedReview.review_counts.current === 2 && unassignedReview.review_counts.assigned === 1 && unassignedReview.review_counts.unassigned_current === 1 && unassignedReview.review_counts.unassigned_future === 0);
     const conflicts = await setup(Buffer.from("Unit,Room,Resident,Actual Rent\n101,Room1,Synthetic A,850\n101,Room1,Synthetic B,850\n"));
-    await activation.ingestRentRoll(pool, conflicts.args);
+    await reviewedIngest(activation,pool,conflicts.args);
     const conflictReview = await activation.readActivation(pool,{user_id:user.id,activation_id:conflicts.act.id});
     check("two disagreeing current claims remain two conflicted proposals",conflictReview.proposals.length === 2 && conflictReview.counts.conflicted === 2 && conflictReview.review_counts.total === 2);
 
@@ -150,7 +153,7 @@ const sourceRows = [{Unit:"101",Room:"Room1",Resident:"Synthetic Tenant (s123456
       values($1,1,$2,$3,'prior source produced this person')`,
       [priorBatch.id,JSON.stringify({resident_id:continuityCode}),priorPerson.id]);
 
-    await activation.ingestRentRoll(pool,{...continuity.args});
+    await reviewedIngest(activation,pool,continuity.args);
     const continuityLease = await one(`select * from proposed_records
       where activation_id=$1 and target_type='lease'`,[continuity.act.id]);
     const peopleBeforeReview = Number((await one("select count(*) from persons")).count);
@@ -215,7 +218,8 @@ const sourceRows = [{Unit:"101",Room:"Room1",Resident:"Synthetic Tenant (s123456
       continuityEvidence.produced_lease_id === confirmedContinuity.lease_id);
   }
   const unnamed = await setup(Buffer.from("Unit,Room,Resident,Status,Market Rent,Actual Rent\n301,Room1,,occupied,900,850\n"));
-  await activation.ingestRentRoll(pool,{...unnamed.args,...(parent ? {rows:[{Unit:"301",Room:"Room1",Resident:"",Status:"occupied","Market Rent":"900","Actual Rent":"850",__row_number:2}]} : {})});
+  if (parent) await activation.ingestRentRoll(pool,{...unnamed.args,rows:[{Unit:"301",Room:"Room1",Resident:"",Status:"occupied","Market Rent":"900","Actual Rent":"850",__row_number:2}]});
+  else await reviewedIngest(activation,pool,unnamed.args);
   const unnamedClaim = await one("select id,status,normalized_json from proposed_records where activation_id=$1 and target_type='lease'",[unnamed.act.id]);
   if (parent) {
     const result = await activation.confirmProposal(pool,{user_id:user.id,proposed_id:unnamedClaim.id});

@@ -341,8 +341,28 @@ module.exports = function dealSetup({ pool, upload }) {
     } catch (e) { fail(res, e); }
   });
 
-  // STEP 2: interpret the retained artifact. Optional legacy rows are checked
-  // for agreement by the service; they can never replace the retained bytes.
+  // STEP 2: parse retained bytes and preview source-to-home identity.  This is
+  // read-only: inventory, leasing basis and the operating source substrate do
+  // not change until the reviewed mapping is applied below.
+  router.post("/deal-setup/activations/:activationId/preview-source",
+    requireHuman, rejectBodyActor, async (req, res) => {
+    try {
+      const act = (await pool.query("select * from activations where id=$1",
+        [req.params.activationId])).rows[0];
+      if (!act) return res.status(404).json({ error: "activation_not_found",
+        receipt: "That setup is no longer on record." });
+      res.json(await activation.previewRentRoll(pool, {
+        user_id: req.human.id, deal_intake_id: act.deal_id, property_id: act.property_id,
+        activation_id: act.id, rows: (req.body || {}).rows,
+        source_artifact_id: (req.body || {}).source_artifact_id,
+        source_as_of_date: (req.body || {}).source_as_of_date || null,
+        leasing_basis: (req.body || {}).leasing_basis || null,
+      }));
+    } catch (e) { fail(res, e); }
+  });
+
+  // STEP 3: apply the explicit reviewed decisions. Optional legacy rows are
+  // checked for agreement; they can never replace the retained bytes.
   router.post("/deal-setup/activations/:activationId/read-source",
     requireHuman, rejectBodyActor, async (req, res) => {
     try {
@@ -359,6 +379,8 @@ module.exports = function dealSetup({ pool, upload }) {
         source_artifact_id: (req.body || {}).source_artifact_id,
         source_as_of_date: (req.body || {}).source_as_of_date || null,
         leasing_basis: (req.body || {}).leasing_basis || null,
+        source_token: (req.body || {}).source_token || null,
+        inventory_decisions: (req.body || {}).inventory_decisions,
         force: Boolean((req.body || {}).force),
       });
       res.status(201).json(out);
@@ -371,6 +393,15 @@ module.exports = function dealSetup({ pool, upload }) {
         user_id: req.human.id, activation_id: req.params.activationId });
       res.json(out);
     } catch (e) { fail(res, e); }
+  });
+
+  router.post("/deal-setup/activations/:activationId/restart-source-review",
+    requireHuman, rejectBodyActor, async (req,res) => {
+    try {
+      res.status(201).json(await activation.restartSourceIdentityReview(pool, {
+        user_id:req.human.id, activation_id:req.params.activationId,
+      }));
+    } catch (e) { fail(res,e); }
   });
 
   router.post("/deal-setup/proposals/:proposedId/confirm", requireHuman, rejectBodyActor, async (req, res) => {

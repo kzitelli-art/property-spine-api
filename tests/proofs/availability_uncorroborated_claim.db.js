@@ -39,6 +39,7 @@ const root = path.resolve(process.env.PROOF_BUSINESS_ROOT || path.join(__dirname
 const parent = process.env.PROOF_EXPECT_DEFECT === "1";
 const activation = require(path.join(root, "src/onboarding/activation_service.js"));
 const artifacts = require(path.join(root, "src/onboarding/source_artifact_service.js"));
+const { reviewedIngest } = require("../helpers/reviewed_source.js");
 const deals = require(path.join(root, "src/onboarding/deal_service.js"));
 const sessions = require(path.join(root, "src/identity/staff_session_service.js"));
 const { readTenancyStanding } = require(path.join(root, "src/tenancy/tenancy_position_read.js"));
@@ -112,7 +113,7 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
       await pool.query("update spaces set space_label='Room1', position_kind='bed', use_type='residential' where unit_id=$1", [u.id]);
       const act = (await activation.openActivation(pool, { user_id: operator.id, deal_intake_id: W.deal, property_id: W.id })).activation;
       const artifact = await artifacts.store(pool, { scope_type: "property", scope_id: W.id, filename: "writer.csv", mimetype: "text/csv", buffer: Buffer.from(csv), uploaded_by_user_id: operator.id, source_as_of_date: AS_OF });
-      await activation.ingestRentRoll(pool, { user_id: operator.id, deal_intake_id: W.deal, property_id: W.id, activation_id: act.id, source_artifact_id: artifact.id, source_as_of_date: AS_OF });
+      await reviewedIngest(activation, pool, { user_id: operator.id, deal_intake_id: W.deal, property_id: W.id, activation_id: act.id, source_artifact_id: artifact.id, source_as_of_date: AS_OF });
       const proposals = (await activation.readActivation(pool, { user_id: operator.id, activation_id: act.id })).proposals;
       let confirmed = null; try { confirmed = await activation.confirmProposal(pool, { user_id: operator.id, proposed_id: proposals[0].id }); } catch (e) { confirmed = { error: String(e.publicMessage || e.message) }; }
       await activation.establishOpeningPosition(pool, { user_id: operator.id, activation_id: act.id });

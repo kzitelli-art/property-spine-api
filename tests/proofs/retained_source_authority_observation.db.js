@@ -36,6 +36,7 @@ if (!api) throw new Error("E2E_API_BASE is required; this observation has no ser
 
 const activation = require(path.join(root, "src/onboarding/activation_service.js"));
 const artifacts = require(path.join(root, "src/onboarding/source_artifact_service.js"));
+const { reviewedIngest } = require("../helpers/reviewed_source.js");
 const deals = require(path.join(root, "src/onboarding/deal_service.js"));
 
 let passed = 0;
@@ -159,7 +160,7 @@ async function main() {
     assert.equal(descriptor.scope_type, "property");
     assert.equal(String(descriptor.scope_id), String(propertyB));
     assert.equal(descriptor.artifact_kind, "rent_roll");
-    const ingested = await activation.ingestRentRoll(pool, {
+    const ingested = await reviewedIngest(activation, pool, {
       user_id: adminA.id, deal_intake_id: deal.id, property_id: propertyB,
       activation_id: opened.id, source_artifact_id: artifact.id, source_as_of_date: AS_OF,
     });

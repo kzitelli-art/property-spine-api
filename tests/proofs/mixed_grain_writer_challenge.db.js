@@ -26,6 +26,7 @@ const root = path.resolve(process.env.PROOF_BUSINESS_ROOT || path.join(__dirname
 const parent = process.env.PROOF_EXPECT_DEFECT === "1";
 const activation = require(path.join(root, "src/onboarding/activation_service.js"));
 const artifacts = require(path.join(root, "src/onboarding/source_artifact_service.js"));
+const { reviewedIngest } = require("../helpers/reviewed_source.js");
 const deals = require(path.join(root, "src/onboarding/deal_service.js"));
 const sessions = require(path.join(root, "src/identity/staff_session_service.js"));
 const { materializeRentableSpaces } = require(path.join(root, "src/tenancy/inventory_materialization.js"));
@@ -127,12 +128,16 @@ const evidence = { mode: parent ? "positive_parent_defect" : "successor", sectio
     async function readSource(p, prepared) {
       try {
         if (api) {
-          const r = await http(p.token, `/deal-setup/activations/${prepared.activation}/read-source`, { method: "POST", body: { source_artifact_id: prepared.artifact.id, source_as_of_date: AS_OF } });
+          const body={ source_artifact_id: prepared.artifact.id, source_as_of_date: AS_OF, leasing_basis:"bed" };
+          const preview=await http(p.token, `/deal-setup/activations/${prepared.activation}/preview-source`, { method:"POST",body });
+          if(preview.status!==200)return{ok:false,error:{status:preview.status,code:preview.body&&preview.body.error,message:String(preview.body&&(preview.body.receipt||preview.body.message)||"")},http:preview};
+          const r = await http(p.token, `/deal-setup/activations/${prepared.activation}/read-source`, { method: "POST", body: {
+            ...body,source_token:preview.body.source_token,inventory_decisions:preview.body.identities.map(identity=>({key:identity.key,...identity.suggested_decision})) } });
           if (r.status !== 201) return { ok: false, error: { status: r.status, code: r.body && r.body.error, message: String(r.body && (r.body.receipt || r.body.message) || "") }, http: r };
           const review = await http(p.token, `/deal-setup/activations/${prepared.activation}`);
           return { ok: true, act: prepared.activation, proposals: (review.body && review.body.proposals) || [], http: r };
         }
-        const out = await activation.ingestRentRoll(pool, { user_id: user.id, deal_intake_id: p.deal, property_id: p.id, activation_id: prepared.activation, source_artifact_id: prepared.artifact.id, source_as_of_date: AS_OF });
+        const out = await reviewedIngest(activation,pool,{ user_id: user.id, deal_intake_id: p.deal, property_id: p.id, activation_id: prepared.activation, source_artifact_id: prepared.artifact.id, source_as_of_date: AS_OF,leasing_basis:"bed" });
         return { ok: true, act: prepared.activation, proposals: (await activation.readActivation(pool, { user_id: user.id, activation_id: prepared.activation })).proposals, service: out };
       } catch (e) { return { ok: false, error: errOf(e) }; }
     }

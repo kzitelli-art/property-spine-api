@@ -370,10 +370,20 @@ function appParsedRows(text) {
      JSON.stringify(act.body).slice(0, 160));
   const activationId = act.body.activation.id;
 
+  const preview = await request("POST", `/deal-setup/activations/${activationId}/preview-source`, {
+    headers: asA,
+    body: { source_artifact_id: artifactId, source_as_of_date: "2026-04-30",
+            leasing_basis: "unit" } });
+  ok("H12a preview retains inventory until a person applies reviewed homes",
+     preview.status === 200 && preview.body.source_token
+       && preview.body.identities.every((identity) => identity.suggested_decision),
+     `${preview.status} ${JSON.stringify(preview.body).slice(0, 240)}`);
   const read = await request("POST", `/deal-setup/activations/${activationId}/read-source`, {
     headers: asA,
-    body: { rows: appParsedRows(RENT_ROLL), source_artifact_id: artifactId,
-            source_as_of_date: "2026-04-30" } });
+    body: { source_artifact_id: artifactId, source_as_of_date: "2026-04-30",
+            leasing_basis: "unit", source_token: preview.body.source_token,
+            inventory_decisions: preview.body.identities.map((identity) => Object.assign(
+              { key: identity.key }, identity.suggested_decision)) } });
   ok("H12 reading the source produced a batch, evidence rows and proposals",
      read.status === 201 && read.body.import_batch_id && read.body.rows_read === 3,
      `${read.status} ${JSON.stringify(read.body).slice(0, 240)}`);

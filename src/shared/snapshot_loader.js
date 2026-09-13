@@ -909,7 +909,14 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
     // Only current rows claim what inventory exists. A future-only reference
     // to an unknown or retired position remains evidence and a discrepancy;
     // it cannot abort or reshape the current inventory load.
-    await refuseIfSourceOnlyMatchesRetiredInventory(client, propertyId, currentRows);
+    // A reviewed activation supplies exact canonical IDs.  Its planner has
+    // already classified retired label matches and revalidated the selected
+    // target under the activation lock.  Running the legacy label preflight
+    // here would reject an explicitly mapped current home merely because the
+    // immutable source text also names an old representation.
+    if (!options.identityBindings) {
+      await refuseIfSourceOnlyMatchesRetiredInventory(client, propertyId, currentRows);
+    }
 
     /*  ── GRAIN IS THE PROPERTY'S, NOT THE CALLER'S ──────────────────
      *  `options.leasingModel` was only ever stamped onto the batch row; the
@@ -942,8 +949,34 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
     for (const row of [...currentRows, ...futureRows]) {
       const isFuture = row.section === "future";
       let discrepancy = null;
-      let unitId=unitCache.get(row.unit_number);
-      if(!unitId){
+      const reviewedBinding = options.identityBindings
+        ? options.identityBindings.get(Number(row.row_index)) || null : null;
+      let unitId = reviewedBinding ? reviewedBinding.unit_id : unitCache.get(row.unit_number);
+      if (options.identityBindings && !reviewedBinding) {
+        discrepancy = isFuture
+          ? `future source position ${row.unit_number} has no approved current-home attachment`
+          : `source position ${row.unit_number} has no approved current-home attachment`;
+      } else if (options.identityBindings && reviewedBinding) {
+        const exact = (await client.query(
+          `select u.id,s.id as space_id
+             from units u join spaces s on s.id=$3 and s.unit_id=u.id
+             left join inventory_retirements ir on ir.unit_id=u.id and ir.reversed_at is null
+            where u.id=$2 and u.property_id=$1 and ir.id is null`,
+          [propertyId, reviewedBinding.unit_id, reviewedBinding.space_id])).rows[0];
+        if (!exact) throw Object.assign(new Error("Approved source-to-home attachment is no longer current."), {
+          code: "INVENTORY_IDENTITY_TARGET_CHANGED", httpStatus: 409,
+          publicMessage: "The reviewed home, parent hierarchy, or retirement state changed. Review the source identity again; nothing was loaded.",
+        });
+        unitId = exact.id;
+        if (!isFuture) {
+          counts.units_reused++;
+          await client.query(
+            `update units set square_feet=coalesce($3,square_feet),market_rent=coalesce($4,market_rent),
+               import_batch_id=$5,source_type='rent_roll_ledger',source_as_of_date=$6,confidence=$7
+             where id=$1 and property_id=$2`,
+            [unitId,propertyId,row.sqft,row.market_rent,batchId,sourceAsOfDate,options.confidence||'confirmed']);
+        }
+      } else if(!unitId){
         //  CURRENT inventory only — same rule, same imported predicate.
         const currentId=await resolveCurrentUnitId(client,propertyId,row.unit_number);
         if(currentId){
@@ -988,9 +1021,13 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
        *  authority to redefine what the building contains.
        */
       const label = stableSpaceLabel({ leasing_model: grain }, row);
-      let spaceId = null;
+      let spaceId = reviewedBinding ? reviewedBinding.space_id : null;
 
-      if (!unitId) {
+      if (options.identityBindings) {
+        // Exact reviewed IDs are the attachment.  Source labels stay in raw
+        // evidence and never run a second resolver here.
+        if (reviewedBinding && !isFuture) counts.spaces_reused++;
+      } else if (!unitId) {
         // The unit-level discrepancy above is the complete answer. Do not
         // query, materialize or invent a child position beneath no inventory.
       } else if (label === "(bed)") {
@@ -1738,6 +1775,10 @@ module.exports.loadLedgerSnapshot = loadLedgerSnapshot;
 //  function the evidence pass uses. Two copies of "which unit is this?"
 //  would diverge, and would diverge silently.
 module.exports.resolveCurrentUnitId = resolveCurrentUnitId;
+// Activation's reviewed identity planner is allowed to create an approved
+// fresh parent through the same materializer used by snapshot loading.  The
+// review owns the decision; this remains the one canonical space writer.
+module.exports.materializeRentableSpaces = materializeRentableSpaces;
 module.exports.priorProducedPerson = priorProducedPerson;
 module.exports.loadReconciliation = loadReconciliation;
 module.exports.readLatestReconciliation = readLatestReconciliation;
