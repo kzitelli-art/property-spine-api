@@ -21,6 +21,8 @@ ok("all four public CHECK definitions are compared as whole normalized definitio
 ok("apply accepts only an exactly sole pending 195", /pending\.length !== 1 \|\| pending\[0\] !== FILE_195/.test(source));
 ok("repeated --apply at validated 195 is no-write and unknown arguments refuse",
   /before\.state === "post"/.test(source) && /unknown command arguments/.test(source) && /REPEAT APPLY/.test(source));
+ok("preflight catalog reads carry bounded lock and statement timeouts",
+  /MIGRATION_PREFLIGHT_LOCK_TIMEOUT/.test(source) && /MIGRATION_PREFLIGHT_STATEMENT_TIMEOUT/.test(source) && /boundPreflight\(client\)/.test(source));
 
 console.log(`\n  ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

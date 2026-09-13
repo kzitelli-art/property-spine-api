@@ -72,6 +72,23 @@ function stripped(definition) {
   return String(definition).toLowerCase().replace(/[\s\"]/g, "");
 }
 
+function interval(name, fallback) {
+  const value = (process.env[name] || fallback).trim().toLowerCase();
+  if (!/^\d+(ms|s|min)?$/.test(value)) die(`${name} is malformed.`, "Use a PostgreSQL interval such as 500ms, 10s or 2min.");
+  return value;
+}
+
+async function boundPreflight(client) {
+  const lock = interval("MIGRATION_PREFLIGHT_LOCK_TIMEOUT", "10s");
+  const statement = interval("MIGRATION_PREFLIGHT_STATEMENT_TIMEOUT", "30s");
+  try {
+    await client.query(`set lock_timeout = '${lock}'`);
+    await client.query(`set statement_timeout = '${statement}'`);
+  } catch (error) {
+    die("could not establish bounded preflight reads.", error.message);
+  }
+}
+
 function required(defs, name, table, definition) {
   const row = defs.get(name);
   if (!row) return `${name} is absent`;
@@ -179,7 +196,10 @@ function runMigration(pin) {
   const client = new Client({ connectionString: url, ssl: databaseSsl(url) });
   await client.connect();
   let before;
-  try { before = await inspect(client); }
+  try {
+    await boundPreflight(client);
+    before = await inspect(client);
+  }
   finally { await client.end(); }
   console.log(`MIGRATION 195 PREDEPLOY: exact ${before.state}-state accepted (${before.entries} ledger rows, ceiling ${before.ceiling}); reviewed SHA and source hash match.`);
   if (!APPLY) {
@@ -195,7 +215,10 @@ function runMigration(pin) {
   const afterClient = new Client({ connectionString: url, ssl: databaseSsl(url) });
   await afterClient.connect();
   let after;
-  try { after = await inspect(afterClient); }
+  try {
+    await boundPreflight(afterClient);
+    after = await inspect(afterClient);
+  }
   finally { await afterClient.end(); }
   if (after.state !== "post" || after.ceiling !== "195") die("migration runner returned but the exact 195 post-state was not observed.");
   console.log(`MIGRATION 195 RELEASE VERIFIED: ${after.entries} ledger rows, ceiling ${after.ceiling}, all reviewed physical constraints present.`);
