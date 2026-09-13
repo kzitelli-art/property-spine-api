@@ -61,6 +61,8 @@ const REPO = path.join(__dirname, "..", "..");
  *  allowed to read DATABASE_URL because pointing at production is their
  *  purpose — and each is separately constrained. */
 const PRODUCTION_APPROVED = [
+  { file: "tools/release/migration_195_predeploy.js",
+    reason: "The one-time migration-195 predeploy operation — it must inspect the actual release target because an isolated fixture cannot establish its ledger or physical CHECK state. It is verify-only by default and refuses every state except the exact reviewed 194 pre-state or physically compatible 195 post-state. A write requires --apply, delegates only to migrations/migrate.js with a full exact build SHA and expected ceiling 194, then rereads the ledger and physical definitions; it never persists MIGRATION_RELEASE in the parent environment. The operation is release-window-only, not ordinary runtime tooling, and is removed or replaced by the next reviewed migration release procedure." },
   { file: "tests/scenarios/prod_smoke_missed_readonly.js",
     reason: "the documented structurally read-only production smoke; runs inside BEGIN TRANSACTION READ ONLY and proves it cannot write before reading" },
   { file: "tools/ledger_reconcile.js",
