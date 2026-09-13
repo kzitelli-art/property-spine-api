@@ -1662,9 +1662,7 @@ module.exports = function leasePacketsModule(deps) {
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const pk = (await client.query(
-        `select * from lease_packets where id=$1 for update`, [req.params.id])).rows[0];
-      if (!pk) { await client.query("rollback"); return res.status(404).json({ receipt: "No lease packet with that id." }); }
+      const { pk } = await lockPacketApplication(client, req.params.id, operator.property_id);
 
       //  THE SESSION'S PROPERTY IS THE WALL. A packet at another property is
       //  not this operator's to sign, and the property comes from the session
@@ -1704,18 +1702,6 @@ module.exports = function leasePacketsModule(deps) {
       //  before anyone approved the application. The released signature door
       //  must not become a way to sign an unapproved application: that is
       //  exactly the decision Execute exists to make explicit.
-      const appRow = (await client.query(
-        `select status, terms_review_obligation_id, activation_obligation_id from lease_applications where id=$1`,
-        [pk.application_id])).rows[0];
-      if (appRow && !appRow.terms_review_obligation_id && !appRow.activation_obligation_id
-          && appRow.status === "submitted") {
-        await client.query("rollback");
-        return res.status(409).json({
-          error: "application_not_approved",
-          receipt: "This application has not been approved. Signing for the company on an unapproved application is not a separate act: use Execute, which approves and signs in one decision.",
-          execute_endpoint: `/operator/leasing/lease-packets/${pk.id}/execute`,
-        });
-      }
       const out = await companySignCore(client, { pk, operator, req });
       await client.query("commit");
       return res.status(201).json({
@@ -1732,6 +1718,67 @@ module.exports = function leasePacketsModule(deps) {
       return res.status(500).json({ receipt: "Could not execute the lease.", error: e.message });
     } finally { client.release(); }
   });
+
+  // Packet generation locks application then packet. Every company decision
+  // uses the same order, including the retained signature door. The unlocked
+  // lookup only discovers the parent; both identities are rechecked under lock.
+  async function lockPacketApplication(client, packetId, propertyId) {
+    const found = (await client.query(
+      `select application_id, property_id from lease_packets where id=$1`, [packetId])).rows[0];
+    if (!found) throw packetError(404, "packet_not_found", "No lease packet with that id.");
+    if (String(found.property_id) !== String(propertyId)) {
+      throw packetError(403, "packet_not_at_your_property", "That lease packet belongs to another property.");
+    }
+    const app = (await client.query(
+      `select * from lease_applications where id=$1 for update`, [found.application_id])).rows[0];
+    if (!app) throw packetError(409, "application_missing", "Application record missing for this packet.");
+    const pk = (await client.query(
+      `select * from lease_packets where id=$1 for update`, [packetId])).rows[0];
+    if (!pk || String(pk.application_id) !== String(app.id)
+        || String(pk.property_id) !== String(propertyId)
+        || String(app.property_id) !== String(propertyId)) {
+      throw packetError(409, "packet_application_changed", "The packet and application no longer identify the same property and application. Reload before deciding.");
+    }
+    return { pk, app };
+  }
+
+  // Approval can be recorded through the retained door after the resident has
+  // signed a two-step packet. Consume that packet's original acknowledgment
+  // for the current terms-review gate regardless of which door approved it.
+  async function completePacketTermsReview(client, { pk, app }) {
+    if (!app.terms_review_obligation_id) return;
+    const ob = (await client.query(
+      `select * from obligations where id=$1 for update`, [app.terms_review_obligation_id])).rows[0];
+    if (!ob || ob.type !== "terms_review" || ob.related_type !== "lease_application"
+        || String(ob.related_id) !== String(app.id) || String(ob.property_id) !== String(app.property_id)) {
+      throw packetError(409, "terms_review_obligation_mismatch", "The terms review does not belong to this application.");
+    }
+    if (ob.status === "complete") return;
+    if (!["open", "in_progress"].includes(ob.status)) {
+      throw packetError(409, "terms_review_not_open", "The current terms review cannot be completed from this packet.");
+    }
+    const ack = (await client.query(
+      `select id, event_json from lease_packet_audit_events
+        where lease_packet_id=$1 and event_type='tenant_submitted'
+          and (event_json->>'two_step_preparation')='true' order by created_at desc limit 1`, [pk.id])).rows[0];
+    const evidence = ack && ack.event_json && ack.event_json.acknowledgment_evidence;
+    if (!evidence || String(evidence.application_id) !== String(app.id)
+        || String(evidence.lease_packet_id) !== String(pk.id)
+        || evidence.signer_role !== "tenant"
+        || evidence.rendered_snapshot_hash !== pk.rendered_snapshot_hash
+        || evidence.instrument_package_sha256 !== pk.instrument_package_sha256) {
+      throw packetError(409, "resident_acknowledgment_evidence_missing",
+        "The packet records no matching frozen resident acknowledgment evidence to satisfy the terms review.");
+    }
+    if ((ob.required_inputs || []).includes("terms_acknowledged")) {
+      await satisfyObligation(client, { obligation_id: ob.id, input: "terms_acknowledged", proof: {
+        ...evidence, terms_review_obligation_id: ob.id,
+        satisfied_from: "lease_packet_audit_events.tenant_submitted", source_audit_event_id: ack.id,
+        satisfied_at_execute: true,
+      } });
+    }
+    await completeObligation(client, { obligation_id: ob.id, completed_by: null });
+  }
 
   //  ── THE COMPANY SIGNATURE, AS ONE FUNCTION ───────────────────────
   //  Shared by the released company-sign door and the two-step Execute
@@ -1761,6 +1808,22 @@ module.exports = function leasePacketsModule(deps) {
         throw packetError(409, "resident_has_not_executed",
           `This packet is '${pk.status}'. The resident signs the instrument before the company does.`);
       }
+
+      // Both public doors hold the application lock before the packet lock.
+      // Re-read after Execute's canonical approval; terminal applications never
+      // acquire a company signature, even if an older approval pointer remains.
+      const app = (await client.query(
+        `select * from lease_applications where id=$1 for update`, [pk.application_id])).rows[0];
+      if (!app) throw packetError(409, "application_missing", "Application record missing for this packet.");
+      if (["declined", "withdrawn", "expired"].includes(app.status)) {
+        throw packetError(409, "application_terminal", `This application is ${app.status}. It cannot be executed.`);
+      }
+      if (!app.terms_review_obligation_id && !app.activation_obligation_id) {
+        throw packetError(409, "application_not_approved",
+          "This application has not been approved. Use Execute to approve and sign in one decision.",
+          { execute_endpoint: `/operator/leasing/lease-packets/${pk.id}/execute` });
+      }
+      await completePacketTermsReview(client, { pk, app });
 
       const field = (await client.query(
         `update lease_packet_fields
@@ -1854,15 +1917,7 @@ module.exports = function leasePacketsModule(deps) {
     if (!applications || typeof applications.approveApplication !== "function") {
       throw packetError(503, "execution_not_wired", "The application approval service is not wired on this deploy.");
     }
-    const pk = (await client.query(
-      `select * from lease_packets where id=$1 for update`, [packetId])).rows[0];
-    if (!pk) throw packetError(404, "packet_not_found", "No lease packet with that id.");
-    if (String(pk.property_id) !== String(operator.property_id)) {
-      throw packetError(403, "packet_not_at_your_property", "That lease packet belongs to another property.");
-    }
-    const app = (await client.query(
-      `select * from lease_applications where id=$1 for update`, [pk.application_id])).rows[0];
-    if (!app) throw packetError(409, "application_missing", "Application record missing for this packet.");
+    const { pk, app } = await lockPacketApplication(client, packetId, operator.property_id);
 
     // ── AUTHORITY, BOTH HALVES, BEFORE ANY WRITE ─────────────────────
     const property = (await client.query(
@@ -1965,22 +2020,6 @@ module.exports = function leasePacketsModule(deps) {
         authority_basis: approval.basis, event_id: approvedEvent ? approvedEvent.id : null,
         at: approvedEvent ? approvedEvent.occurred_at : new Date().toISOString(),
         terms_review_obligation_id: approvedOut.obligation.id });
-      //  The resident's acknowledgment already happened on this packet; the
-      //  obligation approval just spawned is satisfied from THAT frozen
-      //  evidence, never from anything supplied now.
-      const ack = (await client.query(
-        `select event_json from lease_packet_audit_events
-          where lease_packet_id=$1 and event_type='tenant_submitted'
-            and (event_json->>'two_step_preparation')='true' order by created_at desc limit 1`, [pk.id])).rows[0];
-      if (!ack || !ack.event_json || !ack.event_json.acknowledgment_evidence) {
-        throw packetError(409, "resident_acknowledgment_evidence_missing",
-          "The packet records no frozen resident acknowledgment evidence to satisfy the terms review.");
-      }
-      const proof = { ...ack.event_json.acknowledgment_evidence,
-        terms_review_obligation_id: approvedOut.obligation.id,
-        satisfied_from: "lease_packet_audit_events.tenant_submitted", satisfied_at_execute: true };
-      await satisfyObligation(client, { obligation_id: approvedOut.obligation.id, input: "terms_acknowledged", proof });
-      await completeObligation(client, { obligation_id: approvedOut.obligation.id, completed_by: null });
     } else {
       decisions.push({ decision: "application_already_approved", actor_user_id: null, authority_basis: "already_approved",
         event_id: null, at: app.approved_at || null, terms_review_obligation_id: app.terms_review_obligation_id || null });

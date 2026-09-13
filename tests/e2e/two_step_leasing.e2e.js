@@ -16,11 +16,11 @@
 //
 // Between them Mike prepares and attests the application link, prepares the
 // signing package from the acknowledged offer (no approval, no confirmation),
-// and issues the signing links. Three journeys run sequentially on ONE
-// database with three distinct prospects on three genuinely separate beds;
-// the first executed lease is never cancelled and no shared bed is reset.
-// Every fixture write precedes the first business action; nothing is written
-// by SQL after a business action to manufacture an outcome.
+// and issues the signing links. Journeys use separate prospects and beds on
+// ONE database; earlier executed leases are never cancelled or reset. SQL
+// establishes fixture inventory/configuration; journey outcomes use the
+// canonical services and HTTP doors. Role setup includes real invites before
+// the fixture signer list is completed. This is not production configuration.
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -189,6 +189,22 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       need(J.conversion && J.conversion.person_id === J.person, "the conversion belongs to the same person");
     });
 
+    if (J.mode === "handoff" && process.env.TWO_STEP_BROWSER_FULL_JOURNEY === "1") {
+      const outDir = process.env.PROOF_OUTPUT_DIR || path.join(require("node:os").tmpdir(), "two-step-leasing");
+      fs.mkdirSync(outDir, { recursive: true });
+      fs.writeFileSync(path.join(outDir, "two_step_handoff.json"), JSON.stringify({
+        stage: "before_author", property_id: P, person_id: J.person,
+        conversation_id: J.conversation, conversion_id: J.conversion.id,
+        bed_id: J.bed.id, unit_id: J.unit.id, unit_number: J.unit.unit_number,
+        rent: J.rent, lease_start_date: dates.start, lease_end_date: dates.end,
+        prospect: J.prospect, guarantor: { name: `Guarantor ${J.label} ${nonce}`,
+          phone: num(J.index * 10 + 3), email: `guarantor-${J.label}-${nonce}@example.test` },
+        kz_user_id: F.kz.id, mike_user_id: F.mike.id, signer_only_user_id: F.signerOnly.id,
+      }, null, 2));
+      observe(`${J.label} left after tour outcome for the full staff browser journey`, { handoff: "two_step_handoff.json" });
+      return;
+    }
+
     await section(`${J.label} · AUTHOR (decision 1)`, async () => {
       need(J.conversion, "conversion exists");
       const targets = await api("GET", "/operator/leasing/leaseable-units", { token: F.mike.tok });
@@ -310,6 +326,12 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       check(app2.status === "submitted" && !app2.approved_at, "the application is still submitted after every refusal");
     });
 
+    if (J.mode === "coexistence") {
+      await section(`${J.label} · retained approval, packet generation and Execute coexist`, async () => {
+        await require("./helpers/two_step_approval_coexistence")({ pool, api, J, F, propertyId: P, check });
+      });
+      return;
+    }
     if (J.mode === "handoff") {
       //  Left at resident_executed for the browser slice (two_step_execute.browser.js),
       //  which performs Execute through the actual staff UI. Runtime identifiers
@@ -334,6 +356,8 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
         need(deny.status === 200, "the applicant's withdrawal is recorded through the existing disposition door", { status: deny.status, body: deny.body });
         const exec = await api("POST", `/operator/leasing/lease-packets/${J.packet}/execute`, { token: F.kzTok, body: { application_decision: "approve" } });
         check(exec.status === 409 && exec.body.error === "application_terminal", "a withdrawn application cannot be executed even with every signature and every authority", { status: exec.status, error: exec.body && exec.body.error });
+        const oldSign = await api("POST", `/operator/leasing/lease-packets/${J.packet}/company-sign`, { token: F.signerOnly.tok, body: {} });
+        check(oldSign.status === 409 && oldSign.body.error === "application_terminal", "the retained company-sign door also refuses the withdrawn application", { status: oldSign.status, error: oldSign.body && oldSign.body.error });
         const after = await decisionCount(J);
         check(after.approvals === before.approvals && after.company_signatures === 0 && after.leases === 0, "no approval, signature or lease resulted", after);
         const row = await one("select status from lease_applications where id=$1", [J.app]);
@@ -479,7 +503,8 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       F.two = await establishBed(`C8-${nonce}`, "Bed A");
       F.three = await establishBed(`C9-${nonce}`, "Bed A");
       F.four = await establishBed(`D1-${nonce}`, "Bed A");
-      observe("fixture: four beds established under the fixture activation with confirmed-vacancy lineage", { units: [F.one.unit.unit_number, F.two.unit.unit_number, F.three.unit.unit_number, F.four.unit.unit_number] });
+      F.five = await establishBed(`E1-${nonce}`, "Bed A");
+      observe("fixture: five beds established under the fixture activation with confirmed-vacancy lineage", { units: [F.one.unit.unit_number, F.two.unit.unit_number, F.three.unit.unit_number, F.four.unit.unit_number, F.five.unit.unit_number] });
       F.other = await one("insert into properties (name,address,organization_id) values ($1,'2 Scope Wall',$2) returning id", [`TwoStep Other ${nonce}`, F.property.organization_id]);
       await q("insert into property_team_assignments (property_id,user_id,role_title,allowed_modules,primary_for_modules,active,can_manage_roles) values ($1,$2,'property_admin','{management,leasing}','{management}',true,true)", [F.other.id, F.kz.id]);
       F.kzTok = await session(F.kz.id, P);
@@ -516,6 +541,7 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
     const J2 = { label: "J2", index: 2, unit: F.two.unit, bed: F.two.bed, rent: 990, mode: "plain" };
     const J3 = { label: "J3", index: 3, unit: F.three.unit, bed: F.three.bed, rent: 1010, mode: "withdraw" };
     const J4 = { label: "J4", index: 4, unit: F.four.unit, bed: F.four.bed, rent: 1005, mode: "handoff" };
+    const J5 = { label: "J5", index: 5, unit: F.five.unit, bed: F.five.bed, rent: 1025, mode: "coexistence" };
     await journey(J1);
     await journey(J2);
     await section("both leases stand", async () => {
@@ -527,6 +553,7 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       check(total.n === 2, "exactly two leases for the two applications");
     });
     await journey(J3);
+    await journey(J5);
     await journey(J4);
 
     await section("second property shape · incomplete setup refuses honestly", async () => {
