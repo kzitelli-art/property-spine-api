@@ -132,10 +132,20 @@ function parentChoiceFingerprint(propertyId, unitRows) {
   });
 }
 
+/*  Does the selected space carry the grain the review is being made at?
+ *  bed basis:  a room, classified as a bed. A room classified 'unit' is the
+ *              wrong-kind shape (an unconditional mapping-tool write); the
+ *              classification is corrected by the governed mapping tool, not
+ *              by relaxing this rule.
+ *  unit basis: the whole-unit placeholder. Every unit's placeholder is
+ *              created by the units trigger WITHOUT a position_kind (NULL),
+ *              so an established unit-basis property never carried 'unit'
+ *              on it; the label is the grain. Requiring 'unit' here refused
+ *              every existing whole-unit home on the unit shape.  */
 function grainMatches(basis, selected) {
   if (!selected || !selected.space_id) return false;
   if (basis === "bed") return selected.space_label !== "(whole unit)" && selected.space_kind === "bed";
-  return selected.space_label === "(whole unit)" && selected.space_kind === "unit";
+  return selected.space_label === "(whole unit)" && (selected.space_kind === "unit" || selected.space_kind == null);
 }
 
 async function currentSelection(db, propertyId, unitId, spaceId) {
