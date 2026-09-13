@@ -1449,6 +1449,24 @@ CI run 496 (`5be5c1c`) passed the full `verify_all.sh`; app `0450247`.
 
 ## Inventory correction hardening — 2026-09-13
 
+Row 73. **CANDIDATE (not released) · HTTP-PROVEN LOCALLY — final relationship
+and command-identity correction.** A focused review of row 72 reproduced two
+source defects on an owned database: a `unit_events` row with a current direct
+`unit_id` and a retired `space_id` was accepted on both INSERT and UPDATE, and
+two keys differing only after character 200 silently replayed because the
+command service truncated both. API `c479a9c` changes migration 197's existing
+wall to inspect every populated target, preserves the tables' existing
+unit/space grain rules, and makes the conflict reader report every actual
+retired target exactly once. It explicitly refuses idempotency keys longer than
+200 characters before creating or replaying a command. The registered
+hardening proof is **104 passed, 0 failed** and the delivered correction proof
+remains **85 passed, 0 failed**; the live-catalog policy gate passes
+(61 references / 61 entries / 24 blocking tables / 25 triggers), the contract
+test passes, and `tests/verify_source_governance.js` exited 0. Paired app
+remains `0d035c8`; no production migration, deployment, or source-home-196
+integration was performed. Receipt:
+`docs/handoffs/new-hp/inventory-correction/FINAL_REVIEW_20260913.md`.
+
 Row 72. The row-71 door could be raced (authority read before the lock),
 bypassed (every writer but leases could attach to retired inventory),
 and could double-count on reinstatement; none of that is a Greenery

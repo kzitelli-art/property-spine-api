@@ -29,11 +29,14 @@ correction door.
    `TG_ARGV[0]` status column (`''` = every row is operative),
    `TG_ARGV[1]` comma-separated terminal statuses,
    `TG_ARGV[2]` what a NULL status means (`operative` | `terminal`).
-   It resolves the target unit from `NEW.unit_id`, else through
-   `NEW.space_id → spaces.unit_id`, asks whether NEW is operative, asks
-   whether the unit is live-retired, and then:
+   It resolves **every populated** target: `NEW.unit_id` and, independently,
+   `NEW.space_id → spaces.unit_id`. Existing tables that have a narrower
+   unit/space grain rule retain it; this wall still checks both values when a
+   table carries both. It asks whether NEW is operative, asks whether any
+   target is live-retired, and then:
    - INSERT of an operative row → refused (`new attachment`)
-   - UPDATE whose target moved onto a retired unit → refused (`re-target`)
+   - UPDATE that adds or moves any target onto a retired unit → refused
+     (`re-target`)
    - UPDATE of a row that was terminal and becomes operative on a retired
      unit → refused (`reopen`)
    - UPDATE of a row already operative on the same retired unit → allowed
