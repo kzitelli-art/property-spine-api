@@ -17,7 +17,10 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("path");
+const net = require("node:net");
 const { execFileSync, spawn, spawnSync } = require("child_process");
 const { Client } = require("pg");
 const { harnessConnectionString } = require("../_run_receipt");
@@ -59,6 +62,86 @@ async function cloneDatabase(admin, from, suffix) {
   await admin.query(`create database ${quoteIdentifier(name)} template ${quoteIdentifier(from)}`);
   owned.add(name);
   return name;
+}
+
+async function reservePort() {
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", reject);
+    server.listen({ host: "127.0.0.1", port: 0, exclusive: true }, () => {
+      const port = server.address().port;
+      server.close((error) => error ? reject(error) : resolve(port));
+    });
+  });
+}
+
+async function startAndHealthTwice(admin, exact198) {
+  const database = `spine_proof_${nonce.slice(0, 22)}a1`;
+  await admin.query(`drop database if exists ${quoteIdentifier(database)} with (force)`);
+  await admin.query(`create database ${quoteIdentifier(database)} template ${quoteIdentifier(exact198)}`);
+  owned.add(database);
+  await sql(database, `create table proof_run_identity(nonce text not null); insert into proof_run_identity values('${nonce}')`);
+  const port = await reservePort();
+  const manifestPath = path.join(os.tmpdir(), `migration-194-198-${nonce}.json`);
+  const logPaths = Object.fromEntries(["sms", "anthropic", "egress", "sessions"].map((kind) =>
+    [kind, path.join(os.tmpdir(), `migration-194-198-${nonce}-${kind}.log`)]));
+  const manifest = { url: dbUrl(database), admin: adminUrl.href, nonce, port };
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest), { mode: 0o600 });
+  for (const file of Object.values(logPaths)) fs.writeFileSync(file, "");
+  try {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const env = {};
+      for (const key of ["PATH", "HOME", "SystemRoot", "TEMP", "TMP", "LANG", "TZ"]) {
+        if (process.env[key]) env[key] = process.env[key];
+      }
+      Object.assign(env, {
+        DATABASE_URL: manifest.url, E2E_DATABASE_URL: manifest.url,
+        E2E_PROOF_MANIFEST: manifestPath, E2E_SERVER_APPLICATION_NAME: `spine_proof_${nonce}`,
+        E2E_SMS_LOG: logPaths.sms, E2E_ANTHROPIC_LOG: logPaths.anthropic,
+        E2E_EGRESS_LOG: logPaths.egress, E2E_SESSION_LOG: logPaths.sessions,
+        NODE_ENV: "test", PORT: String(port), SMS_SEND_MODE: "customer_care",
+        OPERATOR_KEY: "owned-proof-key", OPERATOR_APP_ORIGIN: "http://127.0.0.1:5179",
+        APP_BASE_URL: `http://127.0.0.1:${port}`,
+      });
+      const child = spawn(process.execPath, [
+        "--require", "./tests/e2e/proof_fence_preload.js",
+        "--require", "./tests/e2e/fake_sms_preload.js",
+        "--require", "./tests/e2e/fake_anthropic_preload.js",
+        "server.js",
+      ], { cwd: ROOT, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+      let output = "";
+      child.stdout.on("data", (chunk) => { output += chunk; });
+      child.stderr.on("data", (chunk) => { output += chunk; });
+      let body = null;
+      try {
+        await waitUntil(`API health on start ${attempt}`, async () => {
+          if (child.exitCode !== null) throw new Error(`server exited ${child.exitCode}: ${output}`);
+          try {
+            const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(800) });
+            if (!response.ok || response.headers.get("x-proof-run") !== nonce) return false;
+            body = await response.json();
+            return body && body.ok === true;
+          } catch { return false; }
+        }, 30000);
+        ok(`post-198 API start ${attempt} answers owned health with the pinned build`,
+          body.build && body.build.commit_short === pin.slice(0, 7), JSON.stringify(body));
+      } finally {
+        if (child.exitCode === null) {
+          const closed = new Promise((resolve) => child.once("close", resolve));
+          child.kill();
+          await Promise.race([
+            closed,
+            new Promise((_, reject) => setTimeout(() => reject(new Error("owned API did not stop")), 5000)),
+          ]);
+        }
+      }
+    }
+    ok("both post-198 starts make no external network attempt",
+      fs.readFileSync(logPaths.egress, "utf8") === "", fs.readFileSync(logPaths.egress, "utf8"));
+  } finally {
+    fs.rmSync(manifestPath, { force: true });
+    for (const file of Object.values(logPaths)) fs.rmSync(file, { force: true });
+  }
 }
 
 function wrapper(database, args = [], environment = {}) {
@@ -296,6 +379,7 @@ async function falsify(admin, exact198, suffix, statement, pattern) {
     succeeds("restart uses ordinary verify-only migrate.js at exact 198", {
       status: restart.status, out: `${restart.stdout || ""}\n${restart.stderr || ""}`,
     }, /SCHEMA VERIFIED/);
+    await startAndHealthTwice(admin, clean);
 
     refuses("wrong 40-SHA pin refuses before database mutation", wrapper(clean, [], {
       EXPECTED_SHA: "0".repeat(40),
