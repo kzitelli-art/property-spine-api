@@ -17,7 +17,7 @@ const { Client } = require("pg");
 const { databaseSsl } = require("../../src/shared/database_ssl");
 const { classifyLedger } = require("../../migrations/ledger_verdict");
 const {
-  FILE_195, PRE_CONTRACT, POST_CONTRACT, constraintKey, requiredConstraint, decideState,
+  FILE_195, PRE_CONTRACT, POST_CONTRACT, constraintKey, requiredConstraint, decideState, positiveInterval,
 } = require("./migration_195_contract");
 
 const ROOT = path.join(__dirname, "..", "..");
@@ -71,8 +71,8 @@ function reviewedFile() {
 }
 
 function interval(name, fallback) {
-  const value = (process.env[name] || fallback).trim().toLowerCase();
-  if (!/^\d+(ms|s|min)?$/.test(value)) die(`${name} is malformed.`, "Use a PostgreSQL interval such as 500ms, 10s or 2min.");
+  const value = positiveInterval(process.env[name] || fallback);
+  if (!value) die(`${name} is malformed or non-positive.`, "Use a positive PostgreSQL interval such as 500ms, 10s or 2min.");
   return value;
 }
 

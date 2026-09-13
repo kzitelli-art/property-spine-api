@@ -25,6 +25,13 @@ function normalizeDefinition(definition) {
   return out;
 }
 
+function positiveInterval(value) {
+  const normalized = String(value).trim().toLowerCase();
+  if (!/^\d+(ms|s|min)?$/.test(normalized)) return null;
+  const amount = Number(normalized.match(/^\d+/)[0]);
+  return Number.isSafeInteger(amount) && amount > 0 ? normalized : null;
+}
+
 const PRE_CONTRACT = [
   ["aptc_source_ck", "application_proposed_terms_confirmations", "CHECK (source = 'operator_proposed_terms'::text)"],
   ["aptc_authority_ck", "application_proposed_terms_confirmations", "CHECK (authority_basis = ANY (ARRAY['owner'::text, 'role_authority'::text, 'managed_role_override'::text]))"],
@@ -85,6 +92,7 @@ module.exports = {
   PRE_CONTRACT,
   POST_CONTRACT,
   normalizeDefinition,
+  positiveInterval,
   constraintKey,
   requiredConstraint,
   decideState,

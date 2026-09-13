@@ -4,7 +4,7 @@
 "use strict";
 
 const {
-  FILE_195, PRE_CONTRACT, POST_CONTRACT, constraintKey, requiredConstraint, decideState,
+  FILE_195, PRE_CONTRACT, POST_CONTRACT, constraintKey, requiredConstraint, decideState, positiveInterval,
 } = require("../../tools/release/migration_195_contract");
 
 let pass = 0, fail = 0;
@@ -31,6 +31,8 @@ const term194 = "CHECK (term_source IS NULL OR (term_source = ANY (ARRAY['applic
 const authority195 = "CHECK (authority_basis = ANY (ARRAY['owner'::text, 'role_authority'::text, 'managed_role_override'::text, 'authored_offer'::text]))";
 
 console.log("\nMIGRATION 195 PREDEPLOY CONTRACT\n");
+ok("positive preflight intervals are accepted", positiveInterval("500ms") === "500ms" && positiveInterval(" 2MIN ") === "2min");
+ok("zero preflight intervals are refused", positiveInterval("0") === null && positiveInterval("0ms") === null && positiveInterval("00min") === null);
 ok("actual 194 source CHECK is accepted", !requiredConstraint(defs([row("application_proposed_terms_confirmations", "aptc_source_ck", source)]), ...PRE_CONTRACT[0]));
 ok("actual 194 authority CHECK is accepted", !requiredConstraint(defs([row("application_proposed_terms_confirmations", "aptc_authority_ck", authority194)]), ...PRE_CONTRACT[1]));
 ok("actual 194 term-source CHECK is accepted", !requiredConstraint(defs([row("lease_applications", "la_term_source_ck", term194)]), ...PRE_CONTRACT[2]));
