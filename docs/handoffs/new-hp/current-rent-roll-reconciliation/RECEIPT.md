@@ -160,7 +160,7 @@ database at `be9ae71`.
 | CI at the delivered API commit | recorded in CURRENT_STATE row 74 |
 
 Pre-existing failures, **identical on the baseline** (witness pairs in
-`evidence/`), none caused here and none in `verify_all.sh` except the first:
+`evidence/`), none caused here and none of them registered in `verify_all.sh`:
 `deal_setup_opening_tenancy.db.js` D6 / D7 / D11 / D13 (4, both trees);
 `confirm_proposal_operative_overlap.db.js` 34 (its fixture rows carry no
 actual rent, so confirm answers `actual_rent_required` before the overlap
