@@ -379,6 +379,39 @@ const evidence = { mode: parent ? "positive_parent_defect" : "successor", sectio
       && !c5identity.suggested_decision && c5identity.existing_parent_new_children
       && c5identity.existing_parent_new_children.placeholder_references.some(x => /leases\.space_id/.test(x))
       && (await spacesOf(c5)).length === 1);
+    const c5Before = await state(c5);
+    const c5ActivationBefore = await activationState(c5, c5prep.activation);
+    const c5ArtifactBefore = await artifactMeta(c5prep.artifact.id);
+    const forcedDecision = { key:c5identity.key, action:"create_children", unit_id:c5.unitIds["901"],
+      fingerprint:c5identity.existing_parent_new_children.fingerprint };
+    let c5forced;
+    if (api) {
+      const response = await http(c5.token, `/deal-setup/activations/${c5prep.activation}/read-source`, {
+        method:"POST", body:{ source_artifact_id:c5prep.artifact.id, source_as_of_date:AS_OF,
+          leasing_basis:c5.basis, source_token:c5preview.body.source_token,
+          inventory_decisions:[forcedDecision] },
+      });
+      c5forced = { status:response.status, code:response.body && response.body.error,
+        message:String(response.body && (response.body.receipt || response.body.message) || "") };
+    } else {
+      try {
+        await activation.ingestRentRoll(pool, { user_id:user.id, deal_intake_id:c5.deal,
+          property_id:c5.id, activation_id:c5prep.activation, source_artifact_id:c5prep.artifact.id,
+          source_as_of_date:AS_OF, leasing_basis:c5.basis, source_token:c5preview.body.source_token,
+          inventory_decisions:[forcedDecision] });
+        c5forced = { status:201, code:null, message:"accepted" };
+      } catch (e) { c5forced = errOf(e); }
+    }
+    const c5After = await state(c5);
+    const c5ActivationAfter = await activationState(c5, c5prep.activation);
+    const c5ArtifactAfter = await artifactMeta(c5prep.artifact.id);
+    S3.history_blocks_conversion.forced_read_source = c5forced;
+    ok("3 C5 hostile control: read-source refuses a forced existing-parent/new-children decision",
+      c5forced.status === 409 && (api ? c5forced.code === "refused" : c5forced.code === "inventory_target_changed"));
+    ok("3 C5 hostile control: refusal preserves inventory, lease, source confirmation and retained artifact",
+      sameState(c5Before,c5After) && sameActivation(c5ActivationBefore,c5ActivationAfter)
+      && c5ArtifactBefore && c5ArtifactAfter && c5ArtifactBefore.sha256 === c5ArtifactAfter.sha256
+      && c5ArtifactBefore.byte_size === c5ArtifactAfter.byte_size);
     let c5materialize;
     try { await tx(c => materializeRentableSpaces(c, { unit_id:c5.unitIds["901"], labels:["Room1"], kind:"bed", use_type:"residential" })); c5materialize={ok:true}; }
     catch (e) { c5materialize={ok:false,error:errOf(e)}; }
