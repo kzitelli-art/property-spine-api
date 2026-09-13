@@ -37,7 +37,7 @@ The last production release verified before this work was API dab19b6 / app e23a
 
 ## Closing checkpoint
 
-- API candidate: `04f5e369c7fdce965ba2112f4a9d374c18a4da8f` on `codex/hp-two-step-review-20260913`; configured GitHub verify run **491 / 34754931870 succeeded** at that exact source commit.
+- API candidate docs tip: `f2d04f1` records source `04f5e369c7fdce965ba2112f4a9d374c18a4da8f` on `codex/hp-two-step-review-20260913`; configured GitHub verify run **491 / 34754931870 succeeded** at that exact source commit.
 - App candidate: `e8fe8e9c9db9df7edcf50b935cd1fb81e173eed1` on the matching branch. The final move-in display correction is `eab7a4cb355e61509ad1c04580812bffc7de084d`; its focused proof is 38/0 and the sanctioned app suite is 68 harnesses / 2,291 assertions / 0 failures.
 - Owned runtime: HTTP 435/0 and native staff Chromium 50/0 passed on a fresh nonce database, including native Author and Execute. Attribution read is 31/0. The standalone 194 migration compatibility proof is 3/3; both owned databases were dropped and their completed manifests retained under the workstation `tmp` records. No production database or provider was touched.
 - The full browser proof uses HTTP for applicant submission and signatures while native staff controls cover Author, preparation, attestation, issue and Execute. It is not an all-browser applicant claim.
