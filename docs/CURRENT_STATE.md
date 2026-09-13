@@ -1448,3 +1448,12 @@ continuation are in `docs/handoffs/new-hp/schema195-recovery/RECEIPT.md` and
 `tests/e2e/schema195_recovery_continuation.js`. This is local owned-artifact
 recovery evidence only; it makes no production rollback, deployment, provider,
 or property-acceptance claim.
+
+Fresh corrected schema-195 recovery run supersedes the initial setup-failure
+attempt: detached API `7cb245e` on owned PG55454/HTTP3354 completed the current
+two-step fixture 508/0 with all flags present, captured the resident-executed
+J4 packet before the first stop, then passed Execute after restart and
+idempotent replay after a second restart. Receipt and portable phase runner:
+`docs/handoffs/new-hp/schema195-recovery/RECEIPT.md`,
+`tests/e2e/schema195_recovery_fresh.js`. The owned runtime was stopped and
+ports were verified free; no production claim is made.

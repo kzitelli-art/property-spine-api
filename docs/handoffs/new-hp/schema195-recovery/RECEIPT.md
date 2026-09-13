@@ -8,7 +8,88 @@ an owned server outage. It is an owned artifact recovery proof; it does not
 validate production rollback, deployment rollback, provider delivery, or a
 real property journey.
 
-## Fixed identities and boundary
+The authoritative result is the fresh corrected run below. The earlier run is
+retained later as superseded failure evidence and is not used for the recovery
+claim.
+
+## Fresh corrected proof (authoritative)
+
+The exact detached product checkout was clean at API
+`7cb245ead0ad02e35e29b7adebde05b2c10d1e25` before the run. A fresh owned
+database was migrated from ledger 000 through migration 195 using the exact
+candidate release runner, with `MIGRATION_RELEASE=1`,
+`EXPECTED_LEDGER_CEILING=000`, and `EXPECTED_SHA=7cb245ead0ad02e35e29b7adebde05b2c10d1e25`.
+The runner applied all 183 migration files, including
+`195_two_step_leasing_authored_offer_basis.sql`; subsequent verify-only runs
+reported `SCHEMA VERIFIED — 183 migrations, all applied. Ledger ceiling 195.`
+
+Runtime manifest: `tmp/schema195-fresh-manifest.json`; nonce
+`7f20677e9fac4734867f1b61941d545e`; owned database
+`spine_proof_7e9c4a2b6d1f0e8a3c5b7d9f` on PostgreSQL 55454; owned API HTTP
+3354. The fixture run used the current
+`node tests/e2e/two_step_leasing.e2e.js` exactly once with all executed-intake
+flags set from startup and completed **508 passed, 0 failed, 4 observations**.
+It left J4 at `resident_executed` and wrote the handoff before any outage.
+
+Before the first stop, the following proof phase ran against the live server:
+
+`node tests/e2e/schema195_recovery_fresh.js --snapshot`
+
+It persisted the application, packet, offer, exact-bed, terms hash, instrument
+package hash, both signer rows, all tenant/guarantor signature fields, and
+zero-decision audit history in
+`tmp/schema195-fresh-evidence/schema195_recovery_fresh_state.json`. The
+server process was PID 14508, its cwd was the detached exact checkout, `git
+HEAD` was the exact 7cb SHA, `git status --short` was empty, and `/health`
+returned `ok: true` before the first stop. The snapshot identified application
+`92c90486-5d83-449e-ae15-0fa50e115bda`, packet
+`643cffd9-a82c-47bf-926c-bda7396317da`, offer
+`7862179f-207c-4807-a2ed-ed21b47660b5`, exact bed
+`e392c8b7-1ade-408e-9194-963e6f147a92`, terms hash
+`bd7fccf37b0b4bc8bb45866f72c6414a44d58235f446a0ad8edad24eb762e1b6`, and
+instrument package hash
+`43e51b54f58c2e19614fd9b16a0040fac4a4962a4a539b4c492c708b88868b22`.
+
+Only PID 14508 was stopped, simulating deployment unavailability after
+195 was committed and before Execute. Verify-only migration was run again
+with migration apply disabled. Exact 7cb was restarted as PID 23424 with the
+same owned manifest and all flags, and `/health` returned `ok: true`.
+Then:
+
+`node tests/e2e/schema195_recovery_fresh.js --execute-after-restart`
+
+returned HTTP 201 for Execute and HTTP 200 for its same-key replay. It created
+exactly two decisions and one pending lease
+`04dad58b-09ae-442c-9ae8-8dd0dde99cae`, then reread Application Review, the
+Leasing desk, and Person Card. The pre-stop signer/field snapshot and all
+immutable packet identity fields were compared before this action.
+
+PID 23424 was then stopped. Verify-only migration was run a third time with
+apply disabled. Exact 7cb restarted as PID 31700; its cwd was the detached
+checkout, `git HEAD` was exact 7cb, `git status --short` was empty, and
+`/health` returned `ok: true`. Then:
+
+`node tests/e2e/schema195_recovery_fresh.js --replay-after-second-restart`
+
+returned HTTP 200 for the original and a different idempotency key, preserved
+lease `04dad58b-09ae-442c-9ae8-8dd0dde99cae`, reread all three canonical
+surfaces, and preserved the one pending tenancy. The post-restart checks
+compared saved tenant/guarantor/company fields, offer/hash/package, offer
+author, exact lease, and the complete two-decision audit event. Audit count
+remained 16; fake SMS and model log sizes were unchanged during continuation
+and replay. No outbound provider was contacted.
+
+The owned API and PostgreSQL processes were stopped after the final replay.
+`Get-NetTCPConnection -LocalPort 55454,3354` returned no rows. The disposable
+data directory and manifest remain as evidence; no owned runtime remains.
+
+## Superseded failed first attempt (retained for audit)
+
+The first attempt below used the same owned boundary but started its initial
+fixture server without the executed-intake flags. It is retained to explain
+the justified rerun and is not evidence for recovery.
+
+### Fixed identities and boundary
 
 - API checkout: `recovery-proof-20260913/api-fable-review-20260907`
 - API commit: `7cb245ead0ad02e35e29b7adebde05b2c10d1e25`
