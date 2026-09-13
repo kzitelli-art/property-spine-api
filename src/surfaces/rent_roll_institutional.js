@@ -83,6 +83,13 @@ function statusLabel(r) {
 
 function institutionalRow(r) {
   const bed = r.space_label && !/whole\s*unit/i.test(r.space_label) ? ` · ${r.space_label}` : "";
+  // A recorded amount is a contractual figure in this report only when the
+  // canonical economics axis has established it.  Keep zero and negative
+  // amounts when they are established; this guard is about authority and
+  // finiteness, not a positivity heuristic.
+  const recordedRent = r.current_rent;
+  const contractualRent = r.economics_state === "available" && recordedRent != null &&
+    Number.isFinite(Number(recordedRent)) ? Number(recordedRent) : "";
   return {
     space_id: r.space_id,
     unit_id: r.unit_id,
@@ -95,7 +102,7 @@ function institutionalRow(r) {
     person_id: r.resident ? r.resident.person_id : null,
     lease_start: r.lease ? ymd(r.lease.start_date) : "",
     lease_expiration: r.lease ? ymd(r.lease.end_date) : "",
-    monthly_rent: r.current_rent == null ? "" : Number(r.current_rent),
+    monthly_rent: contractualRent,
     // Deliberately blank — see the header. The reconciliation section says why.
     security_deposit: "",
     current_balance: r.balance == null ? "" : Number(r.balance),
