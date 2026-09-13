@@ -155,7 +155,7 @@ ln -s "$ROOT/node_modules" "$PARENT_WORKTREE/node_modules" || exit 1
 # DDL in this compatibility witness.
 step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
   do \$\$ begin
-    if not exists (select 1 from schema_migrations where version='198' and name='proposed_source_claim_identity') then
+    if not exists (select 1 from schema_migrations where version='198' and name in ('proposed_source_claim_identity','198_proposed_source_claim_identity.sql')) then
       raise exception 'expected numbered 198 ledger row before parent witness';
     end if;
     if not exists (select 1 from pg_indexes where schemaname='public' and indexname='uq_proposed_natural'
@@ -176,7 +176,7 @@ step "parent onboarding snapshot defects" env HARNESS_DATABASE_URL="$E2E_DATABAS
 step "restore numbered 198 claim index" env DATABASE_URL="$E2E_DATABASE_URL" MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=197 node migrations/migrate.js --apply
 step "verify restored 198 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
   do \$\$ begin
-    if not exists (select 1 from schema_migrations where version='198' and name='proposed_source_claim_identity') then
+    if not exists (select 1 from schema_migrations where version='198' and name in ('proposed_source_claim_identity','198_proposed_source_claim_identity.sql')) then
       raise exception 'numbered 198 ledger row was not restored';
     end if;
     if (select pg_get_indexdef(i.indexrelid) from pg_index i
