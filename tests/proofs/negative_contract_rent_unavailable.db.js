@@ -74,7 +74,7 @@ async function cleanup(pool) {
   await pool.query("delete from organizations where name=$1", [ORG]);
 }
 
-receipt.begin(__filename, { url: CONN, expected: 15 });
+receipt.begin(__filename, { url: CONN, expected: 17 });
 (async () => {
   const pool = new Pool({ connectionString: CONN });
   let server, owned = false;
@@ -125,6 +125,7 @@ receipt.begin(__filename, { url: CONN, expected: 15 });
     const { readTenancyStanding } = require("../../src/tenancy/tenancy_position_read.js");
     const current = await currentRentRoll(pool, { property_id: property, as_of: today });
     const institutional = await institutionalRentRoll(pool, { property_id: property, as_of: today });
+    const institutionalText = institutionalCsv(institutional);
     const screen = await unitRentRoll(pool, { property_id: property, as_of: today });
     const standing = await readTenancyStanding(pool, { property_id: property, as_of: today });
     const row = current.rows.find((item) => String(item.space_id) === String(space));
@@ -140,7 +141,10 @@ receipt.begin(__filename, { url: CONN, expected: 15 });
     check("negative contract amount contributes no trusted rent", [row.contributes_trusted_rent, current.totals.positions_contributing_rent], [false, 0]);
     check("no trusted total is fabricated when every amount is unavailable", current.totals.contractual_rent_trusted, null);
     check("institutional total is the canonical null", institutional.totals.trusted_monthly_contractual_rent, null);
-    check("institutional CSV leaves unknown trusted total blank", institutionalCsv(institutional).includes("Trusted monthly contractual rent,\n"), true);
+    check("institutional row leaves unavailable contractual rent blank", institutional.rows.find((item) => String(item.space_id) === String(space))?.monthly_rent, "");
+    const csvPosition = institutionalText.split("\n").find((line) => line.startsWith("N-1,"));
+    check("institutional CSV leaves unavailable row contractual rent blank", csvPosition && csvPosition.split(",")[6], "");
+    check("institutional CSV leaves unknown trusted total blank", institutionalText.includes("Trusted monthly contractual rent,\n"), true);
     check("existing no-recorded-rent meaning remains null-only", standing.unknowns.occupied_positions_with_no_recorded_rent, 0);
     check("standing adds unavailable contract economics without renaming no-recorded-rent", standing.unknowns.occupied_positions_with_unavailable_contract_economics, 1);
 
@@ -167,7 +171,7 @@ receipt.begin(__filename, { url: CONN, expected: 15 });
     if (owned) await cleanup(pool);
     await pool.end();
   }
-  process.exit(receipt.complete({ harness: __filename, passed, failed, expectedAtLeast: 15 }));
+  process.exit(receipt.complete({ harness: __filename, passed, failed, expectedAtLeast: 17 }));
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);
   process.exit(receipt.died(__filename, error, ran));
