@@ -1,0 +1,50 @@
+OWNED_API_READY
+  FAIL  B1 the tracker's own labels are shown as received (101A / A) with no home pre-selected
+        17-101 · Room2
+1417-102 · Room1
+1417-102 · Room2
+Create new as source names it
+
+101B	B	1	No home has been selected.	
+— choose —
+1417-101 · Room1
+1417-101 · Room2
+1417-102 · Room1
+1417-102 · Room2
+Create new as source names it
+
+102A	A	1	No home has been selected.	
+— choose —
+1417-101 · Room1
+1417-101 · Room2
+1417-102 · Room1
+1417-102 · Room2
+Create new as source names it
+
+102B	B	1	No home has been selected.	
+— choose —
+1417-101 · Room1
+1417-101 · Room2
+1417-102 · Room1
+1417-102 · Room2
+Create new as source names it
+SIGN OUT
+⚙
+Property
+CHOOSE A DESK.
+UNASSIGNED
+MANAGEMENT
+PROPERTY COMMAND.
+OPEN 
+  FAIL  B2 every current source identity carries a picker; the blank future-only row has none
+  ok    B3 REPAIRED PICKER: existing beds are offered by canonical label (1417-101 · Room1 …) — the shipped picker filtered on a field the preview never sends and offered nothing
+  ok    B4 the picker is visible to the document (not covered)
+  FAIL  B5 the reviewed mapping shows 3 of 3 resolved before Apply
+
+  2 passed, 3 failed
+  screenshots: <scratchpad>/run29/artifacts/crr-browser
+locator.waitFor: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for getByRole('heading', { name: 'What Spine read' }) to be visible[22m
+
+    at <scratchpad>/app-fable-review-20260907/current_rent_roll_reconciliation.browser.js:109:66

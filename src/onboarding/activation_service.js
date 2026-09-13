@@ -154,6 +154,12 @@ function classify(n) {
   //  So a row with a tenant and only a market rent is NOT staged. It is a
   //  question for a human: is the rent missing from this report, or is the
   //  unit actually vacant?
+  //  A status that says the signature is still pending is not a signed
+  //  claim. It stays evidence for a human, never current occupancy.
+  if (/^pending$/i.test(String(n.status || "").trim())) {
+    return { status: "needs_review", confidence: 0.4, vacant: false,
+      reason: `${n.name} is shown as pending on this source. A pending signature is not a signed lease and cannot establish current occupancy.` };
+  }
   if (n.actual_rent == null) {
     return { status: "needs_review", confidence: 0.4, vacant: false,
       reason: n.market_rent != null
@@ -814,36 +820,42 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     }
 
     //  ── 2c. ONE SPACE, ONE TENANCY ────────────────────────────────
-    //  The wall executed_lease_service §2b has always held, now held by
-    //  this writer too. It was not here, and nothing else stopped it:
-    //  `leases` has only a plain index on space_id, so confirming a newer
-    //  rent roll would have inserted a SECOND tenancy onto a bed that
-    //  already had one — silently, and straight into every economic read
-    //  underneath it.
+    //  The wall executed_lease_service §2b has always held, held by this
+    //  writer too: `leases` has only a plain index on space_id, so
+    //  confirming a newer rent roll would otherwise insert a SECOND
+    //  tenancy onto a bed that already had one.
     //
-    //  It runs BEFORE person ingress on purpose. A refused row must leave
-    //  nothing behind, and a Person minted for a lease that was never
-    //  created is exactly the kind of residue that reads later as truth.
-    //
-    //  No self-exclusion is passed: a proposal that already produced a
-    //  lease is refused above as `already_promoted` and never reaches here,
-    //  so there is no lease of its own to exclude.
-    //
-    //  This REFUSES; it does not choose a winner. Which claim supersedes
-    //  which is a decision made from source evidence by a person, and
-    //  guessing it here would be the confident-wrong answer the whole
-    //  activation seam exists to prevent.
+    //  THE WINDOW. A row that carries lease dates is compared on them. A
+    //  row that carries NONE — a current tracker export names the resident
+    //  and the rent and no term — is a dated OBSERVATION: it is compared
+    //  from the source's as-of date forward, so a tenancy that ended
+    //  before the observation is not a competitor and every right in force
+    //  or pending from that date is. The observation never becomes a lease
+    //  term; see the acceptance below.
+    const actMeta = (await client.query(
+      "select import_batch_id, source_as_of_date from activations where id=$1",
+      [p.activation_id])).rows[0] || {};
+    const sourceAsOf = actMeta.source_as_of_date
+      ? new Date(actMeta.source_as_of_date).toISOString().slice(0, 10) : null;
+    const undated = n.start_date == null && n.end_date == null;
     await client.query("select id from spaces where id=$1 for update", [space.id]);
     const competing = await competingOperativeLeases(client, {
       space_id: space.id,
-      start_date: n.start_date ?? null,
-      end_date: n.end_date ?? null,
+      start_date: undated ? sourceAsOf : (n.start_date ?? null),
+      end_date: undated ? null : (n.end_date ?? null),
     });
-    if (competing.length) {
-      const where = `Unit ${n.unit_number}${space.space_label ? ` · ${space.space_label}` : ""}`;
-      // Keep the durable refusal inside the activation/proposal lock. An
-      // establishment waiting on this setup must see the review state before
-      // it can publish its counts.
+    //  The receipt names the CANONICAL home the reviewer mapped this row to,
+    //  and the source's own label beside it when the two differ: a tracker
+    //  says "101B", the inventory says "1417-101".
+    const where = `Unit ${unit.unit_number}${space.space_label ? ` · ${space.space_label}` : ""}` +
+      (n.unit_number && String(n.unit_number).trim() !== String(unit.unit_number).trim()
+        ? ` (source "${n.unit_number}")` : "");
+    //  The residents already holding a right on this home. They are offered
+    //  to the human as identity candidates (recognition over re-entry); a
+    //  competing right held by NOBODY resolvable is refused before any
+    //  person could be minted for a row that will not be confirmed.
+    const homeTenants = [...new Set(competing.flatMap((l) => (l.tenant_ids || []).map(String)))];
+    const holdForOverlap = async () => {
       await client.query(
         `update proposed_records
             set status='needs_review', status_reason=$2, updated_at=now()
@@ -851,7 +863,7 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
         [proposed_id,
          `${where} already has ${competing.length === 1 ? "an operative lease" :
             `${competing.length} operative leases`} covering ` +
-         `${asDate(n.start_date)} → ${asDate(n.end_date)}: ${describeCompeting(competing)}. ` +
+         `${asDate(undated ? sourceAsOf : n.start_date)} → ${asDate(undated ? null : n.end_date)}: ${describeCompeting(competing)}. ` +
           `This row was not confirmed and no lease was created.`]);
       await client.query("commit");
       throw refusal(409, "overlapping_operative_lease",
@@ -863,7 +875,8 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
             lease_id: l.id, lease_status: l.lease_status,
             start_date: l.start_date, end_date: l.end_date,
             tenant_ids: l.tenant_ids || [] })) });
-    }
+    };
+    if (competing.length && !homeTenants.length) await holdForOverlap();
 
     //  3) the person, RESOLVED through the one governed ingress boundary.
     //     The name ruling this carried is preserved verbatim inside
@@ -871,10 +884,8 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     //     share a name more often than a silent merge is ever noticed. What
     //     changes is who decides: this service no longer mints a human, it
     //     submits evidence. This IS the confirmation, so the authority is
-    //     real and named, and the operator signs once.
-    const actMeta = (await client.query(
-      "select import_batch_id, source_as_of_date from activations where id=$1",
-      [p.activation_id])).rows[0] || {};
+    //     real and named, and the operator signs once. The home's current
+    //     right-holders ride along as candidates a human may pick.
     const ingested = await personIngress.ingestPerson(client, {
       property_id: n.property_id || p.property_id || null,
       channel: "rent_roll",
@@ -890,6 +901,8 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
         import_source_row_id: p.import_source_row_id || null,
         prior_produced_person_id: await require("../shared/snapshot_loader.js")
           .priorProducedPerson(client, propertyId, n.resident_id),
+        home_tenant_person_ids: homeTenants,
+        home_tenant_basis: homeTenants.length ? describeCompeting(competing) : null,
         import_batch_id: actMeta.import_batch_id || null,
         source: "activation",
         source_type: "rent_roll_ledger",
@@ -906,15 +919,93 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     if (!person) {
       await client.query(
         "update proposed_records set status='needs_review',status_reason=$2,updated_at=now() where id=$1",
-        [proposed_id, "The resident's identity needs review. Historical candidate evidence is retained; no person or lease was invented."]);
+        [proposed_id, homeTenants.length
+          ? "This home already has a resident on record. Choose whether this row names that resident or a different person; no person or lease was invented."
+          : "The resident's identity needs review. Historical candidate evidence is retained; no person or lease was invented."]);
       await client.query("commit");
       throw refusal(409, "resident_identity_requires_review", "Review the resident identity candidate before establishing this lease. No lease was created.");
     }
 
+    //  ── 3b. ALREADY REPRESENTED ───────────────────────────────────
+    //  The resolved person already holds a right on this home. The source
+    //  row is evidence about THAT tenancy — it is tied to the lease and
+    //  creates nothing. A pending lease stays pending: a later as-of date
+    //  activates nothing and records no possession.
+    const tied = competing.find((l) => (l.tenant_ids || []).map(String).includes(String(person.id)));
+    if (tied) {
+      if (p.import_source_row_id) {
+        const attached = await client.query(
+          `update import_source_rows
+              set produced_person_id=$2, produced_lease_id=$3,
+                  produced_unit_id=$4, produced_space_id=$5,
+                  parse_note='current source row — recognised as an existing tenancy on this home'
+            where id=$1
+              and (produced_unit_id is null or produced_unit_id=$4)
+              and (produced_space_id is null or produced_space_id=$5)`,
+          [p.import_source_row_id, person.id, tied.id, unit.id, space.id]);
+        if (attached.rowCount !== 1) throw refusal(409, "source_home_attachment_changed",
+          "This evidence row is attached to a different reviewed home. Nothing was confirmed.");
+      }
+      await client.query(
+        `update proposed_records
+            set status='promoted', promoted_record_id=$2,
+                confirmed_by=$3, confirmed_at=now(), updated_at=now(),
+                status_reason=$4
+          where id=$1`,
+        [proposed_id, tied.id, String(user_id),
+         `Already represented: ${n.tenant_name} holds lease ${tied.id} (${tied.lease_status}, ` +
+         `${asDate(tied.start_date)} → ${asDate(tied.end_date)}) on ${where}. This row is evidence about that tenancy; no second lease was created` +
+         (tied.lease_status === "pending" ? " and the pending lease was not activated." : ".")]);
+      await client.query("commit");
+      return { lease_id: tied.id, person_id: person.id, unit_id: unit.id, vacant: false,
+        outcome: "tied_to_existing_lease", tied_lease_status: tied.lease_status,
+        receipt: `${where} — ${n.tenant_name} is already on record here (lease ${tied.lease_status}). This source row now supports that tenancy; nothing new was created.`,
+        authority_basis: scope.authority_basis };
+    }
+    //  A different person than every right-holder on this home: the source
+    //  and the record disagree, and Spine does not choose.
+    if (competing.length) await holdForOverlap();
+
+    //  ── 3c. OCCUPANCY WITHOUT TERMS ───────────────────────────────
+    //  A current source that names the resident and the rent but no lease
+    //  dates establishes that the bed is OCCUPIED, not what the contract
+    //  says. The existing opening-position reader already carries that
+    //  rung (opening_claim_occupied: "contractual terms unknown"). Writing
+    //  a lease with no dates would assert a term in force forever; a
+    //  manufactured term from a cohort label would assert one nobody
+    //  signed. Neither is done. The rent stays on the evidence row and the
+    //  claim as the source reported it.
+    if (undated) {
+      if (p.import_source_row_id) {
+        const attached = await client.query(
+          `update import_source_rows
+              set produced_person_id=$2, produced_unit_id=$3, produced_space_id=$4,
+                  parse_note='current source row — accepted as current occupancy; contractual terms unknown (no lease dates in source)'
+            where id=$1
+              and (produced_unit_id is null or produced_unit_id=$3)
+              and (produced_space_id is null or produced_space_id=$4)`,
+          [p.import_source_row_id, person.id, unit.id, space.id]);
+        if (attached.rowCount !== 1) throw refusal(409, "source_home_attachment_changed",
+          "This evidence row is attached to a different reviewed home. Nothing was confirmed.");
+      }
+      await client.query(
+        `update proposed_records
+            set status='promoted', promoted_record_id=null,
+                confirmed_by=$2, confirmed_at=now(), updated_at=now(),
+                status_reason=$3
+          where id=$1`,
+        [proposed_id, String(user_id),
+         `Accepted as current occupancy as of ${sourceAsOf || "the source date"}: ${n.tenant_name} on ${where}. ` +
+         `Contractual terms unknown — this source carries no lease dates, so no lease was created; the reported rent is retained as evidence.`]);
+      await client.query("commit");
+      return { lease_id: null, person_id: person.id, unit_id: unit.id, vacant: false,
+        outcome: "occupancy_accepted_terms_unknown",
+        receipt: `${where} — ${n.tenant_name} recorded as occupying this home as of ${sourceAsOf || "the source date"}. No lease dates in the source, so no lease was created; terms stay unknown until a lease is established.`,
+        authority_basis: scope.authority_basis };
+    }
+
     //  4) the lease, stamped with the batch it came from (migration 046).
-    const act = (await client.query(
-      "select import_batch_id, source_as_of_date from activations where id=$1",
-      [p.activation_id])).rows[0] || {};
+    const act = actMeta;
     //  DEPOSIT IS NOT WRITTEN ONTO THE LEASE. `leases` has no
     //  security_deposit column in the schema these migrations build — the
     //  dormant module and the old bare writer both referenced one that does
@@ -960,6 +1051,7 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
 
     await client.query("commit");
     return { lease_id: lease.id, person_id: person ? person.id : null, unit_id: unit.id, vacant: false,
+      outcome: "lease_created",
       receipt: `Unit ${n.unit_number} — ${n.tenant_name} is now part of the position.`,
       authority_basis: scope.authority_basis };
   } catch (e) {

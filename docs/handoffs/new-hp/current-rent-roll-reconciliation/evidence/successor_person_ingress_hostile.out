@@ -1,0 +1,71 @@
+OWNED_API_READY
+
+════════════════════════════════════════════════════════════════
+  PERSON INGRESS — HOSTILE PROOF
+════════════════════════════════════════════════════════════════
+
+── H1  a renewal must not mint another human ─────────────────────────
+  ok    one person before the renewal
+  ok    STILL ONE PERSON after the renewal — the fork is closed
+  ok    and the same person_id, not a lookalike
+  ok    the renewal IS a second lease — lease identity resolved separately
+
+── H2  a bed transfer must not mint another human ────────────────────
+  ok    one person across a bed change
+
+── H3  two different humans with identical names stay distinct ───────
+  ok    TWO persons, not one — a shared name never collapses anyone
+
+── H4  same source record, contradictory strong evidence → refuses ───
+  ok    disposition is CONFLICTED, not a winner-takes-all pick
+  ok    no person_id is handed back
+  ok    both rivals are named for the human
+
+── H5  name-only evidence proposes, never guesses ────────────────────
+  ok    an identical name resolves NOTHING
+  ok    and says so in words an operator can read
+
+── H6/H7  confirmation records WHICH decision was made ───────────────
+  ok    with no authority nothing is minted; a claim is recorded
+  ok    a CLAIM does not decide its own confirmation — resolution_kind is NULL
+  ok    H6 · confirming to an EXISTING person inserts NO new person
+  ok    and records resolution_kind='resolved_existing' with the person as the promoted record
+  ok    H7 · confirming CREATE inserts exactly one person
+  ok    and records resolution_kind='created'
+  ok    an unknown resolution_kind is refused, not stored
+
+── H8  an identical re-import changes nothing durable ────────────────
+  ok    zero new persons and zero new leases on re-import
+
+── H9  correction supersedes — and migrates NO history ───────────────
+  ok    two persons exist to correct between
+  ok    a correction with no named actor is REFUSED
+  ok    the duplicate is retired with a reason and a pointer
+  ok    NO CHILD HISTORY PHYSICALLY MIGRATED — every row set is byte-identical
+  ok    the retired row still says what it WAS, with a separate field for what happened
+  ok    the retired person's lease still points at the row that earned it
+  ok    a candidate pointing at the retired row surfaces the SURVIVOR, not a dead record
+
+── H10 the gate goes red when a domain writer mints a human ──────────
+  FAIL  green before
+          exit 1
+  ok    RED the moment an undeclared writer appears
+  FAIL  green again once it is removed
+          exit 1
+
+── H11 a phone that resolves cleanly is RECOGNISED, not duplicated ───
+  ok    resolved to the existing person, with no insert
+  ok    and reports resolution_kind='resolved_existing'
+
+── H12 a matching phone with a disagreeing candidate still refuses ───
+  ok    an authority does NOT override a contradiction
+
+── H13 the same human at a second property is ONE person, TWO relationships 
+  ok    recognised as the SAME global person at a different property
+  ok    identity is global; the relationship is property-scoped
+
+  34 run · 32 passed · 2 failed
+  FAILED: green before | green again once it is removed
+
+  ✗ FAIL
+

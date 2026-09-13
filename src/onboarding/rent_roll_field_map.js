@@ -53,7 +53,9 @@ const FIELD_SPELLINGS = Object.freeze({
   name:        ["tenant", "tenantname", "resident", "residentname", "lessee", "occupant",
                 "primaryresident", "residentfullname", "name"],
   resident_id: ["residentid", "tenantid", "tcode", "tenantcode", "residentcode"],
-  status:      ["status", "unitstatus", "leasestatus", "occupancystatus", "occupancy"],
+  //  "signedpending" is the leasing tracker's status column ("Signed/Pending").
+  status:      ["status", "unitstatus", "leasestatus", "occupancystatus", "occupancy",
+                "signedpending", "signedstatus"],
   sqft:        ["sqft", "squarefeet", "squarefootage", "sf", "unitsqft", "rentablesqft", "area"],
   market_rent: ["marketrent", "market", "mktrent", "askingrent", "marketrate", "gpr",
                 "grosspotentialrent", "scheduledrent"],
@@ -85,6 +87,10 @@ const KNOWN_UNUSED = Object.freeze(new Set([
   //  row per bed and states "Total Beds 1.00" on each; the bed count is the
   //  row itself, so mapping it would store the same fact twice.
   "totalbeds", "beds",
+  //  Leasing-tracker columns. A cohort label is not a term; a key pickup
+  //  cell is evidence of possession that only a possession record may
+  //  assert; new/renewal is history. Read, shown, never interpreted.
+  "semester", "keypickup", "newrenewal",
 ]));
 
 function squash(s) {

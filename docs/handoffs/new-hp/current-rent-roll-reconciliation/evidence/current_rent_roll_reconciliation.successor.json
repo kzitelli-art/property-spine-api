@@ -1,0 +1,762 @@
+{
+  "server": "succ-local",
+  "summary": {
+    "passed": 59,
+    "failed": 0,
+    "witness": false
+  },
+  "results": [
+    {
+      "section": "fixture · organization, actors, Skyline-shaped property with the actual wrong-kind rooms",
+      "label": "72 units / 160 beds; all 160 room-labelled spaces carry position_kind='unit' (the actual wrong-kind shape)",
+      "ok": true,
+      "detail": {
+        "units": 72,
+        "spaces": 160,
+        "wrong_kind": 160
+      }
+    },
+    {
+      "section": "legacy seed · the July source as it was established in August, later pending rights, no possession events",
+      "label": "the deal holds both properties",
+      "ok": true,
+      "detail": {
+        "made": 201,
+        "added": 201,
+        "other": 201
+      }
+    },
+    {
+      "section": "legacy seed · the July source as it was established in August, later pending rights, no possession events",
+      "label": "July shape: 37 named (31 leases + 6 held), 123 vacancies promoted, 91 future rows with no proposal, established 2026-08-17",
+      "ok": true,
+      "detail": {
+        "leases": 31,
+        "held": 6,
+        "vacancies": 123,
+        "futures": 91
+      }
+    },
+    {
+      "section": "legacy seed · the July source as it was established in August, later pending rights, no possession events",
+      "label": "later records: 44 pending leases on 27 spaces spanning 2026-09-13 (22 future spaces), 13 positions overlapping; no possession events",
+      "ok": true,
+      "detail": {
+        "pendingLeases": 44,
+        "spaces": 27,
+        "overlapping": 13
+      }
+    },
+    {
+      "section": "legacy seed · the July source as it was established in August, later pending rights, no possession events",
+      "label": "canonical dated rent roll on the seeded shape (buckets)",
+      "ok": true,
+      "observe": true,
+      "detail": {
+        "total": 160,
+        "occupied": 31,
+        "activation_pending": 14,
+        "open": 96,
+        "needs_review": 19,
+        "not_established": 0
+      }
+    },
+    {
+      "section": "legacy seed · the July source as it was established in August, later pending rights, no possession events",
+      "label": "the seeded shape reads 160 positions with the July baseline (31 occupied by lease)",
+      "ok": true,
+      "detail": {
+        "total": 160,
+        "occupied": 31
+      }
+    },
+    {
+      "section": "legacy seed · the July source as it was established in August, later pending rights, no possession events",
+      "label": "the current source has 160 rows: 148 Signed (keys TRUE, positive rent) and 12 blank; two identity conflicts (both cells 'A - Reno' with Room A/B; Unit A/B with Room A/A)",
+      "ok": true,
+      "detail": {
+        "signed": 148,
+        "blank": 12,
+        "reno": [
+          "216A - Reno/A",
+          "216A - Reno/B"
+        ],
+        "room": [
+          "410A/A",
+          "410B/A"
+        ]
+      }
+    },
+    {
+      "section": "legacy seed · the July source as it was established in August, later pending rights, no possession events",
+      "label": "designated reconciliation classes (fixture choices, not findings)",
+      "ok": true,
+      "observe": true,
+      "detail": {
+        "already_represented_active": 28,
+        "conflict_overlapping_pending": 13,
+        "conflict_active_other_person": 3,
+        "new_claim_on_held": 6,
+        "blank_with_pending_right": 2,
+        "already_represented_pending": 12,
+        "blank_on_vacancy": 10,
+        "new_claim_on_vacancy": 86
+      }
+    },
+    {
+      "section": "A · newer current source on the established property: upload, open, preview (the run as far as it goes)",
+      "label": "Mike-shaped session uploads the current source; bytes retained",
+      "ok": true,
+      "detail": {
+        "status": 201,
+        "body": "Temple Tracker 2026-2027 Skyline RR (rehearsal).csv is on file. Spine keeps it so it can always show what this position came from."
+      }
+    },
+    {
+      "section": "A · newer current source on the established property: upload, open, preview (the run as far as it goes)",
+      "label": "a new setup opens on the already-established property (the July setup stays activated)",
+      "ok": true,
+      "detail": {
+        "status": 201
+      }
+    },
+    {
+      "section": "A · newer current source on the established property: upload, open, preview (the run as far as it goes)",
+      "label": "preview parses the tracker shape: 160 grouped source identities, Unit + Room understood, tracker-only columns reported",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "receipt": "Read 160 source rows without changing inventory. Review each grouped source home before applying it.",
+        "counts": {
+          "unfamiliar": 160
+        }
+      }
+    },
+    {
+      "section": "A · newer current source on the established property: upload, open, preview (the run as far as it goes)",
+      "label": "no source home is auto-matched: tracker labels (101A / A) are not the canonical labels (1417-101 / Room1); every group is unfamiliar",
+      "ok": true,
+      "detail": {
+        "unfamiliar": 160
+      }
+    },
+    {
+      "section": "A · newer current source on the established property: upload, open, preview (the run as far as it goes)",
+      "label": "the '- Reno' conflict yields two distinct source identities (A and B) that still require an explicit reviewed choice",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "A · newer current source on the established property: upload, open, preview (the run as far as it goes)",
+      "label": "the Unit-A/Unit-B-with-Room-A conflict yields two distinct identities requiring explicit choices",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "A · newer current source on the established property: upload, open, preview (the run as far as it goes)",
+      "label": "preview reports the rooms' actual position_kind ('unit') — the shape the reviewer will be offered",
+      "ok": true,
+      "detail": [
+        "unit"
+      ]
+    },
+    {
+      "section": "B · first red on the actual shape: the explicit bed selection is refused because the rooms carry position_kind='unit'",
+      "label": "FIRST RED: read-source refuses the reviewed selection with inventory_target_changed — grainMatches requires position_kind='bed' for a bed-basis selection and every Skyline room reads 'unit'",
+      "ok": true,
+      "detail": {
+        "status": 409,
+        "error": "inventory_target_changed",
+        "receipt": "The selected home, its parent, or retirement state changed. Review this source identity again; nothing was changed."
+      }
+    },
+    {
+      "section": "B · first red on the actual shape: the explicit bed selection is refused because the rooms carry position_kind='unit'",
+      "label": "the refusal wrote nothing: one batch (July), no proposals on the new setup, basis unchanged",
+      "ok": true,
+      "detail": {
+        "batches": 1,
+        "proposals": 0,
+        "basis": "bed"
+      }
+    },
+    {
+      "section": "B · first red on the actual shape: the explicit bed selection is refused because the rooms carry position_kind='unit'",
+      "label": "DEPENDENCY: the classification is corrected by the governed mapping tool (Codex Luna's lane), not by this proof and not by relaxing the source-home rule. What follows applies that correction as a labelled stand-in.",
+      "ok": true,
+      "observe": true,
+      "detail": {
+        "rooms": 160,
+        "from": "unit",
+        "to": "bed",
+        "owner": "tools/apply_unit_type_mapping.js (Luna)"
+      }
+    },
+    {
+      "section": "C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies",
+      "label": "stand-in: 160 rooms reclassified to position_kind='bed' without replacing any unit/space identity",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies",
+      "label": "preview after the correction still offers no automatic match (labels differ) — the mapping remains an explicit reviewed choice",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies",
+      "label": "decisions carrying the pre-correction fingerprints are refused (inventory changed under the review)",
+      "ok": true,
+      "detail": {
+        "status": 409,
+        "error": "inventory_target_changed"
+      }
+    },
+    {
+      "section": "C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies",
+      "label": "a decision naming another property's home is refused",
+      "ok": true,
+      "detail": {
+        "status": 409,
+        "error": "inventory_target_changed"
+      }
+    },
+    {
+      "section": "C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies",
+      "label": "the explicit reviewed mapping applies: 160 rows read, one evidence row per source row, no unit or space created",
+      "ok": true,
+      "detail": {
+        "status": 201,
+        "receipt": "Read 160 rows from Temple Tracker 2026-2027 Skyline RR (rehearsal).csv, dated 2026-09-13. 148 ready, 12 need a look, 0 unassigned or blocked, 0 conflicting. Nothing is live yet.",
+        "counts": {
+          "staged": 148,
+          "needs_review": 12,
+          "blocked": 0,
+          "conflicted": 0,
+          "vacant": 0
+        }
+      }
+    },
+    {
+      "section": "C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies",
+      "label": "re-reading the same file into the same setup is refused by name; evidence is not doubled",
+      "ok": true,
+      "detail": {
+        "status": 409,
+        "error": "already_established_from_this_file"
+      }
+    },
+    {
+      "section": "C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies",
+      "label": "the two conflict rows keep their raw cells ('212A - Reno') while their reviewed homes are the canonical rooms",
+      "ok": true,
+      "detail": {
+        "rawKept": 2
+      }
+    },
+    {
+      "section": "C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies",
+      "label": "148 signed rows stage (resident + rent, no dates); the 12 blank rows are needs_review, never vacancy",
+      "ok": true,
+      "detail": {
+        "staged": 148,
+        "needs_review": 12
+      }
+    },
+    {
+      "section": "C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies",
+      "label": "term column for every signed row is blank (the tracker carries no lease dates); semester labels were read and not used",
+      "ok": true,
+      "observe": true,
+      "detail": {
+        "sample": [
+          [
+            "101A|A",
+            null,
+            null
+          ],
+          [
+            "101B|B",
+            null,
+            null
+          ]
+        ]
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D1 a signed row naming a resident nobody on this home is: the confirmation creates the person under the operator's authority (no candidate to choose)",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D1 SUCCESSOR: Add accepts current occupancy with contractual terms unknown — NO lease is manufactured from a dateless signed row",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "outcome": "occupancy_accepted_terms_unknown",
+        "leases_on_bed": 0
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D1 the evidence row names the resident and the exact home, and no lease",
+      "ok": true,
+      "detail": {
+        "person": true,
+        "space": true,
+        "no_lease": true
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D2 SUCCESSOR: the identity review offers the tenant of the lease in force on this home as a candidate (recognition over re-entry)",
+      "ok": true,
+      "detail": {
+        "candidates": [
+          "the resident on a lease in force or pending on this home (<id-3> (active, 2025-08-01 → 2026-12-31))"
+        ]
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D2 the reviewer picks the offered existing resident",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D2 SUCCESSOR: Add recognizes the same existing tenancy — tied to the lease in force, no duplicate lease",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "outcome": "tied_to_existing_lease",
+        "leases": 1
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D3 a different current claimant on a bed with a lease in force holds for review; the prior tenancy is not ended and no second lease is written",
+      "ok": true,
+      "detail": {
+        "status": 409,
+        "error": "overlapping_operative_lease",
+        "leases": 1
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D4 SUCCESSOR: the pending applicant on this bed is offered as a candidate",
+      "ok": true,
+      "detail": {
+        "candidates": [
+          "the resident on a lease in force or pending on this home (<id-4> (pending, 2026-08-01 → 2027-07-26))"
+        ]
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D4 SUCCESSOR: tied to the pending lease; it is NOT activated and no possession is recorded by a later as-of date",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "outcome": "tied_to_existing_lease",
+        "lease_status": "pending",
+        "events": 0
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D5 a signed row over overlapping pending rights is refused and held for review",
+      "ok": true,
+      "detail": {
+        "status": 409,
+        "error": "overlapping_operative_lease"
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D6 a blank row (no name, no status, keys unchecked) cannot be added as anything — not vacancy",
+      "ok": true,
+      "detail": {
+        "status": 422,
+        "error": "resident_identity_required"
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D6 the same for a blank row on a July-vacant bed",
+      "ok": true,
+      "detail": {
+        "status": 422,
+        "error": "resident_identity_required"
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D7 a bed whose July claim was held accepts the current signed claim (terms unknown) — the held July claim stays as history",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "outcome": "occupancy_accepted_terms_unknown"
+      }
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D8 a replayed Add on an accepted row is refused by name (already_promoted) and writes nothing",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "D · person/lease comparison and acceptance — each reconciliation class through Add",
+      "label": "D8 an actor without leasing/management access to the property cannot add",
+      "ok": true,
+      "detail": {
+        "status": 403,
+        "error": "property_setup_access_required"
+      }
+    },
+    {
+      "section": "E · authority: revoked while waiting, suspended actor, no partial state",
+      "label": "E1 the Add waits on the setup lock",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "section": "E · authority: revoked while waiting, suspended actor, no partial state",
+      "label": "E1 after the wait, revoked access is refused and nothing was accepted",
+      "ok": true,
+      "detail": {
+        "status": 403,
+        "error": "property_setup_access_required"
+      }
+    },
+    {
+      "section": "E · authority: revoked while waiting, suspended actor, no partial state",
+      "label": "E2 a suspended actor cannot add",
+      "ok": true,
+      "detail": {
+        "status": 401
+      }
+    },
+    {
+      "section": "F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission",
+      "label": "proposal states before establishing",
+      "ok": true,
+      "observe": true,
+      "detail": {
+        "promoted": 132,
+        "needs_review": 14,
+        "staged": 14,
+        "accepted_this_pass": 90,
+        "tied_this_pass": 38
+      }
+    },
+    {
+      "section": "F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission",
+      "label": "the current position is established and supersedes the July position (both retained)",
+      "ok": true,
+      "detail": {
+        "status": 201,
+        "receipt": "Lease & occupancy established as of 2026-09-13: 132 units, 28 still needing attention."
+      }
+    },
+    {
+      "section": "F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission",
+      "label": "July position reads superseded and names its successor; the new one is established",
+      "ok": true,
+      "detail": [
+        {
+          "status": "superseded",
+          "superseded_by_id": "<id-5>"
+        },
+        {
+          "status": "established",
+          "superseded_by_id": null
+        }
+      ]
+    },
+    {
+      "section": "F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission",
+      "label": "canonical dated rent roll after establishing (buckets)",
+      "ok": true,
+      "observe": true,
+      "detail": {
+        "total": 160,
+        "occupied": 122,
+        "activation_pending": 12,
+        "open": 0,
+        "needs_review": 26,
+        "not_established": 0,
+        "occupied_by_accepted_claim_terms_unknown": 92
+      }
+    },
+    {
+      "section": "F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission",
+      "label": "beds accepted from the current source read Occupied with contractual terms unknown; leases in force keep their own basis",
+      "ok": true,
+      "detail": {
+        "occupied_by_claim": 92,
+        "by_lease": 31
+      }
+    },
+    {
+      "section": "F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission",
+      "label": "the blank rows' beds are NOT open: their unresolved current rows read needs review (never vacancy by omission)",
+      "ok": true,
+      "detail": [
+        [
+          "1417-209",
+          "Room2",
+          "opening_position_unreconciled",
+          "needs_review"
+        ],
+        [
+          "1417-210",
+          "Room1",
+          "opening_position_unreconciled",
+          "needs_review"
+        ],
+        [
+          "1417-210",
+          "Room2",
+          "opening_position_unreconciled",
+          "needs_review"
+        ],
+        [
+          "1417-212",
+          "Room1",
+          "opening_position_unreconciled",
+          "needs_review"
+        ]
+      ]
+    },
+    {
+      "section": "F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission",
+      "label": "availability offers none of the unresolved or conflicting beds (occupancy_unknown / not marketable)",
+      "ok": true,
+      "detail": {
+        "marketable_now": 0,
+        "occupancy_unknown": 0,
+        "blank_states": [
+          null
+        ]
+      }
+    },
+    {
+      "section": "F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission",
+      "label": "Rent Roll unit view, tenancy standing and the dated read agree on occupied / open / needs review / not established",
+      "ok": true,
+      "detail": {
+        "view": {
+          "units": 72,
+          "rentable_positions": 160,
+          "occupied": 122,
+          "activation_pending": 12,
+          "open": 0,
+          "needs_review": 26,
+          "not_established": 0,
+          "established": 160,
+          "unclassified": 0,
+          "with_next_known": 0,
+          "rent_not_in_source": 0,
+          "confirmed_rows_not_attached": 0,
+          "held_rows_not_attached": 0
+        },
+        "standing": {
+          "units": 72,
+          "rentable_positions": 160,
+          "occupied": 122,
+          "open": 0,
+          "activation_pending": 12,
+          "needs_review": 26,
+          "not_established": 0,
+          "established": 160,
+          "positions_with_a_known_next": 0,
+          "forward_commitments_natively_proven": 0,
+          "leasing_grain": "bed"
+        }
+      }
+    },
+    {
+      "section": "F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission",
+      "label": "occupancyByBasis (lease-based occupied count, bed grain)",
+      "ok": true,
+      "observe": true,
+      "detail": {
+        "rentable": 160,
+        "occupied": 31,
+        "pct": 19.4
+      }
+    },
+    {
+      "section": "F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission",
+      "label": "entitled Ask gathering reads the same tenancy standing (occupied / needs review / not established) with no ids",
+      "ok": true,
+      "detail": {
+        "units": 72,
+        "rentable_positions": 160,
+        "occupied": 122,
+        "open": 0,
+        "activation_pending": 12,
+        "needs_review": 26,
+        "not_established": 0,
+        "established": 160,
+        "positions_with_a_known_next": 0,
+        "forward_commitments_natively_proven": 0,
+        "leasing_grain": "bed"
+      }
+    },
+    {
+      "section": "F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission",
+      "label": "standing unknowns after the current position",
+      "ok": true,
+      "observe": true,
+      "detail": {
+        "occupied_positions_with_no_recorded_rent": 92,
+        "occupied_positions_with_unavailable_contract_economics": 0,
+        "positions_with_unresolved_occupancy_evidence": 14,
+        "positions_with_overlapping_lease_claims": 13,
+        "occupied_positions_proven_only_by_the_opening_import": 0,
+        "occupied_positions_with_no_linked_resident": 0,
+        "confirmed_source_rows_not_attached_to_a_position": 0,
+        "held_source_rows_not_attached_to_a_position": 0,
+        "unit_records_retired_from_current_inventory": 0,
+        "tenancy_attached_to_retired_inventory": 0
+      }
+    },
+    {
+      "section": "G · idempotency and integrity of the source command",
+      "label": "re-uploading the identical bytes is accepted as the same retained source (same sha256 in the preview)",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "body": "That is the same file already on record (Temple Tracker 2026-2027 Skyline RR (rehearsal).csv)."
+      }
+    },
+    {
+      "section": "G · idempotency and integrity of the source command",
+      "label": "a new setup over the same bytes offers the earlier reviewed mapping for every home (reuse), nothing re-decided by text",
+      "ok": true,
+      "detail": {
+        "needs_identity_review": 160
+      }
+    },
+    {
+      "section": "G · idempotency and integrity of the source command",
+      "label": "a changed payload under the same source identity is refused (source_rows_mismatch)",
+      "ok": true,
+      "detail": {
+        "status": 409,
+        "error": "source_rows_mismatch"
+      }
+    },
+    {
+      "section": "G · idempotency and integrity of the source command",
+      "label": "a different as-of date for the same retained bytes is refused (source_date_mismatch)",
+      "ok": true,
+      "detail": {
+        "status": 409,
+        "error": "source_date_mismatch"
+      }
+    },
+    {
+      "section": "G · idempotency and integrity of the source command",
+      "label": "previewing the July artifact on the new setup (same property, retained bytes)",
+      "ok": true,
+      "observe": true,
+      "detail": {
+        "status": 200,
+        "counts": {
+          "needs_identity_review": 160
+        }
+      }
+    },
+    {
+      "section": "G · idempotency and integrity of the source command",
+      "label": "a session scoped to the other property attempting this setup",
+      "ok": true,
+      "observe": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "G · idempotency and integrity of the source command",
+      "label": "retired-target refusal is asserted by the source-home proof (inventory_target_changed on a retired selection); not repeated here",
+      "ok": true,
+      "observe": true,
+      "detail": {
+        "proof": "tests/proofs/source_home_identity_review.db.js"
+      }
+    },
+    {
+      "section": "H · second property shape (unit basis): the same doors, no Skyline-specific branch",
+      "label": "unit-basis preview auto-suggests the exact whole-unit homes",
+      "ok": true,
+      "detail": {
+        "needs_identity_review": 3
+      }
+    },
+    {
+      "section": "H · second property shape (unit basis): the same doors, no Skyline-specific branch",
+      "label": "applies",
+      "ok": true,
+      "detail": {
+        "status": 201
+      }
+    },
+    {
+      "section": "H · second property shape (unit basis): the same doors, no Skyline-specific branch",
+      "label": "a dated row still creates a lease with the source's dates and rent (unchanged behaviour)",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "outcome": "lease_created"
+      }
+    },
+    {
+      "section": "H · second property shape (unit basis): the same doors, no Skyline-specific branch",
+      "label": "an undated signed row accepts occupancy with terms unknown on the unit shape too",
+      "ok": true,
+      "detail": {
+        "status": 200,
+        "outcome": "occupancy_accepted_terms_unknown"
+      }
+    },
+    {
+      "section": "H · second property shape (unit basis): the same doors, no Skyline-specific branch",
+      "label": "an explicit VACANT row still records a vacant position (source states vacancy)",
+      "ok": true,
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "H · second property shape (unit basis): the same doors, no Skyline-specific branch",
+      "label": "the other property establishes: 2 occupied (one by lease, one by accepted claim), 1 open",
+      "ok": true,
+      "detail": {
+        "status": 201,
+        "buckets": {
+          "occupied": 2,
+          "open": 1,
+          "needs_review": 0,
+          "not_established": 0
+        }
+      }
+    },
+    {
+      "section": "H · second property shape (unit basis): the same doors, no Skyline-specific branch",
+      "label": "Skyline is unchanged by the other property's establishment",
+      "ok": true,
+      "detail": null
+    }
+  ]
+}

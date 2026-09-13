@@ -83,7 +83,11 @@ const CHANNELS = Object.freeze({
     //  A prior import having produced a person from this same source
     //  record is HISTORY, not identity authority. It raises a candidate a
     //  human confirms; it never binds by itself.
-    candidate: ["prior_produced_person"],
+    //  The residents on a lease in force or pending on the SAME reviewed
+    //  home are candidates too: a newer rent roll naming the bed's current
+    //  resident is recognition of an existing tenancy, not a new person.
+    //  Surfaced for the human; never bound by a name.
+    candidate: ["prior_produced_person", "home_tenant"],
     note: "Source record id is provenance. A name is never sufficient.",
   },
   staff_bridge: {
@@ -215,6 +219,20 @@ async function resolvePersonFromEvidence(client, { property_id = null, evidence 
         name: live.person.name,
         basis: `a previous import of source record ` +
                `${evidence.source_system || "?"}:${evidence.source_record_id || "?"} produced this person`,
+        via_supersession: live.via_supersession,
+      });
+    }
+  }
+
+  if (profile.candidate.includes("home_tenant") && Array.isArray(evidence.home_tenant_person_ids)) {
+    for (const personId of evidence.home_tenant_person_ids) {
+      const live = await liveRecord(client, personId);
+      if (!live || candidates.some((c) => c.person_id === live.person.id)) continue;
+      candidates.push({
+        person_id: live.person.id,
+        name: live.person.name,
+        basis: `the resident on a lease in force or pending on this home` +
+               (evidence.home_tenant_basis ? ` (${evidence.home_tenant_basis})` : ""),
         via_supersession: live.via_supersession,
       });
     }

@@ -292,6 +292,7 @@ else
   step "legacy decision writes closed" node tests/e2e/legacy_decision_writes_disabled.e2e.js
   step "greenery staff onboarding" node tests/proofs/greenery_staff_onboarding.db.js
   step "source-to-home identity review and Greenery inventory contract" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/source_home_identity_review.db.js
+  step "current rent-roll reconciliation into an onboarded property" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/current_rent_roll_reconciliation.db.js
   stop_owned_server || exit 1
 fi
 fi
