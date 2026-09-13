@@ -620,9 +620,11 @@ const LETTER = ["A", "B", "C"];
       const dated = byKey.get("Apt 1"), undated = byKey.get("Apt 2"), vacant = byKey.get("Apt 3");
       let r = await confirm(F.mikeOtherTok, dated.id);
       if (r.status === 409 && r.body.error === "resident_identity_requires_review") { await resolveResident(F.mikeOtherTok, dated.id, "created", null); r = await confirm(F.mikeOtherTok, dated.id); }
+      const datedLeaseId = r.body && r.body.lease_id;
       ok("a dated row still creates a lease with the source's dates and rent (unchanged behaviour)", r.status === 200 && r.body.outcome === "lease_created" && (await one(`select start_date::text s, end_date::text e, rent from leases where id=$1`, [r.body.lease_id])).s === "2026-09-01", { status: r.status, outcome: r.body && r.body.outcome, error: r.body && r.body.error });
       r = await confirm(F.mikeOtherTok, undated.id);
       if (r.status === 409 && r.body.error === "resident_identity_requires_review") { await resolveResident(F.mikeOtherTok, undated.id, "created", null); r = await confirm(F.mikeOtherTok, undated.id); }
+      const undatedPersonId = r.body && r.body.person_id;
       ok("an undated signed row accepts occupancy with terms unknown on the unit shape too", r.status === 200 && r.body.outcome === "occupancy_accepted_terms_unknown", { status: r.status, outcome: r.body && r.body.outcome, error: r.body && r.body.error });
       r = await confirm(F.mikeOtherTok, vacant.id);
       ok("an explicit VACANT row still records a vacant position (source states vacancy)", r.status === 200 && r.body.vacant === true, { status: r.status, error: r.body && r.body.error });
@@ -631,6 +633,71 @@ const LETTER = ["A", "B", "C"];
       ok("the other property establishes: 2 occupied (one by lease, one by accepted claim), 1 open", est.status === 201 && b.occupied === 2 && b.open === 1, { status: est.status, buckets: { occupied: b.occupied, open: b.open, needs_review: b.needs_review, not_established: b.not_established } });
       const skylineAgain = await bucketsOf(F.p);
       ok("Skyline is unchanged by the other property's establishment", skylineAgain.occupied === F.after.occupied && skylineAgain.total === 160);
+
+      // A later source can recognise an existing person without silently
+      // deciding that contradictory contract fields support their lease.
+      // A current observation can also coexist with that person's future
+      // pending right; the observation is not evidence of the future term.
+      const apt2 = F.otherUnits[1];
+      const futureLease = await one(`insert into leases(property_id,space_id,tenant_ids,rent,start_date,end_date,balance,lease_status,source_type)
+        values($1,$2,$3,1400,'2027-09-01','2028-08-31',0,'pending','application') returning id`,
+        [F.other, apt2.space_id, [undatedPersonId]]);
+      const correctionRows = [
+        { Unit: "Apt 1", Resident: rows[0].Resident, Status: "Signed", "Actual Rent": 1300, "Lease From": "2026-10-01", "Lease To": "2027-09-30" },
+        { Unit: "Apt 2", Resident: rows[1].Resident, Status: "Signed", "Actual Rent": 999, "Lease From": "", "Lease To": "" },
+      ];
+      const correctionCsv = csvOf(headers, correctionRows);
+      const correctionUp = await upload(F.deal, F.other, F.mikeOtherTok, "other-shape-correction.csv", correctionCsv, AS_OF_NOW);
+      const correctionOpen = await request("POST", `/deal-setup/deals/${F.deal}/properties/${F.other}/activation`, F.mikeOtherTok, {});
+      const correctionAct = correctionOpen.body.activation.id;
+      const correctionPreview = await request("POST", `/deal-setup/activations/${correctionAct}/preview-source`, F.mikeOtherTok,
+        { source_artifact_id: correctionUp.body.artifact.id, source_as_of_date: AS_OF_NOW, leasing_basis: "unit" });
+      const correctionApply = await request("POST", `/deal-setup/activations/${correctionAct}/read-source`, F.mikeOtherTok,
+        { source_artifact_id: correctionUp.body.artifact.id, source_as_of_date: AS_OF_NOW, leasing_basis: "unit",
+          source_token: correctionPreview.body.source_token,
+          inventory_decisions: correctionPreview.body.identities.map((g) => ({ key: g.key, ...g.suggested_decision })) });
+      const correctionSetup = await request("GET", `/deal-setup/activations/${correctionAct}`, F.mikeOtherTok);
+      const correctionByKey = new Map(correctionSetup.body.proposals.map((proposal) => [proposal.natural_key, proposal]));
+
+      const mismatch = correctionByKey.get("Apt 1");
+      await confirm(F.mikeOtherTok, mismatch.id);
+      let refreshed = await request("GET", `/deal-setup/activations/${correctionAct}`, F.mikeOtherTok);
+      let identityCandidates = (refreshed.body.proposals.find((proposal) => proposal.id === mismatch.id).identity_review.candidates || []);
+      await resolveResident(F.mikeOtherTok, mismatch.id, "resolved_existing", identityCandidates[0].person_id);
+      const mismatchResult = await confirm(F.mikeOtherTok, mismatch.id);
+      const mismatchState = await one(`select pr.status,pr.promoted_record_id,isr.produced_lease_id,pr.status_reason
+        from proposed_records pr join import_source_rows isr on isr.id=pr.import_source_row_id where pr.id=$1`, [mismatch.id]);
+      const unchangedDatedLease = await one(
+        `select rent,start_date::text start_date,end_date::text end_date from leases where id=$1`,
+        [datedLeaseId]);
+      ok("a dated recognised row whose supplied rent and dates differ stays needs review with both values and no lease link",
+        correctionApply.status === 201 && mismatchResult.status === 409 && mismatchResult.body.error === "existing_lease_terms_disagree" &&
+        mismatchState.status === "needs_review" && mismatchState.promoted_record_id == null && mismatchState.produced_lease_id == null &&
+        mismatchState.status_reason.includes("1300") && mismatchState.status_reason.includes("1200") &&
+        mismatchState.status_reason.includes("2026-10-01") && mismatchState.status_reason.includes("2026-09-01") &&
+        unchangedDatedLease.rent === "1200.00" && unchangedDatedLease.start_date === "2026-09-01" &&
+        unchangedDatedLease.end_date === "2027-08-31",
+        { status: mismatchResult.status, error: mismatchResult.body && mismatchResult.body.error,
+          state: mismatchState, canonical_lease: unchangedDatedLease });
+
+      const observation = correctionByKey.get("Apt 2");
+      await confirm(F.mikeOtherTok, observation.id);
+      refreshed = await request("GET", `/deal-setup/activations/${correctionAct}`, F.mikeOtherTok);
+      identityCandidates = (refreshed.body.proposals.find((proposal) => proposal.id === observation.id).identity_review.candidates || []);
+      await resolveResident(F.mikeOtherTok, observation.id, "resolved_existing", identityCandidates[0].person_id);
+      const observationResult = await confirm(F.mikeOtherTok, observation.id);
+      const observationState = await one(`select pr.status,pr.promoted_record_id,isr.produced_person_id,isr.produced_lease_id
+        from proposed_records pr join import_source_rows isr on isr.id=pr.import_source_row_id where pr.id=$1`, [observation.id]);
+      const pendingState = await one(`select lease_status,rent,start_date::text start_date,economic_tenancy_activated_at from leases where id=$1`, [futureLease.id]);
+      ok("a dateless current observation of the same person does not link or rewrite their future-only pending lease",
+        observationResult.status === 200 && observationResult.body.outcome === "occupancy_accepted_terms_unknown" &&
+        observationState.status === "promoted" && observationState.promoted_record_id == null &&
+        observationState.produced_person_id === undatedPersonId && observationState.produced_lease_id == null &&
+        pendingState.lease_status === "pending" && pendingState.rent === "1400.00" && pendingState.start_date === "2027-09-01" &&
+        pendingState.economic_tenancy_activated_at == null &&
+        (await one(`select count(*)::int n from unit_events where space_id=$1`, [apt2.space_id])).n === 0,
+        { status: observationResult.status, outcome: observationResult.body && observationResult.body.outcome,
+          observation: observationState, pending: pendingState });
     });
   } finally { await pool.end(); }
 

@@ -838,6 +838,18 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     const sourceAsOf = actMeta.source_as_of_date
       ? new Date(actMeta.source_as_of_date).toISOString().slice(0, 10) : null;
     const undated = n.start_date == null && n.end_date == null;
+    if (undated && !sourceAsOf) {
+      await client.query(
+        `update proposed_records
+            set status='needs_review',
+                status_reason='This row has no lease dates and its source has no as-of date. It cannot establish current occupancy until the source date is recorded.',
+                updated_at=now()
+          where id=$1`,
+        [proposed_id]);
+      await client.query("commit");
+      throw refusal(409, "source_date_required_for_current_observation",
+        "This row has no lease dates and the source has no as-of date, so Spine cannot say when the occupancy was observed. Record the source date before confirming it.");
+    }
     await client.query("select id from spaces where id=$1 for update", [space.id]);
     const competing = await competingOperativeLeases(client, {
       space_id: space.id,
@@ -935,8 +947,47 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     // home. Keep every competing lease visible for the governed correction;
     // source acceptance cannot choose a winner by query order.
     if (competing.length > 1) await holdForOverlap();
-    const tied = competing.find((l) => (l.tenant_ids || []).map(String).includes(String(person.id)));
+    const samePersonRights = competing.filter((l) =>
+      (l.tenant_ids || []).map(String).includes(String(person.id)));
+    const tied = samePersonRights.find((l) => !undated || (
+      (l.start_date == null || asDate(l.start_date) <= sourceAsOf) &&
+      (l.end_date == null || asDate(l.end_date) >= sourceAsOf)
+    ));
     if (tied) {
+      if (!undated) {
+        const canonicalRent = (await client.query(
+          "select rent from leases where id=$1", [tied.id])).rows[0]?.rent;
+        const sourceTerms = {
+          rent: String(n.actual_rent),
+          start_date: n.start_date == null ? null : asDate(n.start_date),
+          end_date: n.end_date == null ? null : asDate(n.end_date),
+        };
+        const canonicalTerms = {
+          rent: String(canonicalRent),
+          start_date: tied.start_date == null ? null : asDate(tied.start_date),
+          end_date: tied.end_date == null ? null : asDate(tied.end_date),
+        };
+        const disagrees = Number(sourceTerms.rent) !== Number(canonicalTerms.rent) ||
+          (sourceTerms.start_date != null && sourceTerms.start_date !== canonicalTerms.start_date) ||
+          (sourceTerms.end_date != null && sourceTerms.end_date !== canonicalTerms.end_date);
+        if (disagrees) {
+          const sourceDescription = `rent ${sourceTerms.rent}, ${sourceTerms.start_date || "no start date"} → ${sourceTerms.end_date || "no end date"}`;
+          const canonicalDescription = `rent ${canonicalTerms.rent}, ${canonicalTerms.start_date || "no start date"} → ${canonicalTerms.end_date || "no end date"}`;
+          await client.query(
+            `update proposed_records
+                set status='needs_review', promoted_record_id=null,
+                    status_reason=$2, updated_at=now()
+              where id=$1`,
+            [proposed_id,
+             `The dated source terms disagree with lease ${tied.id} on ${where}. ` +
+             `Source: ${sourceDescription}. Canonical lease: ${canonicalDescription}. ` +
+             `The row remains evidence for review and was not linked to the lease.`]);
+          await client.query("commit");
+          throw refusal(409, "existing_lease_terms_disagree",
+            `The source's dated terms disagree with the existing lease on ${where}. Review the source and canonical lease before confirming this row.`,
+            { source_terms: sourceTerms, canonical_terms: canonicalTerms, lease_id: tied.id });
+        }
+      }
       if (p.import_source_row_id) {
         const attached = await client.query(
           `update import_source_rows
@@ -968,7 +1019,12 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     }
     //  A different person than every right-holder on this home: the source
     //  and the record disagree, and Spine does not choose.
-    if (competing.length) await holdForOverlap();
+    //  One future-only right for the same person does not describe who
+    //  occupies the home on the observation date. Preserve that pending
+    //  right, then accept the current observation below without linking it.
+    const onlyFutureRightForObservedPerson = undated && competing.length === 1 &&
+      samePersonRights.length === 1;
+    if (competing.length && !onlyFutureRightForObservedPerson) await holdForOverlap();
 
     //  ── 3c. OCCUPANCY WITHOUT TERMS ───────────────────────────────
     //  A current source that names the resident and the rent but no lease
