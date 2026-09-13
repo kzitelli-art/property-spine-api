@@ -199,5 +199,19 @@ this branch invents.
 `evidence.witness.json` (baseline), `evidence.successor.json`,
 `browser.receipt.json` — scrubbed of identifiers. Screenshots inspected,
 kept out of the repository. Owned databases for runs 20–23 dropped with
-`proof_boundary.js cleanup`; the baseline worktree removed. CI on the exact
-final API commit is recorded below once the run completes.
+`proof_boundary.js cleanup`; the baseline worktree removed.
+
+## CI
+
+- Run 495 on `0c70179` (first push): **failed** one existing proof,
+  `opening_claim_relay_edges.db.js` — carrying the retirement exclusion had
+  turned the no-baseline branch's `unknowns` from `null` into a bag of
+  zeroes. Fixed in `5be5c1c`: no baseline remains an unknown; the exclusion
+  rides only with a completed retained-claims read.
+- Run 496 on `5be5c1c` (the exact final API source commit): **success** —
+  full `verify_all.sh`, the inventory-correction proof included.
+  https://github.com/kzitelli-art/property-spine-api/actions/runs/34757746671
+- App commit `0450247` on `claude/inventory-correction-20260913`; validated
+  by the sanctioned app suite (68 harnesses, 2,291 assertions, 0 failures)
+  and the Chromium slice above. The browser slice is reported as skipped by
+  name in CI (no operator-app checkout there).

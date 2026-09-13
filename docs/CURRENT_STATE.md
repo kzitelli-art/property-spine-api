@@ -1444,3 +1444,4 @@ review, retire and reinstate live on the existing Rent Roll page and on
 already exists. Eligibility is about relationships Spine holds, never
 about physical reality; the person's rationale is the identity decision.
 Receipt and scrubbed evidence under `docs/handoffs/new-hp/inventory-correction/`.
+CI run 496 (`5be5c1c`) passed the full `verify_all.sh`; app `0450247`.
