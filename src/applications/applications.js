@@ -212,7 +212,7 @@ module.exports = function applicationsModule(deps) {
         action_code: legacy, group_code: legacy,
       };
     };
-    if (app.status === "active") return out("active", "Lease active. Tenant file open.", { state: "complete" });
+    if (app.status === "active") return out("active", "Tenant file open.", { state: "complete" });
     if (["declined", "withdrawn", "expired"].includes(app.status)) return out("closed", "Application closed (" + app.status + ").", { state: "complete" });
     if (app.status === "accepted_term_required") return out("confirm_term", "Company accepted — confirm the lease term.");
     if (app.status === "submitted") {

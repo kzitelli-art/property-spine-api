@@ -183,7 +183,7 @@ async function waitSms(from, pred) { for (let i = 0; i < 80; i++) { const m = sm
       const booked = await api("POST", `/operator/leasing/conversations/${J.conversation}/book-tour`, { token: F.mike.tok, body: { slot_id: slot.body.slot.id, idempotency_key: `book-${J.label}-${nonce}` } });
       need(booked.status === 200 && booked.body.tour_id, "Mike books the tour", { status: booked.status, body: booked.body });
       await api("POST", `/leasing/tours/${booked.body.tour_id}/check-in`, { key: true, body: { actor_id: F.mike.id } });
-      const done = await api("POST", `/operator/leasing/tours/${booked.body.tour_id}/complete`, { token: F.mike.tok, body: { actual_tour_host_user_id: F.mike.id, preferred_unit_id: J.unit.id, feedback: { standing: "ready_to_apply", notes: `Wants ${J.bed.space_label}` }, idempotency_key: `done-${J.label}-${nonce}` } });
+      const done = await api("POST", `/operator/leasing/tours/${booked.body.tour_id}/complete`, { token: F.mike.tok, body: { actual_tour_host_user_id: F.mike.id, preferred_unit_id: J.unit.id, feedback: { standing: "ready_to_apply", next_move: "send_application", notes: `Wants ${J.bed.space_label}` }, idempotency_key: `done-${J.label}-${nonce}` } });
       need(done.status === 200, "Mike records the outcome as ready to apply", { status: done.status, body: done.body });
       J.conversion = await one("select id, person_id from leasing_conversions where origin_tour_id=$1 and property_id=$2", [booked.body.tour_id, P]);
       need(J.conversion && J.conversion.person_id === J.person, "the conversion belongs to the same person");

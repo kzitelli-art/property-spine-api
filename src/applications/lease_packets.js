@@ -1376,20 +1376,10 @@ module.exports = function leasePacketsModule(deps) {
         "A staff-issued signing package requires both the server-derived actor and one retry identity.");
     }
 
-    const row = (await client.query(
-      `select pk.*,
-              la.property_id as application_property_id,
-              la.status as application_status,
-              la.proposed_terms_confirmation_id as current_confirmation_id
-         from lease_packets pk
-         join lease_applications la on la.id=pk.application_id
-        where pk.id=$1
-        for update of pk, la`,
-      [packetId]
-    )).rows[0];
-    if (!row) {
-      throw packetError(404, "packet_not_found", "No lease packet with that id.");
-    }
+    const locked = await lockPacketApplication(client, packetId, expectedPropertyId, "not_permitted");
+    const row = { ...locked.pk, application_property_id: locked.app.property_id,
+      application_status: locked.app.status,
+      current_confirmation_id: locked.app.proposed_terms_confirmation_id };
     if (expectedPropertyId &&
         (String(row.property_id) !== String(expectedPropertyId) ||
          String(row.application_property_id) !== String(expectedPropertyId))) {
@@ -1722,12 +1712,12 @@ module.exports = function leasePacketsModule(deps) {
   // Packet generation locks application then packet. Every company decision
   // uses the same order, including the retained signature door. The unlocked
   // lookup only discovers the parent; both identities are rechecked under lock.
-  async function lockPacketApplication(client, packetId, propertyId) {
+  async function lockPacketApplication(client, packetId, propertyId = null, scopeError = "packet_not_at_your_property") {
     const found = (await client.query(
       `select application_id, property_id from lease_packets where id=$1`, [packetId])).rows[0];
     if (!found) throw packetError(404, "packet_not_found", "No lease packet with that id.");
-    if (String(found.property_id) !== String(propertyId)) {
-      throw packetError(403, "packet_not_at_your_property", "That lease packet belongs to another property.");
+    if (propertyId && String(found.property_id) !== String(propertyId)) {
+      throw packetError(403, scopeError, "That lease packet belongs to another property.");
     }
     const app = (await client.query(
       `select * from lease_applications where id=$1 for update`, [found.application_id])).rows[0];
@@ -1735,8 +1725,8 @@ module.exports = function leasePacketsModule(deps) {
     const pk = (await client.query(
       `select * from lease_packets where id=$1 for update`, [packetId])).rows[0];
     if (!pk || String(pk.application_id) !== String(app.id)
-        || String(pk.property_id) !== String(propertyId)
-        || String(app.property_id) !== String(propertyId)) {
+        || String(pk.property_id) !== String(found.property_id)
+        || String(app.property_id) !== String(found.property_id)) {
       throw packetError(409, "packet_application_changed", "The packet and application no longer identify the same property and application. Reload before deciding.");
     }
     return { pk, app };

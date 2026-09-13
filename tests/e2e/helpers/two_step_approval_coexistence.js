@@ -15,7 +15,7 @@ module.exports = async function proveApprovalCoexistence({ pool, api, J, F, prop
   check(gateBefore.status === "open", "retained approval creates the expected open terms-review gate");
 
   const generation = await pool.connect();
-  let pending;
+  let pending, issueRetry;
   try {
     await generation.query("begin");
     await generation.query("set local statement_timeout='5s'");
@@ -33,6 +33,17 @@ module.exports = async function proveApprovalCoexistence({ pool, api, J, F, prop
     assert(waiting, "Execute must be observed waiting on this owned application transaction");
     assert.match(waiting.query, /lease_applications/);
     check(true, "Execute waits on the application before taking the packet lock");
+    issueRetry = api("POST", `/operator/leasing/lease-packets/${J.packet}/send`, {
+      token: F.mike.tok, body: { idempotency_key: `late-issue-${J.packet}` },
+    });
+    let waiters;
+    for (let i = 0; i < 160; i++) {
+      waiters = await one("select count(*)::int n from pg_stat_activity where datname=current_database() and wait_event_type='Lock' and query like '%lease_applications%for update%' and array_length(pg_blocking_pids(pid),1)>0");
+      if (waiters.n >= 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert(waiters.n >= 2, "both Execute and a delayed issue retry must wait on application first");
+    check(true, "a delayed signing-link issue also waits on the application before the packet");
     let generated, refused;
     try {
       generated = await packets.generateLeasePacket(generation, {
@@ -47,6 +58,9 @@ module.exports = async function proveApprovalCoexistence({ pool, api, J, F, prop
     generation.release();
   }
   const executed = await pending;
+  const lateIssue = await issueRetry;
+  check(lateIssue.status === 409 && lateIssue.body.error === "packet_not_issuable",
+    "the delayed issue retry refuses the signed packet without deadlock, timeout or a new link");
   assert.equal(executed.status, 201, JSON.stringify(executed.body));
   check(executed.body.decisions[0].decision === "application_already_approved"
       && executed.body.decisions[0].actor_user_id === null,
