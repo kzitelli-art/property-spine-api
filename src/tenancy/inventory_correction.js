@@ -128,13 +128,16 @@ const RETAINED_SQL = POLICY.filter((e) => e.treatment === TREATMENTS.H || e.trea
 //  Property-wide: operative rows attached to LIVE-RETIRED units, by label
 //  and kind. Includes the owner's any-lease wall. This is the conflict
 //  read the standing projection and the history carry; it never repairs.
+const conflictTargets = (columns) => `cross join lateral (
+  select distinct candidate.unit_id
+    from unnest(array[${columns.map((c) => c === "unit_id" ? "t.unit_id" : `(select s.unit_id from spaces s where s.id = t.${c})`).join(", ")}]) as candidate(unit_id)
+   where candidate.unit_id is not null
+) as target`;
 const CONFLICT_SQL = blockingByTable().map(({ entry, columns }) => {
-  const unitExpr = columns.includes("unit_id") && columns.length > 1
-    ? "coalesce(t.unit_id, (select s.unit_id from spaces s where s.id = t.space_id))"
-    : columns.includes("unit_id") ? "t.unit_id" : `(select s.unit_id from spaces s where s.id = t.${columns[0]})`;
   return `select u.unit_number as label, '${entry.code}' as code, '${entry.label}' as kind, count(*)::int as n
-            from ${entry.table} t
-            join units u on u.id = ${unitExpr}
+             from ${entry.table} t
+             ${conflictTargets(columns)}
+             join units u on u.id = target.unit_id
             join inventory_retirements ir on ir.unit_id = u.id and ir.reversed_at is null
            where u.property_id = $1 and ${operativeSql(entry)}
            group by u.unit_number`;
@@ -569,6 +572,14 @@ function replay(row, current_state) {
   return { ...row.result, idempotent: true, replayed_from: row.recorded_at, command_id: row.id, current_state };
 }
 const isDuplicateKey = (e) => e && e.code === "23505" && /uq_inventory_correction_commands_key/.test(e.constraint || e.message || "");
+function commandKey(idempotency_key) {
+  if (!idempotency_key) return null;
+  const key = String(idempotency_key);
+  if (key.length > 200) {
+    throw refuse("idempotency_key_too_long", "The idempotency key is longer than 200 characters. Send one exact key of 200 characters or fewer.", { httpStatus: 400 });
+  }
+  return key;
+}
 
 /*  applyRetirement — one decision over one or more reviewed units. All or
  *  nothing: any refused unit refuses the whole submission before a row
@@ -590,7 +601,7 @@ async function applyRetirement(pool, {
   if (missingTokens.length) {
     throw refuse("review_required", "Each selected unit must be reviewed first; its review token is missing.", { httpStatus: 400, unit_ids: missingTokens });
   }
-  const key = idempotency_key ? String(idempotency_key).slice(0, 200) : null;
+  const key = commandKey(idempotency_key);
   const input = { unit_ids: ids, review_tokens: Object.fromEntries(ids.map((id) => [id, String(review_tokens[id])])), rationale: rationale == null ? null : String(rationale), reason_code, superseded_by_import_batch_id: superseded_by_import_batch_id || null };
   const payload_hash = sha(input);
   const client = await pool.connect();
@@ -691,7 +702,7 @@ async function applyReinstatement(pool, {
   if (identity_decision != null && !IDENTITY_DECISIONS.includes(identity_decision)) {
     throw refuse("identity_decision_unknown", `'${identity_decision}' is not an identity decision. Known: ${IDENTITY_DECISIONS.join(", ")}.`, { httpStatus: 400 });
   }
-  const key = idempotency_key ? String(idempotency_key).slice(0, 200) : null;
+  const key = commandKey(idempotency_key);
   const input = { unit_id: String(unit_id), review_token: String(review_token), reason: reason == null ? null : String(reason), identity_decision: identity_decision || null, identity_reason: identity_reason == null ? null : String(identity_reason) };
   const payload_hash = sha(input);
   const client = await pool.connect();

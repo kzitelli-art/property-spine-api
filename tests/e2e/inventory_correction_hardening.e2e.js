@@ -284,8 +284,16 @@ async function api(method, route, { token, key = false, body, form } = {}) {
       need(l6.out.status === 201, "H-L06 (declined application only) is retired: a terminal row does not block");
       const reopen = await tryWrite("update lease_applications set status='submitted' where id=$1", [F.declinedApp.id]);
       check(reopen.ok === false && /reopen/.test(reopen.message), "REOPENING a terminal row on a retired unit is refused", { message: reopen.message && reopen.message.slice(0, 140) });
-      const retarget = await tryWrite("update lease_applications set unit_id=$2, space_id=$3 where id=$1", [F.openApp.id, F.U["H-L05"].id, F.U["H-L05"].space_id]);
-      check(retarget.ok === false && /re-target/.test(retarget.message), "RE-TARGETING an operative row onto a retired unit is refused", { message: retarget.message && retarget.message.slice(0, 140) });
+       const retarget = await tryWrite("update lease_applications set unit_id=$2, space_id=$3 where id=$1", [F.openApp.id, F.U["H-L05"].id, F.U["H-L05"].space_id]);
+       check(retarget.ok === false && /re-target/.test(retarget.message), "RE-TARGETING an operative row onto a retired unit is refused", { message: retarget.message && retarget.message.slice(0, 140) });
+       // unit_events carries both relations but does not use the application
+       // grain trigger. The retirement wall must independently inspect every
+       // populated target, not let a current direct unit hide a retired space.
+       const divergentInsert = await tryWrite("insert into unit_events (property_id,unit_id,space_id,event_type,effective_date,status,source) values ($1,$2,$3,'move_in_scheduled',current_date,'scheduled','rehearsal divergent insert')", [F.h.id, F.U["H-L04"].id, F.U["H-L05"].space_id]);
+       check(divergentInsert.ok === false && /new attachment/.test(divergentInsert.message), "a current unit plus retired space is refused on INSERT", { message: divergentInsert.message && divergentInsert.message.slice(0, 140) });
+       const currentEvent = await one("insert into unit_events (property_id,unit_id,space_id,event_type,effective_date,status,source) values ($1,$2,$3,'move_in_scheduled',current_date,'scheduled','rehearsal current event') returning id", [F.h.id, F.U["H-L04"].id, F.U["H-L04"].space_id]);
+       const divergentUpdate = await tryWrite("update unit_events set space_id=$2 where id=$1", [currentEvent.id, F.U["H-L05"].space_id]);
+       check(divergentUpdate.ok === false && /re-target/.test(divergentUpdate.message), "a current unit plus retired space is refused on UPDATE", { message: divergentUpdate.message && divergentUpdate.message.slice(0, 140) });
       const audit = await tryWrite("insert into events (property_id,unit_id,type,note) values ($1,$2,'rehearsal_note','audit on retired inventory is allowed')", [F.h.id, F.U["H-L05"].id]);
       const observation = await tryWrite("insert into documents (property_id,unit_id,kind,file_name,storage_ref) values ($1,$2,'photo','rehearsal.jpg','rehearsal://x')", [F.h.id, F.U["H-L05"].id]).catch(() => ({ ok: null }));
       check(audit.ok === true, "audit recording (events) on retired inventory is allowed — history keeps its identity", { audit, observation: observation.ok });
@@ -302,21 +310,23 @@ async function api(method, route, { token, key = false, body, form } = {}) {
       const fx = await pool.connect();
       try {
         await fx.query("begin"); await fx.query("set local session_replication_role = replica");
-        F.legacyApp = (await fx.query("insert into lease_applications (property_id,unit_id,space_id,applicant_name,status,source) values ($1,$2,$3,'Rehearsal Legacy (pre-wall fixture)','submitted','staff') returning id", [F.h.id, F.U["H-L05"].id, F.U["H-L05"].space_id])).rows[0];
+       F.legacyApp = (await fx.query("insert into lease_applications (property_id,unit_id,space_id,applicant_name,status,source) values ($1,$2,$3,'Rehearsal Legacy (pre-wall fixture)','submitted','staff') returning id", [F.h.id, F.U["H-L05"].id, F.U["H-L05"].space_id])).rows[0];
+       F.legacyEvent = (await fx.query("insert into unit_events (property_id,unit_id,space_id,event_type,effective_date,status,source) values ($1,$2,$3,'move_in_scheduled',current_date,'scheduled','rehearsal legacy divergent fixture') returning id", [F.h.id, F.U["H-L04"].id, F.U["H-L05"].space_id])).rows[0];
         await fx.query("commit");
       } catch (e) { await fx.query("rollback").catch(() => {}); observe("legacy conflict fixture could not be written on this tree", { message: e.message }); } finally { fx.release(); }
       const hist = await api("GET", "/operator/inventory/corrections/history", { token: F.adminTok });
       const ex = hist.body && hist.body.explanation;
       const conf = ex && (ex.operative_work_on_retired_inventory || []).find((c) => c.label === "H-L05");
-      check(hist.status === 200 && ex && ex.conflict === true && conf && conf.attachments.some((a) => a.kind === "application" && a.count === 1), "the staff history names the scoped conflict: H-L05 · application × 1", { conflict: ex && ex.conflict, conf });
+       check(hist.status === 200 && ex && ex.conflict === true && conf && conf.attachments.some((a) => a.kind === "application" && a.count === 1) && conf.attachments.some((a) => a.kind === "unit event" && a.count === 1), "the staff history names direct and space-scoped conflicts once each on H-L05", { conflict: ex && ex.conflict, conf });
       const standing = await readTenancyStanding(pool, { property_id: F.h.id });
       const sc = standing.inventory_correction;
       check(sc && sc.read_state === "OK" && sc.conflict === true && (sc.operative_work_on_retired_inventory || []).some((c) => c.label === "H-L05"), "the tenancy standing (Ask Spine's read) carries the same named conflict", { conflict: sc && sc.conflict });
       check(JSON.stringify(ex) === JSON.stringify(sc), "staff history and standing carry the SAME explanation object");
       const r5 = await review(F.adminTok, F.U["H-L05"].id);
-      check(r5.status === 200 && r5.body.eligibility.action === "reinstate" && r5.body.eligibility.blockers.some((b) => b.code === "open_applications"), "the record's own review reports the conflict as a blocker-shaped fact on a retired unit", { blockers: r5.body && r5.body.eligibility.blockers.map((b) => b.code) });
-      const closing = await q("update lease_applications set status='withdrawn' where id=$1", [F.legacyApp.id]).then(() => ({ ok: true })).catch((e) => ({ ok: false, message: e.message }));
-      check(closing.ok === true, "CLOSING the existing conflict (withdrawing the application) is allowed on the retired unit", closing);
+       check(r5.status === 200 && r5.body.eligibility.action === "reinstate" && r5.body.eligibility.blockers.some((b) => b.code === "open_applications") && r5.body.eligibility.blockers.some((b) => b.code === "possession_recorded"), "the record's own review reports direct and space-scoped conflicts as blocker-shaped facts", { blockers: r5.body && r5.body.eligibility.blockers.map((b) => b.code) });
+       const closing = await q("update lease_applications set status='withdrawn' where id=$1", [F.legacyApp.id]).then(() => ({ ok: true })).catch((e) => ({ ok: false, message: e.message }));
+       const closingEvent = await q("update unit_events set status='cancelled' where id=$1", [F.legacyEvent.id]).then(() => ({ ok: true })).catch((e) => ({ ok: false, message: e.message }));
+       check(closing.ok === true && closingEvent.ok === true, "CLOSING existing direct and space-scoped conflicts is allowed on retired inventory", { closing, closingEvent });
       const hist2 = await api("GET", "/operator/inventory/corrections/history", { token: F.adminTok });
       check(hist2.body && hist2.body.explanation && hist2.body.explanation.conflict === false, "after closing, the conflict is gone from the read — resolved by the writer, not repaired by SQL", { conflict: hist2.body && hist2.body.explanation && hist2.body.explanation.conflict });
     });
@@ -372,8 +382,13 @@ async function api(method, route, { token, key = false, body, form } = {}) {
       check(first.body.command_identity === "recorded" && typeof first.body.command_id === "string", "the command has a durable identity", { command_identity: first.body.command_identity });
       const again = await retire(F.adminTok, body);
       check(again.status === 200 && again.body.idempotent === true && again.body.retired === 1 && again.body.replayed_from && again.body.current_state && again.body.current_state.units[0].state === "retired", "same key + same payload REPLAYS the recorded result (200) and separately reports the CURRENT state", { status: again.status, idempotent: again.body && again.body.idempotent, current: again.body && again.body.current_state });
-      const changed = await retire(F.adminTok, { ...body, rationale: RATIONALE + " (edited)" });
-      check(changed.status === 409 && changed.body.error === "command_payload_conflict", "same key + different payload is a conflict, not a silent replay", { status: changed.status, error: changed.body && changed.body.error });
+       const changed = await retire(F.adminTok, { ...body, rationale: RATIONALE + " (edited)" });
+       check(changed.status === 409 && changed.body.error === "command_payload_conflict", "same key + different payload is a conflict, not a silent replay", { status: changed.status, error: changed.body && changed.body.error });
+       const longPrefix = "x".repeat(200);
+       const longA = await retire(F.adminTok, { ...body, idempotency_key: longPrefix + "A" });
+       const longB = await retire(F.adminTok, { ...body, idempotency_key: longPrefix + "B" });
+       const longRows = await commandRows(F.h.id, longPrefix);
+       check(longA.status === 400 && longB.status === 400 && longA.body.error === "idempotency_key_too_long" && longB.body.error === "idempotency_key_too_long" && Array.isArray(longRows) && longRows.length === 0, "distinct oversized keys are explicitly refused; neither is truncated into a replay identity", { a: longA.status, b: longB.status, rows: longRows && longRows.length });
       const otherKey = await retire(F.adminTok, { ...body, idempotency_key: `retire-l10-b-${nonce}` });
       check(otherKey.status === 409 && otherKey.body.error === "retirement_refused" && otherKey.body.refused[0].code === "ALREADY_RETIRED", "a DIFFERENT key for the same unit is a new command and is refused by name (ALREADY_RETIRED)", { status: otherKey.status, code: otherKey.body && otherKey.body.refused && otherKey.body.refused[0].code });
       const r10b = await review(F.adminTok, F.U["H-L10"].id);

@@ -45,17 +45,23 @@ declare
   v_null_means text := coalesce(TG_ARGV[2], 'operative');
   new_j jsonb := to_jsonb(NEW);
   old_j jsonb;
-  v_unit uuid; v_old_unit uuid; v_number text;
-  v_new_operative boolean; v_old_operative boolean;
+  v_space_unit uuid; v_number text;
+  v_new_units uuid[] := array[]::uuid[];
+  v_old_units uuid[] := array[]::uuid[];
+  v_new_operative boolean; v_old_operative boolean; v_new_retired_target boolean := false;
   v_status text;
 begin
-  -- target unit of NEW: unit_id directly, else through space_id
+  -- Every populated relationship is a target. Some existing leasing tables
+  -- already enforce unit/space agreement with their grain trigger; this wall
+  -- must still see both values on every table that carries both columns.
   if new_j ? 'unit_id' and (new_j->>'unit_id') is not null then
-    v_unit := (new_j->>'unit_id')::uuid;
-  elsif new_j ? 'space_id' and (new_j->>'space_id') is not null then
-    select s.unit_id into v_unit from spaces s where s.id = (new_j->>'space_id')::uuid;
+    v_new_units := array_append(v_new_units, (new_j->>'unit_id')::uuid);
   end if;
-  if v_unit is null then return NEW; end if;
+  if new_j ? 'space_id' and (new_j->>'space_id') is not null then
+    select s.unit_id into v_space_unit from spaces s where s.id = (new_j->>'space_id')::uuid;
+    if v_space_unit is not null then v_new_units := array_append(v_new_units, v_space_unit); end if;
+  end if;
+  if coalesce(array_length(v_new_units, 1), 0) = 0 then return NEW; end if;
 
   if v_status_col = '' then
     v_new_operative := true;
@@ -66,17 +72,14 @@ begin
   end if;
   if not v_new_operative then return NEW; end if;
 
-  select u.unit_number into v_number
-    from units u join inventory_retirements ir on ir.unit_id = u.id and ir.reversed_at is null
-   where u.id = v_unit;
-  if v_number is null then return NEW; end if;
-
   if TG_OP = 'UPDATE' then
     old_j := to_jsonb(OLD);
     if old_j ? 'unit_id' and (old_j->>'unit_id') is not null then
-      v_old_unit := (old_j->>'unit_id')::uuid;
-    elsif old_j ? 'space_id' and (old_j->>'space_id') is not null then
-      select s.unit_id into v_old_unit from spaces s where s.id = (old_j->>'space_id')::uuid;
+      v_old_units := array_append(v_old_units, (old_j->>'unit_id')::uuid);
+    end if;
+    if old_j ? 'space_id' and (old_j->>'space_id') is not null then
+      select s.unit_id into v_space_unit from spaces s where s.id = (old_j->>'space_id')::uuid;
+      if v_space_unit is not null then v_old_units := array_append(v_old_units, v_space_unit); end if;
     end if;
     if v_status_col = '' then
       v_old_operative := true;
@@ -85,12 +88,26 @@ begin
       if v_status is null then v_old_operative := (v_null_means = 'operative');
       else v_old_operative := not (v_status = any(v_terminal)); end if;
     end if;
-    -- already operative on this same retired unit: a reported conflict, still editable
-    if v_old_unit is not distinct from v_unit and v_old_operative then return NEW; end if;
+  end if;
+
+  select u.unit_number into v_number
+    from units u join inventory_retirements ir on ir.unit_id = u.id and ir.reversed_at is null
+   where u.id = any(v_new_units)
+   order by u.id limit 1;
+  if v_number is null then return NEW; end if;
+
+  if TG_OP = 'UPDATE' then
+    select exists(
+      select 1 from units u join inventory_retirements ir on ir.unit_id = u.id and ir.reversed_at is null
+       where u.id = any(v_new_units) and not (u.id = any(v_old_units))
+    ) into v_new_retired_target;
+    -- An already-operative conflict may still be edited or closed, but a
+    -- different retired target may never be added or re-targeted onto.
+    if v_old_operative and not v_new_retired_target then return NEW; end if;
   end if;
 
   raise exception 'Unit % is retired from current inventory; % cannot attach operative work to it (%). Reinstate the unit first if this is real current inventory.',
-    v_number, TG_TABLE_NAME, case when TG_OP = 'INSERT' then 'new attachment' when v_old_unit is distinct from v_unit then 're-target' else 'reopen' end
+    v_number, TG_TABLE_NAME, case when TG_OP = 'INSERT' then 'new attachment' when v_new_retired_target then 're-target' else 'reopen' end
     using errcode = 'check_violation';
 end; $$ language plpgsql;
 
