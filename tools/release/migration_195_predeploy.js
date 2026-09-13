@@ -85,15 +85,15 @@ function required(defs, name, table, definition) {
 }
 
 const PRE_CONTRACT = [
-  ["aptc_source_ck", "application_proposed_terms_confirmations", "check(source=operator_proposed_terms::text)"],
-  ["aptc_authority_ck", "application_proposed_terms_confirmations", "check(authority_basis=any(array[owner::text,role_authority::text,managed_role_override::text]))"],
-  ["la_term_source_ck", "lease_applications", "check(term_sourceisnullor(term_source=any(array[application_capture::text,confirm_term_repair::text,operator_proposed_terms::text])))"],
+  ["aptc_source_ck", "application_proposed_terms_confirmations", "check(source='operator_proposed_terms'::text)"],
+  ["aptc_authority_ck", "application_proposed_terms_confirmations", "check(authority_basis=any(array['owner'::text,'role_authority'::text,'managed_role_override'::text]))"],
+  ["la_term_source_ck", "lease_applications", "check(term_sourceisnullor(term_source=any(array['application_capture'::text,'confirm_term_repair'::text,'operator_proposed_terms'::text])))"],
 ];
 const POST_CONTRACT = [
-  ["aptc_source_ck", "application_proposed_terms_confirmations", "check(source=any(array[operator_proposed_terms::text,authored_offer_acknowledged::text]))"],
-  ["aptc_authority_ck", "application_proposed_terms_confirmations", "check(authority_basis=any(array[owner::text,role_authority::text,managed_role_override::text,authored_offer::text]))"],
-  ["aptc_derived_names_offer_ck", "application_proposed_terms_confirmations", "check(source<>authored_offer_acknowledged::textorapplication_offer_idisnotnullandapplication_terms_hashisnotnull)"],
-  ["la_term_source_ck", "lease_applications", "check(term_sourceisnullor(term_source=any(array[application_capture::text,confirm_term_repair::text,operator_proposed_terms::text,authored_offer_acknowledged::text])))"],
+  ["aptc_source_ck", "application_proposed_terms_confirmations", "check(source=any(array['operator_proposed_terms'::text,'authored_offer_acknowledged'::text]))"],
+  ["aptc_authority_ck", "application_proposed_terms_confirmations", "check(authority_basis=any(array['owner'::text,'role_authority'::text,'managed_role_override'::text,'authored_offer'::text]))"],
+  ["aptc_derived_names_offer_ck", "application_proposed_terms_confirmations", "check(source<>'authored_offer_acknowledged'::textorapplication_offer_idisnotnullandapplication_terms_hashisnotnull)"],
+  ["la_term_source_ck", "lease_applications", "check(term_sourceisnullor(term_source=any(array['application_capture'::text,'confirm_term_repair'::text,'operator_proposed_terms'::text,'authored_offer_acknowledged'::text])))"],
 ];
 
 async function physicalContract(client, contract) {
