@@ -35,3 +35,19 @@ It invokes each checkout's actual `migrations/migrate.js` with read-only session
 Migration 195 adds allowed authored-offer source/authority values and requires offer identity/hash for the derived source; it does not replace existing rows. The actual prestart verifier checks both ledger-to-file and file-to-ledger membership. Therefore an ordinary restart of a pre-195 artifact after migration 195 is expected to refuse startup. Do not delete the ledger row or derived histories to make rollback start.
 
 A recovery artifact must carry migration 195 and preserve the two-step resident submission and submitted packet issuance compatibility, as well as truthful attribution and current actor checks. Merely appending the migration file to old code is not sufficient to preserve outstanding two-step resident links. The cheapest safe recovery is a reviewed forward-compatible artifact retaining those branches, or a forward correction on this candidate; deployment and recovery acceptance remain QB-owned and pending.
+
+## Owned schema-194 execution, September 13
+
+The schema-194 half is now executed, superseding its earlier unrun status above. Baseline was exact `a2c54dee3c98d14d64850ebd47e1ceea068c291a`; candidate was `2036977` (attribution plus rollback-proof successor). Using QB's already-running loopback PostgreSQL 55450, the canonical proof boundary created only `spine_proof_08bddc5574f5364a45d75ee1`, with a unique manifest and unused port parameter 3353. Actual baseline migrations and their existing preconditions produced 182 ledger rows / ceiling 194. No business fixtures or API server were needed.
+
+Workspace commands, using the workstation's bundled Node executable:
+
+```text
+node tmp/two-step-attribution-migration194-runtime-20260913.js init
+node tmp/two-step-attribution-migration194-runtime-20260913.js run
+node tmp/two-step-attribution-migration194-runtime-20260913.js cleanup
+```
+
+The `run` adapter sets `PROOF_EXPECTED_CEILING=194`, `MIGRATION_BASELINE_ROOT` to the integration API, and the unique `E2E_PROOF_MANIFEST`; it invokes the committed `tests/proofs/two_step_migration_recovery.db.js`. Observed results: baseline verifier passed; candidate verifier refused unapplied migration 195; the ledger remained identical; both verifier processes used read-only session defaults. All three assertions passed.
+
+Canonical cleanup verified that the owned nonce database was dropped. Its completed manifest is retained outside Git at `tmp/two-step-attribution-migration194-manifest-20260913.completed.json`. The adapter remains beside it. QB's cluster and all other databases were untouched and were not stopped. The schema-195 half and attribution reader execution remain separately QB-owned; this receipt does not claim those results.
