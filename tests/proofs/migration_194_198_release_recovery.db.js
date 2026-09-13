@@ -20,10 +20,11 @@ const assert = require("node:assert/strict");
 const path = require("path");
 const { execFileSync, spawn, spawnSync } = require("child_process");
 const { Client } = require("pg");
+const { harnessConnectionString } = require("../_run_receipt");
 
 const ROOT = path.join(__dirname, "..", "..");
 const WRAPPER = path.join(ROOT, "tools", "release", "migration_194_198_predeploy.js");
-const url = new URL(String(process.env.HARNESS_DATABASE_URL || ""));
+const url = new URL(harnessConnectionString());
 const nonce = String(process.env.HARNESS_NONCE || "");
 if (!/^[a-f0-9]{32}$/.test(nonce)) throw new Error("HARNESS_NONCE must be 32 lowercase hex characters");
 if (!["127.0.0.1", "[::1]"].includes(url.hostname) || url.username !== "postgres" ||
