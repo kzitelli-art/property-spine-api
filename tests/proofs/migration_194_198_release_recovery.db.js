@@ -99,6 +99,7 @@ async function startAndHealthTwice(admin, exact198) {
         E2E_PROOF_MANIFEST: manifestPath, E2E_SERVER_APPLICATION_NAME: `spine_proof_${nonce}`,
         E2E_SMS_LOG: logPaths.sms, E2E_ANTHROPIC_LOG: logPaths.anthropic,
         E2E_EGRESS_LOG: logPaths.egress, E2E_SESSION_LOG: logPaths.sessions,
+        RENDER_GIT_COMMIT: pin,
         NODE_ENV: "test", PORT: String(port), SMS_SEND_MODE: "customer_care",
         OPERATOR_KEY: "owned-proof-key", OPERATOR_APP_ORIGIN: "http://127.0.0.1:5179",
         APP_BASE_URL: `http://127.0.0.1:${port}`,
