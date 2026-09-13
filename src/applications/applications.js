@@ -216,6 +216,33 @@ module.exports = function applicationsModule(deps) {
     if (["declined", "withdrawn", "expired"].includes(app.status)) return out("closed", "Application closed (" + app.status + ").", { state: "complete" });
     if (app.status === "accepted_term_required") return out("confirm_term", "Company accepted — confirm the lease term.");
     if (app.status === "submitted") {
+      //  ── TWO-STEP LEASING (195) ───────────────────────────────────
+      //  A submitted application bound to an acknowledged authored offer
+      //  does not wait on a separate approval click. Staff prepare and
+      //  issue the signing package against the author's decision; the
+      //  authorized actor then Executes — approving and signing for the
+      //  company in one deliberate action. The released `approve` remains
+      //  the answer for applications without an acknowledged offer.
+      const offerBound = !!(rv && rv.application_offer && rv.application_offer.id && rv.application_offer.acknowledged_at);
+      if (rv && offerBound && pk && pk.status === "resident_executed") {
+        return out("execute_lease", "Approve the application and sign for the company.",
+          { group_code: "approve", commercial_decisions_remaining: ["application_approval", "company_signature"] });
+      }
+      if (rv && offerBound && pk && pk.status === "executed") {
+        return out("executed_lease_recorded", "The lease is executed and recorded.",
+          { group_code: "executed_lease_required", state: "complete" });
+      }
+      if (rv && offerBound && pk && PK_AWAITING.includes(pk.status)) {
+        return out("await_resident_acknowledgment", "Awaiting the resident's signature on the lease.",
+          { group_code: "awaiting_acknowledgment", state: "waiting" });
+      }
+      if (rv && offerBound && pk && pk.status === "draft") {
+        return out("issue_terms_review_link", "Issue the signing links.", { group_code: "approve" });
+      }
+      if (rv && offerBound && !pk) {
+        return out("prepare_lease_packet", "Prepare the signing package from the acknowledged offer.",
+          { group_code: "approve", preparation_basis: "authored_offer" });
+      }
       return rv
         ? out("approve_application", "Approve the application.", { group_code: "approve" })
         : out("approve", "Approve the application.");

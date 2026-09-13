@@ -4806,10 +4806,16 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       [packetId]
     )).rows[0];
 
+  //  TWO-STEP LEASING (195): `submitted` is admitted at the perimeter so the
+  //  ONE eligibility predicate (lease_packet_eligibility.js) can decide on
+  //  the acknowledged-authored-offer basis. The perimeter stays the coarse
+  //  wall (session property, leasing module); a submitted application with
+  //  no acknowledged offer is still refused by the predicate, byte-for-byte
+  //  as before.
   const operatorGeneratePacketPerimeter = activationPerimeter({
     pool,
     loadApplication: _getAppForPerimeter,
-    eligibleStatuses: ["lease_ready", "tenant_signed", "approved"],
+    eligibleStatuses: ["lease_ready", "tenant_signed", "approved", "submitted"],
     action: "generate_lease_packet",
     requiredModule: "leasing",
   });
@@ -4817,7 +4823,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   const operatorIssuePacketPerimeter = activationPerimeter({
     pool,
     loadApplication: _getAppForPacketPerimeter,
-    eligibleStatuses: ["lease_ready", "tenant_signed", "approved"],
+    eligibleStatuses: ["lease_ready", "tenant_signed", "approved", "submitted"],
     action: "issue_lease_packet_link",
     requiredModule: "leasing",
   });

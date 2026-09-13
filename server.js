@@ -464,6 +464,9 @@ const __leasePackets = leasePacketsModule({
     executedLease: __executedLease,
     confirmTerm: __tenancyAnchor && __tenancyAnchor.confirmTermService,
     spawnObligationFromEvent,
+    //  Two-step Execute composes the ONE canonical approveApplication; the
+    //  applications module is composed ~230 lines below, hence the thunk.
+    applications: (typeof __applications !== "undefined" && __applications) ? __applications._service : null,
   }),
 });
 app.use("/", __leasePackets); // ONE packet service instance; legacy + operator doors share _service

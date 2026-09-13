@@ -48,7 +48,7 @@ const mammoth = require("mammoth");
 const pdfParse = require("pdf-parse");
 const sourceArtifacts = require("../onboarding/source_artifact_service");
 const { normalizeE164 } = require("../identity/phone_identity");
-const { readBoundApplicationOffer } = require("./proposed_terms_service");
+const { readBoundApplicationOffer, deriveConfirmationFromAuthoredOffer } = require("./proposed_terms_service");
 
 module.exports = function leasePacketsModule(deps) {
   const { pool, satisfyObligation, completeObligation } = deps;
@@ -1008,8 +1008,23 @@ module.exports = function leasePacketsModule(deps) {
       [app.id]
     )).rows[0] || null;
 
+    //  ── TWO-STEP LEASING (195): the authored offer is read BEFORE the
+    //  predicate so a `submitted` application can be admitted on the
+    //  applicant's acknowledged, current offer. readBoundApplicationOffer
+    //  refuses a superseded or unacknowledged offer by throwing; a
+    //  submitted application that is not offer-bound at all reads as null
+    //  and takes the released refusal. Legacy (unbound) applications past
+    //  approval are unaffected: for them this read returns null.
+    let authoredOffer = null;
+    if (app.status === "submitted" && app.application_offer_id) {
+      try { authoredOffer = await readBoundApplicationOffer(client, app); }
+      catch (e) {
+        throw packetError(409, e.code || "application_offer_unusable",
+          e.message || "The acknowledged application offer cannot be read as one current version.");
+      }
+    }
     const verdict = packetEligibility.assessLeasePacketEligibility(app, {
-      existingPacket, expectedPropertyId, createNewVersion,
+      existingPacket, expectedPropertyId, createNewVersion, authoredOffer,
     });
     if (!verdict.eligible) {
       throw packetError(
@@ -1024,7 +1039,29 @@ module.exports = function leasePacketsModule(deps) {
       );
     }
 
-    const confirmationId = app.proposed_terms_confirmation_id || null;
+    let confirmationId = app.proposed_terms_confirmation_id || null;
+    if (verdict.preparation_basis === "authored_offer") {
+      //  ── THE SYSTEM-DERIVED PREPARATION RECORD ─────────────────────
+      //  Downstream lineage (packet ↔ confirmation ↔ offer, issue checks,
+      //  review currency) reads ONE record type. The two-step path writes
+      //  that record DERIVED from the acknowledged offer — never a human
+      //  re-confirmation, and it says so in its source and authority_basis
+      //  (migration 195). The actor is the staff member preparing the
+      //  packet; the economics and their authority are the offer author's,
+      //  reachable through application_offer_id. Nothing here approves the
+      //  application: status, approval_obligation_id and approved_at are
+      //  untouched, and there is no terms_review obligation yet.
+      try {
+        confirmationId = await deriveConfirmationFromAuthoredOffer(client, {
+          app, offer: authoredOffer, actorUserId,
+          currentConfirmationId: app.proposed_terms_confirmation_id || null,
+        });
+      } catch (e) {
+        if (e && e.code && !e.httpStatus) throw packetError(e.http || 409, e.code, e.message);
+        throw e;
+      }
+      app.proposed_terms_confirmation_id = confirmationId;
+    }
     if (!confirmationId) {
       // Unreachable via the predicate above, which refuses on this fact first.
       // Kept as a belt-and-braces guard because everything below dereferences it.
@@ -1411,7 +1448,12 @@ module.exports = function leasePacketsModule(deps) {
     // from generating, so it keeps its own reason code — but the status
     // prerequisite is identical and now comes from the one derived set rather
     // than a second copy that could drift from the first.
-    if (!packetEligibility.PACKET_ELIGIBLE_STATUSES.includes(row.application_status)) {
+    //  Two-step (195): a submitted application's draft may be issued when the
+    //  draft carries the applicant's acknowledged offer lineage — the same
+    //  basis that admitted its generation.
+    const twoStepIssuable = row.application_status === "submitted"
+      && !!row.application_offer_id && !!row.proposed_terms_confirmation_id;
+    if (!packetEligibility.PACKET_ELIGIBLE_STATUSES.includes(row.application_status) && !twoStepIssuable) {
       throw packetError(
         409,
         "application_not_issuable",
@@ -1657,38 +1699,67 @@ module.exports = function leasePacketsModule(deps) {
       //  definitely signed would go looking for the wrong thing. Caught by
       //  reading what the hostile replay and supersession cases actually
       //  reported, not by the fact that they refused.
-      if (pk.voided_at || pk.status === "voided") {
+      //  ── TWO-STEP LEASING (195): no signature without a decision ──
+      //  A packet prepared from the acknowledged offer reaches the resident
+      //  before anyone approved the application. The released signature door
+      //  must not become a way to sign an unapproved application: that is
+      //  exactly the decision Execute exists to make explicit.
+      const appRow = (await client.query(
+        `select status, terms_review_obligation_id, activation_obligation_id from lease_applications where id=$1`,
+        [pk.application_id])).rows[0];
+      if (appRow && !appRow.terms_review_obligation_id && !appRow.activation_obligation_id
+          && appRow.status === "submitted") {
         await client.query("rollback");
         return res.status(409).json({
-          error: "packet_voided",
-          receipt: "This lease packet was voided and cannot be executed.",
+          error: "application_not_approved",
+          receipt: "This application has not been approved. Signing for the company on an unapproved application is not a separate act: use Execute, which approves and signs in one decision.",
+          execute_endpoint: `/operator/leasing/lease-packets/${pk.id}/execute`,
         });
+      }
+      const out = await companySignCore(client, { pk, operator, req });
+      await client.query("commit");
+      return res.status(201).json({
+        receipt: out.tenancy_error
+          ? "Lease executed and recorded. Activation is blocked — the executed lease stands and names the conflict."
+          : "Lease executed. The signed instrument is canonical truth.",
+        ...out,
+      });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      if (e && e.svc) return res.status(e.http || 409).json(e.body);
+      if (e && e.httpStatus) return res.status(e.httpStatus).json(e.body);
+      console.error("company-sign:", e);
+      return res.status(500).json({ receipt: "Could not execute the lease.", error: e.message });
+    } finally { client.release(); }
+  });
+
+  //  ── THE COMPANY SIGNATURE, AS ONE FUNCTION ───────────────────────
+  //  Shared by the released company-sign door and the two-step Execute
+  //  command. It performs the packet-state refusals, the company signature
+  //  field write, the packet state change, the audit row and the reach into
+  //  canonical truth (executeSpineLease). It decides NOTHING about who may
+  //  sign — the caller has already resolved the signer list — and it runs on
+  //  the caller's open transaction so a later failure rolls all of it back.
+  async function companySignCore(client, { pk, operator, req }) {
+      if (pk.voided_at || pk.status === "voided") {
+        throw packetError(409, "packet_voided", "This lease packet was voided and cannot be executed.");
       }
       if (pk.superseded_at) {
-        await client.query("rollback");
-        return res.status(409).json({
-          error: "packet_superseded",
-          receipt: "This packet was superseded by a later version. Execute the current version; "
-                 + "this one remains evidence of what was issued.",
-        });
+        throw packetError(409, "packet_superseded",
+          "This packet was superseded by a later version. Execute the current version; "
+          + "this one remains evidence of what was issued.");
       }
       if (pk.status === "executed") {
-        await client.query("rollback");
-        return res.status(409).json({
-          error: "packet_already_executed",
-          receipt: "This packet is already executed. It is not signed twice.",
-          company_executed_at: pk.company_executed_at,
-        });
+        throw packetError(409, "packet_already_executed",
+          "This packet is already executed. It is not signed twice.",
+          { company_executed_at: pk.company_executed_at });
       }
       //  THE RESIDENT SIGNS FIRST. 184's trigger enforces this in Postgres;
       //  refusing here too means the operator gets an explanation instead of
       //  a constraint violation.
       if (pk.status !== "resident_executed") {
-        await client.query("rollback");
-        return res.status(409).json({
-          error: "resident_has_not_executed",
-          receipt: `This packet is '${pk.status}'. The resident signs the instrument before the company does.`,
-        });
+        throw packetError(409, "resident_has_not_executed",
+          `This packet is '${pk.status}'. The resident signs the instrument before the company does.`);
       }
 
       const field = (await client.query(
@@ -1703,11 +1774,8 @@ module.exports = function leasePacketsModule(deps) {
          operator.id, operator.session_id || null, clientIp(req),
          (req.headers && req.headers["user-agent"]) || null])).rows[0];
       if (!field) {
-        await client.query("rollback");
-        return res.status(409).json({
-          error: "no_company_signature_field",
-          receipt: "This packet carries no outstanding company signature. It may already be executed, or it was generated before the property had a governing instrument.",
-        });
+        throw packetError(409, "no_company_signature_field",
+          "This packet carries no outstanding company signature. It may already be executed, or it was generated before the property had a governing instrument.");
       }
 
       await client.query(
@@ -1724,23 +1792,250 @@ module.exports = function leasePacketsModule(deps) {
 
       //  ── AND THE SAME ACT REACHES CANONICAL TRUTH ──────────────────
       const svcs = executionServices() || {};
-      const out = await executeSpineLease(
+      return executeSpineLease(
         client,
         { lease_packet_id: pk.id, company_signer_user_id: operator.id },
         { executedLease: svcs.executedLease, confirmTerm: svcs.confirmTerm,
           spawnObligationFromEvent: svcs.spawnObligationFromEvent }
       );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  EXECUTE — THE SECOND COMMERCIAL DECISION (two-step leasing, 195)
+  //
+  //  POST /operator/leasing/lease-packets/:id/execute
+  //  body { application_decision: "approve", idempotency_key? }
+  //
+  //  One deliberate human action that, after the applicant and any guarantor
+  //  have signed the governing instrument, (1) APPROVES the application and
+  //  (2) SIGNS for the company — producing the existing pending tenancy.
+  //  Two distinct canonical records result, each with its own actor and
+  //  timestamp: the application_approved event + closed approval obligation
+  //  (the released approveApplication service) and the company signature
+  //  field + company_executed audit + executed lease (companySignCore).
+  //
+  //  AUTHORITY: the actor must hold BOTH consequences — approval authority
+  //  (the approval obligation's owner/role, or the governed override, exactly
+  //  as the released /approve door resolves it) AND company-signer standing
+  //  (the property's configured signer list). Signer-list entry alone does
+  //  not confer approval; approval authority alone does not confer signing.
+  //  Each refusal names the missing authority. Nothing is written before
+  //  both are established.
+  //
+  //  The body decision is explicit: "approve" is the only decision this
+  //  command carries. A decline is not an execution and uses its own door.
+  //
+  //  ATOMIC: one transaction. If the composition fails at any boundary the
+  //  approval, the signature and the lease are all rolled back (proven by
+  //  executeLeasePacketDecision with a failing dependency).
+  // ═══════════════════════════════════════════════════════════════════
+  const APPROVAL_ROLE_FALLBACK = "leasing_manager";
+  async function resolveApprovalAuthority(client, { app, operator }) {
+    if (operator.can_manage_roles === true) return { eligible: true, basis: "managed_role_override" };
+    if (!app.approval_obligation_id) return { eligible: false, basis: null, reason: "no_gate_and_no_override" };
+    const ob = (await client.query(
+      "select assigned_role, assigned_user_id from obligations where id=$1",
+      [app.approval_obligation_id])).rows[0];
+    if (!ob) return { eligible: false, basis: null, reason: "no_gate_and_no_override" };
+    if (ob.assigned_user_id && String(ob.assigned_user_id) === String(operator.id)) return { eligible: true, basis: "owner" };
+    if (ob.assigned_role && (ob.assigned_role === operator.role_title || ob.assigned_role === operator.role)) return { eligible: true, basis: "role_authority" };
+    return { eligible: false, basis: null, reason: "not_gate_eligible", required_role: ob.assigned_role || APPROVAL_ROLE_FALLBACK };
+  }
+
+  //  The composition, on the caller's open transaction. `services` carries
+  //  { applications, executed via executionServices() } so a proof can hand
+  //  it a deliberately failing dependency and assert the rollback.
+  async function executeLeasePacketDecision(client, { packetId, operator, req, decision, idempotencyKey }, services = {}) {
+    if (decision !== "approve") {
+      throw packetError(400, "application_decision_required",
+        "Execute carries exactly one decision: application_decision must be \"approve\". A decline uses the decline door.");
+    }
+    const applications = services.applications || null;
+    if (!applications || typeof applications.approveApplication !== "function") {
+      throw packetError(503, "execution_not_wired", "The application approval service is not wired on this deploy.");
+    }
+    const pk = (await client.query(
+      `select * from lease_packets where id=$1 for update`, [packetId])).rows[0];
+    if (!pk) throw packetError(404, "packet_not_found", "No lease packet with that id.");
+    if (String(pk.property_id) !== String(operator.property_id)) {
+      throw packetError(403, "packet_not_at_your_property", "That lease packet belongs to another property.");
+    }
+    const app = (await client.query(
+      `select * from lease_applications where id=$1 for update`, [pk.application_id])).rows[0];
+    if (!app) throw packetError(409, "application_missing", "Application record missing for this packet.");
+
+    // ── AUTHORITY, BOTH HALVES, BEFORE ANY WRITE ─────────────────────
+    const property = (await client.query(
+      `select lease_config from properties where id=$1`, [pk.property_id])).rows[0] || {};
+    const executionAuthority = property.lease_config && property.lease_config.execution_authority;
+    const companySignerIds = executionAuthority && Array.isArray(executionAuthority.company_signer_user_ids)
+      ? executionAuthority.company_signer_user_ids.map(String) : [];
+    const isSigner = companySignerIds.includes(String(operator.id));
+    const alreadyApproved = !!(app.terms_review_obligation_id || app.activation_obligation_id);
+    const approval = alreadyApproved ? { eligible: true, basis: "already_approved" }
+      : await resolveApprovalAuthority(client, { app, operator });
+    if (!isSigner && !approval.eligible) {
+      throw packetError(403, "execute_not_authorized",
+        "This account holds neither approval authority for this application nor company-signer standing at this property.",
+        { missing: ["application_approval", "company_signature"] });
+    }
+    if (!approval.eligible) {
+      throw packetError(403, "application_approval_not_authorized",
+        "This account may sign for the company but does not hold approval authority for this application. Execute approves and signs in one action, so it needs both.",
+        { missing: ["application_approval"], approval_role: approval.required_role || null });
+    }
+    if (!isSigner) {
+      throw packetError(403, "company_signer_not_authorized",
+        "This account may approve the application but is not recorded as an authorized company signer for this property's lease form. Execute approves and signs in one action, so it needs both.",
+        { missing: ["company_signature"] });
+    }
+
+    // ── IDEMPOTENT REPLAY: an executed packet is one decision, once ──
+    if (pk.status === "executed") {
+      const prior = (await client.query(
+        `select event_json, created_at from lease_packet_audit_events
+          where lease_packet_id=$1 and event_type='executed_by_decision' order by created_at desc limit 1`, [pk.id])).rows[0];
+      const lease = (await client.query(
+        `select id, lease_status from leases where application_id=$1
+            and lease_status not in ('cancelled','rescinded','void','superseded') order by created_at desc limit 1`, [app.id])).rows[0];
+      return { idempotent: true, packet_id: pk.id, application_id: app.id,
+        decisions: (prior && prior.event_json && prior.event_json.decisions) || null,
+        tenancy: lease ? { lease_id: lease.id, lease_status: lease.lease_status } : null,
+        company_executed_at: pk.company_executed_at };
+    }
+
+    // ── APPLICATION STATE ────────────────────────────────────────────
+    if (["declined", "withdrawn", "expired"].includes(app.status)) {
+      throw packetError(409, "application_terminal",
+        `This application is ${app.status}. It cannot be approved or executed.`);
+    }
+    if (!alreadyApproved && app.status !== "submitted") {
+      throw packetError(409, "application_not_executable", `Cannot approve from status '${app.status}'.`);
+    }
+    // ── PACKET STATE (the resident and any guarantor have signed) ────
+    if (pk.voided_at || pk.status === "voided") throw packetError(409, "packet_voided", "This lease packet was voided and cannot be executed.");
+    if (pk.superseded_at) throw packetError(409, "packet_superseded", "This packet was superseded by a later version. Execute the current version.");
+    if (pk.status !== "resident_executed") {
+      const outstanding = (await client.query(
+        `select s.signer_role, s.display_name from lease_packet_signers s
+          where s.lease_packet_id=$1 and s.submitted_at is null order by s.signer_role`, [pk.id])).rows;
+      throw packetError(409, "resident_has_not_executed",
+        `This packet is '${pk.status}'. Every resident-side signature is recorded before the company decides.`,
+        { outstanding_signers: outstanding.map((s) => s.display_name || s.signer_role) });
+    }
+    if (!pk.instrument_source_artifact_id || !pk.instrument_package_sha256) {
+      throw packetError(409, "instrument_package_identity_missing",
+        "This packet does not bind retained lease bytes to the exact deal terms.");
+    }
+    // ── LINEAGE: the packet must carry the applicant's CURRENT acknowledged offer ──
+    let boundOffer = null;
+    if (app.application_offer_id) {
+      try { boundOffer = await readBoundApplicationOffer(client, app); }
+      catch (e) { throw packetError(409, e.code || "application_offer_unusable", e.message); }
+      if (String(pk.application_offer_id || "") !== String(boundOffer.id)
+          || String(pk.application_terms_hash || "") !== String(boundOffer.hash)) {
+        throw packetError(409, "packet_terms_stale",
+          "The signed packet does not carry the applicant's current acknowledged terms. Prepare and sign a current packet.");
+      }
+    }
+    //  EXACT-BED IDENTITY: the packet's signed snapshot names the bed the
+    //  application is for; a sibling bed is never substituted.
+    let pkTerms = pk.terms_json; if (typeof pkTerms === "string") { try { pkTerms = JSON.parse(pkTerms); } catch (e) { pkTerms = {}; } }
+    const packetSpace = (pkTerms && pkTerms.space_id) || null;
+    if (app.space_id && String(packetSpace || "") !== String(app.space_id)) {
+      throw packetError(409, "packet_space_mismatch", "The signed packet does not name the application's exact bed.");
+    }
+
+    // ── DECISION 1 · APPROVE (the released service, this actor) ──────
+    const decisions = [];
+    let approvedOut = null;
+    if (!alreadyApproved) {
+      approvedOut = await applications.approveApplication(client, {
+        applicationId: app.id,
+        approvedByNote: operator.name || `staff:${operator.id}`,
+        actorUserId: operator.id,
+      });
+      //  The approval's own event: the terms-review obligation approval
+      //  spawned carries it as source_event_id (never a lookup by person,
+      //  which could name an earlier approval of the same person).
+      const approvedEvent = approvedOut.obligation && approvedOut.obligation.source_event_id
+        ? (await client.query(`select id, occurred_at from events where id=$1`, [approvedOut.obligation.source_event_id])).rows[0]
+        : null;
+      decisions.push({ decision: "application_approved", actor_user_id: operator.id,
+        authority_basis: approval.basis, event_id: approvedEvent ? approvedEvent.id : null,
+        at: approvedEvent ? approvedEvent.occurred_at : new Date().toISOString(),
+        terms_review_obligation_id: approvedOut.obligation.id });
+      //  The resident's acknowledgment already happened on this packet; the
+      //  obligation approval just spawned is satisfied from THAT frozen
+      //  evidence, never from anything supplied now.
+      const ack = (await client.query(
+        `select event_json from lease_packet_audit_events
+          where lease_packet_id=$1 and event_type='tenant_submitted'
+            and (event_json->>'two_step_preparation')='true' order by created_at desc limit 1`, [pk.id])).rows[0];
+      if (!ack || !ack.event_json || !ack.event_json.acknowledgment_evidence) {
+        throw packetError(409, "resident_acknowledgment_evidence_missing",
+          "The packet records no frozen resident acknowledgment evidence to satisfy the terms review.");
+      }
+      const proof = { ...ack.event_json.acknowledgment_evidence,
+        terms_review_obligation_id: approvedOut.obligation.id,
+        satisfied_from: "lease_packet_audit_events.tenant_submitted", satisfied_at_execute: true };
+      await satisfyObligation(client, { obligation_id: approvedOut.obligation.id, input: "terms_acknowledged", proof });
+      await completeObligation(client, { obligation_id: approvedOut.obligation.id, completed_by: null });
+    } else {
+      decisions.push({ decision: "application_already_approved", actor_user_id: null, authority_basis: "already_approved",
+        event_id: null, at: app.approved_at || null, terms_review_obligation_id: app.terms_review_obligation_id || null });
+    }
+
+    // ── DECISION 2 · SIGN FOR THE COMPANY (the released core) ────────
+    const out = await companySignCore(client, { pk: { ...pk }, operator, req });
+    const signedField = (await client.query(
+      `select completed_at, signed_by_user_id from lease_packet_fields
+        where lease_packet_id=$1 and field_key='sign_company' and field_type='signature'`, [pk.id])).rows[0];
+    decisions.push({ decision: "company_signed", actor_user_id: operator.id, authority_basis: "configured_company_signer",
+      at: signedField ? signedField.completed_at : new Date().toISOString(), packet_id: pk.id });
+
+    await audit(client, req, pk.id, "operator", "executed_by_decision", {
+      actor_user_id: operator.id, application_id: app.id, idempotency_key: idempotencyKey || null,
+      application_decision: "approve", decisions });
+    return { idempotent: false, packet_id: pk.id, application_id: app.id, decisions, ...out };
+  }
+
+  router.post("/operator/leasing/lease-packets/:id/execute", async (req, res) => {
+    if (!staffSessions || !executionServices) {
+      return res.status(503).json({ error: "execution_not_wired", receipt: "In-Spine lease execution is not wired on this deploy." });
+    }
+    let operator;
+    try { operator = await staffSessions.resolveStaffSession(pool, req.headers["x-staff-session"]); }
+    catch (e) { return res.status(500).json({ error: "session_resolution_failed", receipt: "The operator session could not be resolved." }); }
+    if (!operator) return res.status(401).json({ error: "no_operator_session", receipt: "No valid operator session. Sign in." });
+    const modules = Array.isArray(operator.allowed_modules) ? operator.allowed_modules : [];
+    if (!modules.includes("leasing") && !modules.includes("management")) {
+      return res.status(403).json({ error: "module_not_authorized",
+        receipt: "Your assignment at this property does not authorize approving applications or signing a lease for the company." });
+    }
+    const body = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const svcs = executionServices() || {};
+      const out = await executeLeasePacketDecision(client, {
+        packetId: req.params.id, operator, req,
+        decision: body.application_decision, idempotencyKey: body.idempotency_key || null,
+      }, { applications: svcs.applications });
       await client.query("commit");
-      return res.status(201).json({
-        receipt: out.tenancy_error
-          ? "Lease executed and recorded. Activation is blocked — the executed lease stands and names the conflict."
-          : "Lease executed. The signed instrument is canonical truth.",
+      return res.status(out.idempotent ? 200 : 201).json({
+        receipt: out.idempotent
+          ? "This packet was already executed by decision. Nothing was decided twice."
+          : out.tenancy_error
+          ? "Application approved and lease signed for the company. Activation is blocked — the executed lease stands and names the conflict."
+          : "Application approved and lease signed for the company. The signed instrument is canonical truth.",
         ...out,
       });
     } catch (e) {
       await client.query("rollback").catch(() => {});
       if (e && e.svc) return res.status(e.http || 409).json(e.body);
-      console.error("company-sign:", e);
+      if (e && e.httpStatus) return res.status(e.httpStatus).json(e.body || { error: e.code, receipt: e.message });
+      console.error("execute-by-decision:", e);
       return res.status(500).json({ receipt: "Could not execute the lease.", error: e.message });
     } finally { client.release(); }
   });
@@ -2079,7 +2374,22 @@ module.exports = function leasePacketsModule(deps) {
         await client.query("rollback");
         return res.status(409).json({ receipt: "Application record missing for this packet." });
       }
-      if (signer.signer_role === "tenant" && !app.terms_review_obligation_id) {
+      //  ── TWO-STEP LEASING (195) ─────────────────────────────────────
+      //  A packet prepared from the applicant's acknowledged authored offer
+      //  reaches the resident while the application is still `submitted`:
+      //  no approval has happened, so no terms_review obligation exists yet.
+      //  The resident's signature on the governing instrument is recorded
+      //  here (fields + packet state + audit with the frozen evidence); the
+      //  obligation is spawned by Execute's approval and satisfied THERE from
+      //  this packet's evidence. The legacy refusal below stays for packets
+      //  that carry no offer lineage.
+      const twoStepPreparation = signer.signer_role === "tenant"
+        && !app.terms_review_obligation_id
+        && app.status === "submitted"
+        && pk.application_offer_id && app.application_offer_id
+        && String(pk.application_offer_id) === String(app.application_offer_id)
+        && String(pk.application_terms_hash || "") === String(app.application_terms_hash || "");
+      if (signer.signer_role === "tenant" && !app.terms_review_obligation_id && !twoStepPreparation) {
         // A pre-v3 packet on a legacy blended-gate application. Feeding a
         // terms acknowledgment into signature inputs is the exact false
         // equivalence this build removes — refuse honestly, never satisfy.
@@ -2131,7 +2441,7 @@ module.exports = function leasePacketsModule(deps) {
 
       const satisfied = [];
       const alreadyDone = [];
-      if (signer.signer_role === "tenant") {
+      if (signer.signer_role === "tenant" && !twoStepPreparation) {
         try {
           await satisfyObligation(client, {
             obligation_id: app.terms_review_obligation_id,
@@ -2221,7 +2531,12 @@ module.exports = function leasePacketsModule(deps) {
           outstanding_signer_roles: outstandingSigners.map((s) => s.signer_role),
           meaning: governingPackage ? "lease_execution" : "review_intent_only",
           instrument_package_sha256: governingPackage ? pk.instrument_package_sha256 : null,
-          terms_review_obligation_id: app.terms_review_obligation_id });
+          terms_review_obligation_id: app.terms_review_obligation_id,
+          //  Two-step: the acknowledgment evidence is frozen on the audit row
+          //  so Execute can satisfy the (later) terms_review obligation from
+          //  it, rather than from anything supplied at execution time.
+          two_step_preparation: !!twoStepPreparation,
+          acknowledgment_evidence: twoStepPreparation ? evidence : undefined });
       await client.query("commit");
       const bundle = await getBundle(pool, pk.id);
       const currentSigner = (bundle.signers || []).find((s) =>
@@ -2254,6 +2569,8 @@ module.exports = function leasePacketsModule(deps) {
   router._service = Object.freeze({
     generateLeasePacket,
     issueLeasePacketLink,
+    executeLeasePacketDecision,
+    resolveApprovalAuthority,
     getBundle,
     publicPacket,
     propertyLeaseConfiguration,

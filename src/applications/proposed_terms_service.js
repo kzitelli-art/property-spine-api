@@ -363,7 +363,88 @@ async function confirmProposedTerms(client, input) {
   };
 }
 
+//  TWO-STEP LEASING (195). Writes (or reuses) the derived lineage record for a submitted,
+//  offer-bound application. Idempotent per (application, actor, offer):
+//  the same preparer regenerating against the same offer reuses the row;
+//  a different current offer (offer corrected after a voided packet)
+//  supersedes the previous derived row. Requires a server-derived actor —
+//  the key-gated legacy door cannot author this record.
+async function deriveConfirmationFromAuthoredOffer(client, { app, offer, actorUserId, currentConfirmationId }) {
+  if (!actorUserId) {
+    throw conflict("preparation_actor_required",
+      "Preparing a signing package from the applicant's acknowledged offer requires a signed-in staff actor.");
+  }
+  const terms = offer.terms;
+  const authorship = (await client.query(
+    `select authority_basis_snapshot from lease_offers where id=$1`, [offer.id])).rows[0];
+  const authorSnapshot = (authorship && authorship.authority_basis_snapshot) || {};
+  const current = currentConfirmationId ? (await client.query(
+    `select id, source, application_offer_id, application_terms_hash
+       from application_proposed_terms_confirmations where id=$1`, [currentConfirmationId])).rows[0] : null;
+  if (current && String(current.application_offer_id || "") === String(offer.id)
+      && String(current.application_terms_hash || "") === String(offer.hash)) {
+    return current.id; // already derived for this exact offer version
+  }
+  if (current && current.source !== "authored_offer_acknowledged") {
+    //  A human confirmation exists on a still-submitted application. That
+    //  is not a state the released writers produce (confirmation requires
+    //  lease_ready); refuse rather than silently supersede a human record.
+    throw conflict("application_terms_lineage_conflict",
+      "The application carries an operator terms confirmation that does not match its acknowledged offer.");
+  }
+  //  The admission engine compares the executed lease's canonical terms
+  //  hash with THIS row's payload_hash; the derived record therefore
+  //  carries the same canonical hash an operator confirmation would.
+  const { canonical, payload_hash } = normalizeAndHash({
+    rent: terms.rent, security_deposit: terms.security_deposit,
+    lease_start_date: terms.lease_start_date, lease_end_date: terms.lease_end_date,
+    concession_status: "none",
+  });
+  const idempotencyKey = `authored_offer:${offer.id}`;
+  const existing = (await client.query(
+    `select id from application_proposed_terms_confirmations
+      where application_id=$1 and actor_user_id=$2 and idempotency_key=$3`,
+    [app.id, actorUserId, idempotencyKey])).rows[0];
+  let confirmationId;
+  if (existing) {
+    confirmationId = existing.id;
+  } else {
+    const ev = (await client.query(
+      `insert into events (property_id, person_id, unit_id, type, note)
+       values ($1, $2, $3, 'application_terms_derived_from_authored_offer', $4) returning id`,
+      [app.property_id, app.person_id || null, app.unit_id || null,
+       `signing package prepared from acknowledged application offer ${offer.id} for application ${app.id} (hash ${String(offer.hash).slice(0, 12)})`])).rows[0];
+    confirmationId = (await client.query(
+      `insert into application_proposed_terms_confirmations
+         (application_id, property_id, actor_user_id, event_id, rent, security_deposit,
+          lease_start_date, lease_end_date, concession_status, source, authority_basis,
+          idempotency_key, payload_hash, supersedes_confirmation_id,
+          application_offer_id, application_terms_hash)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,'none','authored_offer_acknowledged','authored_offer',
+               $9,$10,$11,$12,$13)
+       returning id`,
+      [app.id, app.property_id, actorUserId, ev.id,
+       canonical.rent, canonical.security_deposit, canonical.lease_start_date, canonical.lease_end_date,
+       idempotencyKey, payload_hash, current ? current.id : null,
+       offer.id, String(offer.hash)])).rows[0].id;
+  }
+  await client.query(
+    `update lease_applications
+        set proposed_terms_confirmation_id=$2,
+            lease_start_date=$3, lease_end_date=$4, rent=$5, deposit=$6,
+            term_source='authored_offer_acknowledged',
+            terms_completed_at=coalesce(terms_completed_at, now()),
+            terms_completed_by=coalesce(terms_completed_by, $7),
+            concession_status='none'
+      where id=$1`,
+    [app.id, confirmationId, canonical.lease_start_date, canonical.lease_end_date,
+     canonical.rent, canonical.security_deposit, authorSnapshot.actor_user_id || actorUserId]);
+  return confirmationId;
+}
+
+
 module.exports = {
+  deriveConfirmationFromAuthoredOffer,
   confirmProposedTerms,
   resolveObligationAuthority,
   normalizeAndHash,

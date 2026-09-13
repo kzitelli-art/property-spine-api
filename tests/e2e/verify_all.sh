@@ -86,6 +86,7 @@ step "application review actions" node tests/unit/application_review_action_cont
 step "application offer writer and read locks" node tests/unit/application_offer_terms.test.js
 step "application review offer projection" node tests/unit/application_review_offer.test.js
 step "historical pending offer read locks" node tests/unit/proposed_terms_read_lock.test.js
+step "two-step packet eligibility basis" node tests/unit/two_step_packet_eligibility.test.js
 step "leasing knowledge coverage" node tests/unit/leasing_knowledge_coverage.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
 step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js
@@ -291,6 +292,15 @@ if [ "$FAILED" = "0" ]; then
   step "staff-assisted journey (Skyline shape)" env JOURNEY_SHAPE=skyline node tests/e2e/staff_assisted_journey.e2e.js
   step "historical application projections" node tests/proofs/proposed_terms_read_lock.db.js
   step "no-consent two-person journey" node tests/e2e/no_consent_two_person_journey.e2e.js
+  step "two-step leasing: author and execute" node tests/e2e/two_step_leasing.e2e.js
+  #  The operator app is a separate repository; CI has no checkout of it, so
+  #  this rung runs where E2E_APP_ROOT names one (local / release rehearsal)
+  #  and is reported as skipped, by name, everywhere else.
+  if [ -x "${CHROMIUM:-/opt/pw-browsers/chromium-1194/chrome-linux/chrome}" ] && [ -f "${E2E_APP_ROOT:-../property-spine-app}/index.html" ]; then
+    step "browser: two-step execute"  node tests/e2e/two_step_execute.browser.js
+  else
+    echo "── browser: two-step execute          SKIPPED (needs Chromium and E2E_APP_ROOT=<operator app checkout>)"
+  fi
   stop_owned_server || exit 1
   unset E2E_INTAKE_INACTIVE_PROPERTY_ID
 fi

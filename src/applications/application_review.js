@@ -318,6 +318,25 @@ function executionPrimaryAction(app, exec, leaseId, packet) {
   //  the execution as staff_attestation when spine_instrument is the truth.
   //  Found by driving a resident signature and reading what the surface
   //  then told the operator to do.
+  //  ── TWO-STEP LEASING (195) ─────────────────────────────────────────
+  //  The application is still `submitted`: nobody has approved it. The
+  //  resident-side signatures are complete on a packet prepared from the
+  //  acknowledged authored offer. The one remaining act is EXECUTE — the
+  //  authorized human approves the application and signs for the company in
+  //  one deliberate action. Offering "Sign for the Company" here would
+  //  either fail (no approval) or hide the approval inside a signature.
+  if (!leaseId && packet && packet.status === "resident_executed"
+      && app.status === "submitted" && app.application_offer_id
+      && app.application_terms_acknowledged_at
+      && packet.instrument_source_artifact_id
+      && packet.instrument_terms_sha256 && packet.instrument_package_sha256) {
+    return { action: "execute_lease", label: "Approve the application and sign for the company",
+      reason: "The applicant and any guarantor have signed the governing instrument. Executing approves this application and signs for the company in one action; both authorities are required.",
+      method: "POST",
+      endpoint: `/operator/leasing/lease-packets/${packet.id}/execute`,
+      body: { application_decision: "approve" },
+      commercial_decisions_remaining: ["application_approval", "company_signature"] };
+  }
   if (!leaseId && packet && packet.status === "resident_executed"
       && packet.instrument_source_artifact_id
       && packet.instrument_terms_sha256 && packet.instrument_package_sha256) {
@@ -452,6 +471,11 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
       next_action = resolvers.resolveNext(app, gate, {
         confirmation,
         packet,
+        //  Two-step (195): the resolver needs to know whether the applicant
+        //  acknowledged an authored offer to answer a submitted application
+        //  with "prepare / issue / execute" instead of "approve".
+        application_offer: boundOffer ? { id: boundOffer.id, terms_hash: boundOffer.hash,
+          acknowledged_at: app.application_terms_acknowledged_at || null } : null,
         currency_status: currency.status,
         lineage_matches_current_confirmation: packet ? lineageMatches : null,
         //  THE EXECUTION SEAM, ALREADY LOADED HERE.
