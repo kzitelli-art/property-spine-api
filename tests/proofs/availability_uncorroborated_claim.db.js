@@ -212,7 +212,7 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
     console.log(`  targets: ${JSON.stringify(targets)}  303|Room2 target: ${JSON.stringify(evidence.target_303_room2)}  standing: ${JSON.stringify(evidence.standing)}  bucket: ${evidence.rent_roll_bucket_303_room2}  canonical: ${JSON.stringify(evidence.canonical_303_room2)}`);
 
     ok("reads: availability 200, leaseable-units 200, down accepted 201", av.status === 200 && lu.status === 200 && down.status === 201, JSON.stringify([av.status, lu.status, down.status]));
-    ok("the dated position already classifies 303 Room2 as evidence 'uncorroborated', tenancy 'unresolved', basis opening_claim_occupied — the same fields the availability read receives", S["303|Room2"].evidence === "uncorroborated" && S["303|Room2"].tenancy === "unresolved" && S["303|Room2"].basis_type === "opening_claim_occupied", JSON.stringify(S["303|Room2"]));
+    ok("the dated position already classifies 303 Room2 as evidence 'uncorroborated', tenancy 'occupied_terms_not_established', basis opening_claim_occupied — the same fields the availability read receives", S["303|Room2"].evidence === "uncorroborated" && S["303|Room2"].tenancy === "occupied_terms_not_established" && S["303|Room2"].basis_type === "opening_claim_occupied", JSON.stringify(S["303|Room2"]));
     if (parent) {
       ok("(defect) 303 Room2 — source says occupied, Spine holds no lease — is offered marketable_now over HTTP", S["303|Room2"].state === "marketable_now", JSON.stringify(S["303|Room2"]));
       ok("(defect) the application selector lists 303 Room2 as an eligible target over HTTP", targets.includes("303|Room2"), JSON.stringify(targets));
@@ -235,8 +235,8 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
     ok("control: a position with no claim at all is occupancy_unknown", S["305|Room2"].state === "occupancy_unknown");
     ok("control: 304 Room1 stays marketable_now (physical readiness untouched)", S["304|Room1"].state === "marketable_now");
     ok("control: a maintenance-only seat is refused 403 at the availability read", refused.status === 403);
-    ok("reconciliation: unit Rent Roll buckets 303 Room2 'occupied'; standing counts it occupied; the canonical rent roll keeps 'unresolved' on its contractual axis — the claim supports occupancy, nothing supports an offer, and no measure was forced to agree",
-      bucket("303|Room2") === "occupied" && standing.position.occupied === 4 && canonRow("303|Room2").tenancy_state === "unresolved" && canonRow("303|Room2").evidence_state === "uncorroborated", JSON.stringify([bucket("303|Room2"), evidence.standing, evidence.canonical_303_room2]));
+    ok("reconciliation: unit Rent Roll buckets 303 Room2 'occupied'; standing counts it occupied; the canonical rent roll keeps it off 'contractually_occupied' — it reads 'occupied_terms_not_established' on its contractual axis — the claim supports occupancy, nothing supports an offer, and no measure was forced to agree",
+      bucket("303|Room2") === "occupied" && standing.position.occupied === 4 && canonRow("303|Room2").tenancy_state === "occupied_terms_not_established" && canonRow("303|Room2").evidence_state === "uncorroborated", JSON.stringify([bucket("303|Room2"), evidence.standing, evidence.canonical_303_room2]));
     const leasesAfter = await leaseRows();
     evidence.lease_rows = { before: leasesBefore.length, after: leasesAfter.length, identical: JSON.stringify(leasesBefore) === JSON.stringify(leasesAfter) };
     ok("no lease row was created, replaced or changed by any read — 4 rows before, 4 after, every column of every row identical", leasesBefore.length === 4 && leasesAfter.length === 4 && evidence.lease_rows.identical, JSON.stringify(evidence.lease_rows));

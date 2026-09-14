@@ -87,8 +87,32 @@ function publishedSourceBatchSql(alias = "b") {
 //                           when the imported claim is 'unknown' — opening
 //                           evidence being inconclusive does not un-occupy a
 //                           position that has a real lease.
-//   unresolved              no spanning lease, but the opening claim says
-//                           occupied, or says nothing conclusive. NOT vacant.
+//   activation_pending      a lease has COMMENCED but economic tenancy is not
+//                           active. A contractual commitment exists, so the
+//                           bed is spoken for; offering it is the expensive
+//                           mistake. Listed here since 2026-09: the code has
+//                           yielded it for some time while this list said
+//                           four, which is how it reached tenancy_summary
+//                           with no bucket and fourteen positions went
+//                           missing from a lender's column.
+//   occupied_terms_not_established
+//                           no spanning lease, and the opening position
+//                           ACCEPTED this bed as occupied with nothing
+//                           contradicting it. Someone occupies it; the rent,
+//                           term and legal right governing that occupancy
+//                           are not established. NOT vacant, and NOT the
+//                           same as not knowing — see below.
+//   unresolved              no spanning lease and the opening claim says
+//                           NOTHING conclusive, or never settled at all.
+//                           NOT vacant.
+//
+//   ⚠ THESE LAST TWO WERE ONE VALUE, AND MERGING THEM WAS THE DEFECT.
+//   "the claim says occupied" and "the claim says nothing" answer different
+//   questions and send an operator to do different work. Held together they
+//   read to a lender as "we do not know whether anyone lives there" about
+//   beds the operator had explicitly accepted as occupied — 92 of them on
+//   the Skyline shape, reported in the same number as 10 genuinely
+//   unreconciled ones.
 //   vacant                  no spanning lease and the opening claim agrees.
 /*  ── WHICH OCCUPANCY CLAIM ANSWERS FOR THIS POSITION ────────────────
  *  The per-SPACE claim accepted by the established opening position wins
@@ -230,7 +254,32 @@ function tenancyState(p) {
    *  axis is the value most likely to be trusted by a future reader.  */
   if ((p.other_spanning_lease_positions || []).length) return "unresolved";
   if (claim(p._opening_space_claim) === "vacant") return "vacant";
-  return "unresolved";                     // 'occupied' claim, or 'unknown'
+  /*  ── ACCEPTED OCCUPANCY IS NOT "UNRESOLVED" ───────────────────────
+   *  A position the operator explicitly accepted as occupied, with no
+   *  lease on record, read `unresolved` on this axis — which to a lender
+   *  means "we do not know whether anyone lives there". That is not what
+   *  Spine knows. It knows someone occupies the bed, and that the rent,
+   *  term and legal right governing that occupancy are not established.
+   *  The row already said so in `bucket_reason_code`
+   *  (OPENING_OCCUPANCY_ACCEPTED_TERMS_UNKNOWN) and in
+   *  `contractual_terms_state`; the contractual axis was the one place
+   *  still calling it a mystery.
+   *
+   *  `unresolved` KEEPS its meaning for genuinely unreconciled positions —
+   *  an unknown claim, or an opening position that never settled. Two
+   *  different situations, two different words, because the operator sent
+   *  to chase them does different work in each case.
+   *
+   *  The predicate is the SAME ONE the reason code uses: an accepted
+   *  `occupied` claim whose evidence is `uncorroborated` (no lease
+   *  contradicts it, and none supports it either). It is deliberately not
+   *  the `disagrees` branch that shares the reason code — there the
+   *  operator's claim IS contradicted, and calling that accepted would be
+   *  the confident wrong answer this change exists to remove. The proof
+   *  asserts the two sets rather than assuming they coincide.          */
+  if (claim(p._opening_space_claim) === "occupied"
+      && evidenceState(p) === "uncorroborated") return "occupied_terms_not_established";
+  return "unresolved";                     // 'unknown' claim, or unreconciled
 }
 
 /*  ── THE FOUR BUCKETS A RENT ROLL SHOWS ─────────────────────────────

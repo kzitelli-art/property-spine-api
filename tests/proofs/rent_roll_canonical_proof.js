@@ -22,7 +22,11 @@ const DEMO = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { fail++; console.log("   FAIL  " + m); } };
 
-const TENANCY = ["contested", "contractually_occupied", "unresolved", "vacant"];
+//  THE FULL TENANCY VOCABULARY. `activation_pending` and
+//  `occupied_terms_not_established` are states this allowlist must name or a
+//  real row reads as an unknown value.
+const TENANCY = ["contested", "contractually_occupied", "occupied_terms_not_established",
+  "activation_pending", "unresolved", "vacant"];
 const EVIDENCE = ["confirmed", "disagrees", "inconclusive"];
 const ECONOMICS = ["available", "unavailable", "not_applicable"];
 
@@ -72,8 +76,12 @@ const ECONOMICS = ["available", "unavailable", "not_applicable"];
   ok(rr.rows.filter(r => r.evidence_state === "inconclusive")
       .every(r => r.imported_occupancy_claim === null || String(r.imported_occupancy_claim).toLowerCase() === "unknown"),
     "an unknown claim is inconclusive - it contradicts nothing and is never called disagreement");
-  ok(rr.rows.filter(r => r.tenancy_state === "unresolved").every(r => !r.lease),
-    "an imported occupied claim with no spanning lease stays unresolved, never vacant");
+  //  The subject of this assertion is now named `occupied_terms_not_established`;
+  //  both states are checked so the "never vacant" guarantee still covers every
+  //  row it covered before the split.
+  ok(rr.rows.filter(r => r.tenancy_state === "unresolved"
+        || r.tenancy_state === "occupied_terms_not_established").every(r => !r.lease),
+    "an imported occupied claim with no spanning lease is never vacant");
   ok(rr.rows.filter(r => r.tenancy_state === "vacant").every(r => String(r.imported_occupancy_claim).toLowerCase() === "vacant"),
     "vacant requires the opening claim to agree");
 

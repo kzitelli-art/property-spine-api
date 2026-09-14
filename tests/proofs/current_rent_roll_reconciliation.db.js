@@ -699,6 +699,123 @@ const LETTER = ["A", "B", "C"];
         { status: observationResult.status, outcome: observationResult.body && observationResult.body.outcome,
           observation: observationState, pending: pendingState });
     });
+
+    /*  ══ I · THE THREE LENDER-FACING LINES ═════════════════════════════
+     *  Added 2026-09-14. Sections A–H are unchanged; these assertions are
+     *  additive and read the SAME established positions those sections
+     *  produced, on both the bed-basis Skyline shape and the unit-basis
+     *  Other Shape. Nothing is seeded here — a lender line proved against
+     *  fixture SQL written after establishment would be proving the
+     *  fixture, not the read.                                          */
+    await section("I · the three lender-facing lines on the canonical rent roll read", async () => {
+      const { currentRentRoll } = require("../../src/surfaces/rent_roll_canonical.js");
+      const sky = await currentRentRoll(pool, { property_id: F.p });
+      const oth = await currentRentRoll(pool, { property_id: F.other });
+
+      //  ── 1. THE TENANCY SUMMARY BALANCES ───────────────────────────
+      const sums = (rr) => {
+        const t = rr.tenancy_summary;
+        return t.contractually_occupied + t.vacant + t.occupied_terms_not_established
+          + t.unresolved + t.activation_pending + t.contested;
+      };
+      ok("tenancy_summary balances on the bed-basis property (was 146 of 160)",
+        sums(sky) === sky.tenancy_summary.total && sky.tenancy_summary.total === 160,
+        sky.tenancy_summary);
+      ok("tenancy_summary balances on the unit-basis property too — no property-specific branch",
+        sums(oth) === oth.tenancy_summary.total, oth.tenancy_summary);
+      ok("activation_pending is the bucket that was missing, and it is not empty here",
+        sky.tenancy_summary.activation_pending === 14, sky.tenancy_summary);
+
+      //  ── 2. UNVERIFIED REVENUE HAS A MAGNITUDE, COUNTED NOWHERE ────
+      const tne = sky.rows.filter((r) => r.tenancy_state === "occupied_terms_not_established");
+      const claimIds = tne.map((r) => r.basis_ref && r.basis_ref.proposal_id).filter(Boolean);
+      //  Computed from the proposals directly, NOT from the read being
+      //  tested. A total asserted against itself asserts nothing.
+      const independent = await one(
+        `select coalesce(sum((normalized_json->>'rent')::numeric),0)::float8 s,
+                count(*) filter (where normalized_json->>'rent' is null)::int no_rent
+           from proposed_records where id = any($1::uuid[])`, [claimIds]);
+      ok("trusted rent is UNCHANGED by the new line",
+        sky.totals.contractual_rent_trusted === 26350 && sky.totals.positions_contributing_rent === 31,
+        { trusted: sky.totals.contractual_rent_trusted, positions: sky.totals.positions_contributing_rent });
+      ok("claimed_rent_unverified is the sum of the accepted claim rents over exactly the 92 positions",
+        tne.length === 92 && claimIds.length === 92
+          && sky.totals.claimed_rent_unverified === independent.s
+          && sky.totals.positions_with_claimed_rent_unverified === 92,
+        { positions: tne.length, reader: sky.totals.claimed_rent_unverified, independent: independent.s });
+      ok("claimed rent NEVER enters trusted rent, current_rent, or the occupancy numerator",
+        tne.every((r) => r.current_rent === null && !r.contributes_trusted_rent)
+          && sky.totals.confirmed_contractual_occupancy.occupied === 31,
+        { occupied: sky.totals.confirmed_contractual_occupancy.occupied });
+      ok("the unit-basis property carries the same line from its own accepted claim",
+        oth.totals.claimed_rent_unverified != null
+          && oth.totals.positions_with_claimed_rent_unverified >= 1,
+        oth.totals.claimed_rent_unverified);
+
+      /*  A CLAIM WITH NO RENT STAYS NULL AND IS COUNTED SEPARATELY.
+       *  Proved by removing the rent from ONE already-established accepted
+       *  claim and re-reading. This is not fixture SQL manufacturing an
+       *  outcome before a business action — the business action already
+       *  happened, through the doors, in sections A–F; this edits retained
+       *  EVIDENCE to exercise a branch of the READ, and restores it.   */
+      const victim = tne.find((r) => r.basis_ref && r.basis_ref.proposal_id);
+      const vid = victim.basis_ref.proposal_id;
+      const before = await one(`select normalized_json->>'rent' r from proposed_records where id=$1`, [vid]);
+      await q(`update proposed_records set normalized_json = normalized_json - 'rent' where id=$1`, [vid]);
+      const without = await currentRentRoll(pool, { property_id: F.p });
+      const victimRow = without.rows.find((r) => String(r.space_id) === String(victim.space_id));
+      ok("a claim carrying no rent reads claimed_rent null — never 0 — and is counted separately",
+        victimRow.claimed_rent === null
+          && without.totals.positions_claimed_without_rent === 1
+          && without.totals.positions_with_claimed_rent_unverified === 91
+          && without.totals.claimed_rent_unverified === sky.totals.claimed_rent_unverified - Number(before.r),
+        { claimed_rent: victimRow.claimed_rent,
+          without_rent: without.totals.positions_claimed_without_rent,
+          total: without.totals.claimed_rent_unverified });
+      await q(`update proposed_records set normalized_json = jsonb_set(normalized_json,'{rent}',to_jsonb($2::text)) where id=$1`, [vid, before.r]);
+      const restored = await currentRentRoll(pool, { property_id: F.p });
+      ok("and the evidence edit is restored, so this section leaves the read as it found it",
+        restored.totals.claimed_rent_unverified === sky.totals.claimed_rent_unverified
+          && restored.totals.positions_claimed_without_rent === 0,
+        restored.totals.claimed_rent_unverified);
+
+      //  ── 3a. THE CONTRACTUAL AXIS SAYS WHAT THE ROW KNOWS ──────────
+      ok("the 92 accepted occupancies no longer read `unresolved` on the contractual axis",
+        sky.tenancy_summary.occupied_terms_not_established === 92,
+        sky.tenancy_summary);
+      ok("`unresolved` KEEPS its meaning: the 10 genuinely unreconciled positions still read it",
+        sky.tenancy_summary.unresolved === 10
+          && sky.rows.filter((r) => r.tenancy_state === "unresolved")
+               .every((r) => r.evidence_state === "unreconciled"),
+        sky.tenancy_summary.unresolved);
+      /*  MEASURED, NOT ASSUMED. The new state is keyed on an accepted
+       *  `occupied` claim with `uncorroborated` evidence — NOT literally on
+       *  bucket_reason_code, which 12 activation_pending rows also carry.
+       *  Keying on the code would have reclassified beds holding a
+       *  commenced lease and re-broken the balance that finding 1 fixes.  */
+      const byCode = sky.rows.filter((r) => r.bucket_reason_code === "OPENING_OCCUPANCY_ACCEPTED_TERMS_UNKNOWN");
+      ok("the reason code is carried by 12 MORE rows than the new state, and every one is activation_pending",
+        byCode.length === tne.length + 12
+          && byCode.filter((r) => r.tenancy_state !== "occupied_terms_not_established")
+               .every((r) => r.tenancy_state === "activation_pending"),
+        { by_code: byCode.length, by_state: tne.length });
+      ok("the new state stays INSIDE the occupancy denominator and is never vacant",
+        sky.totals.confirmed_contractual_occupancy.of_leasable_resolved === 147
+          && sky.totals.confirmed_contractual_occupancy.reported_beside.occupied_terms_not_established === 92
+          && tne.every((r) => r.tenancy_state !== "vacant"),
+        sky.totals.confirmed_contractual_occupancy);
+      ok("the operating bucket is unchanged — these beds still read Occupied",
+        tne.every((r) => r.bucket === "occupied"), tne[0] && tne[0].bucket);
+
+      //  ── 3b. DATES ARE DATES ───────────────────────────────────────
+      const claims = sky.contested_claims.claims;
+      ok("every contested claim date is ISO, not a weekday string",
+        claims.length > 0
+          && claims.every((c) => (c.start_date === null || /^\d{4}-\d{2}-\d{2}$/.test(c.start_date))
+                              && (c.end_date === null || /^\d{4}-\d{2}-\d{2}$/.test(c.end_date))),
+        claims[0]);
+    });
+
   } finally { await pool.end(); }
 
   current = "completion";

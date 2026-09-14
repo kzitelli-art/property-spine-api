@@ -75,6 +75,14 @@ const ymd = (v) => {
 function statusLabel(r) {
   if (r.tenancy_state === "contested") return "Contested — overlapping leases";
   if (r.is_down) return "Down";
+  /*  ⚠ WITHOUT THIS LINE THE NEW STATE FALLS THROUGH TO "Occupied".
+   *  When `occupied_terms_not_established` was split out of `unresolved`,
+   *  every one of those positions stopped matching the test below and
+   *  reached the final `return "Occupied"` — silently upgrading beds with
+   *  no established rent, term or legal right to plain Occupied on the
+   *  ONE surface a lender reads. Found by grepping every consumer of
+   *  tenancy_state === "unresolved" before the split, not afterwards.  */
+  if (r.tenancy_state === "occupied_terms_not_established") return "Occupied — terms not established";
   if (r.tenancy_state === "unresolved") return "Unresolved occupancy evidence";
   if (r.tenancy_state === "vacant") return "Vacant";
   if (r.economics_state === "unavailable") return "Occupied — rent unavailable";
