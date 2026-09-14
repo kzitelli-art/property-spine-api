@@ -1,0 +1,9 @@
+
+  Connected to the database.  (verify-only)
+
+  ✓ SCHEMA VERIFIED — 186 migrations, all applied. Ledger ceiling 198.
+    (verify-only; applying requires an explicit release)
+    (both directions checked: every file is in the ledger, and every
+     ledger version has its file)
+
+exit=0

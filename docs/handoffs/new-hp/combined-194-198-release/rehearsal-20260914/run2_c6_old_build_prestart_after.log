@@ -1,0 +1,33 @@
+
+  Connected to the database.  (verify-only)
+
+  ✗ LEDGER VERSION MISSING FROM THIS REPOSITORY — refusing to start.
+
+    4 migration(s) are recorded as applied to this
+    database, but this build carries no file for them:
+
+      195  the ledger says: two_step_leasing_authored_offer_basis
+           -> migrations/195_*.sql does not exist in this build.
+
+      196  the ledger says: source_home_identity_review
+           -> migrations/196_*.sql does not exist in this build.
+
+      197  the ledger says: inventory_correction_hardening
+           -> migrations/197_*.sql does not exist in this build.
+
+      198  the ledger says: proposed_source_claim_identity
+           -> migrations/198_*.sql does not exist in this build.
+
+    The database contains changes this codebase cannot describe, so the
+    schema cannot be rebuilt or reviewed, and the number is spent without
+    being visible to anyone allocating the next one.
+
+    Resolve it, do not silence it:
+      · the file exists on an unmerged branch  -> merge it, as 121 was;
+      · the migration was applied by hand      -> commit the file it ran;
+      · it is genuinely historical             -> add a documented entry to
+        DOCUMENTED_LEDGER_ONLY in migrations/ledger_verdict.js, naming the
+        reason and what removes it.
+
+    Nothing was applied.
+
