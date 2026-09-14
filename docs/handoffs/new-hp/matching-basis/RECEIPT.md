@@ -97,7 +97,7 @@ one; it is recorded as an owner decision, not taken.
 
 ## What was proven, and what each green would miss
 
-`tests/proofs/prospect_match_basis.db.js` — **44 passed / 0 failed**, on an
+`tests/proofs/prospect_match_basis.db.js` — **62 passed / 0 failed**, on an
 owned nonce database built from the real migration chain (ledger 198 / 186
 rows) with the owned server answering the real staff door. Registered in
 `tests/e2e/verify_all.sh`.
@@ -109,6 +109,74 @@ rows) with the owned server answering the real staff door. Registered in
   two priced homes and one unpriced, so the ordering rule's later tiebreaks
   (ready date, price) are exercised over a small set; a property with many
   homes differing on each key is not covered.
+
+### Correction round (QB grade, 2026-09-14)
+
+Four items, each its own commit with a first red on the head before it.
+Witnesses under `witness/`.
+
+**The person wall (finding 1).** `witness/person_wall.first_red.txt` — 6
+failed, 2 controls passed. A leasing session at one property asked for a
+prospect known only to another and got **HTTP 200 with the full match
+payload**: the recorded budget, the fact keys, the homes. `person_attributes`
+rows may carry a NULL `property_id` (`prospect_capture.js` writes
+`propertyId || null`), so the read's own OR-null clause made every such
+person visible from every property. The predicate the person card has used
+since 2026-07-25 is now `src/identity/person_property_presence.js` and BOTH
+doors call it — the card no longer carries an inline copy, because two walls
+drift and a wall that drifts has a gap nobody chose. The new door refuses
+rather than filtering: a partial payload would itself disclose that the
+person exists.
+
+**The composer (finding 3) — the grade's mechanism did not reproduce, and
+the truth was worse.** `witness/composer_gather.first_red.txt` — 5 failed.
+Calling `gatherFacts` instead of grepping showed:
+
+```
+questionSubject("which homes fit this prospect") -> leasing_person
+prospect_match gathered? false
+composite_silence: {"state":"QUIET", ...}
+```
+
+The branch was `subject === "leasing" || subject === "match"`.
+`questionSubject` yields **neither** — its leasing vocabulary resolves to
+`leasing_person` — so the branch was unreachable and `prospect_match` was
+registered, gate-green, and never gathered by any question.
+`composite_silence` was therefore *not* polluted, because nothing was
+gathered to pollute it. The predicted ATTENTION flood was real but latent:
+it would have appeared the moment the branch became reachable. Both halves
+are fixed in that order — the branch keys on `leasing_person`, measured from
+the producer; and a term-less projection is `read_state: OK`,
+`truth_state: NOT_ESTABLISHED`, `attention_state: null`, with `why` and
+`needs_from_caller`, because the composer gathers with no term by design and
+Spine must not report attention because Spine did not ask for dates.
+
+**Both directions of readiness (finding, non-blocking).** `violated` was
+proven reachable and nothing else. Now: ready before the month end →
+`satisfied`; the month **containing** the ready date → `satisfied`, so the
+last day counts and an off-by-one cannot quietly refuse a home the prospect
+can have; `"spring"` → `not_established` with
+`recorded_move_month_not_a_month`, never satisfied, with the recorded value
+still shown.
+
+**The gate scans `src/leasing`** (QB ruling on owner decision 2). Four
+domains discovered and declared `pending` with owner and clearing condition.
+None `registered`: the detector proves gathering and today it proves none of
+them. Gate 115/115, 14 domains, 8 registered, 6 pending (was 87/87, 10/8/2).
+
+### Why the two doors' module requirements differ, and why that discloses nothing
+
+The HTTP door requires the **leasing** module; the Ask gather accepts
+**leasing or management**. That asymmetry is deliberate and safe because the
+two carry different things. The door returns the full basis — recorded fact
+values, per-home, with the prospect named by id in the request — and that is
+leasing's business. The projection carries **counts and fact KEYS only, never
+a value and never a record id**, asserted by a UUID scan and by the
+person-wall assertions. A management reader therefore learns how many homes
+satisfy every recorded constraint and how many are unknown on price; it
+learns no prospect's budget and no prospect's identity. If the projection ever
+starts carrying values, the two module lists must be reconciled in the same
+change.
 
 ### A second red, found by re-reading my own delivered code
 
