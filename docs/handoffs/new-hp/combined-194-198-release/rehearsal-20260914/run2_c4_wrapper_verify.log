@@ -1,0 +1,3 @@
+COMBINED MIGRATION 194-198 PREDEPLOY: exact 198 accepted (186 ledger rows); full pin, reviewed hashes, and physical fingerprint verified.
+VERIFY-ONLY: exact 198 verified; no migration was applied.
+exit=0

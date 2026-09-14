@@ -1,0 +1,3060 @@
+
+════════════════════════════════════════════════════════════════
+  PARENT VALIDATION STARTED — source governance
+  56 gates · first failure stops the run and sets the exit code
+  Each gate prints its OWN evidence below, unmodified.
+════════════════════════════════════════════════════════════════
+
+  ▶ GATE INVOKED — gate_harness_isolation.js
+    checks: no new unguarded DATABASE_URL consumer; debt register accurate
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   gate_harness_isolation.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  8 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+  ── inventory, classified by behaviour ──
+     guarded harness                 97
+     approved production tool        27
+     unguarded WRITE-CAPABLE         65
+     unguarded read-only             20
+     harness-var, no same-target check 5
+     guard implementation            1
+     dead / obsolete                 0
+     no direct connection            366
+     scanned                         581
+
+  ── frozen debt register, by PROVISIONAL use (derived from naming) ──
+     analysis         8   (4 write-capable)
+     operational      5   (2 write-capable)
+     proof           57   (45 write-capable)
+     repair           5   (5 write-capable)
+     seed             3   (3 write-capable)
+     unknown          7   (6 write-capable)
+     `use` is provisional; `write` is measured. Confirm use by reading,
+     during remediation — a filename is not evidence.
+
+  ok    no NEW unapproved direct DATABASE_URL consumer
+  ok    the frozen inventory is still accurate (repaired entries removed)
+  ok    every debt-register entry carries path, write-class, use, reason and removal condition
+  ok    register write-classification matches the measured source
+  ok    no NEW script reading HARNESS_DATABASE_URL without a same-target refusal
+  ok    the harness-var register is still accurate (repaired entries removed)
+  ok    every PRODUCTION_APPROVED entry states why it may see production
+
+  ── Slice A merge blockers: 2 of 2 outstanding ──
+     ⚠ tests/proofs/work_order_authority_proof.js — repair and prove before Slice A merges
+     ⚠ tests/proofs/work_order_canonical_path_proof.js — repair and prove before Slice A merges
+  ok    Slice A merge blockers are tracked, not lost
+
+  This gate does NOT claim the frozen inventory is safe. It prevents
+  growth and keeps the debt measurable. Those scripts are CAPABLE of
+  writing to whichever database DATABASE_URL names when run directly —
+  that is an unsafe capability, not evidence any of them has run against
+  production. Remediation is its own governed slice after Slice A.
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 8 run · 8 passed · 0 failed
+  ✓ PASS — gate_harness_isolation.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_harness_isolation.js exited 0
+
+  ▶ GATE INVOKED — gate_ci_path_ssl.js
+    checks: nothing on the CI path hardcodes SSL; the one rule still answers correctly
+
+
+── what the CI path executes ──
+  subjects discovered: server.js, tools/apply_unit_type_mapping.js
+  ✓ the discovery found the server and at least one tool
+
+── none of them decides SSL for itself ──
+  ✓ server.js hardcodes no SSL option
+  ✓ server.js takes its answer from the one rule
+  ✓ tools/apply_unit_type_mapping.js hardcodes no SSL option
+  ✓ tools/apply_unit_type_mapping.js takes its answer from the one rule
+
+── and the rule itself still answers correctly ──
+  ✓ no SSL for <db-url>
+  ✓ no SSL for <db-url>
+  ✓ no SSL for <db-url>
+  ✓ SSL for <db-url>
+  ✓ SSL for <db-url>
+  ✓ SSL for not a url at all
+  ✓ SSL for undefined
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 12 run · 12 passed · 0 failed
+  ✓ PASS — gate_ci_path_ssl.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_ci_path_ssl.js exited 0
+
+  ▶ GATE INVOKED — gate_closure_boundary.js
+    checks: closure boundary
+
+GATE PASS — closure authority created only in server.js, consumed only by the rail, no bypass token, no external terminal-state mutation.
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_closure_boundary.js exited 0
+
+  ▶ GATE INVOKED — gate_no_raw_bridge_joins.js
+    checks: no raw bridge joins
+
+GATE PASS — no raw bridge joins outside staff_identity_resolver.js.
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_no_raw_bridge_joins.js exited 0
+
+  ▶ GATE INVOKED — gate_operator_session_fields.js
+    checks: no req.operator read of a field the staff session does not define
+
+════════════════════════════════════════════════════════════════
+  GATE  gate_operator_session_fields.js
+  checks: no code reads a req.operator field the session lacks
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+  ok    A1  the resolver's null-guard anchor is present
+  ok    A2  the resolved-session return literal is locatable
+  ok    A3  a non-trivial field list was derived (not an empty allowlist)
+        session fields: account_kind, allowed_modules, can_manage_roles, email, global_role, id, name, phone, primary_for_modules, property_id, role, role_title, session_id
+  ok    A4  the scan actually found req.operator reads
+        491 reads scanned · 2 file(s) augment req.operator with their own fields
+  ok    A5  every read names a field the session actually defines
+  ok    A5b the known-debt register is still accurate
+
+        KNOWN, UNREPAIRED (fails safe, tracked):
+          src/identity/operator.js:property_name  (line 1863)
+            why:   guarded `|| null`, so it fails SAFE — the identity-context response has always reported the property name as blank rather than wrong. A field that looks alive and can never populate is still a defect, but it is not an authority or attribution defect and does not belong in the same change as one.
+            until: the response either reads the name from the properties row or drops the key
+  ok    A6  governed maintenance actions receive operatorUserId from req.operator.id
+  ok    A7  and nothing in that file reads the non-existent .user_id
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 8 run · 8 passed · 0 failed
+  ✓ PASS — gate_operator_session_fields.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_operator_session_fields.js exited 0
+
+  ▶ GATE INVOKED — gate_native_tour_scheduler.js
+    checks: one Spine-owned tour-slot command; staff scope and attribution stay server-derived
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   gate_native_tour_scheduler.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  20 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+  ok    one runtime file may insert native tour slots
+  ok    the one slot writer is the canonical service
+  ok    the service requires the governed property timezone
+  ok    the service refuses ambiguous wall-clock timestamps
+  ok    the service walls optional units and hosts to the property
+  ok    the service de-duplicates an exact open or booked slot
+  ok    the history is insert-only through the canonical service
+  ok    the native policy owns hours, duration, notice, holidays, host, and horizon
+  ok    policy publication materializes exact native availability
+  ok    day-level callout commands change only open times
+  ok    agent offers and bookings both enforce the governed notice window
+  ok    the legacy slot door defers to the canonical command
+  ok    the legacy booking door defers to bookTourIntoSlot
+  ok    the legacy booking door owns no tour or slot SQL
+  ok    the staff door derives property scope from the session
+  ok    the staff door derives actor identity from the session
+  ok    the staff door exposes policy, day adjustment, publish, block, reopen, and list
+  ok    server constructs the native service exactly once
+  ok    the same service instance is injected into legacy and staff adapters
+  ok    the public booking page and agent share one offerable-slot reader
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 20 run · 20 passed · 0 failed
+  ✓ PASS — gate_native_tour_scheduler.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_native_tour_scheduler.js exited 0
+
+  ▶ GATE INVOKED — unit/us_federal_holidays.test.js
+    checks: federal holiday closures match the legal and OPM-observed calendar rules
+
+  ok    all eleven OPM 2026 observed dates are closures
+  ok    the legal Saturday Independence Day also closes Skyline tours
+  ok    the day before the observed Independence Day remains open
+  ok    a Sunday legal holiday closes its following observed Monday
+  ok    New Year's observed date can fall in the prior calendar year
+  ok    a normal working date has no holiday closure
+
+6 passed, 0 failed
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/us_federal_holidays.test.js exited 0
+
+  ▶ GATE INVOKED — unit/tour_schedule_ask_spine.test.js
+    checks: dashboard and staff SMS Ask Spine read the same native tour schedule standing
+
+
+TOUR SCHEDULE ASK SPINE
+
+  ok    plain tour availability routes to the native schedule
+  ok    a named person's leasing journey remains person-scoped
+  ok    tour scheduling plus published pricing remains an explicit composition refusal
+  ok    tour schedule entitlement is checked before the read
+  ok    Ask Spine receives the canonical schedule standing without deriving slots
+  ok    booked callout coverage remains visible to the narrator
+  ok    the grounding receipt reports schedule and coverage counts
+  ok    the prompt forbids expanding weekly hours into invented openings
+
+8 passed, 0 failed
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/tour_schedule_ask_spine.test.js exited 0
+
+  ▶ GATE INVOKED — unit/team_access_session_boundary.test.js
+    checks: Team roster, invite and access changes use the signed-in staff boundary without a browser operator key
+
+PASS Team's legacy URLs use one staff-session and property authority boundary.
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/team_access_session_boundary.test.js exited 0
+
+  ▶ GATE INVOKED — gate_migration_137_promotion.js
+    checks: migration 137 DDL is the proven scale payload, unchanged
+
+════════════════════════════════════════════════════════════════
+  GATE  gate_migration_137_promotion.js
+  checks: migrations/137 DDL == the proven scale payload DDL
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+  ok    P1  the proven payload exists
+  ok    P2  the payload still carries the digest the scale proof measured
+  ok    P3  the migration candidate exists
+  ok    N1  the normalised payload is substantial (normalisation did not eat it)
+  ok    N2  the normalised payload retains its statements
+        85 statements · 8417 normalised chars
+  ok    W1  the migration does not issue its own `begin`
+  ok    W2  the migration does not issue its own `commit`
+  ok    E1  same statement count
+  ok    E2  every statement is byte-identical after normalisation
+  ok    E3  the whole normalised body is identical
+  ok    D1  the migration cites the payload path
+  ok    D2  the migration records the proven digest
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 12 run · 12 passed · 0 failed
+  ✓ PASS — gate_migration_137_promotion.js
+
+  The scale proof binds migrations/137. Same DDL, measured at 100k rows.
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_migration_137_promotion.js exited 0
+
+  ▶ GATE INVOKED — unit/migration_release_gate.test.js
+    checks: EXPECTED_LEDGER_CEILING and EXPECTED_SHA are enforced, on Render and off it
+
+
+═══ ITEM 5 — migration release gate ═══
+
+  (using the real migrations/ directory: 186 files, newest 198_proposed_source_claim_identity.sql)
+
+  ok    verify: all applied → starts
+  ok    verify: applied nothing
+  ok    verify: pending migration → refuses to start
+  ok    verify: says the schema does not match the code
+  ok    verify: pending migration was NOT silently applied
+  ok    verify: names the pending migration
+  ok    release: refused without a stated expectation
+  ok    release: refused when the ledger moved since inspection
+  ok    release: refused on a deployed build with no pinned SHA
+  ok    release: refused when the running build is not the authorised one
+  ok    release: refused a sha prefix short enough to match many commits
+  ok    PROPERTY: a branch deploy with a new migration neither migrates nor boots
+  ok    OFF-RENDER: a wrong SHA is refused — this is the case that used to pass silently
+  ok    OFF-RENDER: the refusal names git HEAD as what it compared against
+  ok    OFF-RENDER: nothing was applied on the way to that refusal
+  ok    OFF-RENDER: the exact HEAD sha is ACCEPTED
+  ok    OFF-RENDER: the banner reports the pin as verified, and against what
+  ok    OFF-RENDER: a 12-character abbreviation of the real sha still works
+  ok    OFF-RENDER: omitting EXPECTED_SHA is still allowed
+  ok    OFF-RENDER: …and an unpinned release SAYS it authorised no build
+  ok    OFF-RENDER: a matching sha over MODIFIED tracked files is refused
+  ok    OFF-RENDER: …and the refusal names the file that diverged
+  ok    OFF-RENDER: an untracked file does not block the release
+  ok    HOSTILE: the runner DISCOVERS an untracked migration from the filesystem
+  ok    HOSTILE: an UNPINNED release applies it — the hole, run
+  ok    HOSTILE: a matching sha with an untracked migration on disk is REFUSED
+  ok    HOSTILE: …the refusal NAMES the untracked migration
+  ok    HOSTILE: …and it refuses BEFORE anything is applied
+  ok    HOSTILE: …and the VERIFIED banner is never printed on the way to refusing
+  ok    SCOPE: an untracked NON-migration inside migrations/ does not block the release
+  ok    SCOPE: a tracked subdirectory file of the same NAME does not launder an untracked migration
+  ok    NO BUILD IDENTITY: a pin that cannot be checked is REFUSED, not accepted
+  ok    NO BUILD IDENTITY: …and it says why, in the releaser's terms
+
+  33 passed, 0 failed
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/migration_release_gate.test.js exited 0
+
+  ▶ GATE INVOKED — gate_completion_writers.js
+    checks: exactly the expected work-order completion writers; no third writer
+
+════════════════════════════════════════════════════════════════
+  GATE  gate_completion_writers.js
+  checks: exactly the expected work-order completion writers
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+  ok    S1  the scan found work-order status writers at all
+        3 site(s) that write a terminal or parameterised status
+
+  ok    src/comms/tenant_link.js:1731  parameterised, but the route refuses terminal values
+  ok    src/maintenance/maintenance.js:582  TEMPORARILY LEGACY  ["closed"]
+  ok    src/technician/lifecycle_service.js:245  AUTHORIZED FUTURE WRITER  ["complete"]
+  ok    S2  NO unauthorized completion writer exists
+  ok    S3  the writer register is still accurate
+  ok    S4  the authorized writer records a proof evaluation
+  ok    S5  the legacy writer records NO proof evaluation (it is not canonical)
+  ok    C1  the same-named unit-turn claimCompletion never writes work_orders
+  ok    C2  the canonical claimCompletion has exactly the expected callers
+        canonical callers: ["src/technician/conversation.js"]
+  ok    S6  no module outside the evaluation service inserts evaluations directly
+
+  ── REGISTER ──
+    AUTHORIZED FUTURE WRITER  src/technician/lifecycle_service.js
+      why:   claimCompletion — the one canonical completion transaction: claim, proof evaluation, evaluation→attachment links, status, completed progress event, obligation closure, receipt and actor attribution, all in one transaction
+      until: never — this is the intended end state
+    TEMPORARILY LEGACY  src/maintenance/maintenance.js
+      why:   the app closeout route: status='closed' with completion_photo/completion_note. It writes NO proof evaluation and its photo column holds a stub:// string with no bytes, so it can never be converted into proof (§4.1)
+      until: Step 6 retires the done-path of this route. The route itself survives — closeoutNotDone shares it and is not a completion
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 11 run · 11 passed · 0 failed
+  ✓ PASS — gate_completion_writers.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_completion_writers.js exited 0
+
+  ▶ GATE INVOKED — gate_activation_dormant.js
+    checks: the activation service is present and reachable from nothing
+
+
+══════════════════════════════════════════════════════════════════
+  BOUNDARY 8a · THE ACTIVATION MACHINERY IS DORMANT
+══════════════════════════════════════════════════════════════════
+
+  ok    S1  the activation service exists in this build
+  ok    S2  the scan covers the repository root, not just src/
+        951 .js files total · 368 in the runtime scope
+
+  ok    D1  no runtime file imports the activation service or proof state
+  ok    D2  no runtime file calls an activation entry point by name
+        (comments stripped first — a mention is not a call)
+
+  ok    B1  server.js does not require anything under src/release0/
+  ok    B2  no start/prestart script runs anything under src/release0/ or tools/step7/
+        prestart: node migrations/migrate.js
+        start: node server.js
+
+══════════════════════════════════════════════════════════════════
+  ✓ PASS — 6 passed, 0 failed
+  The code is present and unreachable. Turning the guard on is 8b,
+  and it is a deliberate act against production, not a deploy.
+══════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_activation_dormant.js exited 0
+
+  ▶ GATE INVOKED — gate_property_creation_paths.js
+    checks: exactly the known client/property creation paths; no fifth door
+
+════════════════════════════════════════════════════════════════
+  GATE  gate_property_creation_paths.js
+  checks: one property writer; the known callers; behaviours kept
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+  ok    W1  the scan found property-insert sites at all
+        2 property insert site(s), 1 organization insert site(s)
+
+  ok    src/identity/property_creation_service.js:325  THE WRITER
+  ok    src/shared/no076_failclosed_check.js:40  registered non-route harness
+  ok    W2  NO UNREGISTERED property writer exists (see the UNGOVERNED list below)
+  ok    W3  the canonical writer still writes
+  ok    W4  no076_failclosed_check.js creates only its own '__CB_NO076__' rows
+  ok    W5  NO unregistered organization-creation path exists in src/
+
+  ── CALLERS · each door reaches the service, with an actor ──
+  ok    C   POST /admin/organizations/:id/properties/new
+  ok    C   POST /bank/onboard-property
+  ok    C   POST /owner/properties/create-from-upload
+  ok    C   POST /properties
+  ok    C   POST /deal-intakes/:id/create-property
+  ok    C5  the service's creation-source list and the callers agree exactly
+
+  ── BEHAVIOURS · what the collapse promised to preserve ──
+  ok    B1  owner.js's ALIAS-HIJACK REFUSAL survived the collapse
+  ok    B2  bank_intake's CANONICAL-KEY IDEMPOTENCY survived the collapse
+  ok    B3  deal_intake's TEACH-ON-CREATION survived the collapse
+  ok    B4  identity is derived from the address, or its absence is EXPLAINED
+  ok    B5  the scope rule is enforced in the service, not at the doors
+  ok    B6  both proofs of this path still exist in the tree
+
+  ── REGISTER ──
+    WRITER  src/identity/property_creation_service.js
+    CALLER  POST /admin/organizations/:id/properties/new
+      file:        src/identity/super_admin.js   [super_admin_wizard]
+      actor:       req.operator.id (super-admin staff session)
+      contributes: the organization-bearing hierarchy, and the only live browser caller
+    CALLER  POST /bank/onboard-property
+      file:        src/money/bank_intake.js   [bank_intake]
+      actor:       x-staff-session (added by Build 1A-1; was the shared OPERATOR_KEY)
+      contributes: canonical-key idempotency — the same key is the same property
+    CALLER  POST /owner/properties/create-from-upload
+      file:        src/surfaces/owner.js   [owner_upload]
+      actor:       x-staff-session (added by Build 1A-1; was the shared OPERATOR_KEY)
+      contributes: the alias-hijack refusal, and address→canonical-key derivation
+    CALLER  POST /properties
+      file:        src/baseline/baseline_routes.js   [legacy_properties_route]
+      actor:       x-staff-session (added when the door was finally found)
+      contributes: nothing — a legacy duplicate of the wizard. It is here because Build 0 searched src/ and missed it, and this gate inherited the same blind spot. Collapsed rather than retired: no caller in this repo, but the shared key is held outside it.
+    CALLER  POST /deal-intakes/:id/create-property
+      file:        src/onboarding/deal_intake.js   [deal_intake]
+      actor:       x-staff-session (added by Build 1A-1; was the shared OPERATOR_KEY)
+      contributes: teach-on-creation — observed labels become resolved aliases
+    HARNESS IN src/  src/shared/no076_failclosed_check.js   (prefix __CB_NO076__)
+      why:   standalone migration-matrix proof script; nothing in the product imports it
+      until: RETIRE from src/ — relocate under tests/. Deliberately not moved in Build 1A-1: gate_harness_isolation.js registers it BY PATH and is currently red for unrelated Release 0 reasons, so moving it would tangle this slice's evidence with that one's.
+    ORGANIZATION  POST /admin/organizations   src/identity/super_admin.js
+
+  Audit:   docs/archive/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md
+  Receipt: docs/archive/BUILD_1A1_PROPERTY_CREATION_COLLAPSE.md
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 18 run · 18 passed · 0 failed
+  ✓ PASS — gate_property_creation_paths.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_property_creation_paths.js exited 0
+
+  ▶ GATE INVOKED — gate_insurance_economic_independence.js
+    checks: insurance economics answerable without financing, escrow or payment
+
+
+════════════════════════════════════════════════════════════════
+  GATE      insurance economic independence
+════════════════════════════════════════════════════════════════
+
+  ok    migrations/161_insurance_economic_truth.sql has no financing, escrow or payment dependency
+  ok    migrations/162_insurance_coverage_participation.sql has no financing, escrow or payment dependency
+  ok    src/asset/insurance_program_service.js has no financing, escrow or payment dependency
+  ok    src/asset/insurance_allocation_service.js has no financing, escrow or payment dependency
+  ok    src/asset/insurance_position_read.js has no financing, escrow or payment dependency
+  ok    src/asset/insurance_establishment.js has no financing, escrow or payment dependency
+  ok    src/asset/insurance_document_read.js has no financing, escrow or payment dependency
+  ok    coverage total is generated from premium + taxes + fees + broker fee only
+  ok    the accrual divides by the coverage term, not by a payment count
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 9 run · 9 passed · 0 failed
+  ✓ PASS — insurance economics can be answered without financing.
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_insurance_economic_independence.js exited 0
+
+  ▶ GATE INVOKED — gate_funding_boundary.js
+    checks: economics cannot reach funding; funding cannot author economics (insurance + tax)
+
+════════════════════════════════════════════════════════════════
+  GATE      funding boundary  (structural, both ways, per domain)
+════════════════════════════════════════════════════════════════
+
+── 0. THE DETECTORS ARE TESTED BEFORE THEY ARE USED ──
+  ok    importsOf finds a relative require
+  ok    importsOf finds one reached through a directory hop
+  ok    importsOf ignores a package require
+  ok    importsOf ignores a require inside a COMMENT — a mention is not an edge
+  ok    importsOf ignores one inside a block comment
+  ok    namesTable finds a plain reference
+  ok    namesTable is word-bounded — a longer name is a different table
+  ok    writesTable catches an insert
+  ok    writesTable catches an update
+  ok    writesTable catches a delete
+  ok    writesTable catches an ALTER — funding may not reshape economic schema
+  ok    writesTable catches `alter table if exists`
+  ok    writesTable does NOT trip on a foreign key reference
+  ok    writesTable does NOT trip on a select
+  ok    writesTable does NOT trip on a join
+
+══ EQUITY ═══════════════════════════════════════
+  economic chain : 3/3 present
+  funding chain  : 0/0 present
+  ⚠ no funding files yet — the funding-side checks are VACUOUS.
+
+  ── equity: economics may never import funding ──
+  ok    src/asset/equity_position_service.js reaches no funding module (0 repo files transitively)
+  ok    src/asset/equity_position_read.js reaches no funding module (0 repo files transitively)
+
+  ── equity: economics may not name a funding table ──
+  ok    migrations/174_equity_positions.sql names no funding table
+  ok    src/asset/equity_position_service.js names no funding table
+  ok    src/asset/equity_position_read.js names no funding table
+
+  ── equity: funding may reference economics, never author it ──
+     (nothing to scan — stated above)
+
+  ── equity: the economic derivation's inputs ──
+  ok    src/asset/equity_position_read.js still derives from its own governed terms
+  ok    src/asset/equity_position_read.js imports nothing — it cannot reach funding by any path
+
+══ INSURANCE ═══════════════════════════════════════
+  economic chain : 8/8 present
+  funding chain  : 4/4 present
+
+  ── insurance: economics may never import funding ──
+  ok    src/asset/insurance_program_service.js reaches no funding module (0 repo files transitively)
+  ok    src/asset/insurance_allocation_service.js reaches no funding module (1 repo files transitively)
+  ok    src/asset/insurance_position_read.js reaches no funding module (0 repo files transitively)
+  ok    src/asset/insurance_establishment.js reaches no funding module (6 repo files transitively)
+  ok    src/asset/insurance_document_read.js reaches no funding module (1 repo files transitively)
+  ok    src/asset/insurance_standing.js reaches no funding module (1 repo files transitively)
+
+  ── insurance: economics may not name a funding table ──
+  ok    migrations/161_insurance_economic_truth.sql names no funding table
+  ok    migrations/162_insurance_coverage_participation.sql names no funding table
+  ok    src/asset/insurance_program_service.js names no funding table
+  ok    src/asset/insurance_allocation_service.js names no funding table
+  ok    src/asset/insurance_position_read.js names no funding table
+  ok    src/asset/insurance_establishment.js names no funding table
+  ok    src/asset/insurance_document_read.js names no funding table
+  ok    src/asset/insurance_standing.js names no funding table
+
+  ── insurance: funding may reference economics, never author it ──
+  ok    migrations/163_insurance_funding.sql writes no economic table
+  ok    src/asset/insurance_funding_service.js writes no economic table
+  ok    src/asset/insurance_funding_read.js writes no economic table
+  ok    src/asset/insurance_funding.js writes no economic table
+
+  ── insurance: the economic derivation's inputs ──
+  ok    src/asset/insurance_position_read.js still derives from its own governed terms
+  ok    src/asset/insurance_position_read.js imports nothing — it cannot reach funding by any path
+
+══ TAX ═══════════════════════════════════════
+  economic chain : 5/5 present
+  funding chain  : 4/4 present
+
+  ── tax: economics may never import funding ──
+  ok    src/asset/tax_obligation_service.js reaches no funding module (1 repo files transitively)
+  ok    src/asset/tax_position_read.js reaches no funding module (0 repo files transitively)
+  ok    src/asset/tax_establishment.js reaches no funding module (7 repo files transitively)
+  ok    src/asset/philadelphia_tax_rules.js reaches no funding module (0 repo files transitively)
+
+  ── tax: economics may not name a funding table ──
+  ok    migrations/165_philadelphia_tax_position.sql names no funding table
+  ok    src/asset/tax_obligation_service.js names no funding table
+  ok    src/asset/tax_position_read.js names no funding table
+  ok    src/asset/tax_establishment.js names no funding table
+  ok    src/asset/philadelphia_tax_rules.js names no funding table
+
+  ── tax: funding may reference economics, never author it ──
+  ok    migrations/166_tax_funding.sql writes no economic table
+  ok    src/asset/tax_funding_service.js writes no economic table
+  ok    src/asset/tax_funding_read.js writes no economic table
+  ok    src/asset/tax_funding.js writes no economic table
+
+  ── tax: the economic derivation's inputs ──
+  ok    src/asset/tax_position_read.js still derives from its own governed terms
+  ok    src/asset/tax_position_read.js imports nothing — it cannot reach funding by any path
+
+══ DEBT ═══════════════════════════════════════
+  economic chain : 3/4 present
+  funding chain  : 0/2 present
+  ⚠ no funding files yet — the funding-side checks are VACUOUS.
+
+  ── debt: economics may never import funding ──
+  ok    src/asset/debt_instrument_service.js reaches no funding module (0 repo files transitively)
+  ok    src/asset/debt_position_read.js reaches no funding module (0 repo files transitively)
+
+  ── debt: economics may not name a funding table ──
+  ok    migrations/173_debt_instruments.sql names no funding table
+  ok    src/asset/debt_instrument_service.js names no funding table
+  ok    src/asset/debt_position_read.js names no funding table
+
+  ── debt: funding may reference economics, never author it ──
+     (nothing to scan — stated above)
+
+  ── debt: the economic derivation's inputs ──
+  ok    src/asset/debt_position_read.js still derives from its own governed terms
+  ok    src/asset/debt_position_read.js imports nothing — it cannot reach funding by any path
+
+══ CROSS-DOMAIN ════════════════════════════════════════
+  ok    migrations/174_equity_positions.sql writes no other domain's table
+  ok    src/asset/equity_position_service.js writes no other domain's table
+  ok    src/asset/equity_position_read.js writes no other domain's table
+  ok    migrations/161_insurance_economic_truth.sql writes no other domain's table
+  ok    migrations/162_insurance_coverage_participation.sql writes no other domain's table
+  ok    src/asset/insurance_program_service.js writes no other domain's table
+  ok    src/asset/insurance_allocation_service.js writes no other domain's table
+  ok    src/asset/insurance_position_read.js writes no other domain's table
+  ok    src/asset/insurance_establishment.js writes no other domain's table
+  ok    src/asset/insurance_document_read.js writes no other domain's table
+  ok    src/asset/insurance_standing.js writes no other domain's table
+  ok    migrations/163_insurance_funding.sql writes no other domain's table
+  ok    src/asset/insurance_funding_service.js writes no other domain's table
+  ok    src/asset/insurance_funding_read.js writes no other domain's table
+  ok    src/asset/insurance_funding.js writes no other domain's table
+  ok    migrations/165_philadelphia_tax_position.sql writes no other domain's table
+  ok    src/asset/tax_obligation_service.js writes no other domain's table
+  ok    src/asset/tax_position_read.js writes no other domain's table
+  ok    src/asset/tax_establishment.js writes no other domain's table
+  ok    src/asset/philadelphia_tax_rules.js writes no other domain's table
+  ok    migrations/166_tax_funding.sql writes no other domain's table
+  ok    src/asset/tax_funding_service.js writes no other domain's table
+  ok    src/asset/tax_funding_read.js writes no other domain's table
+  ok    src/asset/tax_funding.js writes no other domain's table
+  ok    migrations/173_debt_instruments.sql writes no other domain's table
+  ok    src/asset/debt_instrument_service.js writes no other domain's table
+  ok    src/asset/debt_position_read.js writes no other domain's table
+
+══ NAVIGATION ═══════════════════════════════════════════
+  ok    src/surfaces/asset_management.js writes no domain table — it navigates, it does not author
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 92 run · 92 passed · 0 failed
+  ✓ PASS — economics cannot reach funding; funding cannot author economics.
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_funding_boundary.js exited 0
+
+  ▶ GATE INVOKED — unit/philadelphia_tax_clocks.test.js
+    checks: Philadelphia tax clocks agree with the City's published schedule
+
+════════════════════════════════════════════════════════
+  PHILADELPHIA TAX CLOCKS — pure, no database
+════════════════════════════════════════════════════════
+
+── 1. THE CITY'S PUBLISHED 2026 U&O SCHEDULE ─────────
+  ok    U&O 2026-01 is due 2026-01-26 — the 25th is a Sunday
+  ok    U&O 2026-02 is due 2026-02-25 — a Wednesday — no shift
+  ok    U&O 2026-03 is due 2026-03-25 — a Wednesday — no shift
+  ok    U&O 2026-04 is due 2026-04-27 — the 25th is a Saturday
+  ok    U&O 2026-05 is due 2026-05-26 — the 25th is Memorial Day
+  ok    U&O 2026-06 is due 2026-06-25 — a Thursday — no shift
+  ok    U&O 2026-07 is due 2026-07-27 — the 25th is a Saturday
+  ok    U&O 2026-08 is due 2026-08-25 — a Tuesday — no shift
+  ok    ⚠ the derivation reproduces EVERY published date with no help
+  ok    a published date says so, so a surface never presents one as derived
+  ok    a month the City has not published to us is marked DERIVED
+  ok    …and the derivation still shifts it — Oct 25 2026 is a Sunday
+  ok    …and Christmas moves December off the 25th entirely
+  ok    ⚠ U&O is SAME-MONTH — July is never due in August
+  ok    …and filing and payment land on the same day, as separate requirements
+
+── 2. NPT: ESTIMATES IN YEAR Y, RETURN IN Y+1 ────────
+  ok    ⚠ the FIRST 2026 estimate is due Apr 15 2026, not 2027
+  ok    ⚠ the SECOND 2026 estimate is due Jun 15 2026, not 2027
+  ok    the 2026 RETURN is due Apr 15 2027 — a year after its estimates
+  ok    …and the 2026 balance rides with the return, not with the estimates
+  ok    the two estimates are DIFFERENT requirements, so one cannot pay the other
+  ok    NPT carries four requirements, spanning two calendar years
+
+── 3. BIRT: THE ESTIMATE RIDES ON THE RETURN ─────────
+  ok    the 2025 return is due Apr 15 2026
+  ok    the 2025 balance is due the same day, as its own requirement
+  ok    ⚠ with NO filer profile the mandatory estimate is NOT invented
+  ok    …and the module SAYS the requirement is unknown rather than absent
+  ok    …and names what would resolve it
+  ok    an ESTABLISHED filer owes the 2026 estimate, due with the 2025 return
+  ok    …and nothing is unknown once the profile is recorded
+  ok    ⚠ a FIRST-YEAR filer owes no estimate at all — the City's relief
+  ok    a SECOND-YEAR filer owes it, and the row can say installments are electable
+  ok    ⚠ balance and estimate are SEPARATE keys, so paying one cannot pay the other
+
+── 4. REAL ESTATE TAX ────────────────────────────────
+  ok    the 2026 bill is due Mar 31 2026 — within its own year
+  ok    it has ONE requirement and nothing is filed
+  ok    …and its amount is governed, so a part payment can be recognised as part
+  ok    2027's Mar 31 is a Wednesday, so nothing shifts
+
+── 5. WHICH PERIODS ARE LIVE ON 2026-08-12 ───────────
+  ok    U&O requires THIS month
+  ok    …and shows last month only if it is established
+  ok    Real Estate requires the current tax year
+  ok    BIRT requires the prior tax year — the one filed this April
+  ok    ⚠ NPT requires BOTH — last year's return and this year's estimates
+  ok    an optional period is never a finding when nothing is established
+
+── 6. U&O IS LIVE; ONLY THE EXEMPTION ENDED ──────────
+  ok    on 2026-08-12 the annual exemption is gone
+  ok    …and the note says the TAX remains active and monthly
+  ok    before 2026 the exemption was available
+
+════════════════════════════════════════════════════════
+  44 assertions · 44 passed · 0 failed
+  ✓ PASS — the clocks agree with the City.
+════════════════════════════════════════════════════════
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/philadelphia_tax_clocks.test.js exited 0
+
+  ▶ GATE INVOKED — unit/tax_document_read.test.js
+    checks: tax document reader: reads real City bills and returns, refuses to guess
+
+════════════════════════════════════════════════════════
+  TAX DOCUMENT READER — real City documents, no database
+════════════════════════════════════════════════════════
+
+── 1. A REAL CITY REAL ESTATE TAX BILL ───────────────
+  ok    the bill is readable
+  ok    ⚠ the OPA number is read despite the label appearing twice
+  ok    the tax year comes from the bill's own masthead
+  ok    the due date is read through the weekday that precedes it
+  ok    the amount is the AMOUNT TO PAY, not the pre-reduction figure
+  ok    …which matters: the bill also prints $2,015,129.68 before reductions
+  ok    nothing on the bill was left unread
+  ok    the receipt tells the operator to check every field before confirming
+  ok    ⚠ the ASSESSMENT is not proposed — its labels and values are separated
+
+── 2. A REAL FILED BIRT RETURN ───────────────────────
+  ok    the return is readable
+  ok    the Philadelphia tax ID is read
+  ok    the tax year comes from the filing period, not the submission date
+  ok    ⚠ the SUBMITTED date is read — the one an operator hunts for
+  ok    ⚠ $0.00 is read as a real figure, not discarded as falsy
+  ok    ⚠ the MANDATORY next-year estimate is proposed as its OWN field
+  ok    …because it satisfies a DIFFERENT requirement from the balance
+  ok    a return proposes no DUE DATE, because it does not carry one
+
+── 3. WHAT IT REFUSES TO PROPOSE ─────────────────────
+  ok    ⚠ NO document kind may propose applicability, a basis or a filer profile
+  ok    a clearance certificate proposes nothing at all
+  ok    …and says why, rather than looking broken
+  ok    …even though the text it was given contained a money figure
+  ok    an appeal document proposes nothing, and says an appeal changes nothing owed
+  ok    an unreadable document is honest about it
+  ok    …and still names every field it would have wanted
+  ok    a document with none of the labels proposes nothing
+  ok    …but Spine says it DID read it, unlike a kind it never opens
+  ok    …and tells the operator to enter what it says
+
+── 4. THE PARSERS REFUSE WHAT THEY CANNOT BE SURE OF ──
+  ok    ⚠ an ambiguous numeric date is refused — 03/04/2026 is two dates
+  ok    an ISO date is accepted
+  ok    the City's DD-Mon-YYYY is accepted
+  ok    a written month is accepted through a leading weekday
+  ok    a bare integer is not money — 'Line 4' is not $4.00
+  ok    …but $0.00 is
+  ok    a short number is not an account identifier
+  ok    …a nine-digit OPA number is
+
+════════════════════════════════════════════════════════
+  35 assertions · 35 passed · 0 failed
+  ✓ PASS — it reads what the City wrote, and refuses the rest.
+════════════════════════════════════════════════════════
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/tax_document_read.test.js exited 0
+
+  ▶ GATE INVOKED — unit/prospect_vitals_failure.test.js
+    checks: prospect preferences: failed lookup is not empty or legacy fallback
+
+PASS prospect vitals: failure distinct from empty; active correction over legacy; literal zero; scoped reads; text preserved
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/prospect_vitals_failure.test.js exited 0
+
+  ▶ GATE INVOKED — unit/conversation_intent_extraction.test.js
+    checks: intent seam: one implementation, transport-independent, behaviour pinned
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   conversation_intent_extraction.test.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  34 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+── EXTRACTION IDENTITY ─────────────────────────────────────
+  ok    every extracted line (78) appears verbatim in the tenant_link original
+
+── ONE IMPLEMENTATION ──────────────────────────────────────
+  ok    tenant_link keeps NO local classifyMessage
+  ok    tenant_link keeps NO local recognizeAnswer
+  ok    tenant_link keeps NO local classification vocabulary
+  ok    tenant_link keeps NO local emergency/sensitive patterns
+  ok    tenant_link DELEGATES to the shared module
+
+── TRANSPORT INDEPENDENCE ──────────────────────────────────
+  ok    no provider/transport import (twilio)
+  ok    no HTTP framework import (express)
+  ok    no database driver import (pg)
+  ok    no database access at all
+  ok    no session or cookie handling
+  ok    no environment reach — dependencies are injected
+  ok    does not write work orders
+  ok    does not assign priority or order work
+  ok    does not authorize actors
+  ok    does not mark completion
+
+── BEHAVIOUR · no model available ──────────────────────────
+  ok    no model → classification 'unknown'
+  ok    no model → needs_human TRUE (never guessed onto a work order)
+  ok    no model → confidence 0, not invented
+  ok    no model → no summary or title fabricated
+  ok    no model → recognizeAnswer is 'unclear'
+
+── BEHAVIOUR · hard overrides ──────────────────────────────
+  ok    hard emergency overrides a calm model verdict
+  ok    hard emergency forces needs_human
+  ok    sensitive language forces needs_human even when the model is confident
+  ok    sensitive language does NOT fabricate an emergency
+  ok    an ordinary message keeps the model's verdict
+  ok    a model-called emergency also forces needs_human
+
+── BEHAVIOUR · trade inference when the model is silent ────
+  ok    hard emergency infers trade 'plumbing' from the words
+  ok    hard emergency infers trade 'electric' from the words
+  ok    hard emergency infers trade 'heat_ac' from the words
+  ok    hard emergency infers trade 'lock_key' from the words
+  ok    an emergency with no trade keyword stays 'other', not guessed
+
+── BEHAVIOUR · vocabularies did not drift in the move ──────
+  ok    an off-vocabulary field_category clamps to 'other'
+  ok    a non-numeric confidence becomes 0
+  ok    summary is bounded to 200
+  ok    suggested title is bounded to 80
+  ok    the eleven field categories survived the move
+  ok    the four answer verdicts survived the move
+
+── BEHAVIOUR · answer recognition ──────────────────────────
+  ok    recognises 'answers_question'
+  ok    recognises 'separate_problem'
+  ok    recognises 'both'
+  ok    recognises 'unclear'
+  ok    an unrecognised verdict fails soft to 'unclear'
+recognizeAnswer failed (preserving and flagging): model unavailable (deliberate)
+  ok    a model error fails soft to 'unclear', never a guess
+classify AI failed (degrading to human queue): model unavailable (deliberate)
+  ok    a model error during classification degrades to the human queue
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 45 run · 45 passed · 0 failed
+  ✓ PASS — conversation_intent_extraction.test.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/conversation_intent_extraction.test.js exited 0
+
+  ▶ GATE INVOKED — unit/conversation_clarification_and_receipt.test.js
+    checks: clarification + receipt seams: wording unchanged, operating ≠ delivery
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   conversation_clarification_and_receipt.test.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  150 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+── 1. RESIDENT WORDING — UNCHANGED BY THE EXTRACTION ───────
+  ok    hold · ambiguous open set
+  ok    hold · unrecognized answer
+  ok    hold · not actionable — same wording as an unrecognized answer
+  ok    hold · answer to a question already resolved — DIFFERENT opening word, preserved
+  ok    the two hold wordings are genuinely different (a copy-paste would pass everything above)
+  ok    append · escalated to emergency
+  ok    append · resolved as regular (carries the unit label)
+  ok    append · unresolved
+  ok    append · already emergency falls to the same neutral wording
+  ok    opened · emergency
+  ok    opened · needs confirmation (carries the governed question verbatim)
+  ok    opened · regular (category read BACK from the committed row)
+  ok    opened · underscore category becomes a slash, exactly once
+  ok    opened · missing category falls back to 'maintenance'
+  ok    opened · no lease place → 'your unit'
+  ok    balance · not loaded
+  ok    balance · paid up, with rent
+  ok    balance · owed, no rent on file
+  ok    balance · rent of '0.00' still prints (raw-string truthiness preserved)
+  ok    balance · numeric rent of 0 does NOT print (same test, different type — as before)
+  ok    all 13 resident sentences exist verbatim in bf84eb4 (nothing was reworded)
+  ok    the pre-extraction source is genuinely the pre-extraction source
+
+── 2. ONE IMPLEMENTATION — NO DUPLICATED LOGIC IN TENANTLINK 
+  ok    the conversational region was located for inspection
+  ok    the conversational path keeps NO copy of any of the 7 fixed resident sentences
+  ok    nor any of the 7 interpolated sentence templates
+  ok    tenant_link keeps NO local clarification ladder
+  ok    tenant_link keeps NO local §7.4 confirmation override
+  ok    every read of the wire result builds a delivery receipt and nothing else
+  ok    tenant_link IMPORTS the clarification seam and CALLS it
+  ok    tenant_link IMPORTS the receipt seam and CALLS all three composers
+  ok    clarification.js requires NOTHING — no transport, no database, no model
+  ok    receipt.js requires NOTHING — no transport, no database, no model
+  ok    the conversation seam directory holds exactly the extracted seams
+
+── 3. CLARIFICATION — WHAT IT MAY NEVER DO ─────────────────
+  ok    never reads a person identifier — obligations.person_id cannot be mistaken for the reporter
+  ok    tenant_link's pending-clarification query is still NOT keyed on obligations.person_id
+  ok    never touches authority, roles, staff or entitlement
+  ok    holds no property list and performs no lookup
+  ok    no decision carries an actor, a person or an authority field
+
+── 4. CLARIFICATION LADDER — EVERY BRANCH ──────────────────
+  ok    an UNDELIVERED question holds for a human, never proposes new work
+  ok    ...and says a human is required — this module's own call
+  ok    ...naming the fact it does not have
+  ok    ...and proposes nothing to append to
+  ok    a DELIVERED question still wins — the reply is read against it
+  ok    neither delivered nor undelivered is still the prior-resolution question
+  ok    omitting `undelivered` entirely keeps the old behaviour
+  ok    an unreadable undelivered set is REFUSED, not treated as none
+  ok    every failed delivery state holds identically
+  ok    the seam declares 5 hold states, and they were found in source
+  ok    EVERY hold state the seam can produce composes a receipt — no hold is silent
+  ok    more than one outstanding → ambiguous_open_set
+  ok    more than one outstanding → hold, never a choice
+  ok    more than one outstanding → names the missing fact
+  ok    more than one outstanding → this module positively requires a human
+  ok    exactly one outstanding → no terminal action yet
+  ok    exactly one outstanding → names the determination the caller must perform
+  ok    exactly one outstanding → hands back the EXACT question we asked
+  ok    answers_question → append to the existing work order
+  ok    answers_question → the target is the caller's OWN row, by identity
+  ok    answers_question → does NOT decide the human question (the service does)
+  ok    separate_problem → propose new work, with no target
+  ok    verdict "both" → hold, never an action on a record
+  ok    verdict "unclear" → hold, never an action on a record
+  ok    verdict "" → hold, never an action on a record
+  ok    verdict null → hold, never an action on a record
+  ok    verdict undefined → hold, never an action on a record
+  ok    verdict "ANSWERS_QUESTION" → hold, never an action on a record
+  ok    verdict "yes" → hold, never an action on a record
+  ok    verdict 1 → hold, never an action on a record
+  ok    verdict {} → hold, never an action on a record
+  ok    with a clarification outstanding, ONLY separate_problem can propose new work
+  ok    nothing outstanding → the prior-resolution check is named, not skipped
+  ok    nothing outstanding + a question already settled → hold, not a new request
+  ok    nothing outstanding + nothing settled → the ordinary path
+  ok    every decision is frozen — a caller cannot edit the verdict it was handed
+  ok    every terminal state is declared in the published vocabulary
+  ok    every action is declared in the published vocabulary
+
+── 5. STALE OR MISMATCHED CONTEXT — FAILS HONESTLY ─────────
+  ok    a row from ANOTHER property is refused, not silently dropped
+  ok    a row with nothing to append to is refused
+  ok    a malformed row is refused
+  ok    an unreadable open set is NOT an empty open set
+  ok    no scope → refusal; clarification state is never evaluated outside a property scope
+  ok    a mismatched row never degrades into propose_new_action
+  ok    an outstanding question we cannot quote (null) → hold, never judged
+  ok    an outstanding question we cannot quote (undefined) → hold, never judged
+  ok    an outstanding question we cannot quote ("") → hold, never judged
+  ok    an outstanding question we cannot quote ("   ") → hold, never judged
+  ok    an outstanding question we cannot quote (42) → hold, never judged
+  ok    step 2a cannot be called out of order
+  ok    step 2b cannot be called out of order
+  ok    step 2a refuses a terminal decision as its input
+
+── 6. DUPLICATE ANSWERS DO NOT DUPLICATE THE CANONICAL ACTION 
+  ok    first answer appends to the existing work order
+  ok    the same answer arriving again reaches NO action on its own
+  ok    with the question already settled, the duplicate is held — no second work order
+  ok    an unperformed prior-resolution check is refused, not read as 'no'
+  ok    skipping the check leaves NO action to take (step 1 alone proposes nothing)
+
+── 7. CONSEQUENTIAL INTERPRETATION — §7.4 ──────────────────
+  ok    model says emergency, classifier found no type → confirmation, NOT an invented emergency
+  ok    ...and it asks something
+  ok    ...and the classifier's basis passes through untouched
+  ok    ...and it is marked as requiring confirmation
+  ok    a classifier-established emergency stands, with its type
+  ok    an existing clarifying question is NOT replaced by the default
+  ok    a routine maintenance reading is left alone
+  ok    an emergency with no type is refused rather than passed to the service
+  ok    a confirmation that asks nothing is refused
+  ok    a confirmation asserting the very type it is unsure of is refused
+  ok    no urgency input at all is refused
+  ok    over 12 real reports × 2 classifications, no emergency is ever typeless and no confirmation ever silent
+
+── 8. RECEIPT — PURE OVER THE COMMITTED RESULT ─────────────
+  ok    the resident's message cannot be smuggled in as 'body'
+  ok    the resident's message cannot be smuggled in as 'message'
+  ok    the resident's message cannot be smuggled in as 'inbound'
+  ok    the resident's message cannot be smuggled in as 'text'
+  ok    the resident's message cannot be smuggled in as 'classification'
+  ok    the resident's message cannot be smuggled in as 'personId'
+  ok    the resident's message cannot be smuggled in as 'smsSid'
+  ok    nor hidden inside context
+  ok    nor inside the committed result
+operatingReceipt: committed work order <id-5> is "regular" but the governing decision was "emergency" — describing the committed row and flagging for a human.
+  ok    a committed row that differs from the decision is described AS COMMITTED
+  ok    ...and the divergence is stated, not swallowed
+  ok    ...and it forces a human
+  ok    an idempotent create is reported as deduped, not as created
+  ok    a needs_confirmation open IS a question to the resident
+  ok    an append that leaves the work order unconfirmed is NOT a question we asked
+  ok    the service's human verdict is reported in BOTH directions
+  ok    only a durable write reports itself as committed
+  ok    an unknown outcome is refused outright
+  ok    every operating receipt is frozen
+
+── 9. A REFUSED CANONICAL WRITE PRODUCES NO SUCCESS RECEIPT 
+  ok    a create that returned nothing → nothing is said (text null, refusal 'no_committed_object')
+  ok    a create that returned no work order → nothing is said (text null, refusal 'no_committed_object')
+  ok    a create whose row has no id → nothing is said (text null, refusal 'no_committed_object')
+  ok    a create with no governing decision → nothing is said (text null, refusal 'no_governing_decision')
+  ok    a confirmation with nothing to ask → nothing is said (text null, refusal 'confirmation_without_question')
+  ok    an append that returned nothing → nothing is said (text null, refusal 'no_committed_object')
+  ok    an append whose row has no id → nothing is said (text null, refusal 'no_committed_object')
+  ok    a hold with an unrecognised reason → nothing is said (text null, refusal 'unknown_hold_reason')
+  ok    tenant_link REFUSES to proceed on a refused receipt, rolling the claim back
+
+── 10. OPERATING ≠ DELIVERY — THE LOAD-BEARING SEPARATION ──
+  ok    a transport failure does not revise the operating receipt
+  ok    ...and the delivery failure is separately visible, with its reason
+  ok    A PROVIDER SID DOES NOT MAKE A MESSAGE DELIVERED
+  ok    ...nor does it say anything about the operating action
+  ok    A DELIVERED MESSAGE DOES NOT MAKE AN OPERATING ACTION HAPPEN
+  ok    delivered is derived from the state alone
+  ok    not_attempted is neither delivered nor failed
+  ok    an unexplained failure is refused
+  ok    'nothing happened' cannot carry evidence that something did
+  ok    an unknown delivery state is refused
+  ok    the composed receipt has EXACTLY two keys
+  ok    no merged verdict field exists at any level
+  ok    the composed receipt is frozen against acquiring one
+  ok    a hand-built object cannot pose as an operating receipt
+  ok    a hand-built object cannot pose as a delivery receipt
+  ok    a delivery receipt cannot be passed as the operating one
+  ok    neither half may be omitted
+  ok    nothing else may ride along in the composition
+  ok    the SMS door composes a delivery receipt from the wire result
+  ok    the portal door states not_attempted rather than implying delivery
+
+── 11. WORK-ORDER WRITES STAY IN THE CANONICAL SERVICE ─────
+  ok    work orders are CREATED in exactly one place — the canonical service
+  ok    no NEW unexplained direct work-order updater appeared (register pinned at 5 files)
+  ok    neither conversational seam contains SQL of any kind
+  ok    processInboundClaim was located for inspection
+  ok    processInboundClaim issues NO SQL of its own
+  ok    processInboundClaim reaches work orders ONLY through the canonical service
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 161 run · 161 passed · 0 failed
+  ✓ PASS — conversation_clarification_and_receipt.test.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/conversation_clarification_and_receipt.test.js exited 0
+
+  ▶ GATE INVOKED — unit/technician_work_selection.test.js
+    checks: technician: identity, scope, eligibility, replay, cross-property refusal
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   technician_work_selection.test.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  68 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+── 1. IDENTITY — NO ACTOR, NO WORK ─────────────────────────
+  ok    no actor at all is refused
+  ok    an actor with no user id is refused
+  ok    an actor with no organization is refused — the line established it and the scope must state it
+  ok    an ABSENT scope is not an open scope
+  ok    an EMPTY scope offers nothing rather than everything
+  ok    an unreadable candidate set is not an empty one
+  ok    acceptance eligibility refuses the same partial actors
+
+── 2. ELIGIBILITY — EACH REFUSAL NAMED ─────────────────────
+  ok    somebody else's obligation is not mine to see
+  ok    an unassigned obligation is not mine either
+  ok    an obligation about something other than a work order
+  ok    a work-order obligation with no work order
+  ok    a completed obligation is not actionable
+  ok    an escalated obligation is not actionable
+  ok    an open obligation IS offerable
+  ok    work already in progress stays visible to its owner
+  ok    every refusal reason is in the published vocabulary
+  ok    having candidates but none offerable is stated separately from having none
+  ok    nothing is dropped silently — every refused row is reported with a reason
+  ok    results are frozen
+  ok    a malformed candidate row is refused, not skipped
+
+── 3. CROSS-PROPERTY REFUSAL ───────────────────────────────
+  ok    a building this technician does not work at is refused by name
+  ok    ...and it is refused for ACCEPTANCE too, not only for display
+  ok    assignment to one property does not carry to a sibling
+  ok    the actor's own two properties both resolve
+  ok    the module reaches for no data source of its own
+  ok    the module never reads an organization's property list
+
+── 4. SELECTION — THEY MUST NAME IT ────────────────────────
+  ok    no work at all is said as such
+  ok    ONE offerable item is still not selected without a reference
+  ok    ...nor with an empty reference
+  ok    naming a work order selects exactly it
+  ok    naming an obligation selects exactly it
+  ok    naming something that is not theirs to take is NOT 'you have no work'
+  ok    naming two things is two selections, and is refused
+  ok    a reference matching more than one is ambiguous, never a pick
+  ok    an unreadable offer set is refused
+  ok    every selection outcome is in the published vocabulary
+  ok    no ordinal reference exists to be exploited
+
+── 5. ACCEPTANCE ELIGIBILITY AND REPLAY SAFETY ─────────────
+  ok    an open obligation assigned to me at my property is acceptable
+  ok    somebody else's is refused
+  ok    a non-work-order obligation is refused
+  ok    accepting my own accepted work again is a NO-OP, not an error
+  ok    work somebody else already accepted is a genuine conflict
+  ok    ...and a conflict is never reported as a no-op
+  ok    in-flight work with no acceptance record is refused as not_open
+  ok    completed work is refused before anything else is considered
+  ok    the ownership check runs BEFORE the acceptance check — someone else's accepted work is first of all not mine
+  ok    every verdict is in the published vocabulary
+  ok    no verdict is both ineligible and silent — an ineligible verdict is always named
+
+── 6. THE CANONICAL WRITE — ONE PLACE, SERVER-DERIVED ──────
+  ok    work-order acceptance is written in exactly one place
+  ok    no acceptance write escapes an UPDATE the scan can resolve to a table
+  ok    every OTHER table carrying an accepted_by_user_id write is named, not hidden
+  ok    the service does not re-implement eligibility — it imports the proven module
+  ok    the service DERIVES the actor's scope instead of accepting it
+  ok    the service locks the row before deciding anything
+  ok    the UPDATE is itself guarded on the state it believes it is changing
+  ok    a concurrent duplicate is converted to a replay, not an error
+  ok    an immutable history row is written
+  ok    the service sends nothing
+  ok    the service does not touch the free-text work_orders.assigned_to column
+
+── 7. MIGRATION 131 — WHAT IT MAKES UNEXPRESSABLE ──────────
+  ok    acceptance and its time move together
+  ok    the accepter IS the owner — 'accepted by Dana, assigned to Sam' cannot exist
+  ok    accepted work is never open work
+  ok    a key without an acceptance cannot be stored
+  ok    one acceptance per inbound message, enforced by the DATABASE
+  ok    every column added is nullable, so no existing obligation changes meaning
+  ok    it does NOT lift the Slice A outbound ban
+  ok    it is transactional
+  ok    exactly one file claims 131
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 68 run · 68 passed · 0 failed
+  ✓ PASS — technician_work_selection.test.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/technician_work_selection.test.js exited 0
+
+  ▶ GATE INVOKED — unit/ask_spine_answer.test.js
+    checks: Ask Spine: answers only from reads, names them, and an outage never reads as good news
+
+
+══════════════════════════════════════════════════════════════════
+  ASK SPINE · SLICE 2 — honesty properties
+══════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+  ok    A1  no server-derived property_id → it THROWS rather than answering
+  ok    U1  with NO model client, the outcome is `unavailable`
+  ok    U2  …and it says the assistant is unreachable, not that nothing is happening
+  ok    U3  …and it carries NO grounding, because it read nothing
+ask-spine/answer model error model down
+  ok    U4  when the model THROWS, the outcome is `unavailable` — not a guess
+  ok    U5  an EMPTY model response is `unavailable`, not a blank answer
+  ok    Q1  an empty question is out_of_scope and never reaches the model
+  ok    Q2  an oversized question is refused with a sayable reason
+  ok    G1  a normal question is `answered`
+  ok    G2  …and the answer carries what it was grounded on
+  ok    G3  the model was given the FACTS bundle and the question, in one message
+  ok    R1  the answer carries a references array
+  ok    R2  …and the FACTS given to the model contain NO record ids
+  ok    G4  …and the final model envelope keeps the server-derived property identifier server-side
+  ok    S1  the system prompt forbids answering from anything but the facts
+  ok    S2  …forbids claiming actions it cannot take
+  ok    S3  …requires a failed read to be named, not reported as nothing
+  ok    S4  …allows 'nothing is open' as a real answer without manufacturing concern
+  ok    S5  …bans the internal vocabulary from reaching a human
+  ok    S6  …keeps assignment and acceptance distinct
+  ok    C1  a rental-license question selects the Compliance reader
+  ok    C2  a work-order plus Compliance question refuses composition
+  ok    C3  Compliance without Asset Management entitlement is distinct
+  ok    C4  an unauthorized Compliance question reaches neither reader nor model
+  ok    C5  unsolved cross-domain composition has its own outcome
+  ok    C6  the reader receives only server-derived property authority
+  ok    C7  Compliance questions gather no work or resident facts
+  ok    C8  the model receives standing, why, evidence, unresolved and next
+  ok    C9  opaque record ids and opener tokens never reach the model
+  ok    C10 the model knows which opener roles the interface will render
+  ok    C11 the answer returns both server-minted Compliance opener classes
+  ok    C12 grounding names the governed reader and unsolved composition state
+  ok    C13 the prompt preserves standing, attention and renewal distinctions
+  ok    C14 a failed Compliance read is named, never shaped as not established
+  ok    B1  a model verdict of out_of_scope is returned AS out_of_scope
+  ok    B2  …and the refusal is the SERVER's words, not the model's
+  ok    B3  …and the refusal names what CAN be asked
+  ok    B4  …and it carries no grounding, having answered from nothing
+ask-spine/answer: model did not return a valid decision
+  ok    B5  a PROSE reply is `unavailable`, never `answered`
+ask-spine/answer: model did not return a valid decision
+  ok    B6  an outcome the contract does not define is `unavailable`
+  ok    B7  `answered` with an empty body is `unavailable`, not a blank answer
+  ok    B8  the system prompt and the refusal quote the SAME scope constant
+  ok    B9  …and the prompt names the off-limits topics explicitly
+  ok    B10 …and out_of_scope is reserved for OFF-SUBJECT questions only
+  ok    B10b …and an on-subject question with nothing to report is still answered
+  ok    B10c …and it is still forbidden from inventing one to fill the gap
+  ok    B11 the conversation ENDS on the user turn — a prefill is a 400
+  ok    B11b …and the shape is enforced by a json_schema, not coaxed by prose
+  ok    B11c …and the schema pins BOTH outcomes by name, and admits no others
+  ok    B11d …and `grounded_on` is NOT the model's to supply
+  ok    F1  a read that failed is NAMED in the facts given to the model
+  ok    F2  …and the failed read does NOT appear as an empty result
+  ok    W1  the answer service contains no insert, update or delete
+  ok    W2  …and it hands the model no tools
+
+══════════════════════════════════════════════════════════════════
+  ✓ PASS — 54 passed, 0 failed
+  It answers from reads, names what it read, and says plainly when
+  it cannot answer. An outage never arrives shaped like good news.
+══════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/ask_spine_answer.test.js exited 0
+
+  ▶ GATE INVOKED — unit/skyline_ask_spine_sms_matrix.test.js
+    checks: Skyline Ask Spine: dashboard and SMS share routing, entitlement, signer, and identifier-firewall behavior
+
+
+  ── subject routing, real functions ──
+  ok    subject "What should I focus on?" → work
+  ok    subject "Where does Jane's application stand?" → leasing_person
+  ok    subject "Did the resident sign?" → leasing_person
+  ok    subject "Did the guarantor sign?" → leasing_person
+  ok    subject "Has Skyline countersigned?" → leasing_person
+  ok    subject "has Skyline signed Jane's lease" → leasing_person
+  ok    subject "What is holding this lease up?" → leasing_person
+  ok    subject "What does the applicant need to do next?" → leasing_person
+  ok    subject "Which unit or bed is this applicant pursuing" → leasing_person
+  ok    subject "What happened after yesterday's tour?" → leasing_person
+  ok    subject "When is my next tour?" → tour_schedule
+  ok    subject "What needs my attention?" → work
+  ok    subject "upcoming tour availability" → tour_schedule
+  ok    subject "What is our debt service on this property?" → debt
+  ok    subject "How many beds do we have, and what is the lo" → composition_unavailable
+  ok    subject "What is the weather tomorrow?" → work
+  ok    subject "Where do Jane's and Marcus's applications st" → leasing_person
+  ok    subject "Which signer is still outstanding?" → leasing_person
+  ok    subject "What is the asking rent for a 1 bedroom?" → economics
+  ok    subject "What do we charge for security deposits?" → economics
+  ok    subject "How many beds are occupied right now?" → tenancy
+  ok    subject "How many beds are vacant?" → tenancy
+  ok    subject "What work orders are assigned to me?" → work
+
+  ── SMS router agrees with the composer (no surface-specific logic) ──
+  ok    route "What should I focus on?" → ask_spine
+  ok      and its subject equals the dashboard's for "What should I focus on?"
+  ok    route "Where does Jane's application stand?" → ask_spine
+  ok      and its subject equals the dashboard's for "Where does Jane's application stan"
+  ok    route "Did the resident sign?" → ask_spine
+  ok      and its subject equals the dashboard's for "Did the resident sign?"
+  ok    route "Did the guarantor sign?" → ask_spine
+  ok      and its subject equals the dashboard's for "Did the guarantor sign?"
+  ok    route "Has Skyline countersigned?" → ask_spine
+  ok      and its subject equals the dashboard's for "Has Skyline countersigned?"
+  ok    route "has Skyline signed Jane's lease" → ask_spine
+  ok      and its subject equals the dashboard's for "has Skyline signed Jane's lease"
+  ok    route "What is holding this lease up?" → ask_spine
+  ok      and its subject equals the dashboard's for "What is holding this lease up?"
+  ok    route "What does the applicant need to do next?" → ask_spine
+  ok      and its subject equals the dashboard's for "What does the applicant need to do"
+  ok    route "Which unit or bed is this applicant purs" → ask_spine
+  ok      and its subject equals the dashboard's for "Which unit or bed is this applican"
+  ok    route "What happened after yesterday's tour?" → ask_spine
+  ok      and its subject equals the dashboard's for "What happened after yesterday's to"
+  ok    route "When is my next tour?" → ask_spine
+  ok      and its subject equals the dashboard's for "When is my next tour?"
+  ok    route "What needs my attention?" → ask_spine
+  ok      and its subject equals the dashboard's for "What needs my attention?"
+  ok    route "upcoming tour availability" → ask_spine
+  ok      and its subject equals the dashboard's for "upcoming tour availability"
+  ok    route "What is our debt service on this propert" → ask_spine
+  ok      and its subject equals the dashboard's for "What is our debt service on this p"
+  ok    route "How many beds do we have, and what is th" → ask_spine
+  ok      and its subject equals the dashboard's for "How many beds do we have, and what"
+  ok    route "What is the weather tomorrow?" → technician
+  ok    route "Where do Jane's and Marcus's application" → ask_spine
+  ok      and its subject equals the dashboard's for "Where do Jane's and Marcus's appli"
+  ok    route "Which signer is still outstanding?" → ask_spine
+  ok      and its subject equals the dashboard's for "Which signer is still outstanding?"
+  ok    route "What is the asking rent for a 1 bedroom?" → ask_spine
+  ok      and its subject equals the dashboard's for "What is the asking rent for a 1 be"
+  ok    route "What do we charge for security deposits?" → ask_spine
+  ok      and its subject equals the dashboard's for "What do we charge for security dep"
+  ok    route "How many beds are occupied right now?" → ask_spine
+  ok      and its subject equals the dashboard's for "How many beds are occupied right n"
+  ok    route "How many beds are vacant?" → ask_spine
+  ok      and its subject equals the dashboard's for "How many beds are vacant?"
+  ok    route "What work orders are assigned to me?" → ask_spine
+  ok      and its subject equals the dashboard's for "What work orders are assigned to m"
+
+  ── personal attention stays person-scoped ──
+  ok    a personal-attention question routes to ask_spine with subject work
+  ok    "What should I focus on?" is a personal-attention question on BOTH surfaces
+  ok    "What needs my attention?" is a personal-attention question on BOTH surfaces
+  ok    "what should I do today" is a personal-attention question on BOTH surfaces
+  ok    "what's on my plate" is a personal-attention question on BOTH surfaces
+  ok    the bare noun form "a tour" reaches leasing_person
+  ok    the bare noun form "the tour" reaches leasing_person
+  ok    the bare noun form "she toured" reaches leasing_person
+  ok    the bare noun form "they are touring" reaches leasing_person
+  ok    "countersign" reaches leasing_person
+  ok    "countersigns" reaches leasing_person
+  ok    "countersigned" reaches leasing_person
+  ok    "countersigning" reaches leasing_person
+  ok    a work sentence with a generic leasing phrase now stays with WORK (was a pinned mis-route)
+  ok    "what is holding the elevator up" stays OUT of leasing_person
+  ok    scheduling sentence "when can we tour" still wins over bare tour vocabulary
+  ok    scheduling sentence "schedule a tour" still wins over bare tour vocabulary
+  ok    scheduling sentence "tour availability this week" still wins over bare tour vocabulary
+  ok    scheduling sentence "who is hosting tours friday" still wins over bare tour vocabulary
+  ok    scheduling sentence "When is my next tour?" still wins over bare tour vocabulary
+  ok    an off-subject question routes to `work`; out_of_scope is the model's call, not a blacklist
+
+  ── entitlement precedes intelligence (§40.8) ──
+  ok    an unentitled session NEVER reaches the leasing reader
+  ok    and the fact envelope says NOT_AUTHORIZED
+  ok    no leasing payload exists to leak into model context
+
+  ── the entitled path DOES reach the reader, and strips ids ──
+  ok    an entitled session reaches the canonical leasing reader exactly once
+  ok    the fact envelope reads OK and carries the subject name
+  ok    database identifiers are stripped before the model can see them
+
+  ── an unentitled Asset Management question yields no asset facts ──
+  ok    no debt facts entered the envelope without asset_management
+
+  ── four silences remain distinct (§40.7) ──
+  ok    a read failure is READ_FAILED, not silence
+  ok    a timeout is READ_TIMED_OUT, distinct from a failure
+  ok    no such person is NO_SUBJECT, not a failure and not 'nothing happening'
+  ok    more than one match is AMBIGUOUS_SUBJECT and Spine refuses to guess
+  ok    all four silences are different values
+  ok    an unavailable read never renders as 'nothing outstanding'
+  ok    ambiguity offers NAMES, never database identifiers
+  ok    A4  an unnamed signer question reads the canonical property review exactly once
+  ok    A5  …and carries the exact outstanding signer without database ids
+  ok    A6  the canonical signer answer is deterministic and needs no model
+  ok    A7  module entitlement refuses before the property signer read
+ask-spine/answer model error Anthropic must not be reached
+ask-spine/answer model error Anthropic must not be reached
+  ok    C2  leasing_person · every unentitled module is refused BEFORE any read or model call
+  ok    C2b leasing_person · every entitled module gets past the wall and attempts the work
+ask-spine/answer model error Anthropic must not be reached
+ask-spine/answer model error Anthropic must not be reached
+  ok    C2  tenancy · every unentitled module is refused BEFORE any read or model call
+  ok    C2b tenancy · every entitled module gets past the wall and attempts the work
+ask-spine/answer model error Anthropic must not be reached
+ask-spine/answer model error Anthropic must not be reached
+  ok    C2  tour_schedule · every unentitled module is refused BEFORE any read or model call
+  ok    C2b tour_schedule · every entitled module gets past the wall and attempts the work
+ask-spine/answer model error Anthropic must not be reached
+ask-spine/answer model error Anthropic must not be reached
+  ok    C2  economics · every unentitled module is refused BEFORE any read or model call
+  ok    C2b economics · every entitled module gets past the wall and attempts the work
+ask-spine/answer model error Anthropic must not be reached
+  ok    C2  compliance · every unentitled module is refused BEFORE any read or model call
+  ok    C2b compliance · every entitled module gets past the wall and attempts the work
+ask-spine/answer model error Anthropic must not be reached
+  ok    C2  debt · every unentitled module is refused BEFORE any read or model call
+  ok    C2b debt · every entitled module gets past the wall and attempts the work
+  ok    C3  a refusal carries a server-written sentence, null grounding and no references
+
+  ── cross-domain composition remains refused ──
+  ok    a two-domain question is composition_unavailable at the subject layer
+  ok    the SMS router carries that refusal rather than picking a domain
+
+  ── PHASE A · signature language reaches leasing, maintenance keeps its own ──
+  ok    A1  "Which signer is still outstanding?" reaches leasing_person
+  ok    A1  "Who still needs to sign?" reaches leasing_person
+  ok    A1  "Has Jane signed?" reaches leasing_person
+  ok    A1  "Has Jane signed her lease?" reaches leasing_person
+  ok    A1  "Has Skyline signed Jane's lease?" reaches leasing_person
+  ok    A1  "What is holding up Jane's lease?" reaches leasing_person
+  ok    A1  "Which application is waiting on a signature?" reaches leasing_person
+  ok    A2  CONTROL · "sign maintenance work" is NOT a leasing question
+  ok    A2  CONTROL · "sign off on the repair" is NOT a leasing question
+  ok    A2  CONTROL · "signature paint color" is NOT a leasing question
+  ok    A2  CONTROL · "assign the work order" is NOT a leasing question
+  ok    A2  CONTROL · "the elevator repair is holding this up" is NOT a leasing question
+  ok    A3  CONTROL · "assign the elevator repair" does not reach leasing through a sign-substring
+  ok    A3  CONTROL · "redesign the signage" does not reach leasing through a sign-substring
+  ok    A3  CONTROL · "he resigned last week" does not reach leasing through a sign-substring
+
+  ── PHASE B · personal work attention needs a pronoun, not a keyword ──
+  ok    B1  "What work orders are assigned to me?" is personal attention on BOTH surfaces
+  ok    B1  "What work is assigned to me?" is personal attention on BOTH surfaces
+  ok    B1  "What jobs are mine?" is personal attention on BOTH surfaces
+  ok    B1  "What tasks need my attention?" is personal attention on BOTH surfaces
+  ok    B1  "Show me my open work orders." is personal attention on BOTH surfaces
+  ok    B2  CONTROL · "What work orders are open at Skyline?" stays an ordinary property work question
+  ok    B2  CONTROL · "What work is assigned to Jane?" stays an ordinary property work question
+  ok    B2  CONTROL · "Who is assigned to the elevator repair?" stays an ordinary property work question
+  ok    B2  CONTROL · "What jobs are still unassigned?" stays an ordinary property work question
+  ok    B2  CONTROL · "Show all open work." stays an ordinary property work question
+
+  ── PHASE C · readiness per supported read ──
+  ok    C1  application status for a named person · the SERVER selects the subject deterministically
+  ok    C1  did a named resident sign · the SERVER selects the subject deterministically
+  ok    C1  what is holding a lease up · the SERVER selects the subject deterministically
+  ok    C1  upcoming tour availability · the SERVER selects the subject deterministically
+  ok    C1  published asking rent and charges · the SERVER selects the subject deterministically
+  ok    C1  open/occupied tenancy position · the SERVER selects the subject deterministically
+
+  ── PHASE C · entitlement precedes the model, per subject ──
+
+  ── the model never receives identifiers or an action tool ──
+  ok    the model was called for an entitled question
+  ok    no database uuid crossed into model context
+  ok    the model is given no tools — it cannot act
+  ok    grounded_on is server-generated, not model-authored
+
+  ── DIVERGENCES from the product acceptance rule (REPORTED, not repaired) ──
+     • "What is the weather tomorrow?" routes to `work`. REPORTED, not repaired: questionSubject has no deterministic unsupported boundary — it ends at `return "work"`, and the only deterministic out_of_scope returns are for an empty or oversized question. Off-subject is decided by the model against DECISION_SCHEMA, and the server writes the sentence. Adding a weather pattern would start the blacklist that design deliberately rejected.
+     These are Codex/leasing-routing findings. Repairing them from a CAMP
+     test is out of this lane; they are pinned above as current behaviour.
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 157 run · 157 passed · 0 failed
+  ✓ PASS — skyline_ask_spine_sms_matrix.test.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/skyline_ask_spine_sms_matrix.test.js exited 0
+
+  ▶ GATE INVOKED — proofs/ask_spine_contract_proof.js
+    checks: Ask Spine attention: one canonical obligations reader, scoped ranking, no conversational SQL copy
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   ask_spine_contract_proof.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  28 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+  ✓ 1a  property_id is bound as a parameter, not interpolated
+  ✓ 1b  the query filters on property_id
+  ✓ 1c  a non-empty fixture actually produced an item
+  ✓ 1d  the service refuses to run without a server-derived property
+  ✓ 1e  Ask Spine delegates attention to the canonical obligations reader
+  ✓ 1f  Ask Spine carries no second obligations query
+  ✓ 2a  the route refuses a mismatched client property_id
+  ✓ 2b  the route passes ONLY req.operator values into the service
+  ✓ 2c  the service reads property from its argument only — no req/query/body
+  ✓ 2d  the echoed property_id is the session's, not the request's
+  ✓ 3a  MAX_ITEMS is 5
+  ✓ 3b  the SQL carries a LIMIT 5
+  ✓ 3c  a 9-row result is capped to 5 items
+  ✓ 3d  total_open still reports the true total, not the capped count
+  ✓ 3e  the operator's ordinary obligation list remains uncapped
+  ✓ 3f  the ordinary list keeps its established ordering and has no LIMIT
+  ✓ 4a  a genuine empty result returns items:[] and total_open:0
+  ✓ 4b  a genuine empty result does NOT throw
+  ✓ 4c  a failed read THROWS — it never returns an empty result
+  ✓ 4d  the route maps failure to 500, not to an empty payload
+  ✓ 4e  no module entitlement is an honest empty, not everything
+  ✓ 5a  a person-backed item opens the verified person opener
+  ✓ 5b  an application-backed item opens the verified application opener
+  ✓ 5c  a module with a real desk maps to that desk
+  ✓ 5d  a module with NO desk emits no navigation rather than a guess
+  ✓ 5e  a unit is returned as context but NEVER as a link (no unit opener exists)
+  ✓ 6a  both Ask Spine doors are reads, including the POST carrying a question
+  ✓ 6b  neither module requires staff_agent
+  ✓ 6c  the service issues no INSERT/UPDATE/DELETE and opens no transaction
+  ✓ 6d  the operator's question is not recorded anywhere
+  ✓ 7a  only the session property is bound — the other property never appears
+  ✓ 7b  the query has no path that omits the property predicate
+  ✓ 7c  module entitlement is applied as a bound array, not interpolated
+  ✓ 8a  the four documented tiers are the only ranking, and there is no score
+  ✓ 8b  no money, proof, blockage or waiting inference exists
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 35 run · 35 passed · 0 failed
+  ✓ PASS — ask_spine_contract_proof.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — proofs/ask_spine_contract_proof.js exited 0
+
+  ▶ GATE INVOKED — unit/leasing_knowledge.test.js
+    checks: Leasing knowledge shared reads, staff routing and authority
+
+PASS leasing knowledge routing, scoped read, entitlement, missing topic, references and failure behavior
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/leasing_knowledge.test.js exited 0
+
+  ▶ GATE INVOKED — unit/prospect_matching.test.js
+    checks: Exact-space prospect matching over canonical targets and published economics
+
+PASS exact-space informational matching: term, budget, limit, scope, rent basis, unknowns and failures
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/prospect_matching.test.js exited 0
+
+  ▶ GATE INVOKED — unit/staff_sms_router.test.js
+    checks: staff SMS: governed reads converge on Ask Spine while actions and one-work-order turns remain operational
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   staff_sms_router.test.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  40 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+-- CLEAR GOVERNED READS --------------------------------------
+  ok    "What pricing is published?" routes to Ask Spine
+  ok    ...with subject economics
+  ok    "How many units are occupied?" routes to Ask Spine
+  ok    ...with subject tenancy
+  ok    "What is the utility setup?" routes to Ask Spine
+  ok    ...with subject utility
+  ok    "Where is Maria's application?" routes to Ask Spine
+  ok    ...with subject leasing_person
+  ok    "What is the loan balance?" routes to Ask Spine
+  ok    ...with subject debt
+  ok    "Who is hosting tours this week?" routes to Ask Spine
+  ok    ...with subject tour_schedule
+  ok    "Has Maria's application link been sent?" routes to Ask Spine
+  ok    ...with subject leasing_person
+  ok    "What should I do today?" uses the shared personal Ask Spine read
+  ok    ...as a work question
+  ok    "What work is assigned to me?" uses the shared personal Ask Spine read
+  ok    ...as a work question
+
+-- WORK ALWAYS WINS ------------------------------------------
+  ok    "accept 1042" stays on the technician path
+  ok    "I'm heading over" stays on the technician path
+  ok    "the valve is corroded and needs replacing" stays on the technician path
+  ok    "anything else open here?" stays on the technician path
+  ok    "should I replace the valve?" stays on the technician path
+  ok    "What should I do about work order 1042?" stays on the technician path
+  ok    an attachment always stays on the technician path
+  ok    a vague question stays on the technician path
+  ok    a vague lease update creates no conversational write path
+  ok    postboard feedback stays on the technician rail because no postboard owner exists
+  ok    maintenance feedback remains on the canonical technician rail
+  ok    a statement about pricing is not mistaken for a question
+  ok    an application-send request is not mistaken for an application-status read
+  ok    a polite application-send request reaches the leasing action adapter
+  ok    a proposed fee waiver stays on the action path
+
+-- QUESTION AND RECEIPT CONTRACTS ----------------------------
+  ok    question punctuation is recognized
+  ok    a question word is recognized without punctuation
+  ok    a statement is not question-shaped
+  ok    a governed answer is a non-writing operating receipt
+  ok    the service answer is preserved exactly
+  ok    the Ask Spine outcome remains separately visible
+  ok    a blank governed answer is refused
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 40 run · 40 passed · 0 failed
+  ✓ PASS — staff_sms_router.test.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/staff_sms_router.test.js exited 0
+
+  ▶ GATE INVOKED — unit/staff_sms_preferences_failure.test.js
+    checks: undefined
+
+PASS preference failure rolls back and sends an honest retry receipt
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/staff_sms_preferences_failure.test.js exited 0
+
+  ▶ GATE INVOKED — unit/staff_sms_prompt_reply.test.js
+    checks: undefined
+
+PASS bare outcome without pending context requires a subject
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/staff_sms_prompt_reply.test.js exited 0
+
+  ▶ GATE INVOKED — unit/staff_sms_preferences.test.js
+    checks: undefined
+
+PASS explicit staff preference excerpts; relative timing preserved, no question/negative/hypothetical inference
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/staff_sms_preferences.test.js exited 0
+
+  ▶ GATE INVOKED — unit/staff_sms_leasing_action.test.js
+    checks: staff SMS leasing: explicit standing, exact target, canonical capture/send services, honest receipts
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   staff_sms_leasing_action.test.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  68 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+  ok    owner shorthand retains the application request while standing needs clarification
+  ok    a bedroom preference is not an exact bed selection
+  ok    send app shorthand follows the existing send action
+  ok    opening the software app is not an application send request
+
+-- STAFF LANGUAGE IS NARROW AND DETERMINISTIC ----------------
+  ok    ready_to_apply is recognized only from explicit staff language
+  ok    hot_lead is recognized only from explicit staff language
+  ok    possible is recognized only from explicit staff language
+  ok    not_moving_forward is recognized only from explicit staff language
+  ok    'went well' asks for the canonical four-word standing instead of guessing
+  ok    a direct standing reply can complete the unfinished assigned tour
+  ok    a field phrase containing a standing word is not mistaken for leasing
+  ok    a standing question never becomes a tour write
+  ok    an explicit application command is a send action
+  ok    an exact application target reply stays on the leasing action
+  ok    an application-status question is not a write intent
+  ok    an application-status question with a unit is still not a write intent
+  ok    a passive application-send-state question is not a write intent
+  ok    a server-issued confirmation is the only terse confirm action
+  ok    the shared router sends a capture to Leasing
+  ok    the shared router sends an application command to Leasing
+  ok    an attachment still wins and remains a technician turn
+
+-- PEOPLE AND TARGETS ARE CHOSEN ONLY WHEN EXACT -------------
+  ok    a full name selects one prospect
+  ok    a unique first name selects one prospect
+  ok    a full name outranks shared partial-name tokens
+  ok    no name among multiple open follow-ups is ambiguous
+  ok    one open follow-up can be selected without inventing a name
+  ok    no open follow-up stays an honest none
+  ok    an ambiguous tour prompt teaches a complete deterministic reply
+  ok    an ambiguous application prompt teaches a complete deterministic reply
+  ok    unit plus bed selects one exact by-bed target
+  ok    naming a bed excludes a whole-unit position in that same unit
+  ok    a multi-bed unit without the bed stays ambiguous
+  ok    a bed label without a unit stays ambiguous across units
+  ok    a whole-unit target is exact from its unit number
+  ok    a sole target in the toured unit can be selected from recorded context
+  ok    two beds in the toured unit still require a choice
+  ok    an explicit unavailable bed never falls back to its free sibling
+  ok    a unit-only request never selects the only offerable sibling of a multi-bed unit
+  ok    recorded unit context never guesses the only offerable sibling
+  ok    an explicit unavailable unit never falls back to the hinted whole unit
+  ok    an explicit unmatched bed never falls back to a single-space unit
+  ok    an explicitly different bed cannot be ignored in a physically sole-bed unit
+  ok    two named beds refuse even when just one is offerable
+  ok    two named units refuse even when just one is offerable
+  ok    explicit free bed still resolves beside an unavailable sibling
+  ok    the by-bed label says both unit and bed
+  ok    the whole-unit label stays simple
+  ok    the target prompt teaches the reply shape without choosing
+  ok    Leasing access is read from the assignment modules
+  ok    a title alone never grants Leasing access
+
+-- RECEIPTS SPEAK ONLY FROM COMMITTED FACTS ------------------
+  ok    a leasing clarification claims no write
+  ok    a leasing clarification preserves the exact question
+  ok    a blank leasing clarification is refused
+  ok    a canonical tour result produces a committed conversion receipt
+  ok    the tour receipt names the recorded standing
+  ok    a tour receipt without a conversion is refused
+  ok    a dispatched invitation receipt is committed
+  ok    the application receipt names the exact target
+  ok    the application receipt separately names provider dispatch
+  ok    a provider failure does not erase the prepared invitation
+  ok    a provider failure is visible and needs a human
+
+-- BOTH SURFACES DEFER TO THE SAME DOMAIN SERVICES -----------
+  ok    the dashboard imports the one application-target reader
+  ok    the SMS adapter imports that same target reader
+  ok    the exact target SQL lives in the target reader, not the dashboard route
+  ok    the SMS adapter delegates tour capture to completeTour
+  ok    the SMS adapter delegates application staging to applicationSendCommand
+  ok    the SMS adapter does not insert a tour or application invitation directly
+  ok    server composition injects the already-built conversion service by reference
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 68 run · 68 passed · 0 failed
+  ✓ PASS — staff_sms_leasing_action.test.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/staff_sms_leasing_action.test.js exited 0
+
+  ▶ GATE INVOKED — unit/operations_line_transfer.test.js
+    checks: staff line transfer: one atomic owner change, preserved history, fixed posture, server-derived authority
+
+PASS one transaction retires the source and activates the same number for the target
+PASS retrying the completed transfer returns the current target line
+PASS an existing target line refuses the transfer without retiring the source
+PASS a property-facing line can never be transferred through the staff command
+PASS the HTTP transfer derives target organization and actor from the route
+
+5 passed, 0 failed
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/operations_line_transfer.test.js exited 0
+
+  ▶ GATE INVOKED — unit/personal_attention_convergence.test.js
+    checks: personal attention: dashboard and SMS share one person-scoped read using recorded accountability only
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   personal_attention_convergence.test.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  29 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+  ok    the owner's exact question is personal attention
+  ok    an assignment question is personal attention
+  ok    a natural today variant is personal attention
+  ok    a personal question may name its property
+  ok    a property-wide attention question stays property-wide
+  ok    a technician action is not a personal read
+  ok    a question about one work order remains a technician conversation
+  ok    the canonical query keeps the property and module walls
+  ok    personal scope is direct assignment, escalation, or unassigned primary work
+  ok    claiming and escalation do not hide active attention work
+  ok    identity and module ownership are server inputs
+  ok    the personal question executes one canonical read
+  ok    the personal answer never needs a model
+  ok    the shared answer is successful
+  ok    the answer states the recorded personal count
+  ok    the canonical ranking is preserved in the answer
+  ok    overdue meaning is preserved
+  ok    the grounding names personal scope
+  ok    server-resolved references survive without model-owned ids
+  ok    the direct-assignment basis survives
+  ok    the module-owner basis survives
+  ok    missing live identity refuses
+  ok    missing identity reads no work
+  ok    the canonical service itself requires live identity
+  ok    the dashboard passes its live user and module ownership
+  ok    staff SMS passes the same identity inputs
+  ok    a new leasing rung stamps its eligible owner on the canonical obligation
+  ok    an explicit conversation handoff moves the link and canonical obligation together
+  ok    a reopened rung restores the same owner on the canonical obligation
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 29 run · 29 passed · 0 failed
+  ✓ PASS — personal_attention_convergence.test.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/personal_attention_convergence.test.js exited 0
+
+  ▶ GATE INVOKED — gate_ask_spine_readers.js
+    checks: Ask Spine: every canonical standing domain is registered, pending, or explicitly waived
+
+
+════════════════════════════════════════════════════════════════
+  ASK SPINE READER REGISTRATION — §40.2 / §40.11
+════════════════════════════════════════════════════════════════
+
+  ── detector self-test ──
+  ok    domainsFromFilenames finds a position read
+  ok    domainsFromFilenames finds an establishment read
+  ok    domainsFromFilenames dedupes a domain with both reads
+  ok    domainsFromFilenames ignores a funding read
+  ok    domainsFromFilenames finds a direct canonical read
+  ok    domainsFromFilenames ignores a document adapter
+  ok    domainsFromFilenames ignores an unrelated file
+  ok    domainsFromFilenames CANNOT tell a surface projection from a domain read
+  ok    gathersDomain detects a real gather
+  ok    gathersDomain rejects a require with no assignment
+  ok    gathersDomain rejects an assignment with no require
+  ok    gathersDomain rejects a LOOKALIKE fact key
+  ok    gathersDomain is not satisfied by a comment
+  ok    gathersDomain is not satisfied by a block comment
+  ok    gathersGovernedDetail detects a question-bound canonical detail read
+  ok    gathersGovernedDetail rejects a detail reader mentioned only in a comment
+
+  ── discovery ──
+        9 domain(s) with a canonical standing read: compliance, contracted_service, debt, equity, insurance, maintenance, tax, tenancy, utility
+
+  ── directories deliberately NOT scanned ──
+        src/surfaces — Projections OF domains, not domains. A surface composes canonical reads for one screen and owns no truth of its own, so there is nothing behind it for Ask Spine to register.
+  ok    src/surfaces exclusion names a reason
+  ok    src/surfaces is not also scanned as a domain directory
+  ok    src/surfaces exclusion is still load-bearing
+           keeps 4 non-domain(s) out: availability, management, unit_turn, work_order_status
+  ok    src/surfaces does not hide a declared domain
+  ok    compliance is declared in the Ask Spine registry
+  ok    contracted_service is declared in the Ask Spine registry
+  ok    debt is declared in the Ask Spine registry
+  ok    equity is declared in the Ask Spine registry
+  ok    insurance is declared in the Ask Spine registry
+  ok    maintenance is declared in the Ask Spine registry
+  ok    tax is declared in the Ask Spine registry
+  ok    tenancy is declared in the Ask Spine registry
+  ok    utility is declared in the Ask Spine registry
+  ok    registry entry maintenance corresponds to a real standing read
+  ok    registry entry compliance corresponds to a real standing read
+  ok    registry entry utility corresponds to a real standing read
+  ok    registry entry contracted_service corresponds to a real standing read
+  ok    registry entry insurance corresponds to a real standing read
+  ok    registry entry tax corresponds to a real standing read
+  ok    registry entry debt corresponds to a real standing read
+  ok    registry entry equity corresponds to a real standing read
+  ok    registry entry tenancy corresponds to a real standing read
+
+  ── declared `registered` must actually be wired ──
+  ok    maintenance declared registered AND gathered in src/agent/ask_spine_answer.js
+  ok    compliance declared registered AND gathered in src/agent/ask_spine_answer.js
+  ok    utility declared registered AND gathered in src/agent/ask_spine_answer.js
+  ok    contracted_service declared registered AND gathered in src/agent/ask_spine_answer.js
+  ok    debt declared registered AND gathered in src/agent/ask_spine_answer.js
+  ok    equity declared registered AND gathered in src/agent/ask_spine_answer.js
+  ok    tenancy declared registered AND gathered in src/agent/ask_spine_answer.js
+  ok    utility declared governed detail AND question-bound in src/agent/ask_spine_answer.js
+  ok    contracted_service declared governed detail AND question-bound in src/agent/ask_spine_answer.js
+
+  ── waivers must name an owner and an exit ──
+  ok    maintenance has a valid state
+  ok    maintenance declares retrieval without claiming comparison or cause
+  ok    maintenance records cross-domain composition authorization as unsolved
+  ok    compliance has a valid state
+  ok    compliance declares retrieval without claiming comparison or cause
+  ok    compliance records cross-domain composition authorization as unsolved
+  ok    utility has a valid state
+  ok    utility declares retrieval without claiming comparison or cause
+  ok    utility records cross-domain composition authorization as unsolved
+  ok    contracted_service has a valid state
+  ok    contracted_service declares retrieval without claiming comparison or cause
+  ok    contracted_service records cross-domain composition authorization as unsolved
+  ok    insurance has a valid state
+  ok    insurance declares retrieval without claiming comparison or cause
+  ok    insurance records cross-domain composition authorization as unsolved
+  ok    insurance pending names an owner
+  ok    insurance pending names the condition that clears it
+  ok    tax has a valid state
+  ok    tax declares retrieval without claiming comparison or cause
+  ok    tax records cross-domain composition authorization as unsolved
+  ok    tax pending names an owner
+  ok    tax pending names the condition that clears it
+  ok    debt has a valid state
+  ok    debt declares retrieval without claiming comparison or cause
+  ok    debt records cross-domain composition authorization as unsolved
+  ok    equity has a valid state
+  ok    equity declares retrieval without claiming comparison or cause
+  ok    equity records cross-domain composition authorization as unsolved
+  ok    tenancy has a valid state
+  ok    tenancy declares retrieval without claiming comparison or cause
+  ok    tenancy records cross-domain composition authorization as unsolved
+
+════════════════════════════════════════════════════════════════
+  COVERAGE — NOT A PASS/FAIL NUMBER, A SCOPE STATEMENT
+    domains with a canonical standing read   9
+    registered with Ask Spine                7
+    pending                                  2
+    waived                                   0
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 78 run · 78 passed · 0 failed
+  ✓ PASS — every domain with standing truth is classified.
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_ask_spine_readers.js exited 0
+
+  ▶ GATE INVOKED — gate_current_state.js
+    checks: CURRENT_STATE.md: every src/ domain is named, rungs use the controlled vocabulary, defect numbering has not collided
+
+
+GATE — docs/CURRENT_STATE.md coverage
+
+  ok    section present: STATE SNAPSHOT
+  ok    section present: THE VOCABULARY
+  ok    section present: ⛔ KNOWN LIVE DEFECTS
+  ok    section present: ⛔ CLOSING A THREAD
+  ok    all 21 src/ directories are named somewhere in the file
+  ok    no banned vocabulary used as a proof rung
+  ok    73 defect rows, numbered 1..73, no gaps or duplicates
+  ok    snapshot names an API commit (61f99bf)
+
+  8 passed, 0 failed
+  (Coverage only. This gate does not verify that any row is TRUE.)
+
+
+  ◀ CHILD EXIT CODE PRESERVED — gate_current_state.js exited 0
+
+  ▶ GATE INVOKED — scenarios/ask_spine_reader_gate_falsification.js
+    checks: the reader gate itself goes RED when registration, discovery or the gather is broken
+
+
+════════════════════════════════════════════════════════════════
+  FALSIFYING gate_ask_spine_readers.js — TENANCY
+════════════════════════════════════════════════════════════════
+
+  ok    baseline: the gate is green before anything is mutated
+  ok    baseline: the gate discovers tenancy
+  ok    RED when the tenancy registry entry is deleted
+  ok      …and it fails for the RIGHT reason (tenancy is declared in the Ask Spine registry)
+  ok      …and GREEN again once restored
+  ok    RED when the tenancy standing projection is removed from disk
+  ok      …and it fails for the RIGHT reason (registry entry tenancy corresponds to a real standing read)
+  ok      …and GREEN again once restored
+  ok    RED when the composer's tenancy reader import is removed
+  ok      …and it fails for the RIGHT reason (tenancy declared registered AND gathered)
+  ok      …and GREEN again once restored
+  ok    RED when the composer assigns no tenancy fact key at all
+  ok      …and it fails for the RIGHT reason (tenancy declared registered AND gathered)
+  ok      …and GREEN again once restored
+  ok    RED when src/tenancy is dropped from the scanned directories
+  ok      …and it fails for the RIGHT reason (registry entry tenancy corresponds to a real standing read)
+  ok      …and GREEN again once restored
+  ok    RED when src/surfaces is scanned as though it held domains
+  ok      …and it fails for the RIGHT reason (is declared in the Ask Spine registry)
+  ok      …and GREEN again once restored
+  ok    restored byte-identical: tests/gates/gate_ask_spine_readers.js
+  ok    restored byte-identical: src/agent/ask_spine_answer.js
+  ok    restored byte-identical: src/tenancy/tenancy_position_read.js
+  ok    no falsification backup file left behind
+
+  24 run · 24 passed · 0 failed
+
+  ✓ PASS — the gate goes red six ways and green again. It is measuring something.
+
+
+  ◀ CHILD EXIT CODE PRESERVED — scenarios/ask_spine_reader_gate_falsification.js exited 0
+
+  ▶ GATE INVOKED — unit/tenancy_ask_spine.test.js
+    checks: Tenancy Ask Spine: routing, entitlement before any read, the four silences, the truth walls
+
+
+══════════════════════════════════════════════════════════════════
+  TENANCY → ASK SPINE · THE SEAM
+══════════════════════════════════════════════════════════════════
+
+  ── R · a tenancy question reaches tenancy ──
+  ok    R1  'what does the rent roll look like' routes to tenancy
+  ok    R2  'how many beds are occupied right now' routes to tenancy
+  ok    R3  'when do leases start expiring' routes to tenancy
+  ok    R4  'how many units are vacant' routes to tenancy, not to work
+  ok    R5  a work-order question is untouched by the new terms
+  ok    R6  a contracted-service question is not stolen by 'leasing'
+  ok    R7  an equity question is not stolen by 'residents' or 'units'
+  ok    R7b 'are our licenses expiring' is Compliance, not the rent roll
+  ok    R7c a lease question CLAIMS the clock word and reaches tenancy
+  ok    R7d a bare clock word with no tenancy noun stays Compliance's, as before
+  ok    R7e Compliance now matches its own plurals
+  ok    R8  rent roll + compliance in one question is composition_unavailable
+
+  ── E · unentitled facts never enter model context ──
+  ok    E1  asset_management alone does NOT entitle tenancy
+  ok    E2  …and the canonical read was never called
+  ok    E3  answer() refuses an unentitled tenancy question outright
+  ok    E4  …with a sentence an operator can act on, not an error code
+  ok    E5  …the reader was never called
+  ok    E6  …and no reference was minted
+  ok    E7  management entitles tenancy — the door that resolves the operation
+  ok    E8  and the property_id is the one the SERVER passed, not the question's
+
+  ── G · the model gets the standing projection, walls attached ──
+  ok    G1  the compact projection arrives whole
+  ok    G2  no-recorded-rent and unavailable-contract-economics arrive separately
+  ok    G3  the truth walls travel WITH the facts, not only in the prompt
+  ok    G4  the source it was established from travels too
+  ok    G5  nothing failed, so reads_that_failed stays empty
+  ok    G6  a record id in the read never reaches the model
+
+  ── S · four silences, four different facts ──
+  ok    S1  NOT_ESTABLISHED reaches the model as a PROPERTY fact
+  ok    S2  …and is NOT reported as a failed read
+  ok    S3  …and carries no position block a sentence could read as zero occupancy
+  ok    S4  a thrown read becomes READ_FAILED — Spine could not look
+  ok    S5  …it is NOT dressed as NOT_ESTABLISHED
+  ok    S6  …and it is named in reads_that_failed so the answer must say so
+  ok    S7  a timeout is its own silence, not a failure
+
+  ── P · the wording layer is shown the walls it must not cross ──
+  ok    P1  occupied ≠ paying is a rule, not a hope
+  ok    P2  rent not recorded is never rent of zero
+  ok    P3  open ≠ available, and availability is named as the other read
+  ok    P4  NOT_ESTABLISHED is explicitly not an empty building
+  ok    P5  retrieval only — no comparison, no cause, no invented percentage
+  ok    P6  composition is refused in the prompt as well as in the router
+  ok    P7  every numbered rule has its own number
+
+  ── C · a refusal names what Spine CAN do ──
+  ok    C1  the supported scope mentions the rent roll
+  ok    C2  the out-of-scope reply offers tenancy as a thing to ask about
+  ok    C3  the composition refusal lists tenancy among what it can answer separately
+
+══════════════════════════════════════════════════════════════════
+  ✓ PASS — 43 passed, 0 failed
+  Tenancy is readable by Ask Spine from the same canonical read the
+  ledger uses, entitled before it is read, and unable to say a
+  silence it did not observe.
+══════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/tenancy_ask_spine.test.js exited 0
+
+  ▶ GATE INVOKED — unit/economics_ask_spine.test.js
+    checks: Economics Ask Spine: one canonical picture, lease-term menu preserved, entitlement before read
+
+
+ECONOMICS -> ASK SPINE
+
+  ok    one published term remains directly quotable
+  ok    multiple terms stay a menu and never flatten to the first rent
+  ok    pricing, fee, and lease-price language routes to Economics
+  ok    standing questions and real cross-domain questions are not swallowed
+  ok    bare pricing yields to a more specific governed domain
+  ok    entitlement is checked before the economic reader runs
+  ok    answer refuses unentitled economics before reader and model
+  ok    Ask Spine uses the canonical picture and sends no database ids or drafts
+  ok    a failed economic read is named and never becomes no pricing
+  ok    the narrator is explicitly forbidden to select or add economics
+  ok    a composition refusal names published pricing as a supported separate read
+
+11 economics Ask Spine proofs passed.
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/economics_ask_spine.test.js exited 0
+
+  ▶ GATE INVOKED — unit/application_space_grain.test.js
+    checks: Application space grain (182): the bed is durable from the aim, whole-unit behaviour is unchanged, a bed is never guessed, and the refusal prose stays out of the deployed app's false branch
+
+
+── 1 · WHOLE-UNIT BEHAVIOUR IS UNCHANGED ──────────────────────
+  ok    sole-space unit still resolves
+  ok    …by the SAME basis string 'sole_space_unit'
+  ok    …to the derived space, with no bed supplied
+
+── 2 · A CHOSEN BED RESOLVES (the feature) ────────────────────
+  ok    multi-bed unit resolves when a bed is chosen
+  ok    …basis says the choice was honoured
+  ok    …and it is the bed that was asked for
+
+── 3 · A BED IS NEVER GUESSED ─────────────────────────────────
+  ok    multi-bed unit with NO bed chosen is refused
+  ok    …with the new code, not the old one
+  ok    …and no space is invented on the way out
+  ok    …409, a request problem, not a 404
+
+── 4 · A SUPPLIED BED IS VALIDATED, NEVER TRUSTED ─────────────
+  ok    a bed from another property is refused
+  ok    …named as not-in-unit, not as unavailable
+  ok    a bed from a DIFFERENT unit of the same property is refused
+
+── 5 · THE SERVER DERIVES THE PARENT FROM THE BED ─────────────
+  ok    a bed knows its unit, which is what the preamble reads
+  ok    …and an unknown bed yields nothing to derive from
+
+── 6 · THE APP CONTRACT — PROSE IS PART OF IT ─────────────────
+  ok    the unchosen-bed sentence exists
+  ok    …and does NOT trip the deployed app's 'not supported' branch
+  ok    …nor does the wrong-bed sentence
+  ok    the retired code is still DEFINED for the deployed app
+
+── 7 · BIRTH DERIVES AND REFUSES (lifecycle) ──────────────────
+  ok    birth derives unit_id from the bed
+  ok    birth accepts a unit that agrees with the bed
+  ok    birth REFUSES a unit that contradicts the bed
+  ok    birth REFUSES a bed at another property
+  ok    birth without a bed is permitted (bed not yet chosen)
+
+════════════════════════════════════════════════════════════════
+  24 passed · 0 failed
+════════════════════════════════════════════════════════════════
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/application_space_grain.test.js exited 0
+
+  ▶ GATE INVOKED — unit/application_future_target.test.js
+    checks: Future applications: the governed turn-ready date survives invitation, tenant submission, and application birth
+
+
+Future application target policy
+  PASS  a home available now remains offerable without a target date
+  PASS  a future home requires an intended move-in date
+  PASS  a move-in before the governed ready date is refused
+  PASS  the governed ready date is an admissible target
+  PASS  a later target remains admissible
+  PASS  a lease end without a governed turn-ready date cannot support an application
+
+Durable lineage across both boundaries
+  PASS  tenant submission rechecks the persisted invitation date
+  PASS  the target date is durable on both the invitation and application
+
+  application future target: 8 passed, 0 failed
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/application_future_target.test.js exited 0
+
+  ▶ GATE INVOKED — unit/interval_position_hostile.test.js
+    checks: Interval tenancy: closed-interval arithmetic, which rights count, honest refusals, and the line it does not cross
+
+
+══════════════════════════════════════════════════════════════════════════
+  THE INTERVAL PRIMITIVE — hostile, pure, no database
+══════════════════════════════════════════════════════════════════════════
+
+  ── H · interval arithmetic ──
+  ok    H1  exact adjacent terms, no overlap → contractually_free
+  ok    H2  a prior lease ending ON the requested start DOES collide
+  ok    H3  one-day overlap at the front is a collision
+  ok    H4  one-day overlap at the back is a collision
+  ok    H5  a commitment INSIDE the interval is term_partially_blocked
+  ok    H5b …and the free sub-spans are reported, both of them
+  ok    H6  the request sitting inside a longer lease is term_blocked
+  ok    H7  a lease ending the day BEFORE the request is free
+  ok    H8  an open-ended lease running from before the request is term_blocked
+  ok    H9  an open-ended REQUEST against a future commitment is not free
+  ok    H10 an interval whose end precedes its start is REFUSED, not answered
+  ok    H11 a one-day interval is answered like any other
+  ok    H12 a missing start is refused
+
+  ── R · which recorded rights count as a right ──
+  ok    R1  every terminal status is not a right — all six
+  ok    R2  a PENDING lease is a real dated right
+  ok    R3  an unrecognised status FAILS CLOSED — it withholds the position
+  ok    R4  a collision is a collision at every proof level
+  ok    R4b …and each carries its own proof basis, not a boolean
+  ok    R5  a sitting lease that expires BEFORE the request is not reported as colliding
+  ok    R6  current occupant + successor, both ending before the request → free
+  ok    R7  a successor sitting inside the request is term_partially_blocked
+
+  ── U · the honest refusals ──
+  ok    U1  overlapping claims TOUCHING the interval → unresolved
+  ok    U1b …and both conflicting leases are NAMED, never resolved to the first
+  ok    U2  overlapping claims OUTSIDE the interval are still answerable
+  ok    U3  a position with no leases at all is contractually_free
+  ok    U4  …and its free span is the whole requested interval
+
+  ── C · the line it does not cross ──
+  ok    C1  the classifier decides NOTHING about marketability or readiness
+  ok    C2  the free state is `contractually_free`, never a generic `available`
+  ok    C3  every state is one of the four, and only those four
+  ok    C4  the requested interval is echoed back, so an answer is never orphaned
+  ok    C5  stable position identity travels with the answer
+
+  ── G · by-bed and by-unit, one code path ──
+  ok    G1  a by-bed and a by-unit position with identical rights answer identically
+  ok    G2  …and the source is free of any grain branch
+
+  ── F · free spans, directly ──
+  ok    F1  two separate commitments leave three gaps
+  ok    F2  adjacent commitments do not manufacture a zero-length gap between them
+  ok    F3  overlapping commitments collapse into one blocked run
+  ok    F4  a commitment covering the whole interval leaves nothing
+  ok    F5  an open-ended REQUEST reports its tail as open-ended, not as a fake date
+
+══════════════════════════════════════════════════════════════════════════
+  ✓ PASS — 38 passed, 0 failed
+══════════════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/interval_position_hostile.test.js exited 0
+
+  ▶ GATE INVOKED — unit/meeting_evidence_ingress.test.js
+    checks: Meeting Evidence: Read AI raw-byte ingress, immutable inbox shape, and no Ask Spine/transcript fan-out
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   meeting_evidence_ingress.test.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  57 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+  ok    valid HMAC over exact raw bytes verifies
+  ok    Read digest is hex HMAC-SHA256
+  ok    canonical JSON digest differs from provider raw-byte digest
+  ok    signature over reserialized JSON is refused against original bytes
+  ok    correctly formed HMAC from the wrong secret is refused
+  ok    missing signature is classified distinctly
+  ok    timing-safe comparison rejects non-hex headers
+  ok    verified payload parser reads JSON after signature
+  ok    request_id is read from provider field only
+  ok    session_id is read from provider field only
+  ok    malformed JSON is retained-state material, not a parser crash
+  ok    provider title is observed as metadata, not property authority
+  ok    provider trigger is preserved as observed metadata, not finality authority
+  ok    Read summary is only observed as provider metadata
+  ok    Read action_items are only observed as provider metadata
+  ok    Read key_questions are only observed as provider metadata
+  ok    Read topics are only observed as provider metadata
+  ok    server mounts Read webhook before global JSON parser
+  ok    server mounts governed Meeting Evidence operator routes
+  ok    provider inbox migration uses BYTEA for exact raw bytes
+  ok    provider inbox stores SHA-256
+  ok    provider inbox stores byte length
+  ok    provider inbox separates deliveries from provider meetings
+  ok    property evidence is created only by explicit binding table
+  ok    security refusals stay outside provider delivery evidence
+  ok    evidence rows are append-only by database trigger
+  ok    migration does not weaken source_artifacts
+  ok    service does not call Anthropic
+  ok    service does not import Ask Spine
+  ok    service has no transcript search surface
+  ok    service does not write canonical operating domains
+  ok    routes resolve staff session for binding/read disclosure
+  ok    routes refuse client property authority
+  ok    real route returns service status
+  ok    real route invokes webhook service once
+  ok    real route hands service a Buffer
+  ok    real route preserves exact raw-body bytes
+  ok    route-specific raw parser refuses oversize Read payload
+  ok    oversize refusal is named
+  ok    service accepts a valid signed Read delivery
+  ok    service classifies normal signed delivery as processed_unbound
+  ok    service creates one logical provider delivery
+  ok    service creates one provider meeting from session_id
+  ok    service preserves observed provider trigger on the exact delivery
+  ok    service refuses invalid signature
+  ok    invalid signature creates only a security receipt
+  ok    same request_id and same hash is duplicate_delivery
+  ok    duplicate does not create another provider meeting
+  ok    different request_id and same session_id is another delivery
+  ok    different request_id and same session_id reuses provider meeting
+  ok    same provider session still has one provider meeting
+  ok    same request_id and different hash is provider_anomaly
+  ok    provider anomaly preserves an authenticated body row
+  ok    authentic malformed JSON is retained as verified_invalid_payload
+  ok    authentic payload without session_id is unresolved identity
+  ok    manual binding records provider meeting
+  ok    manual binding records target property
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 57 run · 57 passed · 0 failed
+  ✓ PASS — meeting_evidence_ingress.test.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/meeting_evidence_ingress.test.js exited 0
+
+  ▶ GATE INVOKED — unit/meeting_receipt_v0.test.js
+    checks: Meeting Receipt v0: doctrine decomposition, transcript segments, validation, deterministic receipt, review ledger
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   meeting_receipt_v0.test.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  96 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+  ok    Gate 0 doctrine names source_class
+  ok    Gate 0 doctrine names epistemic_status
+  ok    Gate 0 doctrine names read_status
+  ok    Gate 0 old authority ladder removed from CLAUDE
+  ok    §40.4 correction doc exists
+  ok    §40.4 correction doc names canonical source
+  ok    canonical source classes exported
+  ok    canonical epistemic statuses exported
+  ok    canonical read statuses exported
+  ok    canonical resolution status exported once
+  ok    meeting contract consumes canonical resolution status
+  ok    migration creates meeting_evidence_meetings
+  ok    migration creates transcript_versions
+  ok    migration creates transcript_segments
+  ok    migration creates meeting_speaker_resolutions
+  ok    migration creates meeting_extraction_runs
+  ok    migration creates meeting_interpretation_candidates
+  ok    migration creates candidate_support
+  ok    migration creates candidate_quotes
+  ok    migration creates candidate_branches
+  ok    migration creates candidate_measurements
+  ok    migration creates meeting_receipts
+  ok    migration creates meeting_receipt_items
+  ok    migration creates meeting_receipt_candidate_reviews
+  ok    migration creates meeting_receipt_missed_items
+  ok    canonical meeting has meeting_occurred_at
+  ok    canonical meeting requires occurred_at_source
+  ok    transcript versions dedupe by meeting and digest
+  ok    transcript segments hold provider speaker label
+  ok    transcript segments do not carry speaker_person_id
+  ok    speaker resolutions use canonical resolution status
+  ok    candidate model has no receipt section types
+  ok    candidate model has no read_status column
+  ok    migration has no confidence field
+  ok    candidate quote stores char_start
+  ok    candidate quote stores char_end
+  ok    candidate quote table has no quote text column
+  ok    measurement qualifiers are non-empty
+  ok    receipt sent assertion fields exist
+  ok    receipt item lineage exists
+  ok    interpretation and projection reviews share one ledger
+  ok    missed items require supporting segments
+  ok    receipt core immutability trigger exists
+  ok    transcript segment append-only trigger exists
+  ok    review append-only trigger exists
+  ok    receipt table does not claim delivery
+  ok    receipt table does not claim read confirmation
+  ok    service writes only allowlisted meeting namespace tables
+  ok    service never writes work orders
+  ok    service never writes obligations
+  ok    service never writes leases
+  ok    service never writes occupancy
+  ok    service does not parse email replies
+  ok    service does not call Ask Spine
+  ok    canonical meeting records binder from binding row
+  ok    renderer does not call a model
+  ok    transcript parser produces two segments
+  ok    first segment speaker preserved
+  ok    identical transcript digest is stable
+  ok    changed transcript digest changes
+  ok    de-identified specimen passes structural validator
+  ok    owner projection succeeds
+  ok    projection renders ten owner-visible items
+  ok    measurement outranks observation into Property Pulse
+  ok    decision routes to YOU DECIDED
+  ok    question routes to RAISED, NOT ANSWERED
+  ok    proposal without owner routes to RAISED, NOT ANSWERED
+  ok    instruction routes to NEEDS FOLLOW-UP
+  ok    constraint routes to WATCHING
+  ok    reported claim routes to ALSO HEARD
+  ok    personal item is retained but not projected
+  ok    within section order follows transcript order
+  ok    owner receipt renders
+  ok    receipt starts with frozen correction line
+  ok    receipt subject computes decision count
+  ok    receipt subject computes follow-up count
+  ok    receipt subject computes open item count
+  ok    receipt has Property Pulse
+  ok    receipt has YOU DECIDED
+  ok    receipt has Raised section
+  ok    receipt has Needs Follow-Up
+  ok    receipt has Watching
+  ok    receipt has Also Heard
+  ok    receipt renders exact transcript quote substring
+  ok    receipt preserves decision hedge
+  ok    measurement qualifier renders beside value
+  ok    conditional decision renders first branch
+  ok    conditional decision renders second branch
+  ok    probable owner renders as probable
+  ok    probable identity disclosed in read gaps
+  ok    read gaps render even when none besides identity
+  ok    personal travel detail excluded from receipt
+  ok    receipt digest is 64 hex
+  ok    deterministic re-render digest is stable
+  ok    deterministic re-render body is stable
+  ok    rendered receipt passes qualifier render check
+  ok    partial extraction blocks complete receipt
+  ok    partial extraction returns coverage error
+  ok    plausible cleaned quote text is refused
+  ok    wrong speaker attribution is refused
+  ok    invalid quote range is refused
+  ok    two-speaker stitched quote is refused
+  ok    proposal promoted to decision is refused
+  ok    conditional decision with missing branch is refused
+  ok    reported resident assertion promoted to fact is refused
+  ok    material hedge missing from unconfirmed candidate is refused
+  ok    unassigned action with invented owner is refused
+  ok    branches on non-decisions are refused
+  ok    headline measurement without qualifier is refused
+  ok    candidate read_status is refused
+  ok    confidence field is refused
+  ok    abandoned intermediate decision cannot render as final
+  ok    proposal superseded by decision is retained as lineage not rendered
+  ok    idle brainstorming marked immaterial does not render
+  ok    gold corpus preserves turn capacity type
+  ok    gold corpus preserves office staffing type
+  ok    gold corpus preserves garage door lesson type
+  ok    gold corpus preserves Unit 204 bed fit type
+  ok    capacity constraint typed as observation is caught by gold corpus
+  ok    projection should_have_rendered requires null receipt item
+  ok    missed item without segment evidence is refused
+  ok    sent assertion records who asserted send
+  ok    sent assertion SQL does not claim delivery/read/review
+  ok    prior review blocks automatic reissue
+  ok    reissue gate names reason
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 125 run · 125 passed · 0 failed
+  ✓ PASS — meeting_receipt_v0.test.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/meeting_receipt_v0.test.js exited 0
+
+  ▶ GATE INVOKED — unit/meeting_receipt_extractor_v0.test.js
+    checks: Meeting Receipt Extractor v0: release readiness, reject-not-repair runner, Aug 10 real-path distinctions, feedback routing
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   meeting_receipt_extractor_v0.test.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  65 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+  ok    extractor prompt says invalid output is rejected, not repaired
+  ok    extractor prompt forbids database ids
+  ok    extractor schema references segment ordinals, not ids
+  ok    extractor schema does not ask for candidate ids
+  ok    extractor runner does not import Ask Spine
+  ok    extractor runner does not own an Anthropic client
+  ok    release readiness query checks migration ceiling
+  ok    release readiness query checks meeting_extraction_runs
+  ok    release readiness query checks manual edit deltas
+  ok    release readiness refuses live ceiling 174
+  ok    release readiness names ceiling problem
+  ok    release readiness accepts ceiling 181 with all governed relations
+  ok    migration creates manual edit delta ledger
+  ok    manual edit delta ledger is append-only
+  ok    service writes extraction run and candidates from validated record
+  ok    de-identified transcript produces addressable segments
+  ok    regression fixture is deterministic and self-contained
+  ok    runner prompt carries transcript segment text
+  ok    runner passes output schema to extractor
+  ok    runner input does not send segment ids to extractor
+  ok    extractor function was invoked
+  ok    runner compiled extractor output
+  ok    compiled record passes validator
+  ok    compiled candidate ids are server-created UUIDs
+  ok    compiled quotes have server-resolved character ranges
+  ok    compiled candidates do not persist quote text
+  ok    95% remains unconfirmed with caveat
+  ok    95% caveat survives
+  ok    3BR ruling is decision
+  ok    3BR ruling keeps both branches
+  ok    step-up pricing stays open, not decision
+  ok    resident bed-fit report stays a reported claim
+  ok    resident bed-fit clarification is an instruction
+  ok    resident creator proposal stays unassigned
+  ok    personal chatter is retained only as excluded evidence
+  ok    projector accepts runner record
+  ok    step-up pricing projects to raised unanswered
+  ok    runner record renders owner receipt
+  ok    receipt renders 3BR first branch
+  ok    receipt renders 3BR second branch
+  ok    receipt renders reported bed-fit claim
+  ok    receipt renders bed-fit clarification instruction
+  ok    receipt discloses first probable speaker resolution
+  ok    receipt discloses second probable speaker resolution
+  ok    receipt excludes personal chatter
+  ok    partial model output is rejected before receipt
+  ok    cleaned quote is rejected, not repaired
+  ok    model-supplied segment_id is rejected
+  ok    model-supplied character range is rejected
+  ok    model confidence field is rejected
+  ok    duplicate candidate keys are rejected
+  ok    ambiguous exact quote is rejected
+  ok    invalid extraction result is rejected before DB writes
+  ok    missing feedback routes to missed item ledger
+  ok    wrong-person feedback routes to interpretation
+  ok    wrong-person feedback uses wrong review class
+  ok    should-not-render feedback routes to projection
+  ok    should-not-render feedback uses not_material
+  ok    should-have-rendered refuses receipt item id
+  ok    manual edit delta stores field name
+  ok    manual edit delta refuses unchanged text
+  ok    extractor service still does not write work orders
+  ok    extractor service still does not write obligations
+  ok    extractor service still does not write leases
+  ok    extractor service still does not call Ask Spine
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 65 run · 65 passed · 0 failed
+  ✓ PASS — meeting_receipt_extractor_v0.test.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/meeting_receipt_extractor_v0.test.js exited 0
+
+  ▶ GATE INVOKED — unit/meeting_receipt_runtime_v0.test.js
+    checks: Meeting Receipt runtime v0: official Read shape, model protocol, exact identity resolution, scoped API and review lineage
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   meeting_receipt_runtime_v0.test.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  80 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+  ok    official Read AI speaker_blocks shape is accepted
+  ok    Read AI words remain exact transcript text
+  ok    first block receives elapsed timestamp
+  ok    second block retains provider timing
+  ok    meeting occurrence comes from provider start_time
+  ok    provider summary is excluded from canonical transcript
+  ok    missing transcript is refused
+  ok    malformed transcript block is refused
+  ok    Anthropic adapter returns only structured tool input
+  ok    Anthropic adapter uses the frozen extraction tool
+  ok    Anthropic adapter forces that exact tool
+  ok    Anthropic adapter runs at temperature zero
+  ok    Anthropic adapter passes server schema as input_schema
+  ok    adapter identifies its provider
+  ok    adapter exposes configured model provenance
+  ok    prose beside structured output is rejected
+  ok    multiple extraction tool calls are rejected
+  ok    provider request errors are sanitized
+  ok    prompt requires temporal evidence for every relevant time
+  ok    prompt requires both evidence roles for a reported claim
+  ok    prompt says one segment may satisfy multiple evidence roles
+  ok    schema repeats the temporal evidence requirement
+  ok    schema repeats the reported-claim evidence requirement
+  ok    runner accepts exact unique property-person resolution
+  ok    person id is attached by server after model output
+  ok    model input contains no person ids
+  ok    each extraction rerun receives a new run id
+  ok    candidate ids are unique across extraction runs
+  ok    unknown probable person label is rejected
+  ok    duplicate property person labels are treated as ambiguous
+  ok    unresolved resolution cannot smuggle a resolved label
+  ok    transcript-named owner may remain unresolved
+  ok    unresolved named owner receives no person id
+  ok    forward supersession is rejected before database persistence
+  ok    owner receipt generation endpoint is mounted
+  ok    property-scoped receipt read endpoint is mounted
+  ok    manual preview edit endpoint is mounted
+  ok    manual sent assertion endpoint is mounted
+  ok    human feedback endpoint is mounted
+  ok    release readiness endpoint is mounted
+  ok    binding correction endpoint is mounted
+  ok    exact-delivery finality endpoint is mounted
+  ok    server injects the existing Anthropic client
+  ok    workflow still does not call Ask Spine
+  ok    model adapter has no database dependency
+  ok    service persists speaker resolution lineage
+  ok    service atomically persists extraction and receipt
+  ok    receipt runtime does not send email
+  ok    migration guards receipt-to-run lineage
+  ok    migration guards receipt item lineage
+  ok    migration guards review candidate lineage
+  ok    migration guards missed-item transcript evidence
+  ok    migration still does not write work orders
+  ok    hardening migration enforces one initial binding
+  ok    hardening migration cannot leapfrog Skyline 177 through 180
+  ok    hardening migration prevents binding forks
+  ok    hardening migration exposes only current finality
+  ok    finality method is closed to manual exact-delivery review
+  ok    hardening migration records model attempts and outcomes
+  ok    hardening migration defers accepted outcome enforcement to commit
+  ok    hardening migration still writes no canonical work
+  ok    preview edits are refused after the receipt is sent
+  ok    a conflicting second sent assertion is rejected
+  ok    governed provider-to-receipt workflow completes
+  ok    provider meeting lookup is property scoped
+  ok    workflow persists the validated extraction record
+  ok    workflow response exposes transcript metadata, not transcript prose
+  ok    workflow opens attempt against the exact transcript source link
+  ok    workflow records prompt, schema, and request digests before model use
+  ok    accepted persistence is bound to the opened attempt
+  ok    workflow returns accepted attempt outcome lineage
+  ok    prior human review blocks an unacknowledged reissue
+  ok    blocked reissue causes no additional extraction persistence
+  ok    real owner-receipt HTTP route returns created
+  ok    HTTP route invokes the governed workflow once
+  ok    HTTP route derives property from staff session
+  ok    HTTP route derives actor from staff session
+  ok    HTTP route takes provider meeting identity from path
+  ok    HTTP route passes the intended recipient without client property authority
+  ok    HTTP route refuses a client attempt to switch properties
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 80 run · 80 passed · 0 failed
+  ✓ PASS — meeting_receipt_runtime_v0.test.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/meeting_receipt_runtime_v0.test.js exited 0
+
+  ▶ GATE INVOKED — unit/equity_writer_guards.test.js
+    checks: Equity: provenance, class, transfer, attribution, and ownership reconciliation guards
+
+
+Equity writer guards
+  PASS  secondary summaries cannot establish an additive relationship
+  PASS  governed authority still requires a retained source artifact
+  PASS  not_established remains recordable from a secondary summary
+  PASS  a governed artifact may establish a resolved relationship
+  PASS  preferred terms refuse a non-preferred parent
+  PASS  common overrides refuse a non-common parent
+  PASS  an unsourced position is refused before SQL
+  PASS  a position cannot supersede a different economic slot
+  PASS  a supersession requires the transfer artifact
+  PASS  a successor retires the prior holder on its effective date
+  PASS  a conflict cannot point at another property's position
+  PASS  an unattributed internal note is refused before SQL
+  PASS  whitespace is not a speaker
+  PASS  a named internal-note speaker is retained
+  PASS  establishment preflight refuses an internal note without its speaker
+  PASS  an issuer reconciles only when every current position agrees to 100%
+  PASS  missing or disagreeing percentages never publish an authoritative cap table
+  PASS  the canonical history read carries the holder's governed legal name
+
+18 passed, 0 failed
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/equity_writer_guards.test.js exited 0
+
+  ▶ GATE INVOKED — unit/equity_routes_contract.test.js
+    checks: Equity HTTP: ownership reconciliation survives the canonical standing route
+
+Equity route contract: 5/5
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/equity_routes_contract.test.js exited 0
+
+  ▶ GATE INVOKED — unit/contracted_service_source_artifact.test.js
+    checks: Contracted Services evidence: accepted shapes and product-specific refusals
+
+
+CONTRACTED SERVICES SOURCE EVIDENCE
+
+  ok    an issued agreement is accepted as PDF evidence
+  ok    an accounting workbook remains accounting evidence, not contract truth
+  ok    a renamed text file is refused with Contracted Services language
+  ok    a PDF filename with non-PDF bytes is refused before retention
+
+4 assertions passed
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/contracted_service_source_artifact.test.js exited 0
+
+  ▶ GATE INVOKED — unit/contracted_service_ask_spine.test.js
+    checks: Contracted Services Ask Spine: entitlement, question-bound facts, failures, and references
+
+
+CONTRACTED SERVICES ASK SPINE
+
+  ok    service-contract language selects only Contracted Services
+  ok    cross-domain questions preserve the composition refusal
+  ok    no Asset Management entitlement means no governed read
+  ok    the canonical reader receives server-derived scope and the exact question
+  ok    a failed read is named and never shaped as empty service truth
+  ok    a timed-out read remains distinct from no agreements
+  ok    the composer grounds the answer and keeps database ids away from the model
+  ok    unauthorized Contracted Services questions reach neither reader nor model
+
+8 assertions passed
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/contracted_service_ask_spine.test.js exited 0
+
+  ▶ GATE INVOKED — unit/technician_language.test.js
+    checks: technician language: plain phrases read correctly, nothing guessed into an action
+
+
+════════════════════════════════════════════════════════════════
+  HARNESS   technician_language.test.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  (none — this harness needs no database)
+  EXPECTED  77 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+── 1. PLAIN PHRASES READ CORRECTLY ─────────────────────────
+  ok    "Got it." → accept
+  ok    "got it" → accept
+  ok    "on it" → accept
+  ok    "I'll take it" → accept
+  ok    "ill take that one" → accept
+  ok    "taking it" → accept
+  ok    "will do" → accept
+  ok    "yep" → accept
+  ok    "mine" → accept
+  ok    "accept 1042" → accept
+  ok    "I'm heading over." → en_route
+  ok    "omw" → en_route
+  ok    "on my way" → en_route
+  ok    "heading there now" → en_route
+  ok    "en route" → en_route
+  ok    "leaving now" → en_route
+  ok    "be there in 20" → en_route
+  ok    "headed over" → en_route
+  ok    "next stop" → en_route
+  ok    "Couldn't get in." → no_access
+  ok    "no access" → no_access
+  ok    "nobody's home" → no_access
+  ok    "no one is answering" → no_access
+  ok    "cant get in" → no_access
+  ok    "locked out" → no_access
+  ok    "door was locked" → no_access
+  ok    "no answer at the door" → no_access
+  ok    "need a part" → blocked
+  ok    "waiting on the plumber" → blocked
+  ok    "have to come back" → blocked
+  ok    "can't finish it today" → blocked
+  ok    "stuck" → blocked
+  ok    "needs approval" → blocked
+  ok    "All done." → complete
+  ok    "all done" → complete
+  ok    "finished" → complete
+  ok    "it's complete" → complete
+  ok    "wrapped it up" → complete
+  ok    "all set" → complete
+  ok    "good to go" → complete
+  ok    "finished up" → complete
+  ok    "anything else open here?" → list_work
+  ok    "what's open for me" → list_work
+  ok    "my jobs" → list_work
+  ok    "what do i have" → list_work
+  ok    "anything else" → list_work
+  ok    "what work do i have" → list_work
+  ok    "What work do I have" → list_work
+  ok    "what jobs am i working" → list_work
+  ok    "what work is assigned to me" → list_work
+  ok    "what work do i need to do" → list_work
+  ok    "the leak is stopped but it needs a valve" → finding
+  ok    "shutoff valve is corroded and needs replacing" → finding
+  ok    "the breaker keeps tripping on that outlet" → finding
+  ok    "water damage on the ceiling below" → finding
+
+── 2. NOTHING AMBIGUOUS BECOMES AN ACTION ──────────────────
+  ok    "hi" is not read as a consequential verb
+  ok    "ok" is not read as a consequential verb
+  ok    "?" is not read as a consequential verb
+  ok    "thanks" is not read as a consequential verb
+  ok    "call me" is not read as a consequential verb
+  ok    "sorry" is not read as a consequential verb
+  ok    "should I replace the valve?" is not read as a consequential verb
+  ok    "who is the resident here" is not read as a consequential verb
+  ok    "3 units affected" is not read as a consequential verb
+  ok    "running late" is not read as a consequential verb
+
+── 3. CONSEQUENCE ORDER ────────────────────────────────────
+  ok    a no-access report is not overwritten by a trailing travel clause
+  ok    a blocked report outranks a bare completion word in the same message
+  ok    photos alone are a report, not an unreadable message
+  ok    ...and are flagged as evidence-only so the reply is about the photo
+
+── 4. CONTEXT-DEPENDENT REPLIES ARE SEPARATE ───────────────
+  ok    'ok' is an affirmative, and is NOT a verb on its own
+  ok    'no' is a negative
+  ok    a real sentence is neither
+
+── 5. NO REPLY EVER EXPOSES THE SCHEMA ─────────────────────
+  ok    work_accepted says nothing about the schema
+  ok    en_route_recorded says nothing about the schema
+  ok    no_access_recorded says nothing about the schema
+  ok    blocked_recorded says nothing about the schema
+  ok    finding_recorded says nothing about the schema
+  ok    completion_blocked says nothing about the schema
+  ok    work_completed says nothing about the schema
+  ok    evidence_recorded says nothing about the schema
+  ok    work_list says nothing about the schema
+  ok    authorization_refused says nothing about the schema
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 82 run · 82 passed · 0 failed
+  ✓ PASS — technician_language.test.js
+  EXIT      0
+════════════════════════════════════════════════════════════════
+
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/technician_language.test.js exited 0
+
+  ▶ GATE INVOKED — unit/compliance_document_read.test.js
+    checks: Compliance reader: real City license, explicit unknowns, hostile classification refusals
+
+COMPLIANCE DOCUMENT READER - real City specimen, no database
+  ok    real specimen is recognized
+  ok    classification comes from the authority-issued form
+  ok    compliance type is narrow
+  ok    issuing authority is explicit
+  ok    license number is explicit
+  ok    credential code is explicit
+  ok    commercial activity number is explicit
+  ok    legal entity is explicit
+  ok    property address is explicit
+  ok    unit count is typed
+  ok    unambiguous effective date is ISO
+  ok    ambiguous expiration stays blank
+  ok    ambiguous expiration is named
+  ok    proposal satisfies the governed contract
+  ok    reader explicitly claims retrieval
+  ok    reader does not claim comparison
+  ok    reader does not claim causal explanation
+  ok    wrong folder cannot block content recognition
+  ok    filename cannot alter the proposed number
+  ok    metadata is outside the adapter contract
+  ok    a convincing filename cannot classify content
+  ok    filename-only input remains unclassified
+  ok    production PDF extraction layout is recognized
+  ok    collapsed code and label spacing preserves the credential code
+  ok    the explicit license-number label survives collapsed table columns
+  ok    the compact table preserves the commercial activity number
+  ok    the compact table preserves the unambiguous effective date
+  ok    the compact table still leaves the ambiguous expiration unknown
+  ok    payment is identified as payment evidence
+  ok    payment cannot propose issuance
+  ok    payment proposes no credential number
+  ok    payment proposes no credential period
+  ok    absent license number stays null
+  ok    absent license number is explicit unknown
+  ok    ambiguous numeric date is refused
+  ok    second component over twelve licenses US order
+  ok    invalid calendar date is refused
+  ok    proposal has no standing field
+  ok    proposal has no compliance conclusion
+  ok    proposal has no obligation
+  ok    authority boundary is explicit
+  ok    there is no generic fact_type escape hatch
+  ok    reader has no canonical write authority
+
+43 passed, 0 failed
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/compliance_document_read.test.js exited 0
+
+  ▶ GATE INVOKED — unit/compliance_evidence_intake.test.js
+    checks: Compliance intake: generic PDF retention, dedupe, retain-before-recognition failure
+
+COMPLIANCE EVIDENCE INTAKE - retain first, recognize second
+  ok    pre-existing other format still works: source.csv
+  ok    pre-existing other format still works: source.tsv
+  ok    pre-existing other format still works: source.txt
+  ok    pre-existing other format still works: source.xlsx
+  ok    pre-existing other format still works: source.xlsm
+  ok    pre-existing other format still works: source.xls
+  ok    generic other additionally accepts PDF bytes
+  ok    rent roll still refuses PDF
+  ok    generic PDF still requires PDF bytes
+  ok    source is retained before proposal
+  ok    retained source remains generically classified
+  ok    filename does not prevent content recognition
+  ok    adapter proposes the explicit license number
+  ok    intake returns a proposal fingerprint
+  ok    successful intake has no failure
+  ok    duplicate bytes return the existing artifact
+  ok    duplicate bytes report existing dedupe semantics
+  ok    duplicate bytes do not add a row
+  ok    deduplicated proposal basis is stable
+  ok    parser failure still retains a second source
+  ok    parser failure reports recognition_failed
+  ok    failure receipt says the artifact is retained
+  ok    parser failure does not fabricate a proposal
+  ok    only source_artifacts receives an insert
+  ok    shared storage has no Compliance imports
+  ok    shared storage has no rental-license classification
+
+26 passed, 0 failed
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/compliance_evidence_intake.test.js exited 0
+
+  ▶ GATE INVOKED — unit/compliance_contracts.test.js
+    checks: Compliance contracts: exact proposal and frozen future writer/read/reference wires
+
+COMPLIANCE CONTRACTS - exact wires and implementation state
+  ok    credential labels name their authority identifier
+  ok    finding labels name their authority reference
+  ok    finding labels do not repeat a CVN prefix
+  ok    proposal contract is implemented
+  ok    intake contract is implemented
+  ok    confirmation is implemented
+  ok    write_receipt is implemented
+  ok    standing is implemented
+  ok    detail is implemented
+  ok    HTTP reference opening is implemented
+  ok    proposal validator accepts the live reader
+  ok    proposal names its retrieval basis
+  ok    proposal cannot claim comparison without a basis
+  ok    an unclaimed class cannot smuggle a basis
+  ok    proposal refuses arbitrary fact JSON
+  ok    proposal refuses a standing claim
+  ok    confirmation request is typed and exact
+  ok    confirmation refuses a missing artifact identity
+  ok    confirmation refuses a malformed artifact digest
+  ok    confirmation carries no actor identity
+  ok    confirmation carries no property authority claim
+  ok    browser cannot add property_id to confirmation
+  ok    write receipt requires canonical reread
+  ok    write receipt refuses optimistic embedded standing
+  ok    reference requires a server-minted opener
+  ok    reference refuses an empty opener token
+  ok    reference refuses a raw URL
+  ok    standing separates coverage from credential standing
+  ok    unknown census is represented without an empty-good inference
+  ok    standing separates date from action
+  ok    standing separates attention from standing
+  ok    standing claims retrieval only
+  ok    standing flags cross-domain composition as unsolved
+  ok    standing evidence exposes a server reference, not an artifact id
+  ok    standing refuses an invented composition authorization
+  ok    standing refuses an impossible calendar date
+  ok    standing refuses arbitrary why inputs
+  ok    detail contract carries typed history
+  ok    detail refuses an undeclared capability class
+  ok    comparison remains absent rather than silently inferred
+  ok    failure can prove retention
+  ok    failure cannot claim a returned artifact was discarded
+
+42 passed, 0 failed
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/compliance_contracts.test.js exited 0
+
+  ▶ GATE INVOKED — unit/asset_reader_capabilities.test.js
+    checks: Insurance + Tax readers: retrieval declared; comparison and cause not claimed
+
+ASSET READER CAPABILITIES - retrieval is not comparison or cause
+  ok    shared vocabulary has exactly three classes
+  ok    shared receipt validates
+  ok    shared receipt is immutable
+  ok    a missing class is refused
+  ok    comparison cannot be claimed without its basis
+  ok    an unclaimed class cannot carry a hidden basis
+  ok    insurance proposal: retrieval is claimed
+  ok    insurance proposal: retrieval basis is named
+  ok    insurance proposal: comparison and cause are not claimed
+  ok    tax proposal: retrieval is claimed
+  ok    tax proposal: retrieval basis is named
+  ok    tax proposal: comparison and cause are not claimed
+  ok    unsupported tax evidence still declares what the reader attempted
+  ok    an empty insurance read does not lose its capability receipt
+  ok    proposal bases name their own domains
+  ok    insurance standing: retrieval is claimed
+  ok    insurance standing: retrieval basis is named
+  ok    insurance standing: comparison and cause are not claimed
+  ok    insurance position: retrieval is claimed
+  ok    insurance position: retrieval basis is named
+  ok    insurance position: comparison and cause are not claimed
+  ok    insurance participation carries the same explicit contract
+  ok    tax position: retrieval is claimed
+  ok    tax position: retrieval basis is named
+  ok    tax position: comparison and cause are not claimed
+  ok    tax derivation remains retrieval, not causal explanation
+
+26 passed, 0 failed
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/asset_reader_capabilities.test.js exited 0
+
+  ▶ GATE INVOKED — unit/compliance_user_journey.test.js
+    checks: Compliance user journey: six natural questions, honest attention, server-minted openers
+
+COMPLIANCE USER JOURNEY - question-first contract, no conversational write
+  ok    the governed standing receipt validates
+  ok    the receipt claims retrieval
+  ok    the receipt does not claim comparison
+  ok    the receipt does not claim causal explanation
+  ok    standing is explicitly as-of dated
+  ok    unknown requirement census is not presented as complete
+  ok    'Is our rental license current?' is answerable
+  ok    'Why?' is answerable from a recorded derivation basis
+  ok    'What evidence?' is answerable
+  ok    'When does it expire?' is answerable
+  ok    'Show me the license' has a source reference
+  ok    the canonical record is independently openable
+  ok    'What needs action?' reads attention, not standing
+  ok    expiration remains a date-only next event
+  ok    the unresolved renewal distinction travels with the answer
+  ok    every opener is server minted
+  ok    evidence carries no raw artifact id
+  ok    the composer must not treat its one-property route as composition authority
+  ok    cross-domain composition has an honest failure state
+  ok    confirmation request validates
+  ok    browser confirmation carries no property authority
+  ok    browser confirmation carries no actor authority
+  ok    all six natural questions map to domain-owned fields
+
+23 passed, 0 failed
+
+  ◀ CHILD EXIT CODE PRESERVED — unit/compliance_user_journey.test.js exited 0
+
+════════════════════════════════════════════════════════════════
+  PARENT VALIDATION COMPLETE
+        0  gate_harness_isolation.js
+        0  gate_ci_path_ssl.js
+        0  gate_closure_boundary.js
+        0  gate_no_raw_bridge_joins.js
+        0  gate_operator_session_fields.js
+        0  gate_native_tour_scheduler.js
+        0  unit/us_federal_holidays.test.js
+        0  unit/tour_schedule_ask_spine.test.js
+        0  unit/team_access_session_boundary.test.js
+        0  gate_migration_137_promotion.js
+        0  unit/migration_release_gate.test.js
+        0  gate_completion_writers.js
+        0  gate_activation_dormant.js
+        0  gate_property_creation_paths.js
+        0  gate_insurance_economic_independence.js
+        0  gate_funding_boundary.js
+        0  unit/philadelphia_tax_clocks.test.js
+        0  unit/tax_document_read.test.js
+        0  unit/prospect_vitals_failure.test.js
+        0  unit/conversation_intent_extraction.test.js
+        0  unit/conversation_clarification_and_receipt.test.js
+        0  unit/technician_work_selection.test.js
+        0  unit/ask_spine_answer.test.js
+        0  unit/skyline_ask_spine_sms_matrix.test.js
+        0  proofs/ask_spine_contract_proof.js
+        0  unit/leasing_knowledge.test.js
+        0  unit/prospect_matching.test.js
+        0  unit/staff_sms_router.test.js
+        0  unit/staff_sms_preferences_failure.test.js
+        0  unit/staff_sms_prompt_reply.test.js
+        0  unit/staff_sms_preferences.test.js
+        0  unit/staff_sms_leasing_action.test.js
+        0  unit/operations_line_transfer.test.js
+        0  unit/personal_attention_convergence.test.js
+        0  gate_ask_spine_readers.js
+        0  gate_current_state.js
+        0  scenarios/ask_spine_reader_gate_falsification.js
+        0  unit/tenancy_ask_spine.test.js
+        0  unit/economics_ask_spine.test.js
+        0  unit/application_space_grain.test.js
+        0  unit/application_future_target.test.js
+        0  unit/interval_position_hostile.test.js
+        0  unit/meeting_evidence_ingress.test.js
+        0  unit/meeting_receipt_v0.test.js
+        0  unit/meeting_receipt_extractor_v0.test.js
+        0  unit/meeting_receipt_runtime_v0.test.js
+        0  unit/equity_writer_guards.test.js
+        0  unit/equity_routes_contract.test.js
+        0  unit/contracted_service_source_artifact.test.js
+        0  unit/contracted_service_ask_spine.test.js
+        0  unit/technician_language.test.js
+        0  unit/compliance_document_read.test.js
+        0  unit/compliance_evidence_intake.test.js
+        0  unit/compliance_contracts.test.js
+        0  unit/asset_reader_capabilities.test.js
+        0  unit/compliance_user_journey.test.js
+
+  ✓ PASS — all 56 source-governance gates exited 0
+  PARENT EXIT  0
+════════════════════════════════════════════════════════════════
+
