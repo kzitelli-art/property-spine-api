@@ -328,9 +328,21 @@ const REGISTRY = {
   //  every other registered domain.
   debt: {
     state: "registered",
+    /*  The lender-facing vocabulary an asset manager actually types. Two of
+     *  these were the FOUND item from the reachability lane: `matur(...)`
+     *  beside a debt noun, and `outstanding principal` in the order a person
+     *  says it, both routed to `work` because DEBT_TERMS held only the
+     *  literal `loan maturity`, `maturity date` and `principal balance`.  */
     reached_by: [
       "what is our debt service",
       "when is the maturity date on our debt",
+      "when does the loan mature",
+      "when does the debt mature",
+      "what is the outstanding principal",
+      "what do we owe on the mortgage",
+      "who is the lender",
+      "what is the interest rate on the loan",
+      "is there an extension option",
     ],
     //  Matches docs/archive/DEBT_READ_CONTRACT_AND_SCHEMA.md and the header of
     //  debt_routes.js exactly: retrieval claimed, comparison and causal
