@@ -31,6 +31,13 @@ equity              · absent        · absent        · absent        · absent
 tenancy             · absent        E READ_FAILED   E READ_FAILED   · absent        · absent        E READ_FAILED
 ```
 
+> **SUPERSEDED FOR THE COMPLIANCE ROW, 2026-09-14.** The gap this matrix
+> found was closed in `claude-opus/compliance-guard-20260914`: the compliance
+> branch of `gatherFacts` now carries the `asset_management` guard its four
+> sibling domains have, and its four unentitled cells read `absent`. The
+> table above is left as it was measured — it is the evidence that found the
+> defect. See `docs/handoffs/new-hp/compliance-guard/RECEIPT.md`.
+
 `E` = entitled by the declaration. `READ_FAILED` in an entitled cell is the
 hostile db doing its job — the branch ran and the read was attempted, which is
 what an entitled cell must show. `OK` on `prospect_match` is the term-less

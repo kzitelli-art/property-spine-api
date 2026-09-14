@@ -180,12 +180,19 @@ async function main() {
     TABLE.push(row);
   }
 
-  /*  ── 4. THE DIVERGENCE IS BOUNDED AT THE DOOR ────────────────────────
-   *  The one cell group where gatherFacts discloses without a guard is
-   *  survivable only because answer() refuses first. That claim is not
-   *  taken on trust: it is exercised, with a complete synthetic standing
-   *  shape that WOULD be disclosed if the door let it through.          */
-  console.log("\n  ── THE DIVERGENCE, BOUNDED AT THE DOOR ──");
+  /*  ── 4. BOTH LAYERS NOW REFUSE — THE DIVERGENCE IS CLOSED ───────────
+   *  This block once pinned a gap: gatherFacts disclosed compliance facts
+   *  to a session with zero modules, survivable only because answer()
+   *  refused first. The branch now carries the module guard its four
+   *  sibling domains have, so BOTH layers refuse and this asserts the
+   *  closure in both — with a complete synthetic standing shape that WOULD
+   *  be disclosed if either let it through.
+   *
+   *  The outer assertion is kept rather than deleted. It is the one that
+   *  went red when the fix landed, which is how the fix announced itself
+   *  and forced the registry declaration to be retired in the same commit;
+   *  inverted, it is now the wall that stops the guard being removed.   */
+  console.log("\n  ── BOTH LAYERS REFUSE — THE DIVERGENCE IS CLOSED ──");
   const SYNTHETIC_LABEL = "SYNTHETIC-LICENCE-0001";
   const syntheticStanding = {
     contract_version: "v-synthetic", capability_classes: { retrieval: true },
@@ -204,15 +211,27 @@ async function main() {
     property_id: "p-synthetic-1", allowed_modules: [], subject: "compliance",
     question: "are our licenses current", complianceReader,
   });
-  ok("gatherFacts called directly with ZERO modules DOES disclose compliance facts (the gap, pinned)",
-    JSON.stringify(direct.compliance || {}).includes(SYNTHETIC_LABEL),
-    "the gap no longer reproduces — update the registry declaration");
+  ok("gatherFacts called directly with ZERO modules discloses NO compliance facts",
+    !JSON.stringify(direct.compliance || {}).includes(SYNTHETIC_LABEL),
+    `an unentitled direct caller received compliance facts: ${JSON.stringify(direct.compliance || {}).slice(0, 160)}`);
+  ok("…and the unentitled compliance branch is ABSENT, not a NOT_AUTHORIZED envelope",
+    direct.compliance === undefined,
+    JSON.stringify(direct.compliance));
+  /*  §40.7, AND THE REASON THE ENVELOPE WAS NOT COPIED FROM leasing_person.
+   *  composite_silence classifies every fact whose read_state !== "OK" as
+   *  BLIND. An inner NOT_AUTHORIZED envelope would therefore tell this
+   *  session "at least one required reader did not return, so silence
+   *  cannot mean health" — about a property where nothing is unknown. A
+   *  reader you MAY NOT read is not a reader that DID NOT RETURN.        */
+  ok("…so an unentitled compliance question does not make the property read BLIND",
+    direct.composite_silence && direct.composite_silence.state !== "BLIND",
+    JSON.stringify(direct.composite_silence));
 
   const door = await ask.answer(hostileDb().db, null, {
     property_id: "p-synthetic-1", allowed_modules: [],
     question: "are our licenses current", complianceReader,
   });
-  ok("…but the /ask door refuses first, so nothing is disclosed through it",
+  ok("the /ask door refuses too, with the outer pre-gate unchanged",
     door && door.outcome === "not_authorized"
       && !JSON.stringify(door).includes(SYNTHETIC_LABEL),
     JSON.stringify(door).slice(0, 160));
@@ -220,6 +239,44 @@ async function main() {
     typeof door.answer === "string" && /Compliance/.test(door.answer)
       && /access/i.test(door.answer),
     JSON.stringify(door.answer));
+
+  /*  ── 4b. FOUND, PINNED, NOT FIXED HERE — §40.7 IN leasing_person ─────
+   *  This is why compliance's unentitled path is ABSENCE and not the
+   *  inner envelope leasing_person carries.
+   *
+   *  composite_silence classifies every fact whose `read_state !== "OK"` as
+   *  BLIND, and NOT_AUTHORIZED is not "OK". So a session that merely lacks
+   *  an entitlement is told, about the whole property, that "at least one
+   *  required reader did not return, so silence cannot mean health" — when
+   *  in fact nothing about the property is unknown. Only the caller's
+   *  authority is limited. That is the four silences collapsing: a reader
+   *  you MAY NOT read is not a reader that DID NOT RETURN, and it is not a
+   *  property-level unknown at all.
+   *
+   *  Copying that envelope into compliance would have propagated the
+   *  defect to a second domain, so this lane did not. The fix belongs in
+   *  the silence computation — exclude NOT_AUTHORIZED from `blind` — which
+   *  is outside a lane scoped to one branch and changes leasing_person's
+   *  behaviour. Pinned here so it is tracked and so the next lane inherits
+   *  a measurement rather than a memory. Delete this and the defect goes
+   *  quiet again.                                                         */
+  console.log("\n  ── FOUND · §40.7 · NOT_AUTHORIZED still reads as BLIND ──");
+  {
+    const f = await ask.gatherFacts(hostileDb().db, {
+      property_id: "p-synthetic-1", allowed_modules: ["maintenance"],
+      subject: "leasing_person", question: "has the applicant signed the lease",
+    });
+    ok("leasing_person refuses an unentitled session with an inner envelope",
+      f.leasing_person && f.leasing_person.read_state === "NOT_AUTHORIZED",
+      JSON.stringify(f.leasing_person));
+    ok("FOUND (open): that envelope still makes composite_silence read BLIND",
+      f.composite_silence && f.composite_silence.state === "BLIND"
+        && JSON.stringify(f.composite_silence).includes("leasing_person"),
+      `the defect no longer reproduces — retire this block: ${JSON.stringify(f.composite_silence)}`);
+    ok("FOUND (open): and the stated reason is false for an entitlement refusal",
+      /did not return/.test(JSON.stringify(f.composite_silence)),
+      JSON.stringify(f.composite_silence));
+  }
 
   /*  ── 5. WHAT "NO DATABASE" IS AND IS NOT ─────────────────────────────
    *  The unentitled debt cell touches no database at all. The unentitled
