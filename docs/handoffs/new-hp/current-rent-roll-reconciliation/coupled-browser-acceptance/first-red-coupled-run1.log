@@ -1,0 +1,12 @@
+OWNED_API_READY
+
+  0 passed, 0 failed
+  screenshots: <scratchpad>/current-rr-qb-runtime-20260913/artifacts/coupled-browser
+locator.waitFor: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for locator('#livePropertyLayer:not(.show)') to be visible[22m
+[2m    61 × locator resolved to hidden <section aria-hidden="true" id="livePropertyLayer" class="live-property-layer" aria-labelledby="livePropertyTitle">…</section>[22m
+
+    at selectPropertyVisibly (<scratchpad>/current-rr-qb-runtime-20260913/coupled-browser-runner.cjs:83:55)
+    at async page.evaluate (<scratchpad>/current-rr-qb-runtime-20260913/coupled-browser-runner.cjs:91:98)
+    at async <scratchpad>/app-1a5f257/current_rent_roll_reconciliation.browser.js:83:5
