@@ -26,7 +26,7 @@
 const crypto = require("node:crypto");
 const { Pool } = require("pg");
 const receipt = require("../_run_receipt");
-const HARNESS = __filename, EXPECTED = 58;
+const HARNESS = __filename, EXPECTED = 62;
 const URL_ = receipt.harnessConnectionString();
 const pool = new Pool({ connectionString: URL_, ssl: false });
 const BASE = (process.env.E2E_API_BASE || "http://127.0.0.1:3000").replace(/\/$/, "");
@@ -265,6 +265,61 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
   ok("MB-2: and the basis names the move_month it actually compared",
     readyEarly && readyEarly.prospect_fact && readyEarly.prospect_fact.key === "move_month"
       && String(readyEarly.prospect_fact.value) === "2026-08", JSON.stringify(readyEarly && readyEarly.prospect_fact));
+  //  BOTH DIRECTIONS, and the boundary itself. `violated` above proves the
+  //  comparison can fail; without these it is not proven it can ever pass,
+  //  and a constraint that only ever fails is as useless as one that only
+  //  ever passes. The governed ready date is 2026-09-14, so:
+  //    · a month ending AFTER it            -> satisfied
+  //    · the month it falls in (its own end) -> satisfied, boundary included
+  //    · a month Spine cannot read           -> not_established, never satisfied
+  const personLate = (await pool.query(
+    "insert into persons(name,source,lifecycle_status) values($1,'rehearsal','prospect') returning id",
+    [`Synthetic Prospect Late ${tag}`])).rows[0].id;
+  await recordPersonFact(pool, { personId: personLate, propertyId: priced,
+    attrKey: "move_month", attrValue: "2026-12", source: "human",
+    sourceRecordType: "unknown", actorType: "unattributed", verb: "captured" });
+  const rLate = await inv.matchProspectHomes({ property_id: priced, person_id: personLate, ...TERM }, pool);
+  const readyLate = rLate.homes[0] && rLate.homes[0].basis.find((b) => b.constraint === "readiness");
+  ok("MB-3: a home ready BEFORE the end of the recorded month reads `satisfied`",
+    readyLate && readyLate.state === "satisfied", JSON.stringify(readyLate));
+
+  //  THE BOUNDARY. The recorded month is the one the ready date falls in, so
+  //  the comparison is against that month's LAST day — a prospect who said
+  //  September can take a home ready on the 30th, and an off-by-one here
+  //  would refuse a home they can actually have.
+  const readyDate = String(rLate.homes[0].governed_ready_date);
+  const sameMonth = readyDate.slice(0, 7);
+  const personBoundary = (await pool.query(
+    "insert into persons(name,source,lifecycle_status) values($1,'rehearsal','prospect') returning id",
+    [`Synthetic Prospect Boundary ${tag}`])).rows[0].id;
+  await recordPersonFact(pool, { personId: personBoundary, propertyId: priced,
+    attrKey: "move_month", attrValue: sameMonth, source: "human",
+    sourceRecordType: "unknown", actorType: "unattributed", verb: "captured" });
+  const rBoundary = await inv.matchProspectHomes({ property_id: priced, person_id: personBoundary, ...TERM }, pool);
+  const readyBoundary = rBoundary.homes[0] && rBoundary.homes[0].basis.find((b) => b.constraint === "readiness");
+  note(`boundary: recorded month ${sameMonth} contains the governed ready date ${readyDate}`);
+  ok("MB-3: the month CONTAINING the ready date is satisfied — the last day counts",
+    readyBoundary && readyBoundary.state === "satisfied", JSON.stringify(readyBoundary));
+
+  //  A RECORDED MONTH SPINE CANNOT READ. "spring" is a recorded fact and not
+  //  a comparable one; treating it as satisfied would promote a home on a
+  //  comparison that never happened, which is the defect this whole family
+  //  was corrected for.
+  const personVague = (await pool.query(
+    "insert into persons(name,source,lifecycle_status) values($1,'rehearsal','prospect') returning id",
+    [`Synthetic Prospect Vague ${tag}`])).rows[0].id;
+  await recordPersonFact(pool, { personId: personVague, propertyId: priced,
+    attrKey: "move_month", attrValue: "spring", source: "human",
+    sourceRecordType: "unknown", actorType: "unattributed", verb: "captured" });
+  const rVague = await inv.matchProspectHomes({ property_id: priced, person_id: personVague, ...TERM }, pool);
+  const readyVague = rVague.homes[0] && rVague.homes[0].basis.find((b) => b.constraint === "readiness");
+  ok("MB-3: an unreadable recorded month is `not_established`, never satisfied",
+    readyVague && readyVague.state === "not_established"
+      && readyVague.why === "recorded_move_month_not_a_month", JSON.stringify(readyVague));
+  ok("MB-2: and the basis still shows the recorded value Spine could not compare",
+    readyVague && readyVague.prospect_fact && String(readyVague.prospect_fact.value) === "spring",
+    JSON.stringify(readyVague && readyVague.prospect_fact));
+
   // ══ ACCEPTANCE 2 — NO BUDGET RECORDED ════════════════════════════
   console.log("\nACCEPTANCE 2 [DB] no budget recorded");
   const r2 = await inv.matchProspectHomes({ property_id: skyline, person_id: personNoFacts, ...TERM }, pool);
