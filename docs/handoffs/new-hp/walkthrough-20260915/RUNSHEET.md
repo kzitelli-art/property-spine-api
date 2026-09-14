@@ -9,6 +9,38 @@ production, so the state column says what the receipts last recorded and
 how you confirm it in the morning. Nothing here was executed against
 production.
 
+## Presentation frame (added 2026-09-14 evening)
+
+Say this to Mike, verbatim: **"The operating system is built and the workflow
+has been proven. We are finishing the property-specific data setup so Mike can
+lease from accurate homes, prices, dates, and terms."**
+
+Run it as a controlled launch walkthrough, in this order:
+
+1. Live app, property picker, Skyline, the rent roll as it reads today.
+2. The intended flow: lead arrives → Mike owns it → tour → exact home →
+   application → lease.
+3. Spine asking for a decision when source rows are unclear, instead of
+   silently creating the wrong home or lease (the contested rooms are the
+   demo, not a problem).
+4. Greenery as the next property being prepared: inventory grain and access
+   decisions still open.
+5. Mike's decisions, collected and written down: room mapping, conflicting
+   source rows, tour hours, Greenery's approved lease terms, who may author
+   and who may execute leases.
+
+Facts to have straight before he asks:
+
+- No figure from the rehearsals is Skyline's. The 31 (lease-backed) and 122
+  (claim-backed) counts come from the synthetic fixture in Skyline's shape.
+  The live rent roll tomorrow is the first real read, and it is
+  unreconciled until Mike confirms the room mapping.
+- The coupled browser acceptance passed 14/14 on the reviewed pins and runs
+  in CI on every board build. The production release has not been run.
+- Nothing is deployed. Candidate: API board 6fa4638, app b0be9f4.
+
+Leave with a finite list to finish the Skyline and Greenery pilot.
+
 ## The one-paragraph truth
 
 The website-inquiry-to-signed-lease chain **already exists in production**
