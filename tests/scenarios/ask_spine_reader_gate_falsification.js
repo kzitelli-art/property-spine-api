@@ -226,7 +226,28 @@ try {
                         `const STANDING_READ_DIRS = ["src/asset", "src/tenancy", "src/leasing", "src/surfaces"];`]),
     "is declared in the Ask Spine registry");
 
-  /*  ── 6. THE TREE IS EXACTLY AS IT WAS FOUND ─────────────────────
+  /*  ── 6. THE BRANCH NOBODY CAN REACH ─────────────────────────────
+   *  THE SECOND HISTORICAL DEFECT, and the one this gate could not see
+   *  for two CI runs. prospect_match shipped guarded by
+   *  `subject === "leasing" || subject === "match"`; questionSubject
+   *  yields neither, so the branch was unreachable, the registry said
+   *  `registered`, and the gate passed it. `facts.<domain> =` existing in
+   *  source is not the same claim as a question reaching it, and only the
+   *  reachability check can tell them apart — which is why this mutation
+   *  must be loud.                                                        */
+  falsify("a registered domain's gather branch is guarded by a subject nothing yields",
+    () => mutate(COMPOSER, [`  if (subject === "leasing_person") {`,
+                            `  if (subject === "leasing" || subject === "match") {`]),
+    "is reached by");
+
+  /*  The other direction: a declaration that names no question is a
+   *  registration nobody can exercise, and must not pass either.          */
+  falsify("a registered domain declares no reached_by question",
+    () => mutate(GATE, [`    reached_by: [\n      "how many beds are open",`,
+                        `    reached_by_disabled: [\n      "how many beds are open",`]),
+    "declares reached_by questions");
+
+  /*  ── 7. THE TREE IS EXACTLY AS IT WAS FOUND ─────────────────────
    *  Byte-identical, asserted rather than assumed. A harness that
    *  mutates production source owes the next reader this.              */
   for (const f of FILES) {
@@ -252,5 +273,5 @@ if (fail) {
   console.log("\n  ✗ FAIL — the coverage gate cannot detect a broken registration chain.\n");
   process.exit(1);
 }
-console.log("\n  ✓ PASS — the gate goes red six ways and green again. It is measuring something.\n");
+console.log("\n  ✓ PASS — the gate goes red 8 ways and green again. It is measuring something.\n");
 process.exit(exitCode);
