@@ -26,7 +26,7 @@
 const crypto = require("node:crypto");
 const { Pool } = require("pg");
 const receipt = require("../_run_receipt");
-const HARNESS = __filename, EXPECTED = 62;
+const HARNESS = __filename, EXPECTED = 63;
 const URL_ = receipt.harnessConnectionString();
 const pool = new Pool({ connectionString: URL_, ssl: false });
 const BASE = (process.env.E2E_API_BASE || "http://127.0.0.1:3000").replace(/\/$/, "");
@@ -523,10 +523,17 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
   ok("§40.7: a missing CALLER INPUT never manufactures attention on the property",
     gm.attention_state === null || gm.attention_state === "QUIET",
     `attention_state=${JSON.stringify(gm.attention_state)}`);
-  ok("§40.7: so composite_silence does not name prospect_match as pending",
-    gathered.composite_silence && gathered.composite_silence.state !== "BLIND"
-      && !(gathered.composite_silence.domains || []).includes("prospect_match"),
-    JSON.stringify(gathered.composite_silence).slice(0, 220));
+  //  SCOPED TO THIS DOMAIN. An earlier version also asserted the composite
+  //  state is not BLIND — but BLIND is decided by EVERY other domain's
+  //  reader, so any unrelated reader failing would have turned this step red
+  //  for a reason that has nothing to do with prospect_match. The claim here
+  //  is only that prospect_match contributes neither pending nor blindness.
+  const cs = gathered.composite_silence || {};
+  ok("§40.7: prospect_match is not named pending in composite_silence",
+    !(cs.domains || []).includes("prospect_match"), JSON.stringify(cs).slice(0, 220));
+  ok("§40.7: and prospect_match is not among any unread domains",
+    !(cs.unread || []).some((u) => u && u.domain === "prospect_match"),
+    JSON.stringify(cs).slice(0, 220));
   note(`composite_silence -> ${JSON.stringify(gathered.composite_silence).slice(0, 120)}`);
   //  And the dead subject is gone: a branch no producer can reach is a
   //  registration that cannot be exercised.

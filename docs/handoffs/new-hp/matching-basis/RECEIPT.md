@@ -97,7 +97,7 @@ one; it is recorded as an owner decision, not taken.
 
 ## What was proven, and what each green would miss
 
-`tests/proofs/prospect_match_basis.db.js` — **62 passed / 0 failed**, on an
+`tests/proofs/prospect_match_basis.db.js` — **63 passed / 0 failed**, on an
 owned nonce database built from the real migration chain (ledger 198 / 186
 rows) with the owned server answering the real staff door. Registered in
 `tests/e2e/verify_all.sh`.
@@ -163,6 +163,26 @@ still shown.
 domains discovered and declared `pending` with owner and clearing condition.
 None `registered`: the detector proves gathering and today it proves none of
 them. Gate 115/115, 14 domains, 8 registered, 6 pending (was 87/87, 10/8/2).
+
+### CI 547 went red on a gate I had not actually run
+
+`── source governance gates            FAIL`, with
+`scenarios/ask_spine_reader_gate_falsification.js` exiting 1 and 19 gates NOT
+RUN behind it. That scenario mutates the gate by exact text, and two of its
+six mutations anchor on `const STANDING_READ_DIRS = ["src/asset",
+"src/tenancy"];` — the line the `src/leasing` widening rewrote. The anchors
+now track the new line, carrying `src/leasing` through both sides of each
+rewrite so both mutations keep their original meaning: one drops
+`src/tenancy` (the historical defect), the other adds `src/surfaces` (the
+exclusion turned off). 24/24, six ways red and green again.
+
+**Why I did not see it locally, which is the part worth keeping.** I checked
+the gates with `node tests/verify_source_governance.js 2>&1 | tail -2 && git
+add …`. A pipeline's exit status is the LAST command's, and `tail` always
+succeeds — so the `&&` ran, the two lines I printed looked like the tail of a
+pass, and the gate's real exit code of 1 never reached me. **Piping a gate to
+`tail` discards the only thing the gate returns.** Every gate check in this
+round now runs bare, with `echo "EXIT=$?"` read explicitly.
 
 ### A regression I claimed and then withdrew
 
