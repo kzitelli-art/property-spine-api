@@ -13,7 +13,7 @@ credentials for any of them.
 
 | piece | commit | evidence |
 |---|---|---|
-| API | `03550a8f1cf0ca674839ff51e959c8fbf015730a` (`claude/release-hash-pin-20260914`, product identical to `e808199` except `tools/release/migration_194_198_predeploy.js` pins and one new unit test) | `e808199`: full CI run 522 green; reconciliation proof 63/0; governance 56/0; release contract 23/0. `03550a8`: CI recorded below; PG16 rehearsal below |
+| API | `03550a8f1cf0ca674839ff51e959c8fbf015730a` (`claude/release-hash-pin-20260914`, product identical to `e808199` except `tools/release/migration_194_198_predeploy.js` pins and one new unit test) | `e808199`: full CI run 522 green; reconciliation proof 63/0; governance 56/0; release contract 23/0. `03550a8`: full CI run 525 green with the new hash-pin step executed (`── migration 194-198 reviewed hashes are the git blobs PASS`), release contract PASS, reconciliation 63/0 — https://github.com/kzitelli-art/property-spine-api/actions/runs/34795509220; PG16 rehearsal below |
 | schema | migrations 195, 196, 197, 198 (reviewed hashes pinned inside the wrapper) | recovery matrix 52/0 on PostgreSQL 17 and 18.6 (`RECEIPT.md`, `PG18_RECEIPT.md`); PG16 rehearsal below |
 | app | `1a5f257b703919c4e4caf23dee2fe38002b69591` (`codex/combined-current-rent-roll-app-20260913`) | 71 harnesses 2,422/0; coupled browser acceptance 14/14 against `e808199` (`../current-rent-roll-reconciliation/COUPLED_BROWSER_ACCEPTANCE_20260914.md`) |
 
