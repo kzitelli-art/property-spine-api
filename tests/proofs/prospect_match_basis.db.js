@@ -26,7 +26,7 @@
 const crypto = require("node:crypto");
 const { Pool } = require("pg");
 const receipt = require("../_run_receipt");
-const HARNESS = __filename, EXPECTED = 41;
+const HARNESS = __filename, EXPECTED = 44;
 const URL_ = receipt.harnessConnectionString();
 const pool = new Pool({ connectionString: URL_, ssl: false });
 const BASE = (process.env.E2E_API_BASE || "http://127.0.0.1:3000").replace(/\/$/, "");
@@ -242,6 +242,29 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
     !r1.homes.some((h) => String(h.unit_id) === String(legacyUnit)),
     JSON.stringify(r1.homes.map((h) => h.unit_number)));
 
+  // ══ MB-3 — READINESS IS COMPARED, NOT ASSUMED ════════════════════
+  //  The first delivered version named `move_month` as the prospect fact of
+  //  the readiness constraint and then decided the state purely from whether
+  //  the home had a governed ready date. A home ready AFTER the month the
+  //  prospect recorded read `satisfied`, and `violated` was unreachable — a
+  //  two-state constraint wearing a three-state label, naming a fact it had
+  //  not compared. That is the exact failure MB-3 exists to prevent, in the
+  //  read that exists to enforce it.
+  console.log("\nMB-3 [DB] readiness against the recorded move month");
+  const personEarly = (await pool.query(
+    "insert into persons(name,source,lifecycle_status) values($1,'rehearsal','prospect') returning id",
+    [`Synthetic Prospect Early ${tag}`])).rows[0].id;
+  await recordPersonFact(pool, { personId: personEarly, propertyId: priced,
+    attrKey: "move_month", attrValue: "2026-08", source: "human",
+    sourceRecordType: "unknown", actorType: "unattributed", verb: "captured" });
+  const rEarly = await inv.matchProspectHomes({ property_id: priced, person_id: personEarly, ...TERM }, pool);
+  const readyEarly = rEarly.homes[0] && rEarly.homes[0].basis.find((b) => b.constraint === "readiness");
+  note(`recorded move_month 2026-08 vs governed ready ${rEarly.homes[0] && rEarly.homes[0].governed_ready_date}`);
+  ok("MB-3: a home whose governed ready date is AFTER the recorded move month reads `violated`",
+    readyEarly && readyEarly.state === "violated", JSON.stringify(readyEarly));
+  ok("MB-2: and the basis names the move_month it actually compared",
+    readyEarly && readyEarly.prospect_fact && readyEarly.prospect_fact.key === "move_month"
+      && String(readyEarly.prospect_fact.value) === "2026-08", JSON.stringify(readyEarly && readyEarly.prospect_fact));
   // ══ ACCEPTANCE 2 — NO BUDGET RECORDED ════════════════════════════
   console.log("\nACCEPTANCE 2 [DB] no budget recorded");
   const r2 = await inv.matchProspectHomes({ property_id: skyline, person_id: personNoFacts, ...TERM }, pool);
@@ -252,6 +275,10 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
   ok("MB-3: and it names WHY — the prospect fact is missing, not the home fact",
     price2 && price2.why === "no_recorded_budget" && price2.prospect_fact === null
       && price2.home_fact !== null, JSON.stringify({ why: price2 && price2.why }));
+  const ready2 = r2.homes[0] && r2.homes[0].basis.find((b) => b.constraint === "readiness");
+  ok("MB-3: with no recorded move_month, readiness is `not_established` and says so",
+    ready2 && ready2.state === "not_established" && ready2.why === "no_recorded_move_month"
+      && ready2.prospect_fact === null, JSON.stringify(ready2));
   ok("MB-5: the ordering rule is still named and deterministic",
     typeof r2.ordering_rule === "string" && r2.ordering_rule === r1.ordering_rule
       && /→/.test(r2.ordering_rule), JSON.stringify(r2.ordering_rule));

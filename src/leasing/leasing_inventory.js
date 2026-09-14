@@ -440,6 +440,24 @@ module.exports = function leasingInventoryModule({ pool }) {
     return { amount: n, why: null };
   }
 
+  //  A recorded move month is free text. Accept only shapes that are
+  //  unambiguously a month — YYYY-MM or YYYY-MM-DD. "spring", "ASAP" and
+  //  "Jan" are recorded facts Spine cannot compare, which is its own
+  //  not_established reason and NOT a satisfied constraint. No clever
+  //  parser: a wrong month silently promotes a home the prospect cannot
+  //  take, and honest blank beats confident wrong.
+  function moveMonthEnd(fact) {
+    if (!fact) return { end: null, why: "no_recorded_move_month" };
+    const m = String(fact.value).trim().match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
+    if (!m) return { end: null, why: "recorded_move_month_not_a_month" };
+    const y = Number(m[1]), mo = Number(m[2]);
+    if (!(mo >= 1 && mo <= 12)) return { end: null, why: "recorded_move_month_not_a_month" };
+    //  The LAST day of the recorded month: a prospect who said "August" can
+    //  take a home ready on the 31st.
+    const last = new Date(Date.UTC(y, mo, 0)).toISOString().slice(0, 10);
+    return { end: last, why: null };
+  }
+
   async function matchProspectHomes({
     property_id, person_id = null,
     requested_start = null, requested_end = null, lease_term_months = null,
@@ -551,16 +569,31 @@ module.exports = function leasingInventoryModule({ pool }) {
           value: "eligible_for_requested_term", as_of: requested_start } }));
 
       // ── READINESS ─────────────────────────────────────────────────
-      basis.push(basisEntry("readiness",
-        t.available_from ? STATE.SATISFIED : STATE.NOT_ESTABLISHED, {
-          prospect: prospect.facts.move_month
-            ? prospect.facts.move_month
-            : { key: "move_month", value: null, source: null, recorded_at: null },
-          home: { read: "availability (via application targets)",
+      //  COMPARED, not assumed. The first version of this decided the state
+      //  from whether the home had a governed ready date at all, while
+      //  naming move_month as the prospect fact — so a home ready after the
+      //  recorded month read `satisfied` and `violated` was unreachable. A
+      //  constraint that names a fact it did not compare is the guess MB-2
+      //  forbids, and a state that cannot be violated is two states wearing
+      //  a three-state label.
+      const readyHome = t.available_from
+        ? { read: "availability (via application targets)",
             value: { marketing_state: t.marketing_state, available_from: t.available_from,
               availability_confidence: t.availability_confidence },
-            as_of: requested_start },
-          why: t.available_from ? null : "no_governed_ready_date" }));
+            as_of: requested_start }
+        : null;
+      const want = moveMonthEnd(prospect.facts.move_month);
+      if (!prospect.facts.move_month || want.end == null) {
+        basis.push(basisEntry("readiness", STATE.NOT_ESTABLISHED, {
+          prospect: prospect.facts.move_month || null, home: readyHome, why: want.why }));
+      } else if (!readyHome) {
+        basis.push(basisEntry("readiness", STATE.NOT_ESTABLISHED, {
+          prospect: prospect.facts.move_month, home: null, why: "no_governed_ready_date" }));
+      } else {
+        basis.push(basisEntry("readiness",
+          String(t.available_from) <= want.end ? STATE.SATISFIED : STATE.VIOLATED,
+          { prospect: prospect.facts.move_month, home: readyHome }));
+      }
 
       const counts = { satisfied: 0, violated: 0, not_established: 0 };
       for (const b of basis) counts[b.state]++;
@@ -652,6 +685,9 @@ module.exports = function leasingInventoryModule({ pool }) {
       satisfy_every_recorded_constraint: satisfying,
       unknown_on_price: unknownOn("price"),
       unknown_on_unit_type: unknownOn("unit_type"),
+      unknown_on_readiness: unknownOn("readiness"),
+      violated_on_readiness: r.homes.filter((h) =>
+        h.basis.find((b) => b.constraint === "readiness" && b.state === "violated")).length,
       violated_on_price: r.homes.filter((h) =>
         h.basis.find((b) => b.constraint === "price" && b.state === "violated")).length,
       recorded_prospect_facts: Object.keys(r.prospect.recorded_facts),
