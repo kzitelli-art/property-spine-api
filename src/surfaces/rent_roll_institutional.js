@@ -37,6 +37,7 @@
 "use strict";
 
 const { currentRentRoll } = require("./rent_roll_canonical");
+const { rentRollBuckets } = require("../tenancy/dated_positions");
 
 const NOT_CONFIGURED = "Not configured";
 
@@ -73,6 +74,12 @@ const ymd = (v) => {
 // Occupancy / exception state in language an owner or lender reads without a
 // glossary. The canonical axes stay available in the raw rows beneath.
 function statusLabel(r) {
+  // The operating Rent Roll and this formal schedule must show the same
+  // server-decided bucket. Falling back to the older axis-only wording lets
+  // the print page call a needs-review or activation-pending position
+  // "Occupied" even while the operating table correctly separates it.
+  if (r.bucket_label) return r.bucket_label;
+  if (r.bucket == null) return "Occupancy Unconfirmed";
   if (r.tenancy_state === "contested") return "Contested — overlapping leases";
   if (r.is_down) return "Down";
   /*  ⚠ WITHOUT THIS LINE THE NEW STATE FALLS THROUGH TO "Occupied".
@@ -134,6 +141,10 @@ async function institutionalRentRoll(pool, { property_id, as_of = null } = {}) {
 
   const rows = rr.rows.map(institutionalRow);
   const t = rr.totals;
+  // `currentRentRoll` carries the same bucket on every row that the unit-first
+  // operating reader relays. Tally that already-decided field; do not infer
+  // occupancy from tenancy_state or subtract exceptions in this presentation.
+  const buckets = rentRollBuckets(rr.rows);
 
   return {
     report: {
@@ -152,14 +163,18 @@ async function institutionalRentRoll(pool, { property_id, as_of = null } = {}) {
     // PASSED THROUGH, never recomputed.
     totals: {
       total_positions: t.inventory,
-      confirmed_contractual_occupancy: t.confirmed_contractual_occupancy.occupied,
-      occupancy_denominator: t.confirmed_contractual_occupancy.of_leasable_resolved,
+      confirmed_contractual_occupancy: buckets.occupied,
+      occupancy_denominator: buckets.total,
       trusted_monthly_contractual_rent: t.contractual_rent_trusted,
       positions_contributing_rent: t.positions_contributing_rent,
       contested_rent_excluded: t.contractual_rent_excluded_contested,
       positions_economics_unavailable: t.occupied_without_known_rent,
       positions_conflicting_evidence: rr.exceptions.evidence_disagrees,
       positions_contested: rr.exceptions.contested,
+      positions_activation_pending: buckets.activation_pending,
+      positions_open: buckets.open,
+      positions_needs_review: buckets.needs_review,
+      positions_occupancy_unconfirmed: buckets.not_established,
       positions_down: t.down,
       proof_basis: rr.proof_summary,
     },

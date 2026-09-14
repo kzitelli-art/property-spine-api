@@ -29,6 +29,7 @@ const root = path.resolve(process.env.PROOF_BUSINESS_ROOT || path.join(__dirname
 const sessions = require(path.join(root, "src/identity/staff_session_service.js"));
 const { currentRentRoll } = require(path.join(root, "src/surfaces/rent_roll_canonical.js"));
 const { institutionalRentRoll } = require(path.join(root, "src/surfaces/rent_roll_institutional.js"));
+const { rentRollBuckets } = require(path.join(root, "src/tenancy/dated_positions.js"));
 const { readTenancyStanding } = require(path.join(root, "src/tenancy/tenancy_position_read.js"));
 const { gatherFacts } = require(path.join(root, "src/agent/ask_spine_answer.js"));
 const AS_OF = "2026-07-31";
@@ -172,15 +173,23 @@ function holdExpectation(label) {
         && occ.of_leasable_resolved === expected.denominator && occ.pct === expected.pct,
       JSON.stringify({ actual: occ, expected }));
       const instTotals = institutionalHttp.body.totals;
-      ok(`${label}: institutional JSON carries the same occupancy`, instTotals.confirmed_contractual_occupancy === expected.occupied
-        && instTotals.occupancy_denominator === expected.denominator);
+      // The formal schedule is the print/export of the operator Rent Roll.
+      // Its headline must relay the server bucket decision, including the
+      // full position set and its explicit exceptions. The canonical
+      // tenancy projection above intentionally has a different historical
+      // denominator (it excludes contested/down rows); asserting that old
+      // projection here was the reason this proof stayed red after the
+      // production-facing consistency fix.
+      const operatingBuckets = rentRollBuckets(service.rows);
+      ok(`${label}: institutional JSON carries the operating occupancy`, instTotals.confirmed_contractual_occupancy === operatingBuckets.occupied
+        && instTotals.occupancy_denominator === operatingBuckets.total);
       ok(`${label}: CSV carries the same occupancy`, csvHttp.text.includes(
-        `Confirmed contractual occupancy,${expected.occupied} of ${expected.denominator}`));
+        `Confirmed contractual occupancy,${operatingBuckets.occupied} of ${operatingBuckets.total}`));
       ok(`${label}: canonical service carries the expected occupancy`, service.totals.confirmed_contractual_occupancy.occupied === expected.occupied
         && service.totals.confirmed_contractual_occupancy.of_leasable_resolved === expected.denominator
         && service.totals.confirmed_contractual_occupancy.pct === expected.pct);
-      ok(`${label}: institutional service carries the same occupancy`, institutional.totals.confirmed_contractual_occupancy === expected.occupied
-        && institutional.totals.occupancy_denominator === expected.denominator);
+      ok(`${label}: institutional service carries the operating occupancy`, institutional.totals.confirmed_contractual_occupancy === operatingBuckets.occupied
+        && institutional.totals.occupancy_denominator === operatingBuckets.total);
       ok(`${label}: canonical service and HTTP rows agree`, service.rows.length === canonicalHttp.body.rows.length);
       ok(`${label}: tenancy summary retains two occupied positions`, canonicalHttp.body.tenancy_summary.contractually_occupied === 2);
       ok(`${label}: trusted rent remains 1750`, canonicalHttp.body.totals.contractual_rent_trusted === 1750
