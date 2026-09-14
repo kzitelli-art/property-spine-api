@@ -61,6 +61,50 @@ jobs:
         with:
           fetch-depth: 0
 
+      #  ── THE OPERATOR APP, AT THE COMMIT THIS REPO DECLARED ──────────
+      #  Read the pin from the file rather than writing a sha into this
+      #  workflow. Two copies of a version drift; one does not. The step
+      #  echoes what it read, so the checkout below and the rung labels in
+      #  verify_all.sh can be traced to the same line of the same file.
+      - name: Read the declared operator app pin
+        id: app_pin
+        run: |
+          PIN=tests/e2e/app_pin.txt
+          SHA=$(awk '$1=="sha"{print $2; exit}' "$PIN")
+          BRANCH=$(awk '$1=="branch"{print $2; exit}' "$PIN")
+          REPO=$(awk '$1=="repo"{print $2; exit}' "$PIN")
+          if [ -z "$SHA" ] || [ -z "$REPO" ]; then
+            echo "app_pin.txt declares no sha/repo — refusing to guess"; exit 1
+          fi
+          echo "declared app pin: $REPO @ $SHA ($BRANCH)"
+          echo "sha=$SHA"   >> "$GITHUB_OUTPUT"
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+
+      #  The path is operator-app-pinned, NOT property-spine-app: a tracked
+      #  FILE of that exact name already sits at this repository's root, and a
+      #  checkout there turns it into a directory. Caught locally as a git
+      #  type-change; it would have deleted a tracked file in every CI run.
+      #
+      #  Read-only, and pinned to a full commit sha rather than a branch:
+      #  a branch ref would let the app move under a green API run.
+      #  property-spine-app is PUBLIC, so the default GITHUB_TOKEN reads it
+      #  and no secret is required. If it is ever made private this step is
+      #  the one line to change (`token: ${{ secrets.<name> }}`, contents:read
+      #  on that repository only) — nothing else here weakens to compensate.
+      - name: Check out the operator app at the pin
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.app_pin.outputs.repo }}
+          ref: ${{ steps.app_pin.outputs.sha }}
+          path: operator-app-pinned
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Point the proofs at that checkout
+        run: |
+          echo "E2E_APP_ROOT=$GITHUB_WORKSPACE/operator-app-pinned" >> "$GITHUB_ENV"
+          git -C "$GITHUB_WORKSPACE/operator-app-pinned" rev-parse HEAD
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -120,3 +164,17 @@ jobs:
             /tmp/verify_server.log
             ${{ env.SPINE_PROOF_LOG_DIR }}/*.log
           if-no-files-found: ignore
+
+      #  The coupled rung's screenshots and the transport runner's receipt.
+      #  A browser rung whose evidence stays on a deleted runner is a rung
+      #  nobody can review; these are the only artifacts that show WHAT the
+      #  operator screen looked like when the assertions passed. Retained on
+      #  failure too — a red run's screenshots are the ones worth opening.
+      - name: Upload coupled browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coupled-browser-evidence
+          path: |
+            ${{ env.SPINE_PROOF_LOG_DIR }}/coupled-rent-roll/**
+          if-no-files-found: warn

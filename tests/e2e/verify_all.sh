@@ -73,10 +73,80 @@ step () {  # $1 = label, rest = command
   fi
 }
 
+# ── THE OPERATOR APP PIN ────────────────────────────────────────────
+#  tests/e2e/app_pin.txt is the ONE declared statement of which
+#  property-spine-app commit these proofs may assume. It is read here and
+#  by .github/workflows/verify.yml; nothing else infers an app version.
+#
+#  THE POINT OF THE COMPARISON: a browser rung that runs against an app
+#  commit the API never declared reports green about a surface nobody
+#  pinned. That is worse than the SKIPPED line it replaces. So a present
+#  checkout whose HEAD differs from the pin is a FAILURE that names both
+#  commits, and a checkout whose HEAD cannot be read is a failure too —
+#  "I could not tell" is not "it matched".
+APP_PIN_FILE="$ROOT/tests/e2e/app_pin.txt"
+APP_PIN_SHA=""; APP_PIN_BRANCH=""
+if [ -f "$APP_PIN_FILE" ]; then
+  APP_PIN_SHA=$(awk '$1=="sha"{print $2; exit}' "$APP_PIN_FILE")
+  APP_PIN_BRANCH=$(awk '$1=="branch"{print $2; exit}' "$APP_PIN_FILE")
+fi
+APP_ROOT="${E2E_APP_ROOT:-$ROOT/../property-spine-app}"
+APP_PIN_STATE="no_checkout"; APP_OBSERVED_SHA=""
+if [ -f "$APP_ROOT/index.html" ]; then
+  APP_OBSERVED_SHA=$(git -C "$APP_ROOT" rev-parse HEAD 2>/dev/null || true)
+  if   [ -z "$APP_PIN_SHA" ];                        then APP_PIN_STATE="no_pin_declared"
+  elif [ -z "$APP_OBSERVED_SHA" ];                   then APP_PIN_STATE="unreadable"
+  elif [ "$APP_OBSERVED_SHA" = "$APP_PIN_SHA" ];     then APP_PIN_STATE="matched"
+  else                                                    APP_PIN_STATE="drifted"; fi
+fi
+APP_PIN_SHORT="${APP_PIN_SHA:0:7}"
+export APP_ROOT APP_PIN_SHA APP_PIN_BRANCH APP_PIN_STATE
+
+#  Every rung that needs the shipped app asks THIS, so the three call
+#  sites cannot drift apart from each other either.
+app_rung_ready () {
+  [ -x "${CHROMIUM:-/opt/pw-browsers/chromium-1194/chrome-linux/chrome}" ] || return 1
+  [ "$APP_PIN_STATE" = "matched" ] || return 1
+  return 0
+}
+app_rung_skip_reason () {
+  if [ ! -x "${CHROMIUM:-/opt/pw-browsers/chromium-1194/chrome-linux/chrome}" ]; then
+    echo "no Chromium"
+  elif [ "$APP_PIN_STATE" = "no_checkout" ]; then
+    echo "no E2E_APP_ROOT checkout of the pinned app"
+  else
+    echo "app pin $APP_PIN_STATE"
+  fi
+}
+
 echo "════════════════════════════════════════════════════════════"
 echo "  PROPERTY SPINE — FULL VERIFICATION"
 echo "  database: fresh owned disposable target (credentials omitted)"
 echo "════════════════════════════════════════════════════════════"
+
+printf '── %-34s ' "operator app pin"
+case "$APP_PIN_STATE" in
+  matched)
+    echo "$APP_PIN_SHORT ($APP_PIN_BRANCH) — checkout agrees" ;;
+  no_checkout)
+    echo "$APP_PIN_SHORT declared; no checkout on this runner (app rungs will skip by name)" ;;
+  drifted)
+    echo "FAIL"
+    echo "      THE APP CHECKOUT IS NOT THE COMMIT THIS REPOSITORY DECLARED."
+    echo "      declared (tests/e2e/app_pin.txt): $APP_PIN_SHA"
+    echo "      checked out at $APP_ROOT:         $APP_OBSERVED_SHA"
+    echo "      Move the pin deliberately, or check the app out at the pin."
+    exit 1 ;;
+  unreadable)
+    echo "FAIL"
+    echo "      An app checkout is present at $APP_ROOT but its HEAD could not be read,"
+    echo "      so the declared pin $APP_PIN_SHA could not be confirmed. Not proven is not passed."
+    exit 1 ;;
+  no_pin_declared)
+    echo "FAIL"
+    echo "      An app checkout is present at $APP_ROOT but tests/e2e/app_pin.txt declares no sha."
+    exit 1 ;;
+esac
 
 # ── proofs that need no database ────────────────────────────────────
 step "proof boundary refusal checks" node tests/e2e/proof_boundary.test.js
@@ -295,6 +365,38 @@ else
   step "greenery staff onboarding" node tests/proofs/greenery_staff_onboarding.db.js
   step "source-to-home identity review and Greenery inventory contract" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/source_home_identity_review.db.js
   step "current rent-roll reconciliation into an onboarded property" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/current_rent_roll_reconciliation.db.js
+  #  ── THE SAME RECONCILIATION, THROUGH THE SHIPPED OPERATOR UI ──────
+  #  The step above proves the API. This one proves the screen a person
+  #  actually touches, against the SAME owned server — and it had only
+  #  ever been run by hand, which is why both of this week's first reds
+  #  (the "Choose a property" layer above Deal Setup) were of a class CI
+  #  could not see.
+  #
+  #  The app's proof is NOT edited and NOT copied here. It is loaded
+  #  through the app's own transport runner with `node --require`, on the
+  #  env contract that runner documents: SP (playwright), APP_ROOT, API,
+  #  TLS_PORT, SHOTS — plus API_ROOT and CHROME, which the app proof
+  #  itself reads. SP and API_ROOT are both this checkout: the app proof
+  #  borrows this repository's playwright and pg.
+  #
+  #  TLS_PORT is derived from the nonce-allocated proof port so two runs
+  #  on one machine cannot collide on 8443.
+  if app_rung_ready; then
+    COUPLED_SHOTS="$RUN_DIR/coupled-rent-roll"
+    mkdir -p "$COUPLED_SHOTS"
+    step "browser: coupled rent-roll (app $APP_PIN_SHORT)" \
+      env SP="$ROOT" API_ROOT="$ROOT" APP_ROOT="$APP_ROOT" \
+          API="$E2E_API_BASE" TLS_PORT="${E2E_COUPLED_TLS_PORT:-$((PORT + 5000))}" \
+          CHROME="${CHROMIUM:-}" SHOTS="$COUPLED_SHOTS" \
+          E2E_DATABASE_URL="$E2E_DATABASE_URL" \
+      node --require "$APP_ROOT/tools/coupled_browser_runner.cjs" \
+           "$APP_ROOT/current_rent_roll_reconciliation.browser.js"
+    step "coupled transport receipt (app $APP_PIN_SHORT)" node tests/e2e/coupled_runner_receipt.js "$COUPLED_SHOTS"
+  else
+    echo "── browser: coupled rent-roll         SKIPPED ($(app_rung_skip_reason))"
+    SKIPPED="coupled app browser rung"
+    FAILED=1
+  fi
   stop_owned_server || exit 1
 fi
 fi
@@ -336,19 +438,26 @@ if [ "$FAILED" = "0" ]; then
   step "governed inventory correction" node tests/e2e/inventory_correction.e2e.js
   step "inventory relationship policy coverage" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/gates/gate_inventory_relationship_policy.db.js
   step "inventory correction hardening" node tests/e2e/inventory_correction_hardening.e2e.js
-  if [ -x "${CHROMIUM:-/opt/pw-browsers/chromium-1194/chrome-linux/chrome}" ] && [ -f "${E2E_APP_ROOT:-../property-spine-app}/index.html" ]; then
-    step "browser: inventory correction" node tests/e2e/inventory_correction.browser.js
+  if app_rung_ready; then
+    step "browser: inventory correction (app $APP_PIN_SHORT)" node tests/e2e/inventory_correction.browser.js
   else
-    echo "── browser: inventory correction      SKIPPED (needs Chromium and E2E_APP_ROOT=<operator app checkout>)"
+    echo "── browser: inventory correction      SKIPPED ($(app_rung_skip_reason))"
+    SKIPPED="app browser rungs"
+    FAILED=1
   fi
   step "two-step preparation and execution attribution" node tests/proofs/two_step_attribution_read.db.js
-  #  The operator app is a separate repository; CI has no checkout of it, so
-  #  this rung runs where E2E_APP_ROOT names one (local / release rehearsal)
-  #  and is reported as skipped, by name, everywhere else.
-  if [ -x "${CHROMIUM:-/opt/pw-browsers/chromium-1194/chrome-linux/chrome}" ] && [ -f "${E2E_APP_ROOT:-../property-spine-app}/index.html" ]; then
-    step "browser: two-step execute"  node tests/e2e/two_step_execute.browser.js
+  #  The operator app is a separate repository. CI now checks it out at the
+  #  commit tests/e2e/app_pin.txt declares, so this rung RUNS in CI instead
+  #  of printing SKIPPED in every run. Where no checkout exists (a laptop
+  #  without one) it still skips by name — and the label carries the app
+  #  commit, so a log line can never be read as covering an app version it
+  #  did not run against.
+  if app_rung_ready; then
+    step "browser: two-step execute (app $APP_PIN_SHORT)"  node tests/e2e/two_step_execute.browser.js
   else
-    echo "── browser: two-step execute          SKIPPED (needs Chromium and E2E_APP_ROOT=<operator app checkout>)"
+    echo "── browser: two-step execute          SKIPPED ($(app_rung_skip_reason))"
+    SKIPPED="app browser rungs"
+    FAILED=1
   fi
   stop_owned_server || exit 1
   unset E2E_INTAKE_INACTIVE_PROPERTY_ID
@@ -369,6 +478,7 @@ if [ "$FAILED" = "0" ]; then
 fi
 
 echo "════════════════════════════════════════════════════════════"
+echo "  operator app: $APP_PIN_STATE at ${APP_PIN_SHA:-<none declared>}"
 [ -n "$SKIPPED" ] && echo "  ⚠ NOT RUN: $SKIPPED — this is not a pass."
 if [ "$FAILED" = "0" ]; then echo "  ALL REQUIRED ASSERTIONS PASSED — cleanup must also succeed"; else echo "  ✗ VERIFICATION FAILED"; fi
 echo "════════════════════════════════════════════════════════════"

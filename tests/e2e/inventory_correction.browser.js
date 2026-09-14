@@ -61,6 +61,28 @@ const sessions=require('../../src/identity/staff_session_service');
    });
    await page.addInitScript(s=>sessionStorage.setItem('__ps_staff_session__',JSON.stringify({t:s.token,m:{user_id:s.user,property_id:s.property}})),{token,user:userId,property:H.property_id});
    await page.goto('http://localhost:5174/');await page.waitForLoadState('networkidle');
+   //  ── ISOLATED BLOCK: the combined app's "Choose a property" layer ──
+   //  The combined app (a4a32a4 onward) puts "Choose a property" above the
+   //  shell after entry, at z-index 3900, so NEITHER the Management desk card
+   //  NOR the back crumb is visible until a property is chosen. Before CI
+   //  checked the app out, this rung was SKIPPED in every run and nobody saw
+   //  it; its first CI execution failed here with
+   //  `locator.click: Timeout 30000ms exceeded … waiting for
+   //  locator('.crumb-back') … element is not visible`.
+   //  Same visible step, same shape, as two_step_execute.browser.js — and the
+   //  document is asked whether the choice is actually reachable, because
+   //  rendered is not visible. Nothing in the app is patched.
+   const picker=page.locator('#livePropertyLayer.show');
+   if(await picker.isVisible()){
+    const choice=picker.locator('.live-property-choice:has(.live-property-current)');
+    await choice.first().waitFor({state:'visible',timeout:30000});
+    const seen=await visible(page,'#livePropertyLayer.show .live-property-choice');
+    check(seen.found&&!seen.covered,'the property choice is reachable to the document before any desk is opened');
+    await page.screenshot({path:path.join(artifacts,'choose_property_'+userId+'.png'),fullPage:true}).catch(()=>{});
+    await choice.first().click();
+    await page.waitForFunction(()=>{const l=document.getElementById('livePropertyLayer');return !l||!l.classList.contains('show');},null,{timeout:30000});
+    await page.waitForLoadState('networkidle');
+   }
    const desk=page.locator('.desk-card-management');
    if(await desk.isVisible())await desk.click(); else { await page.locator('.crumb-back').click(); await page.locator('.desk-card-management').click(); }
    await page.locator('.mg-door').first().waitFor({state:'visible',timeout:30000});
