@@ -1178,14 +1178,46 @@ async function gatherFacts(db, {
    *    QUIET      everything returned, and nothing is pending.
    *
    *  The model is handed the verdict, not the evidence to infer one.   */
-  const gathered = Object.entries(facts).filter(
+  const everyEnvelope = Object.entries(facts).filter(
     ([, v]) => v && typeof v === "object" && typeof v.read_state === "string");
+
+  /*  ── A READER YOU MAY NOT READ IS NOT A READER THAT DID NOT RETURN ──
+   *  NOT_AUTHORIZED used to fall into `blind` with everything that is not
+   *  "OK", so a session merely lacking an entitlement was told, about the
+   *  whole property, that "at least one required reader did not return, so
+   *  silence cannot mean health" — when nothing about the property was
+   *  unknown. Only the caller's authority was limited.
+   *
+   *  That is the four silences collapsing. NOT_ESTABLISHED, READ_FAILED,
+   *  READ_TIMED_OUT and QUIET are facts about THE PROPERTY and about
+   *  SPINE. NOT_AUTHORIZED is a fact about THE CALLER. Folding the fifth
+   *  into the four made every restricted session read as BLIND, which is
+   *  both false and the exact shape §5 warns about: a scary-looking
+   *  unknown manufactured out of a perfectly healthy read.
+   *
+   *  A withheld reader is therefore NOT REQUIRED FOR THIS CALLER. It
+   *  decides neither health nor attention, and it is reported separately
+   *  so an answer can say "Spine did not read X for you" without claiming
+   *  the property is unreadable.
+   *
+   *  ⚠ WITHHELD IS NOT ABSENCE. A domain whose branch never ran leaves no
+   *  envelope at all and never appears here; a domain that ran and refused
+   *  leaves this envelope and appears under `withheld`. Both are
+   *  not-a-silence, and they are different facts: one means the question
+   *  did not reach the domain, the other means it did and was refused.  */
+  const withheld = everyEnvelope.filter(([, v]) => v.read_state === "NOT_AUTHORIZED");
+  const gathered = everyEnvelope.filter(([, v]) => v.read_state !== "NOT_AUTHORIZED");
+  const withheldFrom = withheld.length
+    ? { withheld: withheld.map(([k]) => ({ domain: k, reason: "not_authorized" })) }
+    : {};
+
   const blind = gathered.filter(([, v]) => v.read_state !== "OK");
   if (blind.length) {
     facts.composite_silence = {
       state: "BLIND",
       unread: blind.map(([k, v]) => ({ domain: k, read_state: v.read_state })),
       why: "at least one required reader did not return, so silence cannot mean health",
+      ...withheldFrom,
     };
   } else {
     const pending = gathered.filter(([, v]) => {
@@ -1195,10 +1227,18 @@ async function gatherFacts(db, {
         || (Array.isArray(unknowns) && unknowns.length)
         || v.attention_state === "ATTENTION_REQUIRED");
     });
+    /*  QUIET stays computable only when every REQUIRED reader returned —
+     *  and a withheld reader is not required for this caller, so its
+     *  absence from the health computation does not weaken the claim.
+     *  The `why` says so out loud rather than leaving a reader to wonder
+     *  whether the withheld domain was silently counted as healthy.    */
     facts.composite_silence = pending.length
-      ? { state: "ATTENTION", domains: pending.map(([k]) => k) }
+      ? { state: "ATTENTION", domains: pending.map(([k]) => k), ...withheldFrom }
       : { state: "QUIET",
-          why: "every reader returned and none reports anything pending" };
+          why: withheld.length
+            ? "every reader this session may read returned and none reports anything pending"
+            : "every reader returned and none reports anything pending",
+          ...withheldFrom };
   }
 
   return facts;
