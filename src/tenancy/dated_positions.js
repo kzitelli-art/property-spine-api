@@ -230,7 +230,32 @@ function tenancyState(p) {
    *  axis is the value most likely to be trusted by a future reader.  */
   if ((p.other_spanning_lease_positions || []).length) return "unresolved";
   if (claim(p._opening_space_claim) === "vacant") return "vacant";
-  return "unresolved";                     // 'occupied' claim, or 'unknown'
+  /*  ── ACCEPTED OCCUPANCY IS NOT "UNRESOLVED" ───────────────────────
+   *  A position the operator explicitly accepted as occupied, with no
+   *  lease on record, read `unresolved` on this axis — which to a lender
+   *  means "we do not know whether anyone lives there". That is not what
+   *  Spine knows. It knows someone occupies the bed, and that the rent,
+   *  term and legal right governing that occupancy are not established.
+   *  The row already said so in `bucket_reason_code`
+   *  (OPENING_OCCUPANCY_ACCEPTED_TERMS_UNKNOWN) and in
+   *  `contractual_terms_state`; the contractual axis was the one place
+   *  still calling it a mystery.
+   *
+   *  `unresolved` KEEPS its meaning for genuinely unreconciled positions —
+   *  an unknown claim, or an opening position that never settled. Two
+   *  different situations, two different words, because the operator sent
+   *  to chase them does different work in each case.
+   *
+   *  The predicate is the SAME ONE the reason code uses: an accepted
+   *  `occupied` claim whose evidence is `uncorroborated` (no lease
+   *  contradicts it, and none supports it either). It is deliberately not
+   *  the `disagrees` branch that shares the reason code — there the
+   *  operator's claim IS contradicted, and calling that accepted would be
+   *  the confident wrong answer this change exists to remove. The proof
+   *  asserts the two sets rather than assuming they coincide.          */
+  if (claim(p._opening_space_claim) === "occupied"
+      && evidenceState(p) === "uncorroborated") return "occupied_terms_not_established";
+  return "unresolved";                     // 'unknown' claim, or unreconciled
 }
 
 /*  ── THE FOUR BUCKETS A RENT ROLL SHOWS ─────────────────────────────
