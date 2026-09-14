@@ -1,0 +1,38 @@
+{
+  "proof_kind": "actual staff shell, owned HTTP/database",
+  "scope": "Execute slice only; earlier steps via HTTP",
+  "complete": true,
+  "checks": 22,
+  "external_email_sent": false,
+  "writes": [
+    {
+      "actor": "Mike",
+      "dialog": "Approve this application and sign the resident-executed lease for the company?\n\nThis is one decision with two consequences: the application is approved and the lease is executed at the terms the applicant acknowledged."
+    },
+    {
+      "actor": "Mike",
+      "path": "/operator/leasing/lease-packets/<id-1>/execute",
+      "status": 403,
+      "error": "execute_not_authorized"
+    },
+    {
+      "actor": "KZ",
+      "dialog": "Approve this application and sign the resident-executed lease for the company?\n\nThis is one decision with two consequences: the application is approved and the lease is executed at the terms the applicant acknowledged."
+    },
+    {
+      "actor": "KZ",
+      "path": "/operator/leasing/lease-packets/<id-1>/execute",
+      "status": 201,
+      "decisions": [
+        "application_approved",
+        "company_signed"
+      ]
+    }
+  ],
+  "screenshots": [
+    "execute_mike_before.png",
+    "execute_mike_refused.png",
+    "execute_kz_before.png",
+    "execute_kz_after.png"
+  ]
+}
