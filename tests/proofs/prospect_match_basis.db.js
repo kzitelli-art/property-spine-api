@@ -26,7 +26,7 @@
 const crypto = require("node:crypto");
 const { Pool } = require("pg");
 const receipt = require("../_run_receipt");
-const HARNESS = __filename, EXPECTED = 44;
+const HARNESS = __filename, EXPECTED = 52;
 const URL_ = receipt.harnessConnectionString();
 const pool = new Pool({ connectionString: URL_, ssl: false });
 const BASE = (process.env.E2E_API_BASE || "http://127.0.0.1:3000").replace(/\/$/, "");
@@ -356,6 +356,77 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
   ok("MB-7 (HTTP): no term is refused through the door too, with the reason",
     (await call("GET", `/operator/leasing/prospect-match?person_id=${person}`, H))
       .body.qualification === "term_required");
+
+  // ══ MB-8 / §40.8 — THE PERSON WALL ═══════════════════════════════
+  //  The door takes person_id from the query string and reads that person's
+  //  recorded facts. person_attributes rows may carry a NULL property_id —
+  //  prospect_capture.js writes `propertyId || null` — so without a wall a
+  //  leasing user at property A can read the recorded budget, move month and
+  //  unit type of a prospect known only to property B, and can confirm which
+  //  fact keys any person id carries. The sibling door
+  //  /operator/leasing/person-card has refused that since 2026-07-25; this
+  //  one must refuse on the SAME predicate, through one shared helper.
+  console.log("\nMB-8 [HTTP] the person wall");
+  const otherOrg = (await pool.query("insert into organizations(name,slug) values($1,$2) returning id",
+    [`${tag} other`, `${tag.toLowerCase()}-other`])).rows[0].id;
+  const propertyB = (await pool.query(`insert into properties(name,display_name,address,organization_id,
+      leasing_basis,operating_timezone) values($1,'Other property (fixture)','9 Fixture Way',$2,'unit','America/New_York')
+      returning id`, [`${tag} propertyB`, otherOrg])).rows[0].id;
+  const strangerB = (await pool.query(
+    "insert into persons(name,source,lifecycle_status) values($1,'rehearsal','prospect') returning id",
+    [`Synthetic Stranger At B ${tag}`])).rows[0].id;
+  //  Known ONLY at property B — a lead there, and a property-scoped fact.
+  await pool.query("insert into leasing_leads(property_id,person_id) values($1,$2)", [propertyB, strangerB]);
+  await recordPersonFact(pool, { personId: strangerB, propertyId: propertyB, attrKey: "budget",
+    attrValue: "4321", source: "human", sourceRecordType: "unknown", actorType: "unattributed", verb: "captured" });
+  //  And a PERSON-LEVEL fact with no property at all, the shape
+  //  prospect_capture.js writes. This is the one a property wall on
+  //  person_attributes alone would not catch.
+  await recordPersonFact(pool, { personId: strangerB, propertyId: null, attrKey: "unit_type",
+    attrValue: "SECRET-2BR", source: "ai_conversation", sourceRecordType: "unknown",
+    actorType: "unattributed", verb: "captured" });
+
+  const wallQ = `?person_id=${strangerB}&requested_start=${TERM.requested_start}`
+              + `&requested_end=${TERM.requested_end}&lease_term_months=${TERM.lease_term_months}`;
+  const crossed = await call("GET", `/operator/leasing/prospect-match${wallQ}`, H);
+  const crossedText = JSON.stringify(crossed.body);
+  ok("§40.8: a leasing session at THIS property is refused a prospect known only to another",
+    crossed.status === 404 || crossed.status === 403, `${crossed.status} ${crossedText.slice(0, 180)}`);
+  ok("§40.8: and the refusal leaks NO fact key",
+    !/budget|move_month|unit_type/.test(crossedText), crossedText.slice(0, 220));
+  ok("§40.8: no fact VALUE — not the property-scoped one, not the person-level one",
+    !crossedText.includes("4321") && !crossedText.includes("SECRET-2BR"), crossedText.slice(0, 220));
+  ok("§40.8: and no home",
+    !/"homes"\s*:\s*\[\s*\{/.test(crossedText), crossedText.slice(0, 220));
+  //  A success body also contains the word "record"; requiring the refusal
+  //  status here stops this assertion passing on the very answer it exists
+  //  to forbid.
+  ok("§5: the refusal is sayable and names a next step",
+    (crossed.status === 404 || crossed.status === 403)
+      && typeof (crossed.body.error || crossed.body.note) === "string"
+      && /(lead|tour|conversation|enquir)/i.test(String(crossed.body.error || "") + " " + String(crossed.body.note || "")),
+    crossedText.slice(0, 260));
+  //  CONTROL — the wall must not become a blanket refusal. The same session,
+  //  for a prospect with a lead at THIS property, still gets the full basis.
+  await pool.query("insert into leasing_leads(property_id,person_id) values($1,$2)", [priced, person]);
+  const allowed = await call("GET", `/operator/leasing/prospect-match${q}`, H);
+  ok("CONTROL: a prospect with a lead at THIS property still gets the full basis",
+    allowed.status === 200 && Array.isArray(allowed.body.homes) && allowed.body.homes.length >= 1
+      && allowed.body.homes[0].basis.length >= 3,
+    `${allowed.status} ${JSON.stringify(allowed.body).slice(0, 200)}`);
+  ok("CONTROL: and that answer still carries the recorded budget it compared",
+    JSON.stringify(allowed.body).includes('"900"'), JSON.stringify(allowed.body).slice(0, 200));
+  //  The shared helper is ONE predicate, not a second copy.
+  const helperPath = require("node:path").join(__dirname, "..", "..", "src", "identity", "person_property_presence.js");
+  const presenceOwner = require("node:fs").existsSync(helperPath)
+    ? require("node:fs").readFileSync(helperPath, "utf8") : "";
+  const operatorSrc = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "..", "..", "src", "identity", "operator.js"), "utf8");
+  ok("§7: both doors reach the wall through the one shared helper, not two copies",
+    /hasPresenceAtProperty/.test(presenceOwner)
+      && (operatorSrc.match(/hasPresenceAtProperty\(/g) || []).length >= 2
+      && (operatorSrc.match(/from leasing_conversions where person_id/g) || []).length === 0,
+    "operator.js still carries an inline copy of the presence query");
 
   // ══ MB-8 — ASK SPINE: REGISTERED AND GATHERED ════════════════════
   console.log("\nMB-8 [ASK] registration and gathering");
