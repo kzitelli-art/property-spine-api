@@ -35,7 +35,7 @@ edit a codex lane or an Opus lane.
 
 ```text
 Board (single integration candidate):
-  claude/board-20260914 @ f680a36 — CI run 558 green
+  claude/board-20260914 @ 72e981a (this handoff; docs over f680a36, CI run 558 green at f680a36 — confirm the latest run yourself)
   https://github.com/kzitelli-art/property-spine-api/tree/claude/board-20260914
 App pin (development pin, never a release claim):
   tests/e2e/app_pin.txt → property-spine-app claude/coupled-browser-acceptance-20260914 @ b0be9f4
