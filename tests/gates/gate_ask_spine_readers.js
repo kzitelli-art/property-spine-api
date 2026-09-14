@@ -267,24 +267,12 @@ const REGISTRY = {
   compliance: {
     state: "registered",
     entitled_by: ["asset_management"],
-    /*  ⚠ DECLARED FROM THE DOOR, NOT FROM gatherFacts — THEY DISAGREE.
-     *  answer() refuses a compliance question without `asset_management`
-     *  with a sayable refusal. gatherFacts holds NO module guard on this
-     *  branch at all: called directly it gathers full compliance facts for
-     *  a session holding zero modules. Every other registered domain
-     *  carries its guard in BOTH places, and this module's own comment
-     *  says why that matters — "gatherFacts is exported and independently
-     *  callable". Witnessed in tests/proofs/ask_spine_entitlement_matrix.
-     *  test.js and recorded as a FOUND item; NOT fixed, because that is
-     *  product code and this was a proof lane.
-     *
-     *  Removing this block turns the matrix proof red. That is the point:
-     *  the gap is DECLARED and tracked, never silently green.           */
-    composer_divergence: {
-      layer: "gatherFacts",
-      unguarded_cells: ["[]", "leasing", "management", "maintenance"],
-      door_is_guarded: true,
-    },
+    /*  RESOLVED 2026-09-14 — this entry once carried a `composer_divergence`
+     *  block, because gatherFacts held no module guard on the compliance
+     *  branch while answer() refused without `asset_management`. The branch
+     *  now carries the guard its four sibling domains have, so the two
+     *  layers agree and the divergence is retired with the fix that closed
+     *  it. See docs/handoffs/new-hp/compliance-guard/RECEIPT.md.           */
     reached_by: [
       "are our licenses current",
       "what inspections are due",

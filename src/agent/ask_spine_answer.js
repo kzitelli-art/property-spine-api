@@ -783,7 +783,36 @@ async function gatherFacts(db, {
     }
   }
 
-  if (subject === "compliance") {
+  /*  ⚠ THIS BRANCH SHIPPED WITHOUT THE GUARD ITS FOUR SIBLINGS HAVE.
+   *
+   *  `answer()` has always refused a compliance question from a session
+   *  without `asset_management`, so nothing leaked through the door. But
+   *  gatherFacts held NO module check here at all, while utility,
+   *  contracted_service, debt and equity — the four domains that share this
+   *  exact entitlement — each carry one. Called directly with zero modules
+   *  it returned the full compliance projection: licence label, standing,
+   *  evidence labels, next milestone.
+   *
+   *  That mattered because this module already states the rule, a few
+   *  hundred lines down, about the leasing guard: the inner check is kept
+   *  precisely BECAUSE "gatherFacts is exported and independently callable".
+   *  The reasoning was applied to leasing and not to compliance. Found by
+   *  the entitlement matrix, which crosses every registered domain against
+   *  six module sets rather than trusting that a branch is guarded.
+   *
+   *  ⚠ ABSENCE, NOT A NOT_AUTHORIZED ENVELOPE — AND THE REASON IS §40.7.
+   *  The obvious move is to copy leasing_person's inner envelope
+   *  (`{ read_state: "NOT_AUTHORIZED", note }`). Measured, not assumed:
+   *  composite_silence classifies every fact whose `read_state !== "OK"` as
+   *  BLIND, so that envelope tells an unentitled session "at least one
+   *  required reader did not return, so silence cannot mean health" — about
+   *  a property where nothing is unknown. A reader you MAY NOT read is not
+   *  a reader that DID NOT RETURN; collapsing them is exactly the §40.7
+   *  failure. leasing_person has that defect today and it is recorded as a
+   *  FOUND item, not propagated here. Absence is what the four sibling
+   *  domains do, and it is what composite_silence reads correctly.        */
+  if (subject === "compliance"
+      && (allowed_modules || []).includes("asset_management")) {
     try {
       const standing = await complianceReader.readComplianceStanding(db, {
         property_id,
