@@ -52,6 +52,20 @@ const sessions=require('../../src/identity/staff_session_service');
    });
    await page.addInitScript(s=>sessionStorage.setItem('__ps_staff_session__',JSON.stringify({t:s.token,m:{user_id:s.user,property_id:s.property}})),{token,user:userId,property:H.property_id});
    await page.goto('http://localhost:5174/');await page.waitForLoadState('networkidle');
+   //  The combined app (a4a32a4 onward) puts "Choose a property" above the
+   //  shell after entry, at z-index 3900. A signed-in person chooses the
+   //  property the server marked as this session's before any desk is
+   //  reachable; the proof does the same visible step, once, and only when
+   //  the layer is shown. Nothing in the app is patched.
+   const picker=page.locator('#livePropertyLayer.show');
+   if(await picker.isVisible()){
+    const choice=picker.locator('.live-property-choice:has(.live-property-current)');
+    await choice.first().waitFor({state:'visible'});
+    await page.screenshot({path:path.join(artifacts,'choose_property_'+actor+'.png'),fullPage:true}).catch(()=>{});
+    await choice.first().click();
+    await page.waitForFunction(()=>{const l=document.getElementById('livePropertyLayer');return !l||!l.classList.contains('show');});
+    await page.waitForLoadState('networkidle');
+   }
    const home=page.locator('.psx-work');
    if(!(await home.isVisible())){const desk=page.locator('.desk-card').filter({hasText:'LEASING'});if(await desk.isVisible())await desk.click();else await page.locator('.crumb-back').click();await home.waitFor({state:'visible'});}
    //  Signed-in shell: Leasing Work card → Application Records tab → this
