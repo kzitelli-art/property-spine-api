@@ -7,7 +7,7 @@ Full log: `$RT/run.log`
 ## PHASE 0 — local prerequisites — PASS
 
 - `pg_lsclusters`: `16 main 5432 online postgres ...` — Postgres up.
-- `sudo -u postgres psql -c "alter role postgres password 'spineproof'"` → `ALTER ROLE`, exit 0.
+- `sudo -u postgres psql -c "alter role postgres password '<local-only>'"` → `ALTER ROLE`, exit 0.
 - `psql "<db-url>" -Atc "select 1"` → `1`, exit 0.
 - `ls $FIXTURE_TREE/migrations/*.sql | wc -l` → `183`. Last two files: `193_application_offer_lineage.sql`, `194_required_work_target.sql`.
 - `git -C $RELEASE_TREE status --porcelain --untracked-files=no` → empty, exit 0.
