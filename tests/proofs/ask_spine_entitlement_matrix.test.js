@@ -240,27 +240,20 @@ async function main() {
       && /access/i.test(door.answer),
     JSON.stringify(door.answer));
 
-  /*  ── 4b. FOUND, PINNED, NOT FIXED HERE — §40.7 IN leasing_person ─────
-   *  This is why compliance's unentitled path is ABSENCE and not the
-   *  inner envelope leasing_person carries.
-   *
-   *  composite_silence classifies every fact whose `read_state !== "OK"` as
-   *  BLIND, and NOT_AUTHORIZED is not "OK". So a session that merely lacks
-   *  an entitlement is told, about the whole property, that "at least one
+  /*  ── 4b. ENTITLEMENT IS NOT SILENCE (§40.7) ──────────────────────────
+   *  This block was a FOUND pin: composite_silence classified every fact
+   *  whose read_state !== "OK" as BLIND, so a session that merely lacked an
+   *  entitlement was told, about the whole property, that "at least one
    *  required reader did not return, so silence cannot mean health" — when
-   *  in fact nothing about the property is unknown. Only the caller's
-   *  authority is limited. That is the four silences collapsing: a reader
-   *  you MAY NOT read is not a reader that DID NOT RETURN, and it is not a
-   *  property-level unknown at all.
+   *  nothing about the property was unknown. It is now the positive wall.
    *
-   *  Copying that envelope into compliance would have propagated the
-   *  defect to a second domain, so this lane did not. The fix belongs in
-   *  the silence computation — exclude NOT_AUTHORIZED from `blind` — which
-   *  is outside a lane scoped to one branch and changes leasing_person's
-   *  behaviour. Pinned here so it is tracked and so the next lane inherits
-   *  a measurement rather than a memory. Delete this and the defect goes
-   *  quiet again.                                                         */
-  console.log("\n  ── FOUND · §40.7 · NOT_AUTHORIZED still reads as BLIND ──");
+   *  NOT_ESTABLISHED, READ_FAILED, READ_TIMED_OUT and QUIET are facts about
+   *  THE PROPERTY and about SPINE. NOT_AUTHORIZED is a fact about THE
+   *  CALLER. A reader you may not read is not a reader that did not return.
+   *
+   *  The pin was flipped, not deleted: the same three things are asserted,
+   *  in the opposite direction, so removing the fix goes red here.      */
+  console.log("\n  ── ENTITLEMENT IS NOT SILENCE ──");
   {
     const f = await ask.gatherFacts(hostileDb().db, {
       property_id: "p-synthetic-1", allowed_modules: ["maintenance"],
@@ -269,13 +262,67 @@ async function main() {
     ok("leasing_person refuses an unentitled session with an inner envelope",
       f.leasing_person && f.leasing_person.read_state === "NOT_AUTHORIZED",
       JSON.stringify(f.leasing_person));
-    ok("FOUND (open): that envelope still makes composite_silence read BLIND",
-      f.composite_silence && f.composite_silence.state === "BLIND"
-        && JSON.stringify(f.composite_silence).includes("leasing_person"),
-      `the defect no longer reproduces — retire this block: ${JSON.stringify(f.composite_silence)}`);
-    ok("FOUND (open): and the stated reason is false for an entitlement refusal",
-      /did not return/.test(JSON.stringify(f.composite_silence)),
+    ok("composite_silence is NOT BLIND because of an entitlement refusal",
+      f.composite_silence && f.composite_silence.state !== "BLIND",
       JSON.stringify(f.composite_silence));
+    ok("…and the domain is reported under `withheld`, with the reason named",
+      Array.isArray(f.composite_silence.withheld)
+        && f.composite_silence.withheld.some((w) =>
+             w.domain === "leasing_person" && w.reason === "not_authorized"),
+      JSON.stringify(f.composite_silence));
+    ok("…and it is not counted as pending either — entitlement is not attention",
+      !(f.composite_silence.domains || []).includes("leasing_person"),
+      JSON.stringify(f.composite_silence));
+    /*  The health claim must say what it actually checked. "Every reader
+     *  returned" would be a quiet overstatement when one was never read. */
+    ok("…and the QUIET reason says every reader THIS SESSION MAY READ returned",
+      f.composite_silence.state !== "QUIET"
+        || /may read/.test(String(f.composite_silence.why)),
+      JSON.stringify(f.composite_silence.why));
+  }
+
+  /*  WITHHELD IS NOT ABSENCE, AND ABSENCE IS NOT WITHHELD.
+   *  A domain whose branch never ran leaves no envelope and must NOT
+   *  appear under `withheld`; the compliance row of the matrix above is
+   *  absence, and this lane must not have converted it into something
+   *  that looks like a refusal.                                        */
+  {
+    const f = await ask.gatherFacts(hostileDb().db, {
+      property_id: "p-synthetic-1", allowed_modules: [],
+      subject: "compliance", question: "are our licenses current",
+    });
+    ok("an absent domain is not reported as withheld — absence and refusal are different facts",
+      f.compliance === undefined
+        && !(f.composite_silence.withheld || []).some((w) => w.domain === "compliance"),
+      JSON.stringify({ compliance: f.compliance, silence: f.composite_silence }));
+  }
+
+  /*  AND THE SHAPE IS UNCHANGED WHEN NOTHING IS WITHHELD. A new key that
+   *  appeared on every answer would be a contract change for every
+   *  consumer; it appears only when there is something to report.      */
+  {
+    const f = await ask.gatherFacts(hostileDb().db, {
+      property_id: "p-synthetic-1", allowed_modules: ["leasing"],
+      subject: "tour_schedule", question: "when are our next tours",
+      tourScheduleReader: async () => ({ read_state: "OK" }),
+    });
+    ok("no `withheld` key at all when this session was refused nothing",
+      f.composite_silence.withheld === undefined
+        && f.composite_silence.why === "every reader returned and none reports anything pending",
+      JSON.stringify(f.composite_silence));
+  }
+
+  /*  A REAL FAILURE IS STILL BLIND. The fix must narrow what counts as
+   *  blindness by exactly one value and not one more.                  */
+  {
+    const f = await ask.gatherFacts(hostileDb().db, {
+      property_id: "p-synthetic-1", allowed_modules: ["maintenance"],
+      subject: "work", question: "what work is outstanding",
+    });
+    ok("a reader that genuinely did not return is still BLIND",
+      f.composite_silence.state === "BLIND"
+        && (f.composite_silence.unread || []).some((u) => u.read_state === "READ_FAILED"),
+      JSON.stringify(f.composite_silence).slice(0, 200));
   }
 
   /*  ── 5. WHAT "NO DATABASE" IS AND IS NOT ─────────────────────────────
