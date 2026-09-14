@@ -324,8 +324,27 @@ const LEASING_PERSON_WEAK =
  *  but it keeps its own narrower applicant vocabulary on purpose.       */
 const LEASING_PERSON_DETAIL_TERMS =
   /\b(applicants?|sign(?:s|ed|ing|ature|atures)?|countersign(?:s|ed|ing)?|signers?|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|holding (?:this|the|his|her|their|my|our) (?:lease|application|packet|file|approval|signing|renewal|move[- ]?in) up|holding up (?:[a-z]+'?s? )?(?:lease|application|packet|file|approval|signing|renewal|move[- ]?in)|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|tours?|toured|touring|packets?)\b/i;
+/*  ⚠ MATURITY IS A WORD PEOPLE INFLECT, AND PRINCIPAL IS A WORD THEY REORDER.
+ *
+ *  This held only the literal `loan maturity`, `maturity date` and
+ *  `principal balance`, so "when does the loan mature", "when does the debt
+ *  mature" and "what is the outstanding principal" — three sentences a
+ *  lender-facing asset manager types without thinking — fell through every
+ *  named domain and landed on `work`. Registered, gathered, gate-green and
+ *  unreachable by the question actually asked. Found by the reachability
+ *  detector in gate_ask_spine_readers.js, which calls this function on
+ *  declared sentences rather than trusting that the branch exists.
+ *
+ *  The repair is MORPHOLOGY, not a table of sentences: the inflections of
+ *  `mature`, and the two orders of `principal`. A sentence table would have
+ *  to grow once per phrasing and would say nothing about the next one.
+ *
+ *  The maturity verb is BOUND TO A DEBT NOUN on purpose. A bare
+ *  `matur(e|es|ed|ity)` steals "when does the lease mature", which is
+ *  tenancy's and must stay tenancy's — asserted in
+ *  tests/unit/debt_vocabulary_subject.test.js, not left to this comment.  */
 const DEBT_TERMS =
-  /\b(debt (?:position|service)|mortgage(?: loan)?|loan (?:balance|maturity|payment|rate|terms?|pricing)|lender|servicer|principal balance|payoff (?:quote|amount)|interest rate|maturity date|extension option|debt-service reserve)\b/i;
+  /\b(debt (?:position|service)|mortgage(?: loan)?|(?:loan|debt|mortgage)s?\s+matur(?:e|es|ed|ing|ity)|matur(?:e|es|ed|ing|ity)\s+(?:date\s+)?(?:of|on)\s+(?:the\s+|our\s+|its\s+)?(?:loan|debt|mortgage)|loan (?:balance|maturity|payment|rate|terms?|pricing)|lender|servicer|outstanding principal|principal (?:balance|outstanding)|payoff (?:quote|amount)|interest rate|maturity date|extension option|debt-service reserve)\b/i;
 const ECONOMICS_SPECIFIC_TERMS =
   /\b(published pric(?:e|es|ing)|asking rents?|new[- ]lease rents?|renewal rents?|lease (?:price|pricing|rate)|application fees?|administration fees?|admin fees?|amenity fees?|telecom fees?|utility fees?|security deposits?|deposit requirements?|concessions?|move[- ]in (?:cost|costs|total)|monthly total|what (?:do|are) we charg(?:e|ing)|how much (?:do|are) we charg(?:e|ing))\b/i;
 const BARE_PRICING_TERM = /\bpricing\b/i;

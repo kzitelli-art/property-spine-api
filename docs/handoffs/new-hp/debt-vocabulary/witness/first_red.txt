@@ -1,0 +1,139 @@
+FIRST RED — debt reached_by on board 169175da, DEBT_TERMS unchanged
+command: node tests/gates/gate_ask_spine_readers.js; echo GATE EXIT = $?
+
+  ── `registered` must be REACHABLE, not merely assigned ──
+  ok    prospect_match declares reached_by questions
+  ok    prospect_match's gather branch is guarded by a named subject
+  ok    prospect_match is reached by "which homes fit this prospect"
+  ok    prospect_match is reached by "what can we offer a prospect with a 900 budget"
+        prospect_match: guard ["leasing_person"] · 2 question(s) · runtime questionSubject
+  ok    maintenance declares reached_by questions
+  ok    maintenance's gather branch is guarded by a named subject
+  ok    maintenance is reached by "what work is outstanding"
+  ok    maintenance is reached by "which work orders are open"
+        maintenance: guard ["work"] · 2 question(s) · runtime questionSubject
+  ok    compliance declares reached_by questions
+  ok    compliance's gather branch is guarded by a named subject
+  ok    compliance is reached by "are our licenses current"
+  ok    compliance is reached by "what inspections are due"
+        compliance: guard ["compliance"] · 2 question(s) · runtime questionSubject
+  ok    utility declares reached_by questions
+  ok    utility's gather branch is guarded by a named subject
+  ok    utility is reached by "what is the water bill"
+  ok    utility is reached by "how much did we spend on electricity"
+        utility: guard ["utility"] · 2 question(s) · runtime questionSubject
+  ok    contracted_service declares reached_by questions
+  ok    contracted_service's gather branch is guarded by a named subject
+  ok    contracted_service is reached by "what contracted services do we have"
+  ok    contracted_service is reached by "what does our pest control contract cover"
+        contracted_service: guard ["contracted_service"] · 2 question(s) · runtime questionSubject
+  ok    debt declares reached_by questions
+  ok    debt's gather branch is guarded by a named subject
+  ok    debt is reached by "what is our debt service"
+  ok    debt is reached by "when is the maturity date on our debt"
+  FAIL  debt is reached by "when does the loan mature"
+          questionSubject produced "work", but the branch is guarded by ["debt"] — nothing an operator types this way reaches debt.
+  FAIL  debt is reached by "when does the debt mature"
+          questionSubject produced "work", but the branch is guarded by ["debt"] — nothing an operator types this way reaches debt.
+  FAIL  debt is reached by "what is the outstanding principal"
+          questionSubject produced "work", but the branch is guarded by ["debt"] — nothing an operator types this way reaches debt.
+  ok    debt is reached by "what do we owe on the mortgage"
+  ok    debt is reached by "who is the lender"
+  ok    debt is reached by "what is the interest rate on the loan"
+  ok    debt is reached by "is there an extension option"
+        debt: guard ["debt"] · 9 question(s) · runtime questionSubject
+  ok    equity declares reached_by questions
+  ok    equity's gather branch is guarded by a named subject
+  ok    equity is reached by "what is the preferred equity balance"
+  ok    equity is reached by "who holds common equity"
+        equity: guard ["equity"] · 2 question(s) · runtime questionSubject
+  ok    tenancy declares reached_by questions
+  ok    tenancy's gather branch is guarded by a named subject
+  ok    tenancy is reached by "how many beds are open"
+  ok    tenancy is reached by "what is the rent roll"
+        tenancy: guard ["tenancy"] · 2 question(s) · runtime questionSubject
+  ok    utility declared governed detail AND question-bound in src/agent/ask_spine_answer.js
+  ok    contracted_service declared governed detail AND question-bound in src/agent/ask_spine_answer.js
+
+  ── waivers must name an owner and an exit ──
+  ok    forward_leasing has a valid state
+  ok    forward_leasing declares retrieval without claiming comparison or cause
+  ok    forward_leasing records cross-domain composition authorization as unsolved
+  ok    forward_leasing pending names an owner
+  ok    forward_leasing pending names the condition that clears it
+  ok    leasing_standing has a valid state
+  ok    leasing_standing declares retrieval without claiming comparison or cause
+  ok    leasing_standing records cross-domain composition authorization as unsolved
+  ok    leasing_standing pending names an owner
+  ok    leasing_standing pending names the condition that clears it
+  ok    opportunity_lifecycle has a valid state
+  ok    opportunity_lifecycle declares retrieval without claiming comparison or cause
+  ok    opportunity_lifecycle records cross-domain composition authorization as unsolved
+  ok    opportunity_lifecycle pending names an owner
+  ok    opportunity_lifecycle pending names the condition that clears it
+  ok    renewals has a valid state
+  ok    renewals declares retrieval without claiming comparison or cause
+  ok    renewals records cross-domain composition authorization as unsolved
+  ok    renewals pending names an owner
+  ok    renewals pending names the condition that clears it
+  ok    prospect_match has a valid state
+  ok    prospect_match declares retrieval without claiming comparison or cause
+  ok    prospect_match records cross-domain composition authorization as unsolved
+  ok    maintenance has a valid state
+  ok    maintenance declares retrieval without claiming comparison or cause
+  ok    maintenance records cross-domain composition authorization as unsolved
+  ok    compliance has a valid state
+  ok    compliance declares retrieval without claiming comparison or cause
+  ok    compliance records cross-domain composition authorization as unsolved
+  ok    utility has a valid state
+  ok    utility declares retrieval without claiming comparison or cause
+  ok    utility records cross-domain composition authorization as unsolved
+  ok    contracted_service has a valid state
+  ok    contracted_service declares retrieval without claiming comparison or cause
+  ok    contracted_service records cross-domain composition authorization as unsolved
+  ok    insurance has a valid state
+  ok    insurance declares retrieval without claiming comparison or cause
+  ok    insurance records cross-domain composition authorization as unsolved
+  ok    insurance pending names an owner
+  ok    insurance pending names the condition that clears it
+  ok    tax has a valid state
+  ok    tax declares retrieval without claiming comparison or cause
+  ok    tax records cross-domain composition authorization as unsolved
+  ok    tax pending names an owner
+  ok    tax pending names the condition that clears it
+  ok    debt has a valid state
+  ok    debt declares retrieval without claiming comparison or cause
+  ok    debt records cross-domain composition authorization as unsolved
+  ok    equity has a valid state
+  ok    equity declares retrieval without claiming comparison or cause
+  ok    equity records cross-domain composition authorization as unsolved
+  ok    tenancy has a valid state
+  ok    tenancy declares retrieval without claiming comparison or cause
+  ok    tenancy records cross-domain composition authorization as unsolved
+
+════════════════════════════════════════════════════════════════
+  COVERAGE — NOT A PASS/FAIL NUMBER, A SCOPE STATEMENT
+    domains with a canonical standing read   14
+    registered with Ask Spine                8
+    pending                                  6
+    waived                                   0
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 161 run · 158 passed · 3 failed
+  ✗ FAIL — a governed domain is unreachable to Ask Spine and undeclared.
+  EXIT      1
+════════════════════════════════════════════════════════════════
+GATE EXIT = 1
+
+── PRODUCED SUBJECT PER SENTENCE (board 169175da, DEBT_TERMS unchanged) ──
+  reaches debt        "what is our debt service"
+  reaches debt        "when is the maturity date on our debt"
+  MISSES work        "when does the loan mature"
+  MISSES work        "when does the debt mature"
+  MISSES work        "what is the outstanding principal"
+  reaches debt        "what do we owe on the mortgage"
+  reaches debt        "who is the lender"
+  reaches debt        "what is the interest rate on the loan"
+  reaches debt        "is there an extension option"
+  reaches debt        "when does the mortgage mature"
+  MISSES work        "what is the principal outstanding"
