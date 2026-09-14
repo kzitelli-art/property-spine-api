@@ -159,6 +159,7 @@ step "historical pending offer read locks" node tests/unit/proposed_terms_read_l
 step "two-step packet eligibility basis" node tests/unit/two_step_packet_eligibility.test.js
 step "migration 194-198 release contract" node tests/unit/migration_194_198_predeploy_contract.test.js
 step "debt vocabulary subject routing" node tests/unit/debt_vocabulary_subject.test.js
+step "ask spine entitlement matrix" node tests/proofs/ask_spine_entitlement_matrix.test.js
 step "migration 194-198 reviewed hashes are the git blobs" node tests/unit/migration_194_198_reviewed_hashes.test.js
 step "inventory correction door contract" node tests/unit/inventory_correction_contract.test.js
 step "terms preparation attribution" node tests/unit/terms_confirmation_attribution.test.js

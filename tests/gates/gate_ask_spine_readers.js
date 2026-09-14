@@ -242,6 +242,7 @@ const REGISTRY = {
   //  explaining goes red here rather than shipping as "matching".
   prospect_match: {
     state: 'registered',
+    entitled_by: ["leasing", "management"],
     reached_by: [
       "which homes fit this prospect",
       "what can we offer a prospect with a 900 budget",
@@ -255,6 +256,7 @@ const REGISTRY = {
   },
   maintenance: {
     state: 'registered',
+    entitled_by: ["maintenance", "management"],
     reached_by: [
       "what work is outstanding",
       "which work orders are open",
@@ -264,6 +266,25 @@ const REGISTRY = {
   },
   compliance: {
     state: "registered",
+    entitled_by: ["asset_management"],
+    /*  ⚠ DECLARED FROM THE DOOR, NOT FROM gatherFacts — THEY DISAGREE.
+     *  answer() refuses a compliance question without `asset_management`
+     *  with a sayable refusal. gatherFacts holds NO module guard on this
+     *  branch at all: called directly it gathers full compliance facts for
+     *  a session holding zero modules. Every other registered domain
+     *  carries its guard in BOTH places, and this module's own comment
+     *  says why that matters — "gatherFacts is exported and independently
+     *  callable". Witnessed in tests/proofs/ask_spine_entitlement_matrix.
+     *  test.js and recorded as a FOUND item; NOT fixed, because that is
+     *  product code and this was a proof lane.
+     *
+     *  Removing this block turns the matrix proof red. That is the point:
+     *  the gap is DECLARED and tracked, never silently green.           */
+    composer_divergence: {
+      layer: "gatherFacts",
+      unguarded_cells: ["[]", "leasing", "management", "maintenance"],
+      door_is_guarded: true,
+    },
     reached_by: [
       "are our licenses current",
       "what inspections are due",
@@ -274,6 +295,7 @@ const REGISTRY = {
   },
   utility: {
     state: "registered",
+    entitled_by: ["asset_management"],
     reached_by: [
       "what is the water bill",
       "how much did we spend on electricity",
@@ -285,6 +307,7 @@ const REGISTRY = {
   },
   contracted_service: {
     state: "registered",
+    entitled_by: ["asset_management"],
     reached_by: [
       "what contracted services do we have",
       "what does our pest control contract cover",
@@ -328,6 +351,7 @@ const REGISTRY = {
   //  every other registered domain.
   debt: {
     state: "registered",
+    entitled_by: ["asset_management"],
     /*  The lender-facing vocabulary an asset manager actually types. Two of
      *  these were the FOUND item from the reachability lane: `matur(...)`
      *  beside a debt noun, and `outstanding principal` in the order a person
@@ -364,6 +388,7 @@ const REGISTRY = {
   //  as every other registered domain.
   equity: {
     state: "registered",
+    entitled_by: ["asset_management"],
     reached_by: [
       "what is the preferred equity balance",
       "who holds common equity",
@@ -392,6 +417,7 @@ const REGISTRY = {
   //  conversational architecture" means in practice.
   tenancy: {
     state: "registered",
+    entitled_by: ["leasing", "management"],
     reached_by: [
       "how many beds are open",
       "what is the rent roll",
