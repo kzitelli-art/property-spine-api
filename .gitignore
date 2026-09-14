@@ -6,3 +6,12 @@ tmp_*.js
 
 # browser-rung screenshots are run OUTPUT, not fixtures — they change every run
 tests/e2e/*.png
+
+# The operator app is checked out here by CI at the commit tests/e2e/app_pin.txt
+# declares. It is another repository, never this one's source.
+#
+# NOT named property-spine-app/: a TRACKED FILE of that exact name already
+# exists at this repository's root (an HTML copy of the app shell, committed
+# in 0f4aadc). A checkout into that path replaces the tracked file with a
+# directory — caught locally as a `T` type-change before it reached CI.
+operator-app-pinned/
