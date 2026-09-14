@@ -25,10 +25,16 @@ const {
 
 const ROOT = path.join(__dirname, "..", "..");
 const MIGRATIONS = path.join(ROOT, "migrations");
+// SHA-256 of the exact git blobs, which .gitattributes pins to LF on every
+// checkout. The 195-197 values used to be the CRLF bytes of a Windows
+// checkout while 198 was already the LF blob, so a Linux host (Render, CI)
+// refused the release with "differs from the reviewed source". Pin bytes
+// the repository can reproduce anywhere: tests/unit/migration_194_198_reviewed_hashes.test.js
+// recomputes these from the tracked files and fails on any drift.
 const REVIEWED_HASHES = Object.freeze({
-  "195_two_step_leasing_authored_offer_basis.sql": "e5c8f9bdb382b3a36e56e9b514db25734639500be9579171762d37c7e28b02bb",
-  "196_source_home_identity_review.sql": "671273a93914056c0efbf929daab4c0001f7fe4687ae7b5238532f9677e4470c",
-  "197_inventory_correction_hardening.sql": "83d878dc556687e0d5771a4317330f6ebeafe6376a363b590b47578d83bb33a9",
+  "195_two_step_leasing_authored_offer_basis.sql": "cbdf311ea966307a5dfec8d3cbec62ac295b42162b8329e33afef3f1c4788796",
+  "196_source_home_identity_review.sql": "79db3c007ddb52a941a37b0df5e1802f6bf35779166ae33d15182e6272ccd5e8",
+  "197_inventory_correction_hardening.sql": "7c5803a361035fd82521149002f7851145e8fe27905b6698c6bd6fcb1de4c950",
   "198_proposed_source_claim_identity.sql": "0185b55e8ad6ae6b3763296f1136d82064a1f2effc0944e32f32f974c1699556",
 });
 // SHA-256 of normalized pg_get_functiondef() for the reviewed migration 197
