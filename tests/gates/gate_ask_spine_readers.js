@@ -62,6 +62,33 @@
 const fs = require("fs");
 const path = require("path");
 const readerCapabilities = require("../../src/shared/reader_capability_contract.js");
+/*  THE PRODUCER ITSELF, LOADED LAZILY AND DEFENSIVELY.
+ *
+ *  questionSubject is a pure function of its input string, so calling it
+ *  opens no database and starts no server and this stays a
+ *  source-governance gate. But the composer IMPORTS the domain reads it
+ *  composes, so requiring it at load time makes this gate die whenever any
+ *  one of those files is missing — which the falsification scenario proved
+ *  immediately: deleting the tenancy standing read stopped the gate from
+ *  reporting at all instead of failing on the assertion that names it.
+ *
+ *  A gate that dies is worse than a gate that reports: it fails for a
+ *  reason nobody can read. So the producer is loaded on first use, once,
+ *  and a load failure becomes a REPORTED reachability failure naming the
+ *  error, never a crash and never a silent skip.                          */
+let _producer = null;
+function loadQuestionSubject() {
+  if (_producer) return _producer;
+  try {
+    const mod = require("../../src/agent/ask_spine_answer.js");
+    _producer = typeof mod.questionSubject === "function"
+      ? { fn: mod.questionSubject, error: null }
+      : { fn: null, error: "ask_spine_answer exports no questionSubject" };
+  } catch (e) {
+    _producer = { fn: null, error: `could not load the composer: ${e.message}` };
+  }
+  return _producer;
+}
 const ROOT = path.join(__dirname, "..", "..");
 
 let pass = 0, fail = 0;
@@ -215,6 +242,10 @@ const REGISTRY = {
   //  explaining goes red here rather than shipping as "matching".
   prospect_match: {
     state: 'registered',
+    reached_by: [
+      "which homes fit this prospect",
+      "what can we offer a prospect with a 900 budget",
+    ],
     capability_classes: readerCapabilities.retrievalOnly(
       'which homes satisfy a prospect\'s recorded constraints and on what basis; ' +
       'no ranking, no score, no causal explanation'),
@@ -224,17 +255,29 @@ const REGISTRY = {
   },
   maintenance: {
     state: 'registered',
+    reached_by: [
+      "what work is outstanding",
+      "which work orders are open",
+    ],
     capability_classes: readerCapabilities.retrievalOnly('required work and its explicitly recorded location; no readiness assertion'),
     composition_authorization: 'unsolved_cross_domain',
   },
   compliance: {
     state: "registered",
+    reached_by: [
+      "are our licenses current",
+      "what inspections are due",
+    ],
     capability_classes: readerCapabilities.retrievalOnly(
       "canonical Compliance standing and recorded derivation basis"),
     composition_authorization: "unsolved_cross_domain",
   },
   utility: {
     state: "registered",
+    reached_by: [
+      "what is the water bill",
+      "how much did we spend on electricity",
+    ],
     capability_classes: readerCapabilities.retrievalOnly(
       "canonical Utility standing and recorded derivation basis"),
     composition_authorization: "unsolved_cross_domain",
@@ -242,6 +285,10 @@ const REGISTRY = {
   },
   contracted_service: {
     state: "registered",
+    reached_by: [
+      "what contracted services do we have",
+      "what does our pest control contract cover",
+    ],
     capability_classes: readerCapabilities.retrievalOnly(
       "canonical Contracted Services standing, evidence, and recorded derivation basis"),
     composition_authorization: "unsolved_cross_domain",
@@ -281,6 +328,10 @@ const REGISTRY = {
   //  every other registered domain.
   debt: {
     state: "registered",
+    reached_by: [
+      "what is our debt service",
+      "when is the maturity date on our debt",
+    ],
     //  Matches docs/archive/DEBT_READ_CONTRACT_AND_SCHEMA.md and the header of
     //  debt_routes.js exactly: retrieval claimed, comparison and causal
     //  explanation explicitly not — a portfolio comparison needs a basis
@@ -301,6 +352,10 @@ const REGISTRY = {
   //  as every other registered domain.
   equity: {
     state: "registered",
+    reached_by: [
+      "what is the preferred equity balance",
+      "who holds common equity",
+    ],
     //  Matches docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md: retrieval
     //  claimed narrowly, comparison and causal explanation explicitly
     //  not. Equity claims LESS than Debt did at the same build stage on
@@ -325,6 +380,10 @@ const REGISTRY = {
   //  conversational architecture" means in practice.
   tenancy: {
     state: "registered",
+    reached_by: [
+      "how many beds are open",
+      "what is the rent roll",
+    ],
     //  Matches src/tenancy/tenancy_position_read.js exactly. Retrieval only:
     //  comparison needs a basis (per bed, per season, against what) that is a
     //  model nobody recorded, and causal explanation needs linkage between a
@@ -378,6 +437,49 @@ function gathersDomain(gatherSrc, domain, owner = null) {
   if (!assigned) return false;
   if (owner) return code.includes(`require('${owner}')`) || code.includes(`require("${owner}")`);
   return new RegExp(`require\\([^)]*${domain}[^)]*\\)`).test(code);
+}
+
+/*  ══ REACHABILITY — "ASSIGNED" IS NOT "GATHERED" ═══════════════════
+ *
+ *  gathersDomain proves the composer CONTAINS `facts.<domain> =` and the
+ *  right require. It cannot prove any question reaches that line. That gap
+ *  is not hypothetical: prospect_match shipped guarded by
+ *
+ *      if (subject === "leasing" || subject === "match")
+ *
+ *  and questionSubject yields NEITHER — its leasing vocabulary resolves to
+ *  `leasing_person`. The branch was unreachable, the domain was
+ *  `registered`, and this gate passed it twice. A gate that asserts less
+ *  than it says launders the gap into evidence.
+ *
+ *  So a `registered` entry declares `reached_by`: real questions an
+ *  operator might type. For each, the gate CALLS the live questionSubject
+ *  and demands the produced subject be one the domain's own branch is
+ *  guarded by. Runtime, not string-matching, because the producer is the
+ *  only authority on what it produces — and questionSubject is pure over
+ *  its input, so this stays a source-governance gate with no database and
+ *  no server.
+ *
+ *  ── FINDING THE GUARD ───────────────────────────────────────────────
+ *  Static, and deliberately narrow: from the `facts.<domain> =`
+ *  assignment, walk BACK to the nearest `if (subject === …` and read every
+ *  `subject === "literal"` in that condition. A domain whose assignment
+ *  sits under no subject guard at all is unguarded — reported as such
+ *  rather than silently passed, because "runs for every subject" is a
+ *  different claim from "runs for this one" and only the author knows
+ *  which was meant.                                                      */
+function subjectGuardsFor(gatherSrc, domain) {
+  const code = stripComments(gatherSrc);
+  const at = code.search(new RegExp(`facts\\.${domain}\\s*=`));
+  if (at === -1) return { found: false, guards: [], why: "no facts assignment" };
+  const before = code.slice(0, at);
+  const ifAt = before.lastIndexOf("if (subject === ");
+  if (ifAt === -1) return { found: false, guards: [], why: "no enclosing subject guard" };
+  //  The condition runs to the opening brace of its block.
+  const brace = code.indexOf("{", ifAt);
+  const condition = code.slice(ifAt, brace === -1 ? at : brace);
+  const guards = [...condition.matchAll(/subject === "([a-z_]+)"/g)].map((m) => m[1]);
+  return { found: guards.length > 0, guards, why: guards.length ? null : "guard names no subject literal" };
 }
 
 function gathersGovernedDetail(gatherSrc, domain) {
@@ -436,6 +538,42 @@ console.log("  ── detector self-test ──");
   ok("gathersDomain is not satisfied by a block comment",
      !gathersDomain(`/* facts.debt = require("../asset/debt_position_read.js") */`, "debt"));
   //  The declared-owner branch, both ways round.
+  //  ── THE REACHABILITY EXTRACTOR, BOTH WAYS ROUND ─────────────────
+  //  Fed known-good and known-bad text before it is pointed at the real
+  //  composer, same discipline as every other detector here.
+  ok("subjectGuardsFor finds the guard above an assignment",
+     JSON.stringify(subjectGuardsFor(
+       `if (subject === "leasing_person") {\n  facts.prospect_match = read();\n}`,
+       "prospect_match").guards) === '["leasing_person"]');
+  ok("subjectGuardsFor finds EVERY subject a compound guard names",
+     JSON.stringify(subjectGuardsFor(
+       `if (subject === "leasing" || subject === "match") {\n  facts.prospect_match = read();\n}`,
+       "prospect_match").guards) === '["leasing","match"]');
+  ok("subjectGuardsFor reports an assignment under NO subject guard",
+     subjectGuardsFor(`facts.prospect_match = read();`, "prospect_match").found === false);
+  ok("subjectGuardsFor reports a missing assignment rather than guessing",
+     subjectGuardsFor(`if (subject === "leasing_person") { facts.other = read(); }`,
+       "prospect_match").found === false);
+  ok("subjectGuardsFor takes the NEAREST preceding guard, not the first in the file",
+     JSON.stringify(subjectGuardsFor(
+       `if (subject === "work") {\n  facts.maintenance = a();\n}\n` +
+       `if (subject === "tenancy") {\n  facts.tenancy = b();\n}`,
+       "tenancy").guards) === '["tenancy"]');
+  ok("subjectGuardsFor ignores a guard that lives only in a comment",
+     JSON.stringify(subjectGuardsFor(
+       `/* if (subject === "match") { */\nif (subject === "leasing_person") {\n  facts.prospect_match = r();\n}`,
+       "prospect_match").guards) === '["leasing_person"]');
+  //  And the producer is callable from here at all — if requiring the
+  //  composer ever needs a database, this gate stops being source-only and
+  //  must be moved, loudly, rather than quietly skipped.
+  {
+    const probe = loadQuestionSubject();
+    ok("the producer loads inside a source-only gate, or says why not",
+       probe.error === null && typeof probe.fn === "function"
+         && typeof probe.fn("what work is outstanding") === "string",
+       probe.error || "questionSubject did not return a subject");
+  }
+
   ok("gathersDomain accepts a declared owner the composer actually requires",
      gathersDomain(`const x = require('../leasing/leasing_inventory'); facts.prospect_match = x.read();`,
        "prospect_match", "../leasing/leasing_inventory"));
@@ -549,6 +687,39 @@ if (gatherSrc === null) {
        gathersDomain(gatherSrc, d, (REGISTRY[d] || {}).owner || null),
        `${d} claims registration the composer does not implement`);
   }
+  /*  ── REACHABILITY: A SUBJECT THE PRODUCER ACTUALLY YIELDS ────────
+   *  The assignment exists; now prove a question can reach it. The live
+   *  questionSubject is the only authority on what it produces, so it is
+   *  CALLED, never string-matched.                                       */
+  console.log("\n  ── `registered` must be REACHABLE, not merely assigned ──");
+  for (const [d, declaration] of registered) {
+    const reachedBy = Array.isArray(declaration.reached_by) ? declaration.reached_by : [];
+    ok(`${d} declares reached_by questions`, reachedBy.length > 0,
+       `${d} is registered but names no question that reaches it. A branch nobody ` +
+       `can reach is a registration nobody can exercise.`);
+    if (!reachedBy.length) continue;
+
+    const guard = subjectGuardsFor(gatherSrc, d);
+    ok(`${d}'s gather branch is guarded by a named subject`, guard.found,
+       `${d}: ${guard.why}. An assignment under no subject guard claims to run for ` +
+       `every subject, which is a different claim from running for this one.`);
+    if (!guard.found) continue;
+
+    const producer = loadQuestionSubject();
+    for (const q of reachedBy) {
+      let produced = null, threw = producer.error;
+      if (!threw) { try { produced = producer.fn(q); } catch (e) { threw = e.message; } }
+      ok(`${d} is reached by ${JSON.stringify(q)}`,
+         !threw && guard.guards.includes(produced),
+         threw ? `questionSubject threw: ${threw}`
+               : `questionSubject produced ${JSON.stringify(produced)}, but the branch is ` +
+                 `guarded by ${JSON.stringify(guard.guards)} — nothing an operator types ` +
+                 `this way reaches ${d}.`);
+    }
+    console.log(`        ${d}: guard ${JSON.stringify(guard.guards)} · ` +
+                `${reachedBy.length} question(s) · runtime questionSubject`);
+  }
+
   for (const [d, declaration] of registered.filter(([, v]) => v.governed_detail)) {
     ok(`${d} declared governed detail AND question-bound in ${GATHER}`,
        gathersGovernedDetail(gatherSrc, d),
