@@ -26,7 +26,7 @@
 const crypto = require("node:crypto");
 const { Pool } = require("pg");
 const receipt = require("../_run_receipt");
-const HARNESS = __filename, EXPECTED = 40;
+const HARNESS = __filename, EXPECTED = 41;
 const URL_ = receipt.harnessConnectionString();
 const pool = new Pool({ connectionString: URL_, ssl: false });
 const BASE = (process.env.E2E_API_BASE || "http://127.0.0.1:3000").replace(/\/$/, "");
@@ -53,18 +53,19 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
   receipt.begin(HARNESS, { url: URL_, expected: EXPECTED });
 
   // ══ FIXTURE SETUP — labelled, and BEFORE any business action ══════
-  //  The governed inventory is the repository's own established fixture:
-  //  Skyline E2E carries ONE eligible target (3B | Bed B) under an
-  //  established opening position, priced at 1025 for a 12-month term.
-  //  Hand-rolling a second activation chain would prove my fixture, not
-  //  the product. A separate synthetic property carries NO published
-  //  pricing, for the coverage case.
-  const skyline = (await pool.query(
-    "select id from properties where name='Skyline E2E' order by created_at desc limit 1")).rows[0].id;
-  const org = (await pool.query(
-    "select organization_id from properties where id=$1", [skyline])).rows[0].organization_id
-    || (await pool.query("insert into organizations(name,slug) values($1,$2) returning id",
-        [tag, tag.toLowerCase()])).rows[0].id;
+  //  THE PROOF OWNS ITS INVENTORY. An earlier version borrowed the shared
+  //  Skyline fixture, which passed locally and failed in CI: by the time
+  //  this step runs, twenty other proofs have leased, applied to and moved
+  //  into Skyline, so its one eligible target is gone. A proof that depends
+  //  on another proof's leftovers is measuring the order of the suite.
+  //
+  //  So this establishes its own governed inventory the way the product
+  //  does — import batch → activation → source row → confirmed proposed
+  //  record → established opening position — copied in shape from
+  //  tests/e2e/property_fixture.sql. Two homes, both confirmed vacant, so
+  //  the ordering tiebreaks have something to order. Invented figures.
+  const org = (await pool.query("insert into organizations(name,slug) values($1,$2) returning id",
+    [tag, tag.toLowerCase()])).rows[0].id;
   const person = (await pool.query(
     "insert into persons(name,source,lifecycle_status) values($1,'rehearsal','prospect') returning id",
     [`Synthetic Prospect ${tag}`])).rows[0].id;
@@ -77,41 +78,112 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
     [`Synthetic Staff ${tag}`, `${tag.toLowerCase()}@example.test`,
      `+1215${String(5000000 + (parseInt(tag.slice(3), 16) % 4000000)).padStart(7, "0")}`, org])).rows[0].id;
 
-  const unpriced = (await pool.query(`insert into properties(name,display_name,address,organization_id,
-      leasing_basis,operating_timezone) values($1,'Unpriced (fixture)','2 Fixture Way',$2,'unit','America/New_York')
-      returning id`, [`${tag} unpriced`, org])).rows[0].id;
-  for (const p of [skyline, unpriced]) {
+  async function property(name, display) {
+    const id = (await pool.query(`insert into properties(name,display_name,address,organization_id,
+      leasing_basis,operating_timezone) values($1,$2,'1 Fixture Way',$3,'unit','America/New_York')
+      returning id`, [name, display, org])).rows[0].id;
     await pool.query(`insert into property_team_assignments(property_id,user_id,role_title,role_key,
       scope_type,allowed_modules,primary_for_modules,can_manage_roles,active)
-      values($1,$2,'property_admin','property_admin','property',array['leasing','management'],'{management}',true,true)
-      on conflict do nothing`, [p, staff]);
+      values($1,$2,'property_admin','property_admin','property',array['leasing','management'],'{management}',true,true)`,
+      [id, staff]);
+    return id;
+  }
+  //  ESTABLISH CONFIRMED VACANT POSITIONS, through the same objects a real
+  //  confirmation writes. Without this the classifier answers
+  //  `occupancy_unknown` and the target read refuses the home — correctly.
+  //
+  //  ONE opening position per property: uq_opening_tenancy_position_current_per_property
+  //  enforces it, which is the product rule, so every home at a property is
+  //  established under ONE activation with one source row each.
+  async function establishVacantHomes(propertyId, unitNumbers, unitTypeId) {
+    const batch = (await pool.query(`insert into import_batches(property_id,source_type,source_file,
+      source_as_of_date,leasing_model,confidence,status)
+      values($1,'rent_roll_ledger',$2,date '2026-07-31','unit','confirmed','committed') returning id`,
+      [propertyId, `${tag}-${propertyId.slice(0, 8)}.csv`])).rows[0].id;
+    const act = (await pool.query(`insert into activations(property_id,status,source_as_of_date,
+      import_batch_id,source_label) values($1,'activated',date '2026-07-31',$2,$3) returning id`,
+      [propertyId, batch, `${tag}.csv`])).rows[0].id;
+    const made = [];
+    let rowIndex = 0;
+    for (const unitNumber of unitNumbers) {
+      rowIndex++;
+      const unit = (await pool.query(`insert into units(property_id,unit_number,bedrooms,bathrooms,
+        unit_type_id,unit_type_source) values($1,$2,2,1,$3,'fixture') returning id`,
+        [propertyId, unitNumber, unitTypeId])).rows[0].id;
+      await pool.query("delete from spaces where unit_id=$1", [unit]);   // drop the trigger placeholder
+      await materializeRentableSpaces(pool, { unit_id: unit, labels: ["Whole"], kind: "unit" });
+      //  use_type is the operating-use decision and the materializer does not
+      //  make it. Without it the target read answers `use_not_configured` and
+      //  refuses the home — correctly, which is why the fixture must record
+      //  it rather than the reader assume it.
+      await pool.query("update spaces set use_type='residential' where unit_id=$1", [unit]);
+      const space = (await pool.query("select id from spaces where unit_id=$1 limit 1", [unit])).rows[0].id;
+      const row = (await pool.query(`insert into import_source_rows(import_batch_id,row_index,raw,parse_note,
+        produced_unit_id,produced_space_id) values($1,$2,$3,'fixture: confirmed vacancy',$4,$5) returning id`,
+        [batch, rowIndex, JSON.stringify({ unit_number: unitNumber, space_label: "Whole", is_vacant: true }),
+         unit, space])).rows[0].id;
+      await pool.query(`insert into proposed_records(activation_id,property_id,module,target_type,natural_key,
+        normalized_json,status,status_reason,import_source_row_id,confirmed_at)
+        values($1,$2,'leasing','lease',$3,$4,'promoted','Fixture: confirmed vacant rentable position.',$5,now())`,
+        [act, propertyId, `${unitNumber}|Whole`,
+         JSON.stringify({ section: "current", unit_number: unitNumber, space_label: "Whole", is_vacant: true }), row]);
+      made.push({ unit, space, unitNumber });
+    }
+    await pool.query(`insert into opening_tenancy_positions(property_id,activation_id,import_batch_id,
+      as_of_date,positions_established,positions_unresolved,source_rows_read,authority_basis,status)
+      values($1,$2,$3,date '2026-07-31',$4,0,$4,'fixture:prospect_match_basis.db.js','established')`,
+      [propertyId, act, batch, made.length]);
+    return made;
   }
 
-  //  LEGACY-ONLY HOME (acceptance case 5): units.bedrooms populated and
-  //  flagged vacant, with its trigger-provisioned space REMOVED so there is
-  //  no Deal Setup position behind it. If matching ever reads the legacy
-  //  columns, this row appears.
+  const priced = await property(`${tag} priced`, "Priced (fixture)");
+  const unpriced = await property(`${tag} unpriced`, "Unpriced (fixture)");
+  const typeFor = {};
+  for (const pr of [priced, unpriced]) {
+    typeFor[pr] = (await pool.query(`insert into property_unit_types(property_id,code,label,sort_order)
+      values($1,'2BR','2 Bed / 1 Bath',1) returning id`, [pr])).rows[0].id;
+  }
+  await establishVacantHomes(priced, ["P-101", "P-102"], typeFor[priced]);
+  await establishVacantHomes(unpriced, ["U-201"], typeFor[unpriced]);
+
+  //  Published pricing for the priced property only: draft, then publish,
+  //  which is the order the immutability rule requires.
+  const ver = (await pool.query(`insert into property_pricing_versions(property_id,status,effective_from,note)
+      values($1,'draft',current_date - 1,'FIXTURE — not authorized pricing') returning id`, [priced])).rows[0].id;
+  await pool.query(`insert into pricing_terms(pricing_version_id,property_id,unit_type_id,unit_type,
+      lease_term_months,base_rent,offer_state) values($1,$2,$3,'2BR',12,1400.00,'offered')`,
+    [ver, priced, typeFor[priced]]);
+  await pool.query("update property_pricing_versions set status='published', published_at=now() where id=$1", [ver]);
+
+  //  LEGACY-ONLY HOME (acceptance case 5): bedrooms populated and flagged
+  //  vacant, with its trigger-provisioned space REMOVED, so there is no
+  //  governed position behind it. If matching ever reads the legacy
+  //  columns, this row appears in the answer.
   const legacyUnit = (await pool.query(`insert into units(property_id,unit_number,bedrooms,bathrooms,occupancy_status)
-      values($1,$2,2,1,'vacant') returning id`, [skyline, `LEGACY-${tag}`])).rows[0].id;
+      values($1,$2,2,1,'vacant') returning id`, [priced, `LEGACY-${tag}`])).rows[0].id;
   await pool.query("delete from spaces where unit_id=$1", [legacyUnit]);
   const legacySpaces = (await pool.query("select count(*)::int n from spaces where unit_id=$1", [legacyUnit])).rows[0].n;
   ok("PRECONDITION: the legacy-only home has bedrooms and a vacant flag but NO governed position",
     legacySpaces === 0, `spaces=${legacySpaces}`);
 
-  //  The prospect's RECORDED constraint, through the canonical writer.
-  //  1200 is above nothing here: the governed price is 1025, so a budget of
-  //  900 makes the one eligible home violated, which is the case MB-3 exists
-  //  for. pa_typed_source_has_ref: a TYPED receipt must carry its id, and
-  //  this fixture has no lead row to point at, so the honest receipt is
-  //  'unknown' — the writer's own vocabulary allows it.
+  const skyline = priced;   // the property under test for every case below
+
+  //  The prospect's RECORDED constraint, through the canonical writer. The
+  //  governed price is 1400, so a recorded budget of 900 makes both homes
+  //  violated — the case MB-3 exists for. pa_typed_source_has_ref: a TYPED
+  //  receipt must carry its id, and this fixture has no lead row to point
+  //  at, so the honest receipt is 'unknown', which the writer allows.
   const budgetWrite = await recordPersonFact(pool, {
-    personId: person, propertyId: skyline, attrKey: "budget", attrValue: "900",
+    personId: person, propertyId: priced, attrKey: "budget", attrValue: "900",
     source: "human", sourceRecordType: "unknown", actorType: "unattributed", verb: "captured" });
   ok("PRECONDITION: the prospect's budget is recorded through the canonical person-fact writer",
     budgetWrite.written === true, JSON.stringify(budgetWrite.skipped_reason || null));
+  ok("PRECONDITION: two governed homes are established and priced for this term",
+    (await pool.query("select count(*)::int n from spaces s join units u on u.id=s.unit_id where u.property_id=$1",
+      [priced])).rows[0].n === 2, "expected exactly two rentable positions at the priced property");
 
   const token = (await staffSessions.issueStaffSession(pool,
-    { userId: staff, propertyId: skyline, purpose: "bootstrap_invite" })).session_token;
+    { userId: staff, propertyId: priced, purpose: "bootstrap_invite" })).session_token;
   const H = { "x-staff-session": token };
   const inv = leasingInventory({ pool });
 
@@ -141,7 +213,7 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
       && !!price1.prospect_fact.recorded_at, JSON.stringify(price1 && price1.prospect_fact));
   ok("MB-2: and the governed home fact it was compared against, with its read and as-of",
     price1 && price1.home_fact && price1.home_fact.read === "effective_pricing.resolveSpaceEconomics"
-      && Number(price1.home_fact.value) === 1025 && !!price1.home_fact.as_of,
+      && Number(price1.home_fact.value) === 1400 && !!price1.home_fact.as_of,
     JSON.stringify(price1 && price1.home_fact));
   ok("MB-4: the price came from the published pricing authority, not a legacy column",
     price1 && price1.home_fact && price1.home_fact.authority != null,
