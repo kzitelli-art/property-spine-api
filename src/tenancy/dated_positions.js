@@ -87,8 +87,32 @@ function publishedSourceBatchSql(alias = "b") {
 //                           when the imported claim is 'unknown' — opening
 //                           evidence being inconclusive does not un-occupy a
 //                           position that has a real lease.
-//   unresolved              no spanning lease, but the opening claim says
-//                           occupied, or says nothing conclusive. NOT vacant.
+//   activation_pending      a lease has COMMENCED but economic tenancy is not
+//                           active. A contractual commitment exists, so the
+//                           bed is spoken for; offering it is the expensive
+//                           mistake. Listed here since 2026-09: the code has
+//                           yielded it for some time while this list said
+//                           four, which is how it reached tenancy_summary
+//                           with no bucket and fourteen positions went
+//                           missing from a lender's column.
+//   occupied_terms_not_established
+//                           no spanning lease, and the opening position
+//                           ACCEPTED this bed as occupied with nothing
+//                           contradicting it. Someone occupies it; the rent,
+//                           term and legal right governing that occupancy
+//                           are not established. NOT vacant, and NOT the
+//                           same as not knowing — see below.
+//   unresolved              no spanning lease and the opening claim says
+//                           NOTHING conclusive, or never settled at all.
+//                           NOT vacant.
+//
+//   ⚠ THESE LAST TWO WERE ONE VALUE, AND MERGING THEM WAS THE DEFECT.
+//   "the claim says occupied" and "the claim says nothing" answer different
+//   questions and send an operator to do different work. Held together they
+//   read to a lender as "we do not know whether anyone lives there" about
+//   beds the operator had explicitly accepted as occupied — 92 of them on
+//   the Skyline shape, reported in the same number as 10 genuinely
+//   unreconciled ones.
 //   vacant                  no spanning lease and the opening claim agrees.
 /*  ── WHICH OCCUPANCY CLAIM ANSWERS FOR THIS POSITION ────────────────
  *  The per-SPACE claim accepted by the established opening position wins

@@ -64,7 +64,47 @@ of a business action.
 
 ## 3 · The contractual axis says what the row knows, and dates are dates
 
-### (a) `occupied_terms_not_established`
+### (a) A distinct tenancy value, not a sub-object on the summary
+
+The ruling offered two shapes: report the split beside the total
+(`unresolved: { total, opening_claim_occupied, inconclusive }`), or introduce
+a distinct tenancy value and discharge three obligations. **I took the
+distinct value.** Why:
+
+1. **A per-row surface needs a per-row value.** `rent_roll_institutional.js`
+   labels each row for a lender. A sub-object on the summary cannot drive
+   that label, so those 92 rows would have kept reading *"Unresolved
+   occupancy evidence"* — the exact sentence the finding calls wrong — while
+   the summary quietly said otherwise. The read would then disagree with
+   itself, one altitude apart.
+2. **The complaint was about a row, not a total.** The board's words:
+   *"A position the operator explicitly accepted as occupied reads
+   `unresolved` on the contractual axis, which to a lender means 'we do not
+   know if anyone lives there'."* That is a defect in what the row says.
+3. **The row already carries the distinction durably** (`basis_type:
+   opening_claim_occupied`), so the axis was the one place still collapsing
+   two facts §40.7 keeps apart. Deriving the split only in the summary
+   would leave the collapse in place and paper over it downstream.
+
+The cost is a vocabulary change with consumers, which is real — and is
+exactly what the obligations exist to control. All three are discharged: the
+header axis list below, the grep table, and this paragraph.
+
+**The header's axis list is updated.** It listed four values while the code
+yielded five; it now lists six, and says of `activation_pending` that it had
+been yielded for some time while the list said four — which is how it
+reached `tenancy_summary` with no bucket and fourteen positions went missing
+from a lender's column. The two split values carry an explicit note that
+merging them *was* the defect.
+
+**The unit view and the standing read mirror the BUCKET axis, not this one.**
+`rent_roll_unit_view.js` counts `occupied / activation_pending / open /
+needs_review`, which key on `basis_type`; the proof asserts every one of the
+92 still buckets as `occupied`. `tenancy_position_read.js` keys on
+`evidence_state` and `interval_state`. Neither needed a change, and neither
+got one.
+
+### (a·ii) `occupied_terms_not_established`
 
 92 positions move off `unresolved`. **`unresolved` keeps its meaning** for
 the 10 genuinely unreconciled positions, and the proof asserts every one of
@@ -114,7 +154,41 @@ HTTP 200 GET /operator/rent-roll/canonical
   claims with a non-ISO start_date: 0 of 30
 ```
 
-## Every consumer of `tenancy_state === "unresolved"`, found by grep
+## ⚠ My first consumer sweep was incomplete, and CI caught it
+
+**This is the important correction in this receipt.** My first sweep ran
+`grep -rn "tenancy_state" src/ server.js property-spine-app` and, for tests,
+only `tests/unit/` and `tests/gates/`. It did not cover `tests/proofs/`.
+I then claimed a complete consumer list. CI run 559 went red and named the
+gap: `availability_uncorroborated_claim.db.js` pins the old value in two
+assertions. This repo's own rule — *a count is a claim about a search;
+search the whole repo, not a subfolder* — is the one I broke.
+
+The sweep below is the corrected one, run over the whole repository:
+
+```
+grep -rn 'tenancy_state\s*===\|tenancy_state\s*!==\|\.tenancy\s*===' \
+  --include=*.js --include=*.sh --include=*.html .
+```
+
+Four real consumers of the old value existed. Two were in `src/` and I found
+them; **two were in `tests/proofs/` and I did not**:
+
+| consumer | what I did |
+|---|---|
+| `tests/proofs/availability_uncorroborated_claim.db.js:215` | **MISSED, then updated** — pinned `tenancy === "unresolved"` for 303 Room2 |
+| `tests/proofs/availability_uncorroborated_claim.db.js:239` | **MISSED, then updated** — same row through the canonical read; its sentence now says the row reads `occupied_terms_not_established`, keeping its intent (the claim supports occupancy, nothing supports an offer, no measure was forced to agree) |
+| `tests/proofs/rent_roll_canonical_proof.js:25` | **updated** — a `TENANCY` vocabulary allowlist that named four values. It was already missing `activation_pending`; it now names all six |
+| `tests/proofs/rent_roll_canonical_proof.js:75` | **updated** — "an imported occupied claim with no spanning lease stays unresolved, never vacant". Its subject is now the new state; both states are checked so the never-vacant guarantee still covers every row it covered before |
+| `tests/proofs/skyline_rent_roll_model.db.js:225` | **updated** — `vacantPos` is the complement of `contractually_occupied` and is summed against it to 160; the new state belongs to that complement |
+
+Verified after the fix, each on its own freshly built database: the two
+flagged assertions pass, and `availability_uncorroborated_claim` reads
+**14 passed / 4 failed identically on the baseline tree and this one** — the
+four remaining are a local `503` on the "down accepted" door that cascades,
+present on both sides and absent in CI, where that door returns 201.
+
+## Every other consumer of `tenancy_state`, shown unaffected
 
 `grep -rn "tenancy_state" src/ server.js property-spine-app` — the app file
 and `server.js` contain none.
