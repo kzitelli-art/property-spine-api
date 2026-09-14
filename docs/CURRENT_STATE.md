@@ -484,7 +484,32 @@ CURRENT SOURCE / RUNTIME  →  CURRENT_STATE.md  →  PHILOSOPHY  →  THREAD_HA
 ## STATE SNAPSHOT
 
 ```text
-API verified against    d15c968     2026-09-14  (production /health, owner read)
+API verified against    b3e4407     2026-09-14  (owner report, later same day)
+                        SUPERSEDES d15c968, which this file carried earlier today.
+                        Production moved twice in one day; do not quote a sha
+                        from this file without checking its date.
+APP deployed            6f92b50     2026-09-14  (owner report) — resolves the
+                        d45344d / 336c82f disagreement recorded earlier today.
+LEDGER AFTER DEPLOY     UNKNOWN. Last owner read was 182 rows / ceiling 194 BEFORE
+                        this deploy. Whether migrations 195-198 were released is
+                        NOT RECORDED. b3e4407 is not the 6fa4638 release candidate,
+                        so it may carry a different migration set. prestart is
+                        verify-only and refuses to boot on a pending migration, so
+                        a SERVING api proves its ledger satisfies its OWN files —
+                        it proves nothing about 195-198. Read the ledger before
+                        quoting a ceiling.
+SKYLINE, REAL DATA      2026-09-14 owner read of the live app, NOT the fixture:
+                        160 positions / 72 units; 31 confirmed occupied; 9 pending
+                        activation; 20 need review; 14 overlapping lease claims; 1
+                        conflicting occupancy evidence; 13 commenced awaiting
+                        move-in funds; ONLY 4 positions with trusted rent economics.
+                        ⚠ The $26,350 / 31-position / $78,200 figures in rows 80
+                        and 82 are SYNTHETIC fixture values in Skyline's SHAPE.
+                        They are not Skyline's and must never be quoted as its
+                        economics. Real trusted-economics count is 4.
+                        Tracker reads ~90.6% preleased (145 signed/pending, ~148
+                        occupancy claims). Both readings are valid and unreconciled;
+                        "31 occupied" is NOT the building's business occupancy.
 PRODUCTION DEPLOYED     d15c968     2026-09-14  ← owner /health read. SUPERSEDES the
                         61f99bf/2026-08-22 stamp below, which stood unchallenged
                         for three weeks and was WRONG. Dated rows keep 61f99bf as
