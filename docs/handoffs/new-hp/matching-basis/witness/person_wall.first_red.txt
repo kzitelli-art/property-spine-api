@@ -1,0 +1,102 @@
+
+════════════════════════════════════════════════════════════════
+  HARNESS   prospect_match_basis.db.js
+  COMMIT    d2669353719abf66e33f221e813dd035a58d0df9
+  BRANCH    lane-work
+  DATABASE  spine_proof_<scrubbed>  @  127.0.0.1:55432  (user spine)
+  ENDPOINT  (not a Neon endpoint host)
+  ISOLATED  yes — target differs from DATABASE_URL (which is unset here)
+  EXPECTED  52 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+  ok    PRECONDITION: the legacy-only home has bedrooms and a vacant flag but NO governed position
+  ok    PRECONDITION: the prospect's budget is recorded through the canonical person-fact writer
+  ok    PRECONDITION: two governed homes are established and priced for this term
+
+MB-1 [DB] the canonical read and its projection
+  ok    MB-1: the leasing inventory owner exposes a canonical prospect-match read
+  ok    MB-8: and a compact standing projection beside it
+
+ACCEPTANCE 1 [DB] recorded budget below every governed price
+  ok    MB-1: the answer declares itself retrieval and disclaims comparison and cause
+  ok    MB-3: the over-budget home is RETURNED, not hidden
+  ok    MB-3: its price constraint reads exactly `violated`
+  ok    MB-2: the basis names the recorded prospect fact — key, value and provenance
+  ok    MB-2: and the governed home fact it was compared against, with its read and as-of
+  ok    MB-4: the price came from the published pricing authority, not a legacy column
+  ok    MB-1: no score, weight or ranking KEY appears anywhere in the payload
+  ok    MB-1: and the payload says in its own words that it produces no score
+  ok    MB-4 / acceptance: the legacy-only home (bedrooms + vacant, no position) does not appear
+
+MB-3 [DB] readiness against the recorded move month
+    · recorded move_month 2026-08 vs governed ready 2026-09-14
+  ok    MB-3: a home whose governed ready date is AFTER the recorded move month reads `violated`
+  ok    MB-2: and the basis names the move_month it actually compared
+
+ACCEPTANCE 2 [DB] no budget recorded
+  ok    MB-3: price is `not_established`, never satisfied and never hidden
+  ok    MB-3: and it names WHY — the prospect fact is missing, not the home fact
+  ok    MB-3: with no recorded move_month, readiness is `not_established` and says so
+  ok    MB-5: the ordering rule is still named and deterministic
+  ok    MB-8: the projection says how many homes are unknown on price
+  ok    MB-8: and names which prospect facts are missing rather than implying none exist
+  ok    MB-8: the projection carries NO record ids
+
+ACCEPTANCE 3 [DB] a property with no published pricing
+  ok    MB-6: the price family is reported unavailable for the property, not silently empty
+  ok    MB-6: readiness is still reported as an evaluable family or honestly as no governed homes
+  ok    MB-6: and the answer is NOT the phrase 'no matches'
+
+ACCEPTANCE 4 [DB/HTTP] no term
+  ok    MB-7: refused with the EXISTING reason, inherited from the seam
+  ok    MB-7: the refusal carries the sentence that keeps 'I need your dates' distinct from 'nothing available'
+  ok    MB-7: and it returns no homes at all rather than an empty match set that reads as inventory
+  ok    MB-7: a term with no published pricing months is a DIFFERENT refusal, not the same one
+
+MB-5 [DB] the ordering rule
+  ok    MB-5: the rule is named in the payload and mentions no weight or score
+  ok    MB-5: the same inputs produce the same order (deterministic, not arrival-dependent)
+
+MB-8 [HTTP] the staff door
+  ok    MB-8: a staff-session door answers the match question (200)
+  ok    MB-2: the HTTP payload carries a per-home basis
+  ok    MB-8: property scope is SESSION-derived — a query-string property is ignored
+  ok    MB-8: the door refuses an unauthenticated caller
+  ok    MB-7 (HTTP): no term is refused through the door too, with the reason
+
+MB-8 [HTTP] the person wall
+  FAIL  §40.8: a leasing session at THIS property is refused a prospect known only to another
+        200 {"matched":true,"qualification":"match_basis_recorded","capability_class":"retrieval","claims_not_made":["comparison","causal_explanation","best_fit","score"],"property_id":"d7cdd3
+  FAIL  §40.8: and the refusal leaks NO fact key
+        {"matched":true,"qualification":"match_basis_recorded","capability_class":"retrieval","claims_not_made":["comparison","causal_explanation","best_fit","score"],"property_id":"<uuid>","term":{
+  FAIL  §40.8: no fact VALUE — not the property-scoped one, not the person-level one
+        {"matched":true,"qualification":"match_basis_recorded","capability_class":"retrieval","claims_not_made":["comparison","causal_explanation","best_fit","score"],"property_id":"<uuid>","term":{
+  FAIL  §40.8: and no home
+        {"matched":true,"qualification":"match_basis_recorded","capability_class":"retrieval","claims_not_made":["comparison","causal_explanation","best_fit","score"],"property_id":"<uuid>","term":{
+  FAIL  §5: the refusal is sayable and names a next step
+        {"matched":true,"qualification":"match_basis_recorded","capability_class":"retrieval","claims_not_made":["comparison","causal_explanation","best_fit","score"],"property_id":"<uuid>","term":{"requested_start":"2027-01-05","requeste
+  ok    CONTROL: a prospect with a lead at THIS property still gets the full basis
+  ok    CONTROL: and that answer still carries the recorded budget it compared
+  FAIL  §7: both doors reach the wall through the one shared helper, not two copies
+        operator.js still carries an inline copy of the presence query
+
+MB-8 [ASK] registration and gathering
+  ok    MB-8: the Ask Spine registry declares the prospect-match domain
+  ok    MB-8: ask_spine_answer gathers the prospect-match standing projection
+  ok    MB-8: the projection reports the violated-on-price count for an entitled reader
+  ok    MB-1: the projection declares retrieval and disclaims comparison
+  ok    MB-7 (ASK): with no term the projection is NOT_ESTABLISHED and says why — never 'no homes'
+
+MB-9 [DB] no schema was added
+  ok    MB-9: the ledger is unchanged by this slice — computed at read time
+  ok    MB-9: and no matching table was created
+
+46 passed, 6 failed
+FAILED: §40.8: a leasing session at THIS property is refused a prospect known only to another | §40.8: and the refusal leaks NO fact key | §40.8: no fact VALUE — not the property-scoped one, not the person-level one | §40.8: and no home | §5: the refusal is sayable and names a next step | §7: both doors reach the wall through the one shared helper, not two copies
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 52 run · 46 passed · 6 failed
+  ✗ FAIL — prospect_match_basis.db.js
+  EXIT      1
+════════════════════════════════════════════════════════════════
+

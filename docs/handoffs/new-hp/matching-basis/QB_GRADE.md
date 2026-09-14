@@ -1,5 +1,48 @@
 # QB grade — Opus lane #2 `claude-opus/matching-basis-20260914`
 
+> **FINAL, 2026-09-14 — INTEGRATED into `claude/board-20260914` at lane head
+> `6b5403a4`.** Third packet graded. Findings 1 and 3 CONFIRMED fixed, each
+> red first on the lane's own head (`witness/person_wall.first_red.txt` 6
+> failed / 2 controls; `witness/composer_gather.first_red.txt` 5 failed);
+> readiness pinned in both directions and at the boundary month; the Ask
+> gate scans `src/leasing` with four `pending` declarations (115/115, 14
+> domains, 8 registered, 6 pending); the falsification scenario anchors
+> retracked after CI 547 went red on them. CI 548 at `6b5403a4`: **success** — `── prospect match basis               PASS` ·
+> `COMMIT    6b5403a4…` · `EXPECTED  63 assertions` · `ASSERTIONS COMPLETE ·
+> 63 run · 63 passed · 0 failed` · `operator app: matched at b0be9f46…` · zero
+> `SKIPPED` lines · no `── … FAIL` status line · `ALL REQUIRED ASSERTIONS
+> PASSED`. Run 547 at `888de45d` was a failure (the falsification-scenario
+> anchors). The governance step line itself fell outside the extracted log
+> window; the board's own CI run re-executes it.
+> On the merged board tree here: `gate_current_state` 8/0,
+> `gate_ask_spine_readers` 115/115 exit 0; committed evidence scrubbed clean.
+>
+> **A correction to this grade's own finding 3.** I wrote that the null-term
+> gather "flips composite silence to ATTENTION on every leasing question".
+> Opus measured it by calling `gatherFacts` and the branch was unreachable:
+> `questionSubject` never yields `leasing` or `match`, so nothing was
+> gathered and nothing was polluted. The defect was worse than I described
+> (registered, gate-green, never gathered) and the predicted flood was
+> latent. Finding 3 stands as to the code and is REJECTED as to the observed
+> effect I claimed. Lesson kept: I read the branch and inferred the runtime;
+> the proof should have called the composer from the start, which is what
+> the correction round asked for.
+>
+> **Recorded at integration, not blocking.** (a) `facts.person` is never
+> assigned in the composer, so through Ask Spine the projection is only ever
+> the term-less refusal; a term-carrying, person-naming question is the
+> successor (row 76 carries this). (b) The gate's `gathersDomain` proves an
+> assignment exists in source, not that a subject reaches it — Opus's FOUND
+> 1, accepted as a class-3 follow-up, same class as the scan-scope gap.
+> (c) Row 76 said 62/0 where the head runs 63; corrected in the merge.
+> (d) My ruling that the QB "re-stamps" the `61f99bf` production line is
+> withdrawn: that stamp is a production `/health` read, which the QB does
+> not perform. It stays until Kameron reads it. (e) Opus withdrew a
+> `leasing_hostile` regression claim after seven controlled runs; the table
+> is in its receipt. (f) A pre-existing failure in Opus's ad-hoc runtime,
+> `conversation_takeover_owner.db.js`, is not investigated here; it passes
+> in CI 548 under the full harness.
+
 > **Re-graded 2026-09-14 at lane head `d2669353`** (second packet). Opus found
 > and fixed finding 2 (readiness compared, not assumed) on its own before
 > reading this grade: `0eaabb4` product + proof, `d266935` receipt/row. CI 544

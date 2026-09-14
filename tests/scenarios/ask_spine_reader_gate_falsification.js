@@ -202,12 +202,18 @@ try {
        `      facts.NOTHING = { read_state: state, standing: null, position: null, unknowns: null };`]),
     "tenancy declared registered AND gathered");
 
+  /*  The two mutations below rewrite the gate's STANDING_READ_DIRS line by
+   *  exact text, so the anchor must track that line. src/leasing joined it
+   *  on 2026-09-14; both mutations keep their original MEANING — one drops
+   *  src/tenancy (the historical defect), the other adds src/surfaces (the
+   *  exclusion turned off) — and neither weakens because src/leasing is
+   *  carried through both sides of each rewrite.  */
   /*  ── 4. THE SCAN DIRECTORY REMOVED ──────────────────────────────
    *  THE ACTUAL HISTORICAL DEFECT. This is the state the gate shipped
    *  in: tenancy invisible, gate green. It must never be quiet again.  */
   falsify("src/tenancy is dropped from the scanned directories",
-    () => mutate(GATE, [`const STANDING_READ_DIRS = ["src/asset", "src/tenancy"];`,
-                        `const STANDING_READ_DIRS = ["src/asset"];`]),
+    () => mutate(GATE, [`const STANDING_READ_DIRS = ["src/asset", "src/tenancy", "src/leasing"];`,
+                        `const STANDING_READ_DIRS = ["src/asset", "src/leasing"];`]),
     "registry entry tenancy corresponds to a real standing read");
 
   /*  ── 5. THE EXCLUSION TURNED OFF ────────────────────────────────
@@ -216,8 +222,8 @@ try {
    *  entries they can never honestly earn. The exclusion is a real
    *  boundary, and this proves removing it is loud rather than free.   */
   falsify("src/surfaces is scanned as though it held domains",
-    () => mutate(GATE, [`const STANDING_READ_DIRS = ["src/asset", "src/tenancy"];`,
-                        `const STANDING_READ_DIRS = ["src/asset", "src/tenancy", "src/surfaces"];`]),
+    () => mutate(GATE, [`const STANDING_READ_DIRS = ["src/asset", "src/tenancy", "src/leasing"];`,
+                        `const STANDING_READ_DIRS = ["src/asset", "src/tenancy", "src/leasing", "src/surfaces"];`]),
     "is declared in the Ask Spine registry");
 
   /*  ── 6. THE TREE IS EXACTLY AS IT WAS FOUND ─────────────────────

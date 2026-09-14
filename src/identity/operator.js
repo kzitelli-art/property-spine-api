@@ -46,6 +46,7 @@ const applicationTargetAuthority = require("../applications/application_target_a
 const applicationTargetRead = require("../applications/application_target_read");
 
 module.exports = function operatorModule(deps) {
+  const { hasPresenceAtProperty } = require("./person_property_presence");
   const {
     pool, agentService, conversionService = null, leasingTourService = null,
     tourAvailabilityService = null,
@@ -1746,6 +1747,71 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     (req, res) => changeNativeTourSlot(req, res, "reopen"));
 
   // ══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/leasing/prospect-match
+  //     ?person_id=&requested_start=&requested_end=&lease_term_months=
+  //   "Which homes satisfy this prospect's recorded constraints, and on
+  //   what basis." RETRIEVAL on a declared basis — not a score, not a
+  //   ranking, not an explanation (MB-1). Every home carries the
+  //   constraint, the recorded prospect fact and the governed home fact
+  //   it was compared against (MB-2); a home that fails one is RETURNED
+  //   and marked violated, never filtered away (MB-3).
+  //
+  //   STAFF SURFACE ONLY. The prospect's recorded budget is disclosed
+  //   here because this reader already sees the prospect's lead record;
+  //   the prospect-facing altitude is a separate, later decision and
+  //   Tenant Agent is reserved (MB-8).
+  //
+  //   property_id is SESSION-DERIVED, never from the query string.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/prospect-match", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      //  ── THE PERSON WALL (§40.8, MB-8) ──────────────────────────────
+      //  person_id arrives from the query string and decides whose recorded
+      //  facts get read — including person-level facts with a NULL
+      //  property_id, which prospect_capture.js writes. Without this, a
+      //  leasing user at one property could read another property's
+      //  prospect's budget, and could confirm which fact keys any person id
+      //  carries. Same predicate as the person card, through the one shared
+      //  helper. A refusal, never a filtered-down answer: a partial match
+      //  payload would itself disclose that the person exists.
+      const askedPerson = req.query.person_id || null;
+      if (askedPerson) {
+        const seen = await hasPresenceAtProperty(pool, {
+          person_id: askedPerson, property_id: req.operator.property_id });
+        if (!seen) {
+          return res.status(404).json({
+            error: "This property has no record of this person.",
+            note: "Spine will not read a person's recorded constraints at a property "
+                + "where they have never been seen. Find them in this property's leads, "
+                + "tours or conversations first, then match from there.",
+          });
+        }
+      }
+      const inventory = require("../leasing/leasing_inventory")({ pool });
+      const out = await inventory.matchProspectHomes({
+        property_id: req.operator.property_id,   // session only
+        person_id: req.query.person_id || null,
+        requested_start: req.query.requested_start || null,
+        requested_end: req.query.requested_end || null,
+        lease_term_months: req.query.lease_term_months == null || req.query.lease_term_months === ""
+          ? null : Number(req.query.lease_term_months),
+      });
+      //  A refusal is a 200 with a reason an agent can say out loud —
+      //  "I need your dates" is an answer, not an error, and it must not
+      //  render as an empty inventory result.
+      return res.json(out);
+    } catch (e) {
+      //  A failed read is UNAVAILABLE. It must never render as "no homes
+      //  match", which is a claim about inventory this read cannot make.
+      return res.status(e.httpStatus || 500).json({
+        error: e.publicMessage || e.message,
+        note: "Spine could not complete the match. This is not an answer about inventory.",
+      });
+    }
+  });
+
   // GET /operator/leasing/availability-canonical?as_of=&horizon_days=
   //   Availability as the LEASING INTERPRETATION of canonical positions.
   //   Consumes lease, notice, successor, conflict, proof and down state;
@@ -2716,37 +2782,12 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       // the property wall: the person must actually have presence at THIS property
       const p = (await client.query(`select id, name, primary_phone_e164 as phone, email from persons where id=$1`, [personId])).rows[0];
       if (!p) return res.status(404).json({ error: "person not found" });
-      const presence = (await client.query(
-        `select 1 where exists (select 1 from leasing_leads where person_id=$1 and property_id=$2)
-             or exists (select 1 from conversations where person_id=$1 and property_id=$2)
-             or exists (select 1 from person_attributes where person_id=$1 and property_id=$2)
-             -- R3: a conversion IS presence — the card projects task events for
-             -- conversion-driven people, so the wall must recognize them.
-             or exists (select 1 from leasing_conversions where person_id=$1 and property_id=$2)
-             -- A LEASE IS PRESENCE (owner ruling, 2026-07-25). The card is
-             -- Person × Property, and a lease is the strongest possible
-             -- statement that a person has a relationship with a property.
-             -- Before this clause the wall tested leads/conversations/attrs/
-             -- conversions but NEVER leases, so 621 of 623 active-lease
-             -- residents got "person not found" — a bug that failed closed,
-             -- not a privacy control.
-             --   · Scoped to THIS property. Never portfolio-wide — that would
-             --     collide with the locked cross-deal rule.
-             --   · No lease_status filter, deliberately: 'active', 'pending'
-             --     and 'commercial' all evidence presence here, and a future
-             --     historical status must not silently drop a person off the
-             --     card. (relationship_stage.js still refuses to LABEL
-             --     former_resident — presence and stage are different jobs.)
-             --   · A PRESENCE test, not an entitlement. Which projection a
-             --     given viewer gets is a separate question and stays open.
-             -- $1/$2 are cast explicitly: every other use here is uuid, so the
-             -- inference stays uuid (see relationship_stage.js:52 for the
-             -- 42883 trap when a bare $1 meets a cast $1).
-             or exists (select 1 from leases
-                         where property_id = $2::uuid
-                           and tenant_ids is not null
-                           and tenant_ids @> array[$1::uuid])`,
-        [personId, propertyId])).rows[0];
+      //  THE PROPERTY WALL — one predicate, shared with
+      //  /operator/leasing/prospect-match. The reasoning behind each clause
+      //  (conversion is presence, a lease is presence, scoped to THIS
+      //  property, presence is not entitlement) moved into the helper with
+      //  the query, so the two doors cannot drift apart.
+      const presence = await hasPresenceAtProperty(client, { person_id: personId, property_id: propertyId });
       if (!presence) return res.status(404).json({ error: "person not found" }); // no presence here → the name does not leak across the wall
 
       const userName = async (uid) => {

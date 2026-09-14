@@ -365,6 +365,14 @@ else
   step "greenery staff onboarding" node tests/proofs/greenery_staff_onboarding.db.js
   step "source-to-home identity review and Greenery inventory contract" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/source_home_identity_review.db.js
   step "current rent-roll reconciliation into an onboarded property" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/current_rent_roll_reconciliation.db.js
+  #  Matching is retrieval on a declared basis (MATCHING_BASIS_RULING_20260914,
+  #  MB-1..MB-9). It establishes its OWN governed inventory and its own
+  #  published pricing, so it does not depend on the Skyline fixture or on
+  #  anything an earlier step left behind — an earlier version did, and went
+  #  red in CI the moment the rent-roll proof above consumed Skyline's one
+  #  eligible target. It runs here because it needs the owned server for its
+  #  staff door and its Ask Spine composer call.
+  step "prospect match basis" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/prospect_match_basis.db.js
   #  ── THE SAME RECONCILIATION, THROUGH THE SHIPPED OPERATOR UI ──────
   #  The step above proves the API. This one proves the screen a person
   #  actually touches, against the SAME owned server — and it had only

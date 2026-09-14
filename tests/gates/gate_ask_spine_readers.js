@@ -97,7 +97,17 @@ function readIf(rel) {
  *
  *  Any directory that OWNS canonical domain truth belongs here. When the
  *  next one lands, add it in the same breath as the read.                */
-const STANDING_READ_DIRS = ["src/asset", "src/tenancy"];
+/*  src/leasing was added 2026-09-14 on QB's ruling. A gate that scans less
+ *  than it asserts launders the gap into evidence — the same reasoning that
+ *  added src/tenancy after Tenancy turned out to be UNDISCOVERABLE. Four
+ *  leasing domains carry canonical standing reads and none was classified;
+ *  they are declared below, `pending`, which is a declaration and not other
+ *  lanes' work. None is `registered`: the detector proves gathering, and
+ *  today it proves none of them. leasing_standing_read.js IS required by
+ *  the composer, but its results land under other fact keys
+ *  (facts.leasing_signing and siblings), so `facts.leasing_standing =` does
+ *  not exist and the detector correctly refuses to call it registered.  */
+const STANDING_READ_DIRS = ["src/asset", "src/tenancy", "src/leasing"];
 const STANDING_READ_SUFFIXES = ["_position_read.js", "_establishment.js", "_read.js"];
 const NON_STANDING_READ_SUFFIXES = ["_document_read.js", "_funding_read.js"];
 
@@ -153,6 +163,65 @@ function domainsFromFilenames(filenames) {
  *  is enforced by the composer rather than used to block single-domain reads.
  *  A green gate reports this split; it does not erase it.  */
 const REGISTRY = {
+  /*  ── THE FOUR LEASING DOMAINS (QB ruling, 2026-09-14) ─────────────
+   *  Discovered the moment src/leasing entered the scan. Each owns
+   *  canonical standing truth and none is gathered by the composer today.
+   *  `pending` with an owner and a condition is the honest state; calling
+   *  any of them `registered` would be the lie this gate exists to catch.  */
+  forward_leasing: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "forward-leasing standing: which future terms are committed and which are open"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers the forward-leasing standing projection — committed " +
+            "future terms, open intervals and the dates behind them — under a fact " +
+            "key of its own, with the term refusal preserved so a missing caller " +
+            "term never reads as no forward inventory.",
+  },
+  leasing_standing: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "one person's leasing standing and the recorded basis for it"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "the composer assigns facts.leasing_standing from readLeasingStanding. " +
+            "The reader is already required and used, but its results land under " +
+            "facts.leasing_signing and siblings, so the domain itself is not yet " +
+            "gathered under its own name and the detector rightly refuses it.",
+  },
+  opportunity_lifecycle: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "where an opportunity stands in its lifecycle and what moved it there"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers the opportunity-lifecycle standing projection with " +
+            "stage transitions attributed, and close reasons (budget_mismatch and " +
+            "its siblings) carried as recorded reasons rather than as judgements.",
+  },
+  renewals: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "which tenancies are in a renewal window and what has been offered or decided"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers the renewals standing projection — window, offer " +
+            "state and decision — with the §40.5 wall that an offered renewal is " +
+            "not an accepted one preserved in the projection's own vocabulary.",
+  },
+  //  Prospect-to-home matching. Retrieval on a declared basis only — the
+  //  registry records the class so a later build that starts ranking or
+  //  explaining goes red here rather than shipping as "matching".
+  prospect_match: {
+    state: 'registered',
+    capability_classes: readerCapabilities.retrievalOnly(
+      'which homes satisfy a prospect\'s recorded constraints and on what basis; ' +
+      'no ranking, no score, no causal explanation'),
+    composition_authorization: 'unsolved_cross_domain',
+    //  Exposed from the existing leasing seam, not a second *_read module.
+    owner: '../leasing/leasing_inventory',
+  },
   maintenance: {
     state: 'registered',
     capability_classes: readerCapabilities.retrievalOnly('required work and its explicitly recorded location; no readiness assertion'),
@@ -293,11 +362,22 @@ function stripComments(src) {
  *  Anchored on both ends now. A domain that genuinely needs a suffixed
  *  key is a convention change to make deliberately, in this function,
  *  not something a rename gets to do by accident.                       */
-function gathersDomain(gatherSrc, domain) {
+/*  A domain whose standing read lives in an EXISTING owner cannot be
+ *  detected by looking for its own name in a require path: `prospect_match`
+ *  is exposed from src/leasing/leasing_inventory.js, and nothing in that
+ *  path says "prospect_match". The substring rule is also weaker than it
+ *  looks in the other direction — it would accept a require of any path
+ *  that merely CONTAINS the domain word.
+ *
+ *  So a registry entry may declare `owner`, and when it does the detector
+ *  demands that exact path. Entries without one keep the original rule
+ *  unchanged, so nothing already green moves.  */
+function gathersDomain(gatherSrc, domain, owner = null) {
   const code = stripComments(gatherSrc);
-  const required = new RegExp(`require\\([^)]*${domain}[^)]*\\)`).test(code);
   const assigned = new RegExp(`facts\\.${domain}\\s*=`).test(code);
-  return required && assigned;
+  if (!assigned) return false;
+  if (owner) return code.includes(`require('${owner}')`) || code.includes(`require("${owner}")`);
+  return new RegExp(`require\\([^)]*${domain}[^)]*\\)`).test(code);
 }
 
 function gathersGovernedDetail(gatherSrc, domain) {
@@ -355,6 +435,16 @@ console.log("  ── detector self-test ──");
      !gathersDomain(`// TODO: require debt_position_read and set facts.debt = ...`, "debt"));
   ok("gathersDomain is not satisfied by a block comment",
      !gathersDomain(`/* facts.debt = require("../asset/debt_position_read.js") */`, "debt"));
+  //  The declared-owner branch, both ways round.
+  ok("gathersDomain accepts a declared owner the composer actually requires",
+     gathersDomain(`const x = require('../leasing/leasing_inventory'); facts.prospect_match = x.read();`,
+       "prospect_match", "../leasing/leasing_inventory"));
+  ok("gathersDomain REFUSES a declared owner the composer never requires",
+     !gathersDomain(`const x = require('../leasing/something_else'); facts.prospect_match = x.read();`,
+       "prospect_match", "../leasing/leasing_inventory"));
+  ok("gathersDomain still refuses a declared owner with no assignment",
+     !gathersDomain(`const x = require('../leasing/leasing_inventory');`,
+       "prospect_match", "../leasing/leasing_inventory"));
   ok("gathersGovernedDetail detects a question-bound canonical detail read",
      gathersGovernedDetail(
        `const r=require("../asset/utility_ask_detail.js"); r.readForQuestion(db,{question});`,
@@ -380,6 +470,14 @@ for (const dir of STANDING_READ_DIRS) {
 // inventing a second *_read module just to satisfy filename discovery.
 const maintenanceOwner = readIf('src/maintenance/work_acceptance_service.js') || '';
 if (/module\.exports\s*=\s*\{[^}]*\breadRequiredWorkStanding\b/.test(stripComments(maintenanceOwner))) discovered.push('maintenance');
+//  Same shape, same reason: matching extends the existing leasing inventory
+//  seam and exposes its standing read from that owner's factory rather than
+//  inventing a second *_read module to satisfy filename discovery. Scanning
+//  all of src/leasing instead would discover four OTHER domains that belong
+//  to other lanes and demand registry entries nobody has decided — that is a
+//  scope change, not a side effect of this one (recorded in the receipt).
+const leasingOwner = readIf('src/leasing/leasing_inventory.js') || '';
+if (/return\s*\{[^}]*\breadProspectMatchStanding\b/.test(stripComments(leasingOwner))) discovered.push('prospect_match');
 const domains = [...new Set(discovered)].sort();
 console.log(`        ${domains.length} domain(s) with a canonical standing read: ` +
             (domains.join(", ") || "none"));
@@ -448,7 +546,7 @@ if (gatherSrc === null) {
   }
   for (const [d] of registered) {
     ok(`${d} declared registered AND gathered in ${GATHER}`,
-       gathersDomain(gatherSrc, d),
+       gathersDomain(gatherSrc, d, (REGISTRY[d] || {}).owner || null),
        `${d} claims registration the composer does not implement`);
   }
   for (const [d, declaration] of registered.filter(([, v]) => v.governed_detail)) {
