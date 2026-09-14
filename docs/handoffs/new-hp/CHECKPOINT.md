@@ -1,3 +1,10 @@
+> **SUPERSEDED 2026-09-14.** This checkpoint describes the 9 September handoff
+> (API `ec9e774` / app `f2eda58` on `codex/new-hp-handoff-20260909`) and is kept
+> as history. The current candidate lineage is `claude/board-20260914` (product
+> pin `03550a8` over `e808199`, app `1a5f257`); the current board lives in
+> `docs/CURRENT_STATE.md` rows 73–74 and the receipts dated 2026-09-13/14 in
+> this directory. Do not take branch names or shas from the text below.
+
 # New HP handoff — checkpoint
 
 Prepared 2026-09-09. Both repositories use branch codex/new-hp-handoff-20260909.
