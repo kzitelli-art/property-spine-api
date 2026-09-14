@@ -1,0 +1,25 @@
+OWNED_API_READY
+PASS before Execute: application submitted (unapproved), packet resident_executed
+PASS Mike sees the server-authored Execute control, visible to the document, labelled as approve + sign
+PASS Mike's click reached the real Execute door and was refused (403 execute_not_authorized)
+PASS the browser sent the explicit decision and a retry key
+PASS the server's own refusal is visible on the page as product copy
+PASS nothing was approved or signed by the refused click
+PASS KZ sees the same visible Execute control
+PASS the progress ladder shows the authored offer as the terms record and no separate confirmation step
+PASS the confirmation dialog named both consequences before anything was sent
+PASS KZ sent exactly one Execute request and it decided
+PASS KZ confirmation precedes KZ decision response
+PASS the server returned two decisions and the pending tenancy
+PASS the browser sent no separate approve, confirm-terms or company-sign request
+PASS the progress ladder names the executed decision
+PASS the current-packet canonical Execute receipt completes the progress row
+PASS the execution panel rereads the confirmed tenancy, visible to the document
+PASS the distinct move-in panel understands the actual canonical response
+PASS executed lease display does not claim possession
+PASS the pending tenancy is not described as an active lease
+PASS the database holds one pending lease on the exact bed at the authored rent
+PASS exactly one lease
+PASS no page errors
+
+two-step execute (browser): 22 checks passed · <scratchpad>/walkthrough-20260915/two-step-run2/browser
