@@ -1,19 +1,33 @@
 # QB grade — Opus lane #2 `claude-opus/matching-basis-20260914`
 
+> **Re-graded 2026-09-14 at lane head `d2669353`** (second packet). Opus found
+> and fixed finding 2 (readiness compared, not assumed) on its own before
+> reading this grade: `0eaabb4` product + proof, `d266935` receipt/row. CI 544
+> and 545 green with the step executed, **44/44**. Verified here: the
+> comparison is string-on-ISO-date (the availability read produces
+> `available_from` through `ymd()`, and the CI log's own note line prints
+> `governed ready 2026-09-14`), so `String(available_from) <= monthEnd` is
+> sound. What the new proof would miss: there is no **satisfied** readiness
+> case (ready date on or before the month end) and no
+> `recorded_move_month_not_a_month` case, so `violated` is proven reachable
+> but `satisfied` is not. **Findings 1 and 3 still stand and still block.**
+> The correction round below is revised to those two plus the proof gap.
+> Rulings on the packet's owner decisions are at the end.
+
 Graded 2026-09-14 against the ruling
 `docs/handoffs/new-hp/rulings/MATCHING_BASIS_RULING_20260914.md` (MB-1..MB-9)
-and the lane's own receipt (`RECEIPT.md` at `13381cf`). Lane head `13381cf`,
-four commits over board `0e10ef8`: `aafe963` (product + proof + gate),
-`39b405e` (receipt, row 76), `4c8e062` (proof owns its inventory),
-`13381cf` (receipt records the CI red). Every verdict below was formed by
-reading the lane's diff and its CI log directly, not from the packet.
+and the lane's own receipt. First grade at lane head `13381cf` (four commits
+over board `0e10ef8`: `aafe963` product + proof + gate, `39b405e` receipt and
+row 76, `4c8e062` proof owns its inventory, `13381cf` receipt records the CI
+red); re-grade at `d2669353` (adds `0eaabb4`, `d266935`). Every verdict was
+formed by reading the lane's diff and its CI log directly, not from the
+packet.
 
 **Verdict: NOT INTEGRATED. Returned for one correction round.** The shape is
 right — retrieval on a declared basis, violated homes returned, the seam
-extended in its owner, no schema, no score — and the CI red was diagnosed
-honestly and for the right reason. Three findings block integration; none
-of them is a rewrite.
-
+extended in its owner, no schema, no score — and both CI reds were diagnosed
+honestly and for the right reason. Two findings block integration; neither is
+a rewrite.
 ## CI
 
 Read directly from the GitHub Actions logs, not from the packet.
@@ -24,6 +38,8 @@ Read directly from the GitHub Actions logs, not from the packet.
 | 540 | `39b405e` | failure | docs-only over `aafe963`; same red |
 | 541 | `4c8e062` | **success** | `── prospect match basis               PASS` · `ASSERTIONS COMPLETE · 41 run · 41 passed · 0 failed` · `── browser: coupled rent-roll (app b0be9f4) PASS` · `operator app: matched at b0be9f46…` · zero `SKIPPED` lines · `ALL REQUIRED ASSERTIONS PASSED` |
 | 542 | `13381cf` | **success** | docs-only over `4c8e062` |
+| 544 | `0eaabb4` | **success** | readiness compared; proof 44 |
+| 545 | `d266935` | **success** | `── prospect match basis               PASS` · `COMMIT    d2669353…` · `EXPECTED  44 assertions` · `MB-3 [DB] readiness against the recorded move month` · `· recorded move_month 2026-08 vs governed ready 2026-09-14` · `ASSERTIONS COMPLETE · 44 run · 44 passed · 0 failed` · `operator app: matched at b0be9f46…` · no `── … FAIL` line · `ALL REQUIRED ASSERTIONS PASSED` |
 
 The local "41/41" claim is CONFIRMED by CI 541. The gate's own count line
 (87/87, 10 domains) was not extracted from the log; the receipt's figure is
@@ -44,7 +60,7 @@ carried as PLAUSIBLE.
 | MB-9 no schema | CONFIRMED | diffstat touches no migration |
 | Gate change is not a weakening | CONFIRMED | `owner` branch demands the exact require path AND the `facts.<domain> =` assignment; entries without `owner` keep the original rule; three self-tests cover both directions |
 | "Registered and gathered by `ask_spine_answer`" (MB-8) | PLAUSIBLE only | the proof checks this with a **source regex** (`/readProspectMatchStanding/` and `/facts\.prospect_match\s*=/`) and then calls the projection **directly with a term**. `gatherFacts` itself is never called, so what the composer actually gathers is unproven — and by reading, it is a refusal (finding 3) |
-| MB-2 every constraint carries the fact it was **compared** against | REJECTED for readiness | finding 2 |
+| MB-2 every constraint carries the fact it was **compared** against | CONFIRMED at `d2669353` (was REJECTED at `13381cf`) | finding 2, fixed by the lane itself in `0eaabb4`; `violated` proven reachable in CI 545; `satisfied` not yet proven |
 | MB-8 budget disclosed only where the staff reader already may see it | REJECTED | finding 1 |
 | Committed evidence scrubbed | CONFIRMED | no UUIDs, tokens, phones, hostnames, scratch paths or database names in the added lines; fixture phones and emails are synthetic |
 
@@ -67,8 +83,9 @@ the person-card route uses (one shared helper, not a second copy), and
 refuse with a sayable reason; the projection through Ask Spine already
 derives the person from an entitled lookup and needs nothing.
 
-**2. The readiness constraint reports `satisfied` without comparing anything
-to the prospect's recorded move month (MB-2, MB-3, §5).** The basis entry
+**2. FIXED AT `d2669353` — kept for the record. The readiness constraint
+reported `satisfied` without comparing anything to the prospect's recorded
+move month (MB-2, MB-3, §5).** The basis entry
 attaches `prospect_fact = move_month` when recorded and sets `satisfied`
 whenever the home has any governed ready date. Move month `2027-03` against
 `available_from = 2027-06-01` reads `satisfied`, and that home then counts
@@ -98,6 +115,11 @@ grepping the source. Also: `subject === "match"` is never produced by
 
 ## Findings recorded, not blocking
 
+- The readiness proof (`0eaabb4`) asserts `violated` and `no_recorded_move_month`
+  only. Add the `satisfied` case (ready on or before the last day of the
+  recorded month, including the last day itself) and the
+  `recorded_move_month_not_a_month` case, so both directions of the new
+  comparison are pinned. Small; part of the correction round.
 - `tests/e2e/verify_all.sh` step comment still says the proof "needs the
   established Skyline fixture" — stale after `4c8e062`.
 - `RECEIPT.md` says "40 passed / 0 failed" under "What was proven" while the
@@ -113,3 +135,26 @@ grepping the source. Also: `subject === "match"` is never produced by
 No product code was changed on the lane or the board. Nothing was pushed to
 the Opus lane. The board's `app_pin.txt` is unchanged. No database outside
 an owned nonce was touched; no production read.
+
+## Rulings on the packet's owner decisions (QB, 2026-09-14)
+
+1. **Do the `exact_spaces` callers migrate to the new read?** Not in this
+   lane and not before tomorrow. It changes what a prospect hears from the
+   agent path, which is prose in a model-facing surface; QB recommends
+   option (a) as a successor lane with its own first red, and it is
+   Kameron's call. `exact_spaces` stays as it is (option c is refused: it is
+   a different question's answer with 18 assertions built on the filter).
+2. **Does the Ask Spine gate widen to `src/leasing`?** Yes. A gate that scans
+   less than it asserts launders the gap into evidence, and the gate's own
+   vocabulary exists for exactly this: the four discovered domains
+   (`forward_leasing`, `leasing_standing`, `opportunity_lifecycle`,
+   `renewals`) are declared `pending` with an owner and a clearing
+   condition, not `registered`. That is a declaration, not other lanes'
+   work. Added to the correction round as a bounded item; if any of the
+   four turns out to already be gathered, declare it `registered` only when
+   the detector proves it.
+3. **The screen.** After this lane integrates, as a separate assignment to
+   the app lane with the door as its contract. Not before the person wall
+   exists, and not for the 15 Sept walkthrough.
+4. **`CURRENT_STATE.md` snapshot commit stale.** Carried; the QB re-stamps
+   it on the board at the next integration. Not this lane's.
