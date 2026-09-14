@@ -119,3 +119,9 @@ Do not accept Skyline tracker mappings during the session. Do not enable
 autonomous dispatch, booking or signing allowlists for the demo; the
 rehearsals ran with all allowlists on a synthetic server and that is not
 a production instruction.
+
+## Rehearsal evidence at the candidate (2026-09-14, owned database at ledger 198)
+
+- `evidence/skyline_journey_03550a8.log` — `staff-assisted journey (skyline): 88 passed, 0 failed, 8 observations; chain complete`; "Skyline completes the chain with an executed lease and no configuration stop".
+- `evidence/two_step_leasing_03550a8.log` — `two-step leasing: 508 passed, 0 failed, 4 observations`.
+- Two-step Execute in the **browser** on the combined app `1a5f257`: the shipped proof timed out at the new "Choose a property" layer (never run in CI; skipped unless an app checkout is named). Adapted on `claude/two-step-browser-picker-20260914` (`140cf35`, proof only) to make the visible selection; its rerun and screenshots are recorded here when done.

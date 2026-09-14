@@ -1,0 +1,121 @@
+OWNED_API_READY
+
+== property-and-staff ==
+(node:3231) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+  PASS  [property-and-staff] Skyline-shaped fixture property exists
+  PASS  [property-and-staff] fixture manager (instrument company signer) exists
+  PASS  [property-and-staff] fixture unit 3B with established Bed B exists
+  PASS  [property-and-staff] the leasing agent joins through the governed invite and OTP | {"invite":200,"delivery":"sms_sent","verify":200,"body":{"receipt":"Verified. You're in.","session_token":"Xwq-to0cpJJkaJjKhtR-1eEGj23VoBJjqXI97dBK2B4","user":{"id":"<id-1>","name":"Mike (journey) 9e8e30af","phone_number":"<phone>"},"property":{"id":"<id-2>","name":"Skyline E2E"},"role_title":"Leasing Agent","role_key":"leasing_agent
+  PASS  [property-and-staff] the agent resolves as staff at the property | {"state":"resolved"}
+  PASS  [property-and-staff] the manager resolves as staff at the property | {"state":"resolved","basis":"bridge_plus_active_assignment_plus_authority"}
+  PASS  [property-and-staff] staff ready
+
+== inquiry ==
+  PASS  [inquiry] the authenticated website inquiry is captured once | {"status":200,"body":{"receipt":"New prospect — opened a new Skyline E2E opportunity. Inquiry saved for staff follow-up. No automated reply was generated or sent.","person_id":"<id-3>","lead_id":"<id-4>","new_person":true,"reused_opportunity":false,"first_response_sent":false,"status":"new","conversation_id":"d35cd8cc-a20b-46c8-ad80-1359f
+  PASS  [inquiry] a relay redelivery replays the same person, lead and conversation | {"replayed":true}
+  PASS  [inquiry] the form's positive consent is recorded (no consent would leave the prospect untextable) | {"consent_state":"opted_in"}
+  PASS  [inquiry] capture sent nothing to the prospect
+
+== ownership ==
+  PASS  [ownership] conversation exists
+  PASS  [ownership] the agent takes ownership of the inquiry | {"status":200,"body":{"ok":true,"mode":"human_takeover","by":"<id-1>"}}
+  PASS  [ownership] the conversation detail names the agent as accountable owner | {"owner":true}
+  PASS  [ownership] the conversation reads the original website question from communications
+  PASS  [ownership] Ask Spine reads the same original website question through its scoped inquiry read
+  NOTE  [ownership] repeating the take-over by the same owner | {"status":200}
+  PASS  [ownership] a second staff member cannot take an owned inquiry away silently | {"status":409}
+  NOTE  [ownership] the agent's personal Ask read after taking ownership | {"outcome":"answered","open_items":1}
+
+== tour ==
+  PASS  [tour] conversation exists
+  PASS  [tour] the agent books the prospect onto a native slot from the conversation | {"status":200,"body":{"receipt":"Tour booked. No confirmation message was sent.","tour_id":"<id-5>","slot_id":"<id-6>","scheduled_for":"2026-09-16T10:46:28.826Z","status":"scheduled","idempotent":false}}
+  PASS  [tour] a repeated booking returns the same tour | {"status":200}
+  PASS  [tour] the tour is on the same lead and property
+  PASS  [tour] booking sent no message
+  PASS  [tour] tour check-in | {"status":200}
+  PASS  [tour] the agent records the actual outcome as ready to apply | {"status":200,"body":{"receipt":"Outcome recorded — tour given. Follow-up rail opened — outcome · owner set to the actual host.","tour_id":"<id-5>","conversion_id":"<id-7>"}}
+  PASS  [tour] re-saving the same outcome replays instead of recording twice | {"status":200}
+  PASS  [tour] the outcome opened the conversion for the same person
+  PASS  [tour] post-tour follow-up is the agent's accountable work
+
+== exact-home ==
+  PASS  [exact-home] conversion exists
+  PASS  [exact-home] leaseable targets read
+  PASS  [exact-home] the established vacant bed is offerable as an exact choice | {"marketing_state":"marketable_now","availability_confidence":"confirmed"}
+  PASS  [exact-home] the free sibling is offerable, the leased sibling and the unknown-readiness home are not
+
+== offer ==
+  PASS  [offer] exact bed exists
+  PASS  [offer] the leasing agent cannot author terms without pricing authority | {"status":403,"error":"NO_APPLICATION_OFFER_AUTHORITY"}
+  PASS  [offer] an offer on the leased sibling bed refuses | {"status":409,"error":"not_offerable"}
+  PASS  [offer] an offer on a home with no governed ready date refuses truthfully | {"status":409,"error":"application_ready_date_not_governed"}
+  PASS  [offer] the manager authors a complete offer for the chosen bed | {"status":200,"body":{"application_offer_id":"<id-8>","application_terms":{"schema_version":1,"property_id":"<id-2>","person_id":"<id-3>","target":{"space_id":"<id-9>","unit_id":"<id-10>"},"rent":"1025.00","security_deposit":"1025.00","lease_start_dat
+  PASS  [offer] an identical retry returns the same offer
+  PASS  [offer] the same request identity with different terms is refused | {"status":409,"error":"APPLICATION_OFFER_IDEMPOTENCY_CONFLICT"}
+
+== send ==
+  PASS  [send] offer exists
+  PASS  [send] naming the occupied sibling bed is refused or clarified, never re-aimed at the free bed | {"status":200,"outcome":"leasing_clarification","proposed":null}
+  PASS  [send] naming the apartment without the bed asks for clarification | {"outcome":"leasing_clarification","answer":"undefined"}
+  PASS  [send] the agent's request for the chosen bed becomes a server-selected proposal | {"status":200,"outcome":"application_send_proposed"}
+  PASS  [send] the proposal names the exact bed and exposes no identifiers
+  PASS  [send] another staff member cannot redeem the agent's confirmation | {"status":403}
+  PASS  [send] the agent's confirmation sends the application | {"status":200,"body":{"outcome":"application_sent","action_code":"send_application_after_tour","confirmation_required":false,"confirmation":null,"receipt":"Application sent to Journey Prospect 9e8e30af for Unit 3B, Bed B.","subject":{"display_name":"Journey Prospect 9e8e30af"},"target":{"label":"Unit 3B, Bed B"},"sent":true,"replayed":false}}
+  PASS  [send] the application text reached the fake transport
+  PASS  [send] a repeated confirmation is a used receipt, not a second send
+  NOTE  [send] a second send request after the invitation exists | {"status":200,"kind":"clarification_or_refusal","outcome":"leasing_clarification"}
+  PASS  [send] the manager revises the offer on the existing invitation; applicant review is required | {"status":200,"body":{"application_offer_id":"<id-11>","application_terms":{"schema_version":1,"property_id":"<id-2>","person_id":"<id-3>","target":{"space_id":"<id-9>","unit_id":"<id-10>"},"rent":"1100.00","security_deposit":"1100.00","lease_start_dat
+  PASS  [send] a revision sends no new message
+  NOTE  [send] no stale confirmation could be minted after the send; the confirm-time terms guard was not exercised here
+  PASS  [send] a second revision of the already-superseded offer is refused | {"status":409,"error":"APPLICATION_TERMS_REVIEW_REQUIRED"}
+  PASS  [send] one invitation and one message exist | {"invitations":1,"texts":1}
+  PASS  [send] the invitation carries the exact bed, the current offer and the same person
+
+== application ==
+  PASS  [application] application link exists
+  PASS  [application] the applicant reads server-owned terms
+  PASS  [application] the applicant sees the current rent and the exact bed | {"rent":"1100.00","unit_label":"3B · Bed B"}
+  PASS  [application] acknowledging the superseded terms cannot submit | {"status":409,"error":"Review and acknowledge the current application terms before submitting."}
+  PASS  [application] the prospect submits against the acknowledged terms | {"status":200,"body":{"receipt":"Application submitted for Journey Prospect 9e8e30af. Now with leasing_manager for approval.","application":{"id":"<id-12>","property_id":"<id-2>","unit_id":"<id-10>","person_id":"<id-3>","status":"submitted","applicant_name":"Journey Prospect 9e8e30
+  PASS  [application] a repeated submission returns the same application
+  PASS  [application] the application is the same person, conversion, bed and offer, with the named guarantor
+  PASS  [application] exactly one application exists for this person here
+
+== lease ==
+  PASS  [lease] application exists
+  PASS  [lease] the agent cannot approve the application they collected | {"status":403}
+  PASS  [lease] the manager's session at another property cannot approve | {"status":403}
+  PASS  [lease] the manager approves | {"status":200,"body":{"receipt":"Approved. Terms-review next for Journey Prospect 9e8e30af. The resident acknowledges proposed terms; an executed lease is a separate, later fact.","application":{"id":"<id-12>","property_id":"<id-2>","unit_id":"<id-10>","person_id":"<id-3>","status"
+  PASS  [lease] terms the applicant did not acknowledge cannot be confirmed | {"status":409}
+  PASS  [lease] the acknowledged terms are confirmed | {"status":200,"body":{"receipt":"Proposed terms confirmed for resident review. This is a proposal, not an executed lease.","idempotent":false,"confirmation_id":"<id-13>","authority_basis":"managed_role_override","supersedes_confirmation_id":null}}
+  PASS  [lease] the governing lease packet is generated | {"status":200,"body":{"receipt":"Lease package generated for Journey Prospect 9e8e30af. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms.","packet":{"id":"<id-14>","property_id":"<id-2>","application_id":"<id-12>","unit_id":"d0a28b7e-f6b6-4989-
+  NOTE  [lease] generating the packet again | {"status":200,"same":true}
+  PASS  [lease] a prepared packet blocks a further offer change | {"status":409}
+  PASS  [lease] resident and guarantor links are issued | {"status":200,"body":{"receipt":"Separate resident and guarantor signing links issued (expires in 14 days). Each presents the same retained governing form and exact deal terms as one package.","already_issued":false,"tenant_url":"http://127.0.0.1:3111/t/lease/<token>","guarantor_url":"http://127.0.0.1:3111/t/lease/<token>","si
+  PASS  [lease] separate resident and guarantor secrets
+  PASS  [lease] re-issuing is a replay, not a second package | {"status":200,"already_issued":true,"lease_texts_after_both":0}
+  PASS  [lease] the guarantor completes only guarantor controls | {"status":200}
+  PASS  [lease] the company cannot execute before the resident has signed | {"status":409}
+  PASS  [lease] the resident completes and the package reads resident executed | {"status":200,"packet":"resident_executed"}
+  NOTE  [lease] re-submitting the resident signature | {"status":404,"receipt":"Lease link is invalid, expired, or already submitted."}
+  PASS  [lease] leasing access is not company signing authority | {"status":403}
+  PASS  [lease] the recorded company signer executes and the tenancy is created | {"status":201,"body":{"receipt":"Lease executed and tenancy created — pending lease <id-15>.","lease_packet_id":"<id-14>","application_id":"<id-12>","verification_basis":"spine_instrument","execution_channel":"spine_esign","instrument_body_sha256":"<hash>
+  PASS  [lease] executing again creates no second tenancy | {"status":409}
+  PASS  [lease] the tenancy is anchored to the exact bed at the acknowledged rent and dates | {"rent":"1100.00","lease_status":"pending"}
+  PASS  [lease] execution leaves a pending lease without economic activation or possession | {"lease_status":"pending","economic_tenancy_activated_at":null,"move_in_events":0}
+  PASS  [lease] exactly one lease exists on the bed
+  PASS  [lease] the leased bed leaves the selector
+  PASS  [lease] Application Review reads the same application, person, exact bed, packet and tenancy | {"status":200}
+  PASS  [lease] the Person Card reads the same pending tenancy on the exact bed | {"status":200}
+  NOTE  [lease] Ask Spine read of the same person after execution | {"outcome":"answered","stage":"applicant_followup"}
+
+== removed-authority ==
+  PASS  [removed-authority] agent exists
+  PASS  [removed-authority] the manager removes the agent's access through the governed door | {"status":200,"body":{"receipt":"Access updated.","assignment_id":"<id-16>","allowed_modules":["leasing"],"primary_for_modules":["leasing"],"landing_module":"leasing","active":false}}
+  PASS  [removed-authority] the agent's live session loses access immediately | {"status":401}
+  PASS  [removed-authority] a removed agent cannot propose a send | {"status":401}
+  NOTE  [removed-authority] access restored through the same door | {"status":200}
+  PASS  [completion] Skyline completes the chain with an executed lease and no configuration stop | {"stopped_at":null,"lease_created":true}
+
+staff-assisted journey (skyline): 88 passed, 0 failed, 8 observations; chain complete
