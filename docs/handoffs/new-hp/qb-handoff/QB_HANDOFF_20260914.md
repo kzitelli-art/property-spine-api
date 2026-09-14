@@ -1,7 +1,7 @@
 # QB handoff — 2026-09-14 evening
 
 For the thread that takes over as QB until Friday. Read this, then
-`CLAUDE.md`, then `docs/CURRENT_STATE.md` rows 73–81, then
+`CLAUDE.md`, then `docs/CURRENT_STATE.md` rows 73–83, then
 `docs/PHILOSOPHY.md` §5, §7, §31, §33, §40. Do not reconstruct history from
 git; the board's `docs/handoffs/new-hp/*/QB_GRADE.md` files are the record
 of what was graded and why.
@@ -35,7 +35,7 @@ edit a codex lane or an Opus lane.
 
 ```text
 Board (single integration candidate):
-  claude/board-20260914 @ 72e981a (this handoff; docs over f680a36, CI run 558 green at f680a36 — confirm the latest run yourself)
+  claude/board-20260914 @ 6fa4638 — CI run 564 green (all eight lanes + lender read integrated); confirm the latest run yourself
   https://github.com/kzitelli-art/property-spine-api/tree/claude/board-20260914
 App pin (development pin, never a release claim):
   tests/e2e/app_pin.txt → property-spine-app claude/coupled-browser-acceptance-20260914 @ b0be9f4
@@ -61,8 +61,9 @@ Every Opus lane graded today and its grade file:
 | 4 | `claude-opus/debt-vocabulary-20260914` | 09e54623 | `debt-vocabulary/QB_GRADE.md` | integrated |
 | 5 | `claude-opus/ask-entitlement-proof-20260914` | 0f66c663 | `ask-entitlement/QB_GRADE.md` | integrated |
 | 6 | `claude-opus/compliance-guard-20260914` | 34068706 | `compliance-guard/QB_GRADE.md` | integrated |
-| 7 | rent roll lender lines | not started | `qb-handoff/ASSIGNMENT_OPUS_7.md` | queued, branch from f680a36 |
-| 8 | silence: NOT_AUTHORIZED is not BLIND | not started | `qb-handoff/ASSIGNMENT_OPUS_8.md` | queued, after #7 |
+| 7 | `claude-opus/rent-roll-lender-lines-20260914` | 371a460a | `rent-roll-lender-lines/QB_GRADE.md` | integrated (row 82) |
+| 8 | `claude-opus/silence-not-authorized-20260914` | be3ebed4 | `silence-not-authorized/QB_GRADE.md` | integrated (row 83) |
+| 9 | refusal envelope on every domain + a consumer for `withheld` | not started | ruling in `silence-not-authorized/QB_GRADE.md` | next lane to write, after the walkthrough |
 
 ## The grading routine (do exactly this per packet)
 
@@ -126,6 +127,8 @@ one invented a SHA, one missed branches through pagination.
 
 ## Decisions only Kameron can make (ask, do not decide)
 
+0. Ship pins if he says go: API board head 6fa4638 (release 195–198 via the wrapper at the pins carried on the board), app b0be9f4. Nothing is deployed as of this handoff.
+
 1. Release go: 195–198 at API 03550a8 (on the board) and app b0be9f4; who
    runs the runbook; anything in production a deploy must not interrupt.
 2. Skyline tracker cutover date: the day the spreadsheet stops being edited
@@ -165,7 +168,7 @@ one invented a SHA, one missed branches through pagination.
 You are the QB for Property Spine until Friday. Read, in order:
 docs/handoffs/new-hp/qb-handoff/QB_HANDOFF_20260914.md on branch
 claude/board-20260914 (kzitelli-art/property-spine-api), then CLAUDE.md,
-then docs/CURRENT_STATE.md rows 73–81, then PHILOSOPHY.md §5, §7, §31, §33,
+then docs/CURRENT_STATE.md rows 73–83, then PHILOSOPHY.md §5, §7, §31, §33,
 §40. Confirm the board head and its latest CI run yourself before anything
 else. Then: grade the next Opus packet Kameron pastes using the routine in
 the handoff, integrate what passes, keep CURRENT_STATE true, and report to
