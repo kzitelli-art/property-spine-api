@@ -484,11 +484,22 @@ CURRENT SOURCE / RUNTIME  →  CURRENT_STATE.md  →  PHILOSOPHY  →  THREAD_HA
 ## STATE SNAPSHOT
 
 ```text
-API verified against    61f99bf     2026-08-22  (integration branch, deployed commit)
-PRODUCTION DEPLOYED     61f99bf     2026-08-22  ← independently verified at /health
-APP verified/deployed   d45344d     2026-08-21
-Production ledger       ceiling 189 (schema)
-Migrations on deployed branch 189  → matches production
+API verified against    d15c968     2026-09-14  (production /health, owner read)
+PRODUCTION DEPLOYED     d15c968     2026-09-14  ← owner /health read. SUPERSEDES the
+                        61f99bf/2026-08-22 stamp below, which stood unchallenged
+                        for three weeks and was WRONG. Dated rows keep 61f99bf as
+                        history; it is not the running build.
+Production ledger       182 rows, ceiling 194  2026-09-14 (owner read of Neon)
+                        Rows ≠ ceiling: numbers are skipped. 189 was the stale claim.
+APP deployed            NOT RE-READ 2026-09-14. Two records disagree and neither is
+                        measured: d45344d (2026-08-21, here) and 336c82f (QB handoff).
+                        Unresolved — needs a read before it is quoted anywhere.
+RELEASE CANDIDATE       API 6fa4638 · app b0be9f4 · migrations 195-198 at pin 03550a8.
+                        NOT RELEASED. 2026-09-14 attempt stopped SAFELY before any
+                        production change on the owner's precondition: live
+                        conversations, leads and lease activity (tenant_signed,
+                        submitted) were in flight. Neon ledger and all 56 source
+                        governance gates passed. Not a code failure — a window problem.
 Migrations on github main     187  → production is ahead; see defect #29
 Surveyed / verified     2026-08-19 (wave 1) · 2026-08-20 (Codex PR review, AM
                         domains) · 2026-08-20 (wave 2, 148 capabilities:
