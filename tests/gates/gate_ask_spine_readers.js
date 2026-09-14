@@ -97,7 +97,17 @@ function readIf(rel) {
  *
  *  Any directory that OWNS canonical domain truth belongs here. When the
  *  next one lands, add it in the same breath as the read.                */
-const STANDING_READ_DIRS = ["src/asset", "src/tenancy"];
+/*  src/leasing was added 2026-09-14 on QB's ruling. A gate that scans less
+ *  than it asserts launders the gap into evidence — the same reasoning that
+ *  added src/tenancy after Tenancy turned out to be UNDISCOVERABLE. Four
+ *  leasing domains carry canonical standing reads and none was classified;
+ *  they are declared below, `pending`, which is a declaration and not other
+ *  lanes' work. None is `registered`: the detector proves gathering, and
+ *  today it proves none of them. leasing_standing_read.js IS required by
+ *  the composer, but its results land under other fact keys
+ *  (facts.leasing_signing and siblings), so `facts.leasing_standing =` does
+ *  not exist and the detector correctly refuses to call it registered.  */
+const STANDING_READ_DIRS = ["src/asset", "src/tenancy", "src/leasing"];
 const STANDING_READ_SUFFIXES = ["_position_read.js", "_establishment.js", "_read.js"];
 const NON_STANDING_READ_SUFFIXES = ["_document_read.js", "_funding_read.js"];
 
@@ -153,6 +163,53 @@ function domainsFromFilenames(filenames) {
  *  is enforced by the composer rather than used to block single-domain reads.
  *  A green gate reports this split; it does not erase it.  */
 const REGISTRY = {
+  /*  ── THE FOUR LEASING DOMAINS (QB ruling, 2026-09-14) ─────────────
+   *  Discovered the moment src/leasing entered the scan. Each owns
+   *  canonical standing truth and none is gathered by the composer today.
+   *  `pending` with an owner and a condition is the honest state; calling
+   *  any of them `registered` would be the lie this gate exists to catch.  */
+  forward_leasing: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "forward-leasing standing: which future terms are committed and which are open"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers the forward-leasing standing projection — committed " +
+            "future terms, open intervals and the dates behind them — under a fact " +
+            "key of its own, with the term refusal preserved so a missing caller " +
+            "term never reads as no forward inventory.",
+  },
+  leasing_standing: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "one person's leasing standing and the recorded basis for it"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "the composer assigns facts.leasing_standing from readLeasingStanding. " +
+            "The reader is already required and used, but its results land under " +
+            "facts.leasing_signing and siblings, so the domain itself is not yet " +
+            "gathered under its own name and the detector rightly refuses it.",
+  },
+  opportunity_lifecycle: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "where an opportunity stands in its lifecycle and what moved it there"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers the opportunity-lifecycle standing projection with " +
+            "stage transitions attributed, and close reasons (budget_mismatch and " +
+            "its siblings) carried as recorded reasons rather than as judgements.",
+  },
+  renewals: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "which tenancies are in a renewal window and what has been offered or decided"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers the renewals standing projection — window, offer " +
+            "state and decision — with the §40.5 wall that an offered renewal is " +
+            "not an accepted one preserved in the projection's own vocabulary.",
+  },
   //  Prospect-to-home matching. Retrieval on a declared basis only — the
   //  registry records the class so a later build that starts ranking or
   //  explaining goes red here rather than shipping as "matching".
