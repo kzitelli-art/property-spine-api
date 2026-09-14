@@ -97,7 +97,7 @@ one; it is recorded as an owner decision, not taken.
 
 ## What was proven, and what each green would miss
 
-`tests/proofs/prospect_match_basis.db.js` — **40 passed / 0 failed**, on an
+`tests/proofs/prospect_match_basis.db.js` — **44 passed / 0 failed**, on an
 owned nonce database built from the real migration chain (ledger 198 / 186
 rows) with the owned server answering the real staff door. Registered in
 `tests/e2e/verify_all.sh`.
@@ -109,6 +109,33 @@ rows) with the owned server answering the real staff door. Registered in
   two priced homes and one unpriced, so the ordering rule's later tiebreaks
   (ready date, price) are exercised over a small set; a property with many
   homes differing on each key is not covered.
+
+### A second red, found by re-reading my own delivered code
+
+Before signing this receipt I re-read the readiness constraint I had shipped.
+It named `move_month` as its prospect fact and then decided the state purely
+from whether the home had a governed ready date at all:
+
+```
+recorded move_month 2026-08 vs governed ready 2026-09-14
+{"constraint":"readiness","state":"satisfied",
+ "prospect_fact":{"key":"move_month","value":"2026-08",...},
+ "home_fact":{...,"available_from":"2026-09-14",...},"why":null}
+```
+
+A home ready AFTER the month the prospect recorded read **satisfied**, and
+`violated` was unreachable — two states wearing a three-state label, naming a
+fact it had not compared. That is exactly what MB-2 and MB-3 forbid, in the
+read built to enforce them, and it would have promoted a home the prospect
+cannot take. Two assertions now cover it, red on the delivered code and green
+after: no recorded month → `not_established` (`no_recorded_move_month`); a
+month Spine cannot read → `not_established`
+(`recorded_move_month_not_a_month`), because "spring" and "ASAP" are recorded
+facts and not comparable ones and no parser should guess; no governed ready
+date → `not_established`; otherwise the ready date is compared against the
+last day of the recorded month, so a prospect who said August can take a home
+ready on the 31st. The projection gained `unknown_on_readiness` and
+`violated_on_readiness`.
 
 ### The proof failed in CI after passing locally, and why that mattered
 
