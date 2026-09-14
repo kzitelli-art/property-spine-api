@@ -103,14 +103,32 @@ rows) with the owned server answering the real staff door. Registered in
 `tests/e2e/verify_all.sh`.
 
 - **Would miss:** no browser rung — this is proven as a domain and a door,
-  not as a screen, and no screen was built. The governed-inventory cases run
-  against the repository's established Skyline fixture, which carries exactly
-  one eligible target; multi-home ordering is asserted deterministic but only
-  over that one home plus the unpriced property's zero, so the tiebreak chain
-  beyond the first key is exercised by construction rather than by data.
-  Ask Spine is proven registered, gathered and projected — **no provider
-  answer was generated**, so the model's rendering of the projection is
-  unproven.
+  not as a screen, and no screen was built. Ask Spine is proven registered,
+  gathered and projected — **no provider answer was generated**, so the
+  model's rendering of the projection is unproven. The fixture establishes
+  two priced homes and one unpriced, so the ordering rule's later tiebreaks
+  (ready date, price) are exercised over a small set; a property with many
+  homes differing on each key is not covered.
+
+### The proof failed in CI after passing locally, and why that mattered
+
+CI 539 at `aafe963d`: **30 passed, 10 failed**, every failure the same shape —
+`{"violated":0,"satisfying":0}` and each MB-2/MB-3/MB-4 assertion that needs a
+home. Zero homes came back. The first version borrowed the shared Skyline
+fixture, and this step is registered immediately after "current rent-roll
+reconciliation into an onboarded property", which onboards into Skyline and
+consumes its one eligible target. It passed locally only because nothing had
+consumed it there. **A proof that depends on another proof's leftovers is
+measuring the order of the suite**, and a green from it is a claim about
+scheduling rather than about the product.
+
+The proof now establishes its own governed inventory through the same objects
+a real confirmation writes. Two product rules it had to learn on the way, both
+correct, both now recorded in the fixture rather than worked around:
+`uq_opening_tenancy_position_current_per_property` permits ONE opening
+position per property, so every home is established under one activation; and
+`materializeRentableSpaces` does not decide operating use, so without
+`use_type` the target read answers `use_not_configured` and refuses the home.
 - Gates: `gate_ask_spine_readers.js` 87/87 with 10 domains, 8 registered,
   2 pending; all 56 source-governance gates `PARENT EXIT 0`.
 - Nearest regressions, same runtime: `leasing_path`, `leasing_hostile`,
