@@ -1,0 +1,46 @@
+
+════════════════════════════════════════════════════════════════
+  HARNESS   prospect_match_basis.db.js
+  COMMIT    0e10ef84e6b858ed2b35e132af2f50ee208fb5d0
+  BRANCH    HEAD
+  DATABASE  spine_proof_<scrubbed>  @  127.0.0.1:55432  (user spine)
+  ENDPOINT  (not a Neon endpoint host)
+  ISOLATED  yes — target differs from DATABASE_URL (which is unset here)
+  EXPECTED  34 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+    · fixture setup complete: 1 unit type(s) priced at 1400.00 for a 12-month term
+  ok    PRECONDITION: the prospect's budget is recorded through the canonical person-fact writer
+
+RED 1 [DB] does the leasing owner answer the question at all?
+  FAIL  MB-1: the leasing inventory owner exposes a canonical prospect-match read
+        leasing_inventory exports: availableUnits, attachSelectedUnit, matchConfirmationToOffer
+  FAIL  MB-8: and a compact standing projection beside it
+        leasing_inventory exports: availableUnits, attachSelectedUnit, matchConfirmationToOffer
+
+RED 2 [HTTP] does a staff door answer it?
+  FAIL  MB-8: a staff-session door answers the match question (200)
+        404 {}
+  FAIL  MB-2: the HTTP payload carries a per-home basis
+        {}
+
+RED 3 [ASK] is the domain registered and gathered?
+  FAIL  MB-8: the Ask Spine registry declares the prospect-match domain
+        no prospect_match entry in the registry
+  FAIL  MB-8: ask_spine_answer gathers the prospect-match standing projection
+        ask_spine_answer never calls the standing read
+
+RED 4 [DB] the existing seam's answer when the budget is exceeded
+    · existing seam returned 0 home(s), qualification=exact_space_matches_informational
+  ok    MB-3 (RED): today's seam returns ZERO homes rather than naming them violated
+  ok    MB-3 (RED): and nothing in that answer says WHICH homes exceeded the budget, or by how much
+
+3 passed, 6 failed
+FAILED: MB-1: the leasing inventory owner exposes a canonical prospect-match read | MB-8: and a compact standing projection beside it | MB-8: a staff-session door answers the match question (200) | MB-2: the HTTP payload carries a per-home basis | MB-8: the Ask Spine registry declares the prospect-match domain | MB-8: ask_spine_answer gathers the prospect-match standing projection
+
+════════════════════════════════════════════════════════════════
+  ASSERTIONS COMPLETE · 9 run · 3 passed · 6 failed
+  ✗ FAIL — prospect_match_basis.db.js
+  EXIT      1
+════════════════════════════════════════════════════════════════
+

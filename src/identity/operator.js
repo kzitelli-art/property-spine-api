@@ -1746,6 +1746,49 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     (req, res) => changeNativeTourSlot(req, res, "reopen"));
 
   // ══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/leasing/prospect-match
+  //     ?person_id=&requested_start=&requested_end=&lease_term_months=
+  //   "Which homes satisfy this prospect's recorded constraints, and on
+  //   what basis." RETRIEVAL on a declared basis — not a score, not a
+  //   ranking, not an explanation (MB-1). Every home carries the
+  //   constraint, the recorded prospect fact and the governed home fact
+  //   it was compared against (MB-2); a home that fails one is RETURNED
+  //   and marked violated, never filtered away (MB-3).
+  //
+  //   STAFF SURFACE ONLY. The prospect's recorded budget is disclosed
+  //   here because this reader already sees the prospect's lead record;
+  //   the prospect-facing altitude is a separate, later decision and
+  //   Tenant Agent is reserved (MB-8).
+  //
+  //   property_id is SESSION-DERIVED, never from the query string.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/prospect-match", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const inventory = require("../leasing/leasing_inventory")({ pool });
+      const out = await inventory.matchProspectHomes({
+        property_id: req.operator.property_id,   // session only
+        person_id: req.query.person_id || null,
+        requested_start: req.query.requested_start || null,
+        requested_end: req.query.requested_end || null,
+        lease_term_months: req.query.lease_term_months == null || req.query.lease_term_months === ""
+          ? null : Number(req.query.lease_term_months),
+      });
+      //  A refusal is a 200 with a reason an agent can say out loud —
+      //  "I need your dates" is an answer, not an error, and it must not
+      //  render as an empty inventory result.
+      return res.json(out);
+    } catch (e) {
+      //  A failed read is UNAVAILABLE. It must never render as "no homes
+      //  match", which is a claim about inventory this read cannot make.
+      return res.status(e.httpStatus || 500).json({
+        error: e.publicMessage || e.message,
+        note: "Spine could not complete the match. This is not an answer about inventory.",
+      });
+    }
+  });
+
   // GET /operator/leasing/availability-canonical?as_of=&horizon_days=
   //   Availability as the LEASING INTERPRETATION of canonical positions.
   //   Consumes lease, notice, successor, conflict, proof and down state;

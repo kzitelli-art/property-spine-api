@@ -48,6 +48,7 @@ const leasingKnowledge = require("../leasing/leasing_knowledge");
 const askSpineService = require("./ask_spine_service");
 const workOrderRead = require("../surfaces/work_order_status_read");
 const maintenanceReader = require('../maintenance/work_acceptance_service');
+const leasingInventoryOwner = require('../leasing/leasing_inventory');
 const complianceRead = require("../asset/compliance_read");
 const utilityAskRead = require("../asset/utility_ask_detail.js");
 const contractedServiceAskRead = require("../asset/contracted_service_ask_detail.js");
@@ -630,6 +631,7 @@ async function gatherFacts(db, {
   economicReader = economicPicture,
   tourScheduleReader = readTourScheduleStanding,
   requiredWorkReader = maintenanceReader,
+  prospectMatchReader = leasingInventoryOwner,
   //  The canonical application lifecycle service. Accepted as a value OR a
   //  thunk: ask_spine mounts in server.js ABOVE the applications module, so
   //  a value captured at mount time would be undefined forever.
@@ -651,6 +653,28 @@ async function gatherFacts(db, {
       const state = silenceFor(e);
       facts.tour_schedule = failedRead(e);
       failures.push(state === "READ_TIMED_OUT" ? "tour_schedule_timed_out" : "tour_schedule");
+    }
+  }
+
+  /*  MB-8 — MATCHING HAS TWO READERS FROM DAY ONE. The compact standing
+   *  projection carries counts, the basis and what is unknown — never a
+   *  record id, because a model holding an id can compose a link Spine did
+   *  not resolve (§40.8). Detail is a second read through the staff door.
+   *  A term is required: without one the projection says so, in the same
+   *  vocabulary the seam uses, rather than reading as "no homes".  */
+  if (subject === "leasing" || subject === "match") {
+    if ((allowed_modules || []).some((m) => m === "leasing" || m === "management")) {
+      try {
+        const standing = await prospectMatchReader({ pool: db }).readProspectMatchStanding(db, {
+          property_id,
+          person_id: (facts.person && facts.person.id) || null,
+          requested_start: null, requested_end: null, lease_term_months: null,
+        });
+        facts.prospect_match = standing;
+      } catch (e) {
+        facts.prospect_match = failedRead(e);
+        failures.push(silenceFor(e) === 'READ_TIMED_OUT' ? 'prospect_match_timed_out' : 'prospect_match');
+      }
     }
   }
 
@@ -1858,6 +1882,9 @@ async function answer(db, anthropic, {
     grounded_on: {
       open_items: facts.attention ? facts.attention.total_open : null,
       work_orders: facts.work_orders ? facts.work_orders.count : null,
+      prospect_match_read_state: facts.prospect_match ? facts.prospect_match.read_state : null,
+      prospect_match_homes_considered: facts.prospect_match && facts.prospect_match.read_state === 'OK'
+        ? facts.prospect_match.homes_considered : null,
       required_work_read_state: facts.maintenance ? facts.maintenance.read_state : null,
       required_work_count: facts.maintenance && facts.maintenance.read_state === 'OK'
         ? facts.maintenance.required_work_count : null,

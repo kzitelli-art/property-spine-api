@@ -365,6 +365,11 @@ else
   step "greenery staff onboarding" node tests/proofs/greenery_staff_onboarding.db.js
   step "source-to-home identity review and Greenery inventory contract" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/source_home_identity_review.db.js
   step "current rent-roll reconciliation into an onboarded property" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/current_rent_roll_reconciliation.db.js
+  #  Matching is retrieval on a declared basis (MATCHING_BASIS_RULING_20260914,
+  #  MB-1..MB-9). Runs here because it needs the established Skyline fixture,
+  #  the owned server for its staff door, and the same database the pricing
+  #  fixture published into.
+  step "prospect match basis" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/prospect_match_basis.db.js
   #  ── THE SAME RECONCILIATION, THROUGH THE SHIPPED OPERATOR UI ──────
   #  The step above proves the API. This one proves the screen a person
   #  actually touches, against the SAME owned server — and it had only

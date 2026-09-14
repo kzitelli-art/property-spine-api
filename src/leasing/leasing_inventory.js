@@ -356,5 +356,312 @@ module.exports = function leasingInventoryModule({ pool }) {
     return null;
   }
 
-  return { availableUnits, attachSelectedUnit, matchConfirmationToOffer };
+
+  /*  ══════════════════════════════════════════════════════════════════
+   *   MATCHING IS RETRIEVAL ON A DECLARED BASIS.
+   *
+   *   Governed by docs/handoffs/new-hp/rulings/MATCHING_BASIS_RULING_20260914.md.
+   *   This EXTENDS the availableUnits seam above: it inherits that door's
+   *   term refusal verbatim (MB-7) and composes the same governed owners
+   *   it composes — leaseableApplicationTargets for contractual rights and
+   *   readiness, resolveSpaceEconomics for published price (MB-4). It reads
+   *   no legacy `units.occupancy_status`, and it never reaches the date-only
+   *   branch.
+   *
+   *   WHAT MAKES IT DIFFERENT FROM THE SEAM, AND WHY IT IS NOT A REWRITE:
+   *   exact_spaces mode answers "what could we offer?" by FILTERING — a home
+   *   over budget is dropped with `continue`, and the answer says "no priced
+   *   home matched". That is a wrong answer to a different question. Asked
+   *   "which homes satisfy this prospect's recorded constraints, and on what
+   *   basis", the same homes must come back NAMED and `violated`, because
+   *   "nothing fits" and "three homes fit except on price" are different
+   *   facts and an operator needs the second one (MB-3, §5).
+   *
+   *   THREE STATES, NEVER TWO. A missing prospect fact and a missing home
+   *   fact are both `not_established`, and both stay visible. Nothing is
+   *   averaged, scored or hidden.
+   *
+   *   Class 1 — permanent. This is retrieval only (MB-1): no "best fit", no
+   *   outlier, no score. Ordering is a named deterministic rule (MB-5).
+   *   ══════════════════════════════════════════════════════════════════ */
+
+  //  The ordering rule is DATA, named in every payload, so changing it is a
+  //  visible diff and a ruling rather than a tweak (MB-5).
+  const MATCH_ORDER_RULE = "all_recorded_constraints_satisfied "
+    + "→ fewest_not_established → earliest_governed_ready_date "
+    + "→ lowest_governed_price → unit_number";
+
+  //  The prospect fact keys that exist. person_facts.js is the one writer;
+  //  tour completion records exactly these three (leasing_leads OBS_KEYS).
+  const PROSPECT_FACT_KEYS = ["budget", "move_month", "unit_type"];
+
+  const STATE = { SATISFIED: "satisfied", VIOLATED: "violated", NOT_ESTABLISHED: "not_established" };
+
+  //  A basis entry is the whole point: what was compared, what the prospect
+  //  said, where that came from, what the home's governed fact was, and when
+  //  each was true (MB-2). A match without one is a guess.
+  function basisEntry(constraint, state, { prospect, home, why }) {
+    return {
+      constraint, state,
+      prospect_fact: prospect || null,   // {key,value,source,recorded_at} or null
+      home_fact: home || null,           // {read,value,as_of} or null
+      why: why || null,                  // named reason when not_established
+    };
+  }
+
+  async function readProspectFacts(q, { person_id, property_id }) {
+    if (!person_id) return { read_state: "OK", facts: {}, missing: PROSPECT_FACT_KEYS.slice() };
+    const rows = (await q.query(
+      `select attr_key, attr_value, source, created_at
+         from person_attributes
+        where person_id = $1 and status = 'active'
+          and (property_id = $2 or property_id is null)
+          and attr_key = any($3)
+        order by attr_key, property_id nulls last, created_at desc`,
+      [person_id, property_id, PROSPECT_FACT_KEYS])).rows;
+    const facts = {};
+    for (const r of rows) {
+      if (facts[r.attr_key]) continue;   // most specific / most recent wins
+      facts[r.attr_key] = { key: r.attr_key, value: r.attr_value, source: r.source,
+        recorded_at: r.created_at ? new Date(r.created_at).toISOString() : null };
+    }
+    return { read_state: "OK", facts, missing: PROSPECT_FACT_KEYS.filter((k) => !facts[k]) };
+  }
+
+  //  A recorded budget is free text ("1200", "$1,200/mo"). A number we cannot
+  //  read is NOT a budget of zero and not a missing budget — it is a recorded
+  //  fact we could not compare, which is its own not_established reason.
+  function budgetAmount(fact) {
+    if (!fact) return { amount: null, why: "no_recorded_budget" };
+    const m = String(fact.value).replace(/[,\s]/g, "").match(/-?\d+(\.\d+)?/);
+    if (!m) return { amount: null, why: "recorded_budget_not_numeric" };
+    const n = Number(m[0]);
+    if (!Number.isFinite(n) || n < 0) return { amount: null, why: "recorded_budget_not_numeric" };
+    return { amount: n, why: null };
+  }
+
+  async function matchProspectHomes({
+    property_id, person_id = null,
+    requested_start = null, requested_end = null, lease_term_months = null,
+    limit = 25,
+  } = {}, clientArg = null) {
+    const q = clientArg || pool;
+    if (!property_id) return { matched: false, qualification: "no_property", homes: [] };
+
+    /*  MB-7 — TERM IS REQUIRED, AND THE REFUSAL IS INHERITED, NOT RETYPED.
+     *  The seam already distinguishes "I need your dates" from "nothing is
+     *  available" and carries the sentence an agent should say. Asking it
+     *  for one home is the cheapest way to get that exact refusal without a
+     *  second copy of the rule that could drift from it.  */
+    const gate = await availableUnits({ property_id, requested_start, requested_end,
+      lease_term_months, discovery_mode: "exact_spaces", limit: 1 }, q);
+    const REFUSALS = ["term_required", "invalid_term", "pricing_term_required",
+      "invalid_pricing_term", "invalid_preferences", "term_check_unavailable",
+      "pricing_read_unavailable", "no_property"];
+    if (REFUSALS.includes(gate.qualification)) {
+      return { matched: false, qualification: gate.qualification, note: gate.note,
+        refusal_inherited_from: "availableUnits(exact_spaces)", homes: [],
+        ordering_rule: MATCH_ORDER_RULE, capability_class: "retrieval" };
+    }
+
+    const term = { requested_start, requested_end, lease_term_months };
+    const prospect = await readProspectFacts(q, { person_id, property_id });
+
+    //  GOVERNED INVENTORY ONLY (MB-4). Membership comes from the application
+    //  target owner, so a legacy `units` row with bedrooms and a vacant flag
+    //  but no Deal Setup position simply is not here — it is not excluded by
+    //  a rule, it was never governed inventory.
+    let targets;
+    try {
+      targets = await require("../applications/application_target_read")
+        .leaseableApplicationTargets(q, { property_id, requested_start, requested_end });
+    } catch (e) {
+      return { matched: false, qualification: "term_check_unavailable",
+        note: "Spine could not read the homes and check those dates. This is not an empty inventory result.",
+        homes: [], ordering_rule: MATCH_ORDER_RULE, capability_class: "retrieval" };
+    }
+
+    const shapes = new Map((await q.query(
+      `select s.id as space_id, u.bedrooms, u.bathrooms, u.square_feet,
+              put.code as unit_type_code, put.label as unit_type_label
+         from units u join spaces s on s.unit_id = u.id
+         left join property_unit_types put on put.id = u.unit_type_id
+        where u.property_id = $1 and s.use_type = 'residential'`, [property_id]
+    )).rows.map((r) => [String(r.space_id), r]));
+
+    const budget = budgetAmount(prospect.facts.budget);
+    const homes = [];
+    let pricingReadFailed = false, pricedHomes = 0;
+
+    for (const t of targets.eligible_targets) {
+      const shape = shapes.get(String(t.space_id)) || {};
+      let economics = null;
+      try {
+        economics = await require("../money/effective_pricing").resolveSpaceEconomics(q, {
+          property_id, space_id: t.space_id, lease_term_months });
+      } catch (_) { pricingReadFailed = true; }
+
+      const basis = [];
+
+      // ── PRICE ─────────────────────────────────────────────────────
+      const priceHome = economics && economics.resolved
+        ? { read: "effective_pricing.resolveSpaceEconomics", value: economics.rent.new_lease_rent,
+            as_of: economics.as_of, authority: economics.authority }
+        : null;
+      if (priceHome) pricedHomes++;
+      if (!prospect.facts.budget || budget.amount == null) {
+        basis.push(basisEntry("price", STATE.NOT_ESTABLISHED, {
+          prospect: prospect.facts.budget || null, home: priceHome,
+          why: budget.why || "no_recorded_budget" }));
+      } else if (!priceHome) {
+        basis.push(basisEntry("price", STATE.NOT_ESTABLISHED, {
+          prospect: prospect.facts.budget, home: null,
+          why: economics ? economics.reason : "pricing_read_failed" }));
+      } else {
+        basis.push(basisEntry("price",
+          priceHome.value <= budget.amount ? STATE.SATISFIED : STATE.VIOLATED,
+          { prospect: prospect.facts.budget, home: priceHome }));
+      }
+
+      // ── UNIT TYPE ─────────────────────────────────────────────────
+      const typeHome = shape.unit_type_code
+        ? { read: "property_unit_types", value: shape.unit_type_code, label: shape.unit_type_label, as_of: null }
+        : null;
+      if (!prospect.facts.unit_type) {
+        basis.push(basisEntry("unit_type", STATE.NOT_ESTABLISHED,
+          { prospect: null, home: typeHome, why: "no_recorded_unit_type" }));
+      } else if (!typeHome) {
+        basis.push(basisEntry("unit_type", STATE.NOT_ESTABLISHED,
+          { prospect: prospect.facts.unit_type, home: null, why: "home_has_no_governed_unit_type" }));
+      } else {
+        const want = String(prospect.facts.unit_type.value).trim().toLowerCase();
+        const got = [typeHome.value, typeHome.label].filter(Boolean).map((x) => String(x).trim().toLowerCase());
+        basis.push(basisEntry("unit_type", got.includes(want) ? STATE.SATISFIED : STATE.VIOLATED,
+          { prospect: prospect.facts.unit_type, home: typeHome }));
+      }
+
+      // ── TERM ──────────────────────────────────────────────────────
+      //  The home is in eligible_targets FOR this exact term, which is the
+      //  governed statement that it can support it. The prospect fact is the
+      //  requested term itself, supplied by the caller and named as such.
+      basis.push(basisEntry("term", STATE.SATISFIED, {
+        prospect: { key: "requested_term", value: `${requested_start}..${requested_end}`,
+          source: "caller_supplied_term", recorded_at: null },
+        home: { read: "application_target_read.leaseableApplicationTargets",
+          value: "eligible_for_requested_term", as_of: requested_start } }));
+
+      // ── READINESS ─────────────────────────────────────────────────
+      basis.push(basisEntry("readiness",
+        t.available_from ? STATE.SATISFIED : STATE.NOT_ESTABLISHED, {
+          prospect: prospect.facts.move_month
+            ? prospect.facts.move_month
+            : { key: "move_month", value: null, source: null, recorded_at: null },
+          home: { read: "availability (via application targets)",
+            value: { marketing_state: t.marketing_state, available_from: t.available_from,
+              availability_confidence: t.availability_confidence },
+            as_of: requested_start },
+          why: t.available_from ? null : "no_governed_ready_date" }));
+
+      const counts = { satisfied: 0, violated: 0, not_established: 0 };
+      for (const b of basis) counts[b.state]++;
+      homes.push({
+        unit_id: t.unit_id, space_id: t.space_id, unit_number: t.unit_number,
+        space_label: t.space_label, position_kind: t.position_kind,
+        bedrooms: shape.bedrooms == null ? null : Number(shape.bedrooms),
+        governed_price: priceHome ? priceHome.value : null,
+        governed_ready_date: t.available_from || null,
+        basis, constraint_counts: counts,
+        all_recorded_constraints_satisfied: counts.violated === 0 && counts.not_established === 0,
+        selection_eligible: false,
+      });
+    }
+
+    /*  MB-5 — ONE NAMED DETERMINISTIC RULE, NO SCORE.
+     *  Every tiebreak is a recorded fact, and unit_number closes it so the
+     *  order cannot depend on row arrival.  */
+    homes.sort((a, b) =>
+      (b.all_recorded_constraints_satisfied - a.all_recorded_constraints_satisfied)
+      || (a.constraint_counts.not_established - b.constraint_counts.not_established)
+      || String(a.governed_ready_date || "9999-12-31").localeCompare(String(b.governed_ready_date || "9999-12-31"))
+      || ((a.governed_price == null ? Infinity : a.governed_price)
+          - (b.governed_price == null ? Infinity : b.governed_price))
+      || String(a.unit_number).localeCompare(String(b.unit_number)));
+
+    /*  MB-6 — COVERAGE IS REPORTED, NOT ASSUMED. A property with no published
+     *  pricing says so and still evaluates readiness; it does not answer
+     *  "no matches".  */
+    const coverage = {
+      price: pricingReadFailed ? "read_failed"
+        : (pricedHomes > 0 ? "evaluable"
+          : (homes.length ? "unavailable_for_this_property" : "no_governed_homes")),
+      readiness: homes.length ? "evaluable" : "no_governed_homes",
+      unit_type: homes.some((h) => h.basis.find((b) => b.constraint === "unit_type").home_fact)
+        ? "evaluable" : "unavailable_for_this_property",
+      term: "evaluable",
+      bedrooms: "not_a_recorded_prospect_fact",
+    };
+
+    return {
+      matched: true,
+      qualification: "match_basis_recorded",
+      capability_class: "retrieval",
+      claims_not_made: ["comparison", "causal_explanation", "best_fit", "score"],
+      property_id, term,
+      prospect: { person_id: person_id || null, recorded_facts: prospect.facts,
+        missing_fact_keys: prospect.missing },
+      ordering_rule: MATCH_ORDER_RULE,
+      constraint_coverage: coverage,
+      home_count: homes.length,
+      homes: homes.slice(0, Math.min(Math.max(Number(limit) || 25, 1), 100)),
+      truncated: homes.length > Math.min(Math.max(Number(limit) || 25, 1), 100),
+      may_promise: false,
+      note: "Retrieval on a declared basis. Each home names every constraint compared, "
+        + "the recorded prospect fact behind it and the governed home fact it was compared "
+        + "against. Homes that fail a constraint are RETURNED and marked violated, never "
+        + "hidden. Unknowns stay unknown. These are informational; no home is held or "
+        + "selected, and staff confirm any exact choice.",
+    };
+  }
+
+  /*  MB-8 — THE COMPACT STANDING PROJECTION.
+   *  Cheap enough to gather routinely, and it carries NO ids: an entitled
+   *  person asking from a meeting gets counts, the basis and what is unknown.
+   *  Detail is a second read through the staff door.  */
+  async function readProspectMatchStanding(db, { property_id, person_id = null,
+    requested_start = null, requested_end = null, lease_term_months = null } = {}) {
+    const r = await matchProspectHomes({ property_id, person_id, requested_start,
+      requested_end, lease_term_months, limit: 100 }, db || pool);
+    if (!r.matched) {
+      return { read_state: "OK", truth_state: "NOT_ESTABLISHED",
+        attention_state: "ATTENTION_REQUIRED", as_of: new Date().toISOString(),
+        qualification: r.qualification, why: r.note || null,
+        capability_class: "retrieval", claims_not_made: ["comparison", "causal_explanation"],
+        ordering_rule: MATCH_ORDER_RULE };
+    }
+    const unknownOn = (c) => r.homes.filter((h) =>
+      h.basis.find((b) => b.constraint === c && b.state === "not_established")).length;
+    const satisfying = r.homes.filter((h) => h.all_recorded_constraints_satisfied).length;
+    return {
+      read_state: "OK",
+      truth_state: r.home_count ? "ESTABLISHED" : "NOT_ESTABLISHED",
+      attention_state: r.home_count ? "QUIET" : "ATTENTION_REQUIRED",
+      as_of: new Date().toISOString(),
+      capability_class: "retrieval",
+      claims_not_made: ["comparison", "causal_explanation", "best_fit", "score"],
+      homes_considered: r.home_count,
+      satisfy_every_recorded_constraint: satisfying,
+      unknown_on_price: unknownOn("price"),
+      unknown_on_unit_type: unknownOn("unit_type"),
+      violated_on_price: r.homes.filter((h) =>
+        h.basis.find((b) => b.constraint === "price" && b.state === "violated")).length,
+      recorded_prospect_facts: Object.keys(r.prospect.recorded_facts),
+      missing_prospect_facts: r.prospect.missing_fact_keys,
+      constraint_coverage: r.constraint_coverage,
+      ordering_rule: r.ordering_rule,
+      basis: "each home carries the constraint, the recorded prospect fact and the governed home fact",
+    };
+  }
+
+  return { availableUnits, attachSelectedUnit, matchConfirmationToOffer,
+           matchProspectHomes, readProspectMatchStanding };
 };
