@@ -26,7 +26,7 @@
 const crypto = require("node:crypto");
 const { Pool } = require("pg");
 const receipt = require("../_run_receipt");
-const HARNESS = __filename, EXPECTED = 52;
+const HARNESS = __filename, EXPECTED = 58;
 const URL_ = receipt.harnessConnectionString();
 const pool = new Pool({ connectionString: URL_, ssl: false });
 const BASE = (process.env.E2E_API_BASE || "http://127.0.0.1:3000").replace(/\/$/, "");
@@ -434,11 +434,55 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
     require("node:path").join(__dirname, "..", "gates", "gate_ask_spine_readers.js"), "utf8");
   ok("MB-8: the Ask Spine registry declares the prospect-match domain",
     /prospect_match\s*:\s*\{/.test(gateSrc), "no prospect_match entry in the registry");
+
+  //  ── THE COMPOSER PATH, CALLED — NOT GREPPED ─────────────────────
+  //  The first version of this asserted gathering with a source regex and
+  //  then called the projection directly with a term. A regex proves the
+  //  line exists; it cannot prove any question reaches it. Call gatherFacts
+  //  the way the composer does, with a subject its own producer yields.
+  const askSpine = require("../../src/agent/ask_spine_answer");
+  const MATCH_QUESTION = "which homes fit this prospect";
+  const producedSubject = askSpine.questionSubject(MATCH_QUESTION);
+  //  The branch must key on the subject the PRODUCER yields for this
+  //  question, not on a word chosen when the branch was written.
+  const answerSrcEarly = require("node:fs").readFileSync(
+    require("node:path").join(__dirname, "..", "..", "src", "agent", "ask_spine_answer.js"), "utf8");
+  ok("MB-8: the gather branch keys on the subject questionSubject actually produces",
+    typeof producedSubject === "string" && producedSubject.length > 0
+      && new RegExp(`subject === "${producedSubject}"`).test(answerSrcEarly),
+    `questionSubject(${JSON.stringify(MATCH_QUESTION)}) = ${producedSubject}, `
+      + "but no gather branch keys on it");
+  note(`questionSubject(${JSON.stringify(MATCH_QUESTION)}) -> ${producedSubject}`);
+  const gathered = await askSpine.gatherFacts(pool, {
+    property_id: priced, allowed_modules: ["leasing", "management"],
+    subject: producedSubject, question: MATCH_QUESTION });
+  ok("MB-8: the composer GATHERS prospect_match for a real matching question",
+    Object.prototype.hasOwnProperty.call(gathered, "prospect_match"),
+    "facts keys: " + Object.keys(gathered).join(", "));
+  const gm = gathered.prospect_match || {};
+  ok("§40.7: the term-less gather is a successful read, not a failed one",
+    gm.read_state === "OK", JSON.stringify(gm).slice(0, 200));
+  ok("§40.7: it is NOT_ESTABLISHED and says why — the caller gave no dates",
+    gm.truth_state === "NOT_ESTABLISHED" && gm.qualification === "term_required"
+      && typeof gm.why === "string", JSON.stringify(gm).slice(0, 220));
+  ok("§40.7: a missing CALLER INPUT never manufactures attention on the property",
+    gm.attention_state === null || gm.attention_state === "QUIET",
+    `attention_state=${JSON.stringify(gm.attention_state)}`);
+  ok("§40.7: so composite_silence does not name prospect_match as pending",
+    gathered.composite_silence && gathered.composite_silence.state !== "BLIND"
+      && !(gathered.composite_silence.domains || []).includes("prospect_match"),
+    JSON.stringify(gathered.composite_silence).slice(0, 220));
+  note(`composite_silence -> ${JSON.stringify(gathered.composite_silence).slice(0, 120)}`);
+  //  And the dead subject is gone: a branch no producer can reach is a
+  //  registration that cannot be exercised.
   const answerSrc = require("node:fs").readFileSync(
     require("node:path").join(__dirname, "..", "..", "src", "agent", "ask_spine_answer.js"), "utf8");
-  ok("MB-8: ask_spine_answer gathers the prospect-match standing projection",
-    /readProspectMatchStanding/.test(answerSrc) && /facts\.prospect_match\s*=/.test(answerSrc),
-    "ask_spine_answer never calls the standing read");
+  //  Strip comments first: the history of the dead branch is worth keeping
+  //  in prose, and a mention is not a branch (CLAUDE.md).
+  const answerCode = answerSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  ok("MB-8: no gather branch is keyed to a subject questionSubject cannot yield",
+    !/subject === "match"/.test(answerCode) && !/subject === "leasing"(?!_)/.test(answerCode),
+    'ask_spine_answer still branches on a subject nothing produces');
   const proj1 = await inv.readProspectMatchStanding(pool, { property_id: skyline, person_id: person, ...TERM });
   ok("MB-8: the projection reports the violated-on-price count for an entitled reader",
     proj1.read_state === "OK" && proj1.violated_on_price >= 1,

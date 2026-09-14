@@ -662,7 +662,16 @@ async function gatherFacts(db, {
    *  not resolve (§40.8). Detail is a second read through the staff door.
    *  A term is required: without one the projection says so, in the same
    *  vocabulary the seam uses, rather than reading as "no homes".  */
-  if (subject === "leasing" || subject === "match") {
+  /*  ⚠ THE SUBJECT MUST BE ONE THE PRODUCER YIELDS. This branch was first
+   *  written as `subject === "leasing" || subject === "match"`. questionSubject
+   *  yields neither — its leasing vocabulary resolves to `leasing_person` —
+   *  so the branch was unreachable and prospect_match was registered,
+   *  gate-green, and never gathered by any question. A registration that
+   *  cannot be exercised is the gap §40.11 exists to prevent, and the gate
+   *  did not catch it because it asserts the assignment EXISTS in source,
+   *  not that a subject reaches it. Measured, not assumed:
+   *  questionSubject("which homes fit this prospect") === "leasing_person".  */
+  if (subject === "leasing_person") {
     if ((allowed_modules || []).some((m) => m === "leasing" || m === "management")) {
       try {
         const standing = await prospectMatchReader({ pool: db }).readProspectMatchStanding(db, {

@@ -665,9 +665,20 @@ module.exports = function leasingInventoryModule({ pool }) {
     const r = await matchProspectHomes({ property_id, person_id, requested_start,
       requested_end, lease_term_months, limit: 100 }, db || pool);
     if (!r.matched) {
+      /*  §40.7 — A MISSING CALLER INPUT IS NOT A PROPERTY CONDITION.
+       *  The composer gathers standing projections with no term, so this
+       *  path is the ordinary one there, not an exception. Rendering it
+       *  ATTENTION_REQUIRED put prospect_match into composite_silence's
+       *  pending list on every leasing question, whatever the property's
+       *  state — Spine telling an operator something needs attention
+       *  because SPINE did not ask for dates. The read succeeded; the
+       *  property is silent; the question is simply not answerable yet,
+       *  and `why` says so in the seam's own vocabulary.  */
       return { read_state: "OK", truth_state: "NOT_ESTABLISHED",
-        attention_state: "ATTENTION_REQUIRED", as_of: new Date().toISOString(),
+        attention_state: null, as_of: new Date().toISOString(),
         qualification: r.qualification, why: r.note || null,
+        needs_from_caller: r.qualification === "term_required"
+          || r.qualification === "pricing_term_required" ? r.qualification : null,
         capability_class: "retrieval", claims_not_made: ["comparison", "causal_explanation"],
         ordering_rule: MATCH_ORDER_RULE };
     }
