@@ -164,6 +164,36 @@ domains discovered and declared `pending` with owner and clearing condition.
 None `registered`: the detector proves gathering and today it proves none of
 them. Gate 115/115, 14 domains, 8 registered, 6 pending (was 87/87, 10/8/2).
 
+### A regression I claimed and then withdrew
+
+During the correction round's regression sweep, `leasing_hostile.e2e.js`
+failed 13/3 on this lane's head (checks 6, 7 and 8 — signed rent, replay
+convergence, blocked admission) while passing on `d2669353`. I recorded that
+as a regression and started bisecting.
+
+It does not hold. Controlled re-runs on the same owned database:
+
+| what | result |
+|---|---|
+| `d2669353` alone, twice | 16/0, 16/0 |
+| `3a5f96e0` (person wall) alone | 16/0 |
+| `0e0ce8a7` (composer) alone | 16/0 |
+| lane head alone | 16/0 |
+| lane head, after the match proof | 16/0 |
+| `d2669353`, the full batch in order | 16/0 |
+| lane head, the full batch in order | 16/0 |
+
+Seven controlled runs, no reproduction in either direction, and the product
+diff touches nothing in lease execution — it adds a presence check to two
+read doors, a subject branch, and a projection field. The most likely cause
+is a stale server process in this ad-hoc runtime: the failing observation
+came after several kill-and-reboot cycles, and I cannot prove which source
+that server was running. **The regression claim is withdrawn; the
+observation is recorded because it happened, not because it stands.**
+
+`conversation_takeover_owner.db.js` fails identically on the lane head and on
+`d2669353` in this runtime — pre-existing, and not investigated further.
+
 ### Why the two doors' module requirements differ, and why that discloses nothing
 
 The HTTP door requires the **leasing** module; the Ask gather accepts
