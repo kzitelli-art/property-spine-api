@@ -4309,6 +4309,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         property_id:req.operator.property_id, space_id:made.offer.space_id,
         intended_move_in:made.application_terms.lease_start_date,
         requested_end:made.application_terms.lease_end_date,
+        //  Correcting THEIR OWN terms must not be refused because THEY signed.
+        //  The id comes from the application row loaded and property-checked
+        //  above, never from the request body.
+        for_application_id: application ? application.id : null,
       });
       if (!target.ok) throw Object.assign(new Error(target.refusal_reason), {httpStatus:target.httpStatus || 409,code:target.refusal_code});
       if (invitation) {

@@ -71,6 +71,11 @@
 
 const { availabilityRead } = require("../surfaces/availability_read");
 const { intervalPropertyPositions } = require("../tenancy/dated_positions");
+//  THE ONE hold predicate, for its state name only. The hold itself is
+//  decided in availability_read, which this file already consults — so the
+//  bed a prospect is offered and the bed an application may target cannot
+//  disagree about who has signed for it.
+const applicationHold = require("./application_inventory_hold");
 
 // ── THE OFFERABILITY POLICY — ONE STATE, BOTH BOUNDARIES ─────────────
 //  A targeted invitation is supported when the canonical position is
@@ -141,6 +146,11 @@ const REFUSAL = {
   // open invitation rather than having been an unsupported shape all along.
   BECAME_AMBIGUOUS:       "application_target_became_ambiguous",
   NO_LONGER_OFFERABLE:    "application_target_no_longer_offerable",
+  //  NEW. A COMMITMENT refusal, not an availability statement: the home is
+  //  physically fine and contractually free, and somebody has signed for it.
+  //  Distinct from NOT_OFFERABLE so the operator learns the difference
+  //  between "this home has a problem" and "this home is taken".
+  HELD_FOR_SIGNED_APPLICANT: "application_target_held_for_signed_applicant",
 };
 
 // Operator-facing sentences. No internal codes in operator copy; the code
@@ -179,6 +189,13 @@ const REFUSAL_TEXT = {
     "This home is coming available, but no governed turn-ready date is on file yet. Set the turn target before sending an application.",
   [REFUSAL.BECAME_AMBIGUOUS]:     "This unit was changed to hold more than one rentable space after the application link was sent, so the application can no longer be attributed to a single space.",
   [REFUSAL.NO_LONGER_OFFERABLE]:  "This unit is no longer available, so this application link can no longer be used.",
+  //  ⚠ NO APPLICANT'S NAME HERE. This sentence is shown to a different
+  //  prospect and to staff working other leads; naming who signed would
+  //  disclose one applicant's decision to another. The hold's attribution
+  //  travels on the availability row for entitled operator surfaces, not in
+  //  the refusal a second applicant can read.
+  [REFUSAL.HELD_FOR_SIGNED_APPLICANT]:
+    "Someone has already signed for this home, so it is being held. Choose another home for this application.",
 };
 
 function refuse(code, extra = {}) {
@@ -288,6 +305,11 @@ async function resolveApplicationTarget(q, {
   intended_move_in = null,
   requested_end = null,
   require_offerable = true,
+  /*  The application this resolution is FOR, when one already exists. It
+   *  exempts that application from its own applicant's inventory hold and
+   *  from nothing else. Server-derived at every call site — it comes from a
+   *  loaded application row, never from a request body (§21).            */
+  for_application_id = null,
 } = {}) {
   if (!property_id) throw new Error("resolveApplicationTarget requires a server-derived property_id");
   const normalizedIntendedMoveIn = ymd(intended_move_in);
@@ -404,10 +426,12 @@ async function resolveApplicationTarget(q, {
     availability_confidence: row.availability_confidence,
     intended_move_in: normalizedIntendedMoveIn,
     turnover: row.turnover || null,
+    application_hold: row.application_hold || null,
   };
 
   const verdict = await evaluateDatedOfferability(q, row, {
     property_id, intended_move_in: normalizedIntendedMoveIn, requested_end,
+    for_application_id,
   });
 
   if (!verdict.offerable && require_offerable) {
@@ -442,10 +466,30 @@ async function resolveApplicationTarget(q, {
 //                      turnover completion date ever lands, this branch starts
 //                      working without a policy rewrite.
 //  everything else     refused, including states this file does not know.
-function evaluateOfferability(row, { intended_move_in = null } = {}) {
+function evaluateOfferability(row, { intended_move_in = null, for_application_id = null } = {}) {
   const state = row.marketing_state;
 
   if (state === OFFERABLE_NOW) return { offerable: true, refusal_code: null };
+
+  /*  ── A HOLD DOES NOT REFUSE ITS OWN HOLDER ─────────────────────────
+   *  The held state REPLACES marketable_now, so a row reaching here has
+   *  already passed every physical and contractual guard. For the
+   *  application whose applicant created the hold, that is still true and
+   *  the target is still theirs — a correction to their own terms must not
+   *  be refused because they signed. For everybody else it is taken.
+   *
+   *  `for_application_id` is server-derived at every call site: it comes
+   *  from the application row the caller already loaded, never from a
+   *  request body, so it cannot be used to walk past another person's
+   *  hold (§21).                                                        */
+  if (state === applicationHold.HELD_STATE) {
+    const held = row.application_hold;
+    if (for_application_id && held && String(held.application_id) === String(for_application_id)
+        && !(held.contested_by || []).length) {
+      return { offerable: true, refusal_code: null };
+    }
+    return { offerable: false, refusal_code: REFUSAL.HELD_FOR_SIGNED_APPLICANT };
+  }
 
   if (FUTURE_DATED_STATES.has(state)) {
     const available = ymd(row.available_from);
@@ -466,8 +510,9 @@ function evaluateOfferability(row, { intended_move_in = null } = {}) {
 // with complete offer terms, check the entire interval. No reservation is made.
 async function evaluateDatedOfferability(q, row, {
   property_id, intended_move_in = null, requested_end = null, interval_cache = null,
+  for_application_id = null,
 } = {}) {
-  const physical = evaluateOfferability(row, { intended_move_in });
+  const physical = evaluateOfferability(row, { intended_move_in, for_application_id });
   if (!physical.offerable || !intended_move_in) return physical;
   const start = ymd(intended_move_in), end = ymd(requested_end) || start;
   const key = `${start}/${end}`;
@@ -507,9 +552,11 @@ async function evaluateDatedOfferability(q, row, {
 //  genuinely ambiguous, and the pre-182 reasoning applies to them unchanged.
 async function resolveSubmissionTarget(q, {
   property_id, unit_id, space_id = null, intended_move_in = null, requested_end = null,
+  for_application_id = null,
 } = {}) {
   const target = await resolveApplicationTarget(q, {
     property_id, unit_id, space_id, intended_move_in, requested_end, require_offerable: false,
+    for_application_id,
   });
 
   if (!target.ok) {
@@ -532,7 +579,7 @@ async function resolveSubmissionTarget(q, {
   if (!target.targeted) return target;   // untargeted invitation: nothing to revalidate
   if (target.refusal_code === REFUSAL.TERM_NOT_FREE) return { ...target, ok: false, httpStatus: 409 };
 
-  const verdict = evaluateOfferability(target, { intended_move_in });
+  const verdict = evaluateOfferability(target, { intended_move_in, for_application_id });
   if (!verdict.offerable) {
     // TWO DIFFERENT FACTS, TWO DIFFERENT CODES.
     //
@@ -544,9 +591,15 @@ async function resolveSubmissionTarget(q, {
     //  Every other non-marketable state DID change under an open invitation:
     //  the unit was taken, went down, became contested. That is a genuine
     //  no-longer-offerable.
+    /*  A HOLD KEEPS ITS OWN CODE HERE TOO. "This unit is no longer
+     *  available" is false of a home that is physically fine and simply
+     *  signed for, and it sends staff to look for a problem that is not
+     *  there. The commitment refusal says what actually happened.        */
     const code = FUTURE_DATED_STATES.has(target.marketing_state)
       ? verdict.refusal_code
-      : REFUSAL.NO_LONGER_OFFERABLE;
+      : (verdict.refusal_code === REFUSAL.HELD_FOR_SIGNED_APPLICANT
+          ? REFUSAL.HELD_FOR_SIGNED_APPLICANT
+          : REFUSAL.NO_LONGER_OFFERABLE);
     return {
       ...target,
       ok: false,

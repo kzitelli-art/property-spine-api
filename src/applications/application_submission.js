@@ -955,6 +955,9 @@ module.exports = function applicationSubmissionModule(deps) {
     const target = await applicationTarget.resolveSubmissionTarget(client, {
       property_id: inv.property_id, unit_id: inv.unit_id, space_id: inv.space_id,
       intended_move_in: offer.lease_start_date, requested_end: offer.lease_end_date,
+      //  This application's own applicant may have signed for this bed
+      //  already; their own hold is not a reason to refuse them.
+      for_application_id: applicationId || null,
     });
     if (!target.ok) throw httpErr(target.httpStatus || 409, target.refusal_reason, target.refusal_code);
     const ack = (await client.query(`insert into application_terms_acknowledgements
@@ -1075,7 +1078,10 @@ module.exports = function applicationSubmissionModule(deps) {
       const still = await applicationTarget.resolveSubmissionTarget(client, {
         property_id: inv.property_id, unit_id: inv.unit_id, space_id: inv.space_id,
         intended_move_in: inv.intended_move_in,
-        requested_end: agreedTerms ? agreedTerms.lease_end_date : null });
+        requested_end: agreedTerms ? agreedTerms.lease_end_date : null,
+        //  From the invitation row the server already loaded. A bed held by
+        //  ANOTHER applicant refuses here, which is the point.
+        for_application_id: inv.lease_application_id || null });
       if (!still.ok) {
         throw httpErr(still.httpStatus || 409,
           still.refusal_reason || "This application link can no longer be used.",

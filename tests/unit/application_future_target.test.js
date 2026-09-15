@@ -49,9 +49,20 @@ const submission = fs.readFileSync(path.join(
   __dirname, "..", "..", "src", "applications", "application_submission.js"), "utf8");
 const migration = fs.readFileSync(path.join(
   __dirname, "..", "..", "migrations", "190_application_move_in_lineage.sql"), "utf8");
-ok(/resolveSubmissionTarget\(client,\s*\{[\s\S]*?intended_move_in:\s*inv\.intended_move_in[\s\S]*?requested_end:\s*agreedTerms \? agreedTerms\.lease_end_date : null\s*\}/
+//  ⚠ THIS PIN STOPS AT WHAT IT MEANS. It previously required the argument
+//  object to CLOSE immediately after requested_end, so adding any further
+//  server-derived argument to the same call broke it — a pin that fails on
+//  correct changes teaches people to loosen pins. It now asserts the two
+//  values it actually cares about, in that call, in that order.
+ok(/resolveSubmissionTarget\(client,\s*\{[\s\S]*?intended_move_in:\s*inv\.intended_move_in[\s\S]*?requested_end:\s*agreedTerms \? agreedTerms\.lease_end_date : null/
     .test(submission),
   "tenant submission rechecks the persisted invitation date");
+//  And the inventory-hold exemption on that same recheck is SERVER-DERIVED:
+//  it reads the invitation row the server already loaded. A request-body
+//  value here would let a second applicant walk past the first one's hold.
+ok(/resolveSubmissionTarget\(client,\s*\{[\s\S]*?for_application_id:\s*inv\.lease_application_id/
+    .test(submission),
+  "…and its hold exemption comes from the invitation row, never the request");
 ok(/application_invitations[\s\S]*?intended_move_in date/.test(migration)
     && /lease_applications[\s\S]*?intended_move_in date/.test(migration),
   "the target date is durable on both the invitation and application");
