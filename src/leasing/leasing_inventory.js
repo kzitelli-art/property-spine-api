@@ -16,6 +16,11 @@
 // ════════════════════════════════════════════════════════════════════
 
 module.exports = function leasingInventoryModule({ pool }) {
+  /*  Which refusals bound which decision. Required HERE, at module-factory
+   *  scope, because matchProspectHomes consults it on every call — an
+   *  earlier revision shipped with no require at all and only the
+   *  db-backed proof, which actually executes that line, could see it.  */
+  const decisionStrength = require("./match_decision_strength");
 
   //  availableUnits — the ONE query that answers "what could we offer?"
   //  property_id is SERVER-DERIVED by the caller (the conversation's
