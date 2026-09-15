@@ -48,8 +48,31 @@
 //    superseded_at is null a superseded version's signature is history; the
 //                          current version carries the live commitment
 //    status <> 'void'      a voided package holds nothing
-//    la.status not terminal a declined / withdrawn / expired application
-//                          releases its bed by this read alone
+//    la.status pre-tenancy see RELEASED_STATUSES below
+//
+//  ── A HOLD IS A PRE-TENANCY COMMITMENT, AND IT ENDS WHEN TENANCY BEGINS ──
+//  The first version released a bed only on `declined / withdrawn / expired`,
+//  which is right for an application that STOPPED and wrong for one that
+//  finished. Once an application reaches `accepted_term_required` or
+//  `active` the lease exists: the bed's state is governed by that lease, and
+//  a reader still saying "held for a signed applicant" is asserting a
+//  commitment that has already been honoured. Stale, and visibly so — CI
+//  found it as `application_target_held_for_signed_applicant` refusing a
+//  later scenario on a bed whose application had long since become a
+//  tenancy.
+//
+//  In production the lease usually decides first, because this read is
+//  consulted LAST and an occupied or committed position never reaches it.
+//  That is exactly why the predicate has to be right on its own: a guard
+//  that is only correct because something upstream normally shadows it is
+//  not a guard.
+const RELEASED_STATUSES = [
+  //  Stopped — the applicant is not coming.
+  "declined", "withdrawn", "expired",
+  //  Finished — a tenancy exists and the lease governs the bed now.
+  "accepted_term_required", "active",
+];
+
 const HOLD_SQL = `
   select la.space_id, la.unit_id, la.id as application_id, la.applicant_name,
          lp.id as lease_packet_id, lp.status as packet_status,
@@ -59,7 +82,7 @@ const HOLD_SQL = `
    where lp.tenant_submitted_at is not null
      and lp.superseded_at is null
      and coalesce(lp.status,'') <> 'void'
-     and la.status not in ('declined','withdrawn','expired')
+     and la.status <> all($RELEASED$)
      and la.space_id is not null`;
 
 function shape(r) {
@@ -82,8 +105,9 @@ function shape(r) {
 async function heldSpacesForProperty(q, property_id) {
   if (!property_id) throw new Error("heldSpacesForProperty requires a property_id");
   const rows = (await q.query(
-    `${HOLD_SQL} and la.property_id = $1 order by lp.tenant_submitted_at asc`,
-    [property_id])).rows;
+    `${HOLD_SQL.replace("$RELEASED$", "$2::text[]")} and la.property_id = $1
+       order by lp.tenant_submitted_at asc`,
+    [property_id, RELEASED_STATUSES])).rows;
   const bySpace = new Map();
   for (const r of rows) {
     const key = String(r.space_id);
@@ -98,8 +122,9 @@ async function heldSpacesForProperty(q, property_id) {
 async function holdForSpace(q, space_id) {
   if (!space_id) return null;
   const rows = (await q.query(
-    `${HOLD_SQL} and la.space_id = $1 order by lp.tenant_submitted_at asc`,
-    [space_id])).rows;
+    `${HOLD_SQL.replace("$RELEASED$", "$2::text[]")} and la.space_id = $1
+       order by lp.tenant_submitted_at asc`,
+    [space_id, RELEASED_STATUSES])).rows;
   if (!rows.length) return null;
   const [first, ...rest] = rows;
   return { ...shape(first), contested_by: rest.map(shape) };
@@ -110,4 +135,4 @@ async function holdForSpace(q, space_id) {
 //  "held" needs to know who and since when, and both travel with it.
 const HELD_STATE = "held_for_signed_applicant";
 
-module.exports = { heldSpacesForProperty, holdForSpace, HELD_STATE, HOLD_SQL };
+module.exports = { heldSpacesForProperty, holdForSpace, HELD_STATE, HOLD_SQL, RELEASED_STATUSES };

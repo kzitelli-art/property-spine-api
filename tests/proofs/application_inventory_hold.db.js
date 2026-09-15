@@ -305,6 +305,36 @@ const ok = (label, cond, detail = "") => {
     ok("…and still offers its roommate's home",
       eligibleSpaces.includes(String(roomB.id)), JSON.stringify(eligibleSpaces));
 
+    /*  ── 4c · A HOLD ENDS WHEN TENANCY BEGINS ────────────────────
+     *  A hold is a PRE-tenancy commitment. Once the application reaches
+     *  `accepted_term_required` or `active` the lease exists and governs
+     *  the bed; a reader still saying "held for a signed applicant" is
+     *  asserting a commitment that has already been honoured.
+     *
+     *  The first version released only on declined / withdrawn / expired —
+     *  right for an application that STOPPED, wrong for one that FINISHED
+     *  — and CI found it as a later scenario refused with
+     *  `application_target_held_for_signed_applicant` on a bed whose
+     *  application had long since become a tenancy.
+     *
+     *  In production the lease usually decides first, because this read is
+     *  consulted LAST and an occupied position never reaches it. That is
+     *  exactly why the predicate is asserted directly here: a guard that is
+     *  only correct because something upstream normally shadows it is not
+     *  a guard.                                                          */
+    for (const st of ["approved", "lease_ready"]) {
+      await pool.query("update lease_applications set status=$2 where id=$1", [app.id, st]);
+      ok(`a signed application at \`${st}\` still holds its home`,
+        !!(await applicationHold.holdForSpace(pool, roomA.id)));
+    }
+    for (const st of applicationHold.RELEASED_STATUSES.filter(
+           (x) => !["declined", "withdrawn", "expired"].includes(x))) {
+      await pool.query("update lease_applications set status=$2 where id=$1", [app.id, st]);
+      ok(`…and at \`${st}\` the lease governs the home, so the hold ends`,
+        (await applicationHold.holdForSpace(pool, roomA.id)) === null);
+    }
+    await pool.query("update lease_applications set status='lease_ready' where id=$1", [app.id]);
+
     // ── 5 · NOTHING WAS RESERVED, SO NOTHING HAS TO BE RELEASED ────
     /*  The hold is a READ of the signature. A withdrawn application releases
      *  its bed through the same read that created the hold — no release
