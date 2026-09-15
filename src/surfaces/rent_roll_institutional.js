@@ -197,6 +197,12 @@ async function institutionalRentRoll(pool, { property_id, as_of = null } = {}) {
   // operating reader relays. Tally that already-decided field; do not infer
   // occupancy from tenancy_state or subtract exceptions in this presentation.
   const buckets = rentRollBuckets(rr.rows);
+  //  The canonical contract's sub-objects, read once and defensively — see
+  //  the note on occupancy_excluded_down below for why absent is null here
+  //  and not a zero.
+  const cco = t.confirmed_contractual_occupancy || {};
+  const excluded = cco.excluded_from_denominator || {};
+  const beside = cco.reported_beside || {};
 
   return {
     report: {
@@ -232,20 +238,32 @@ async function institutionalRentRoll(pool, { property_id, as_of = null } = {}) {
        *  occupancy"). Pass it through — the header three lines above says
        *  PASSED THROUGH, never recomputed, and this is what that means.
        *  The bucket counts live below, under names that say `positions_`.  */
-      confirmed_contractual_occupancy: t.confirmed_contractual_occupancy.occupied,
-      occupancy_denominator: t.confirmed_contractual_occupancy.of_leasable_resolved,
-      //  Named, not silent: a ratio with a narrower denominator has to say
-      //  what it left out, or the next reader re-derives a different one.
-      occupancy_excluded_down: t.confirmed_contractual_occupancy.excluded_from_denominator.down,
-      occupancy_excluded_contested: t.confirmed_contractual_occupancy.excluded_from_denominator.contested,
+      confirmed_contractual_occupancy: cco.occupied,
+      occupancy_denominator: cco.of_leasable_resolved,
+      /*  Named, not silent: a ratio with a narrower denominator has to say
+       *  what it left out, or the next reader re-derives a different one.
+       *
+       *  ⚠ ABSENT STAYS ABSENT, AND IS NOT A CRASH. Reading
+       *  `.excluded_from_denominator.down` directly threw a TypeError on a
+       *  caller whose totals carried only `occupied` and
+       *  `of_leasable_resolved`. Neither extreme is right: a hard throw
+       *  makes a presentation layer the thing that decides a contract is
+       *  broken, and `|| 0` would print a confident zero for an exclusion
+       *  nobody computed. So: null when it was not provided, which the
+       *  consumers already treat as "do not show this row" (see psIrHas in
+       *  the app). The REAL reader always provides it, and the DB proof
+       *  asserts these two against its `excluded_from_denominator` — so a
+       *  genuine regression there still goes red, loudly, where it should.  */
+      occupancy_excluded_down: excluded.down == null ? null : excluded.down,
+      occupancy_excluded_contested: excluded.contested == null ? null : excluded.contested,
       /*  THE OPERATING BUCKET, over EVERY position, under a name that says
        *  so. This is deliberately NOT the same number as the contractual
        *  numerator above whenever an accepted opening claim exists, and the
        *  two are reported side by side so the gap is visible rather than
        *  collapsed into whichever one a surface happened to pick.  */
       positions_occupied_all_bases: buckets.occupied,
-      positions_occupied_terms_not_established:
-        t.confirmed_contractual_occupancy.reported_beside.occupied_terms_not_established,
+      positions_occupied_terms_not_established: beside.occupied_terms_not_established == null
+        ? null : beside.occupied_terms_not_established,
       trusted_monthly_contractual_rent: t.contractual_rent_trusted,
       positions_contributing_rent: t.positions_contributing_rent,
       contested_rent_excluded: t.contractual_rent_excluded_contested,
