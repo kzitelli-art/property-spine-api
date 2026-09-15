@@ -501,11 +501,15 @@ module.exports = function leasingInventoryModule({ pool }) {
     const q = clientArg || pool;
     if (!property_id) return { matched: false, qualification: "no_property", homes: [] };
 
-    /*  MB-7 — TERM IS REQUIRED, AND THE REFUSAL IS INHERITED, NOT RETYPED.
-     *  The seam already distinguishes "I need your dates" from "nothing is
+    /*  MB-7 — THE VOCABULARY IS INHERITED, NOT RETYPED.
+     *  The seam distinguishes "I need your dates" from "nothing is
      *  available" and carries the sentence an agent should say. Asking it
-     *  for one home is the cheapest way to get that exact refusal without a
-     *  second copy of the rule that could drift from it.  */
+     *  for one home is the cheapest way to get that exact wording without
+     *  a second copy of the rule that could drift from it.
+     *
+     *  A TERM IS NO LONGER REQUIRED TO ANSWER. It is required to make a
+     *  contractual offer; interpretGate() decides which of those a given
+     *  qualification bounds.  */
     const gate = await availableUnits({ property_id, requested_start, requested_end,
       lease_term_months, discovery_mode: "exact_spaces", limit: 1 }, q);
     /*  ── THE REFUSAL BOUNDS THE ANSWER; IT DOES NOT ALWAYS EMPTY IT ───
@@ -763,9 +767,14 @@ module.exports = function leasingInventoryModule({ pool }) {
   }
 
   /*  MB-8 — THE COMPACT STANDING PROJECTION.
-   *  Cheap enough to gather routinely, and it carries NO ids: an entitled
-   *  person asking from a meeting gets counts, the basis and what is unknown.
-   *  Detail is a second read through the staff door.  */
+   *  Cheap enough to gather routinely, and it carries NO record ids: an
+   *  entitled person asking from a meeting gets the top named options with
+   *  the basis behind each, the counts, and what is unknown. Homes are
+   *  identified by LABEL; ids stay in the detail read behind the staff door.
+   *
+   *  It used to pass counts only, and its next action told the operator to
+   *  go open the matching screen — the backend had an answer to WHICH home
+   *  and the conversation received an answer to HOW MANY.  */
   async function readProspectMatchStanding(db, { property_id, person_id = null,
     requested_start = null, requested_end = null, lease_term_months = null } = {}) {
     const r = await matchProspectHomes({ property_id, person_id, requested_start,
