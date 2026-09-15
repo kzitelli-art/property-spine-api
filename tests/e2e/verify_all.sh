@@ -403,6 +403,42 @@ else
       node --require "$APP_ROOT/tools/coupled_browser_runner.cjs" \
            "$APP_ROOT/current_rent_roll_reconciliation.browser.js"
     step "coupled transport receipt (app $APP_PIN_SHORT)" node tests/e2e/coupled_runner_receipt.js "$COUPLED_SHOTS"
+
+    #  ── THE SIGNED-IN DEAL PICKER, THROUGH THE APP'S OWN PROOF ───────
+    #  Added 2026-09-15 to close a trace the API repository could not
+    #  answer about itself. There are two pickers: GET /deals is gated by
+    #  the shared operator key and serves a HARDCODED FILE
+    #  (src/onboarding/deal_registry.js) that returns six deals against an
+    #  empty database; GET /operator/properties requires a real staff
+    #  session and reads the caller's authorized properties. Which one the
+    #  app actually lands on decides what a portfolio cleanup must touch,
+    #  and reading the API cannot settle it.
+    #
+    #  The app already proves this. live_deal_picker.browser.js exercises
+    #  the signed-in chooser and its server-authorized selection path, and
+    #  asserts that preview LANDING_DEALS do not appear in signed-in
+    #  operation. It is loaded UNEDITED through the app's own transport
+    #  runner, on the same env contract as the rung above.
+    #
+    #  ⚠ ABSENT IS NOT PASSING. A proof that is not there at the pin must
+    #  say so by name and fail the run, exactly as the coupled rung does
+    #  below — a silent skip is how the two browser rungs sat unrun for
+    #  weeks while the suite reported all assertions passed (row 75).
+    if [ -f "$APP_ROOT/live_deal_picker.browser.js" ]; then
+      PICKER_SHOTS="$RUN_DIR/coupled-deal-picker"
+      mkdir -p "$PICKER_SHOTS"
+      step "browser: signed-in deal picker (app $APP_PIN_SHORT)" \
+        env SP="$ROOT" API_ROOT="$ROOT" APP_ROOT="$APP_ROOT" \
+            API="$E2E_API_BASE" TLS_PORT="${E2E_PICKER_TLS_PORT:-$((PORT + 5100))}" \
+            CHROME="${CHROMIUM:-}" SHOTS="$PICKER_SHOTS" \
+            E2E_DATABASE_URL="$E2E_DATABASE_URL" \
+        node --require "$APP_ROOT/tools/coupled_browser_runner.cjs" \
+             "$APP_ROOT/live_deal_picker.browser.js"
+    else
+      echo "── browser: signed-in deal picker     NOT RUN (live_deal_picker.browser.js is not present at app $APP_PIN_SHORT)"
+      SKIPPED="signed-in deal picker browser rung"
+      FAILED=1
+    fi
   else
     echo "── browser: coupled rent-roll         SKIPPED ($(app_rung_skip_reason))"
     SKIPPED="coupled app browser rung"

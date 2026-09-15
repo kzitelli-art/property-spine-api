@@ -1,5 +1,7 @@
 # The two pickers, traced to their readers
 
+*v2, 15 Sep — two claims corrected in place, marked where they stood.*
+
 2026-09-15, over board `2aab0db5`. Source read plus an owned runtime on an
 empty schema at ledger 198. **No production read. No product code changed.**
 
@@ -41,11 +43,29 @@ property ids came back from a schema with nothing in it.
 
 ## What this settles
 
-**The signed-in chooser is correct and is not the problem.**
+**The signed-in chooser's ACCESS AND DISPLAY logic is correct. That is not the
+same as the records it returns, and v1 of this document conflated them.**
+
 `authorized_properties.js` coalesces for display *and* sorts by the coalesce —
-the only reader found so far that does both. It returns each property with the
-caller's `allowed_modules`, which is what draws the four doors. Nothing about
-it needs fixing.
+the only reader found so far that does both — and returns each property with
+the caller's `allowed_modules`, which is what draws the four doors. Its query
+is:
+
+```sql
+from property_team_assignments a
+join properties p on p.id = a.property_id
+where a.user_id = $1 and a.active = true
+```
+
+It has **no independent exclusion of demo, fixture or retired properties**. It
+returns whatever the caller's active assignments point at. A correctly
+functioning reader therefore displays the wrong operating portfolio whenever
+the underlying assignments still reach old test properties — which is the
+actual condition being cleaned up.
+
+So: nothing in this reader needs fixing, and the reader is *also* not evidence
+that the portfolio is right. Those are separate claims and only the first one
+was established.
 
 **Editing the six-entry registry would not change it.** The two surfaces do not
 meet. This confirms the direction's caution for a reason more specific than
@@ -67,16 +87,29 @@ shared bearer key."*
 
 ## What it does not settle
 
-Whether the picker Kameron actually lands on is `/deals`, `/operator/properties`
-or a client-side composition of both. **That answer is in the app repo**
-(`property-spine-app`, pinned `b0be9f4`), which was not read here. The
-Network-tab evidence from 15 Sep shows the dashboard calling `properties` and
-`me`, which points at the authenticated chooser — but one screenshot is not a
-trace, and the deal-picker landing page was not captured.
+Whether the picker the operator lands on is `/deals`, `/operator/properties` or
+a composition of both. That is settled by the app's own proof, not by watching
+browser traffic — **`live_deal_picker.browser.js` at the app pin already
+exercises the signed-in chooser and its server-authorized selection path, and
+asserts that preview `LANDING_DEALS` do not appear in signed-in operation.**
 
-**Next concrete step:** on the deal-picker page, DevTools → Network → reload,
-and read which of the two is called. That is a thirty-second answer to the one
-question this trace could not reach from the API side.
+v1 of this document asked for a Network-tab check. That was wrong: it put a
+manual step on the owner for a question the repository answers. Withdrawn.
+
+**What was done instead:** `verify_all.sh` now runs that proof as a second
+coupled app rung, unedited, through the app's own transport runner on the same
+env contract as the rent-roll rung. CI checks the app out at the pin, so the
+trace closes in CI rather than in a browser.
+
+The rung is guarded and **absent is not passing** — if the file is not present
+at the pin, the run names it and fails, rather than skipping silently. A silent
+skip is how two browser rungs sat unrun for weeks while the suite reported all
+assertions passed (CURRENT_STATE row 75).
+
+This lane could not read the app repository directly — it is outside the
+session's repository scope and no tool here can add it — so the proof's env
+contract is assumed to match the rent-roll rung's. If it does not, CI says so
+by name and the rung is adjusted from that evidence.
 
 ## Recorded, not fixed
 
