@@ -63,11 +63,32 @@ async function assertDatabase(m = manifest()) {
 
 async function portFree(port) {
   // Attempt an exclusive bind, independent of /health and availability of ss.
-  await new Promise((resolve, reject) => {
+  //
+  //  `::` with ipv6Only:false is a DUAL-STACK reservation on purpose: it
+  //  detects a conflicting listener on either family, which 0.0.0.0 alone
+  //  would miss. That remains the check wherever IPv6 exists.
+  //
+  //  ⚠ FALLBACK IS FOR A HOST WITHOUT IPv6, NOT FOR A BUSY PORT. A kernel
+  //  with IPv6 disabled cannot bind `::` at all, so every database-backed
+  //  proof was unrunnable there — the harness refused before it ever
+  //  reached an assertion. Only EAFNOSUPPORT/EADDRNOTAVAIL (no such
+  //  address family) fall back to the IPv4 wildcard. EADDRINUSE and every
+  //  other error still propagate, so port-conflict detection is unchanged
+  //  and no socket failure is swallowed to obtain a green run.
+  const bind = (host) => new Promise((resolve, reject) => {
     const s = net.createServer();
     s.once("error", reject);
-    s.listen({ port: Number(port), host: "::", ipv6Only: false, exclusive: true }, () => s.close(resolve));
+    s.listen({ port: Number(port), host, ipv6Only: false, exclusive: true }, () => s.close(resolve));
   });
+  try {
+    await bind("::");
+  } catch (e) {
+    if (e && (e.code === "EAFNOSUPPORT" || e.code === "EADDRNOTAVAIL")) {
+      await bind("0.0.0.0");
+      return;
+    }
+    throw e;
+  }
 }
 
 async function waitServer(base, childAlive = () => true) {

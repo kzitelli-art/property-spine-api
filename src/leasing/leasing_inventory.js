@@ -489,30 +489,25 @@ module.exports = function leasingInventoryModule({ pool }) {
      *  requirements. match_decision_strength.js says which refusals bound
      *  which decision. The offer decision is UNCHANGED: everything that
      *  blocked a contractual offer still blocks one.                    */
-    /*  ⚠ THE RAW QUALIFICATION, NOT A PRE-FILTERED ONE. Mapping anything
-     *  outside a local list to `null` here is what silently defeated the
-     *  predicate's fail-closed guarantee: an unknown refusal arrived as
-     *  "no refusal" and proceeded. The predicate allowlists success, so
-     *  it must see exactly what the seam returned.                       */
-    const refusal = gate.qualification || null;
-    if (decisionStrength.blocksEverything(refusal)) {
+    /*  ── ONE INTERPRETATION OF THE GATE, READ HERE AND NOWHERE ELSE ──
+     *  The raw qualification goes straight to the predicate. Three
+     *  separate interpretations used to derive from it — does it block,
+     *  what strength does it allow, was a term chosen — and each revision
+     *  that repaired one broke another. They are now one call.
+     *
+     *  ⚠ DATES AND A PRICING TERM ARE DIFFERENT FACTS.
+     *  `pricing_term_required` means the caller DID supply dates and the
+     *  homes WERE evaluated for that interval; only the priced term is
+     *  unresolved. Reporting "no term chosen" there would tell an
+     *  operator their dates are missing when they are not.             */
+    const gateRead = decisionStrength.interpretGate(gate.qualification);
+    if (gateRead.blocks) {
       return { matched: false, qualification: gate.qualification, note: gate.note,
         refusal_inherited_from: "availableUnits(exact_spaces)", homes: [],
         ordering_rule: MATCH_ORDER_RULE, capability_class: "retrieval" };
     }
-    //  null only when the refusal was fatal, which returned above.
-    const strengthCeiling = decisionStrength.ceilingFor(refusal);
-    /*  ⚠ DERIVED FROM THE CEILING, NOT FROM "refusal == null".
-     *  That earlier form was correct only while the caller pre-filtered
-     *  the qualification to null on success. Once the predicate began
-     *  allowlisting success, a SUCCESSFUL gate returns a non-null
-     *  qualification — so `refusal == null` read false on the happy path
-     *  and reported "no term chosen" for a call that supplied one.
-     *
-     *  After the fatal return above, the qualification is exactly one of:
-     *  absent, a success value, or a term-not-chosen refusal. Only the
-     *  last caps the ceiling, so the ceiling IS the answer.             */
-    const termChosen = strengthCeiling === decisionStrength.STRENGTH.OFFERABLE;
+    const strengthCeiling = gateRead.ceiling;
+    const termChosen = gateRead.dates_established;
 
     const term = { requested_start, requested_end, lease_term_months };
     const prospect = await readProspectFacts(q, { person_id, property_id });
@@ -722,7 +717,7 @@ module.exports = function leasingInventoryModule({ pool }) {
        *  offer, so a caller can ask for exactly that and nothing else —
        *  never reopen a blank form for a fact Spine already holds.     */
       decision_strength_ceiling: strengthCeiling,
-      needs_for_offer: termChosen ? null : (gate.qualification || "term_required"),
+      needs_for_offer: gateRead.missing,
       constraint_coverage: coverage,
       home_count: homes.length,
       homes: homes.slice(0, Math.min(Math.max(Number(limit) || 25, 1), 100)),

@@ -383,7 +383,7 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
     (r4.homes || []).every((h) => h.decision_strength !== "offerable"),
     JSON.stringify((r4.homes || []).map((h) => h.decision_strength).slice(0, 6)));
   ok("SHOWING: the one missing fact is NAMED so a caller can ask for exactly it",
-    r4.needs_for_offer === "term_required", JSON.stringify(r4.needs_for_offer));
+    r4.needs_for_offer === "requested_dates", JSON.stringify(r4.needs_for_offer));
   ok("§5: the term constraint is NOT recorded satisfied when no term was chosen",
     (r4.homes || []).every((h) => {
       const t = h.basis.find((b) => b.constraint === "term");
@@ -393,9 +393,24 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
     r4.constraint_coverage.term === "term_not_chosen", JSON.stringify(r4.constraint_coverage.term));
   const r4b = await inv.matchProspectHomes({ property_id: skyline, person_id: person,
     requested_start: "2027-01-05", requested_end: "2027-12-31" }, pool);
-  ok("MB-7: a term with no published pricing months is a DIFFERENT refusal, not the same one",
-    r4b.matched === false && r4b.qualification === "pricing_term_required",
-    JSON.stringify(r4b.qualification));
+  //  ⚠ THE DISTINCTION THIS ASSERTION ALWAYS PROTECTED, KEPT AND MADE
+  //  SHARPER. It used to prove that a missing PRICING term was a
+  //  different REFUSAL from missing dates. Both now answer instead of
+  //  refusing, so the distinction moves to what each says is missing --
+  //  and the dates the caller DID supply must still read as established,
+  //  because the homes were evaluated for that exact interval.
+  ok("PRICING TERM: dates were supplied, so the answer does not claim they are missing",
+    r4b.matched === true && r4b.constraint_coverage.term === "evaluable",
+    JSON.stringify([r4b.matched, r4b.constraint_coverage && r4b.constraint_coverage.term]));
+  ok("PRICING TERM: the missing fact named is the pricing term, NOT the dates",
+    r4b.needs_for_offer === "pricing_term", JSON.stringify(r4b.needs_for_offer));
+  ok("PRICING TERM: still not offerable, because the priced term is unresolved",
+    r4b.decision_strength_ceiling === "likely_fit"
+      && (r4b.homes || []).every((h) => h.decision_strength !== "offerable"),
+    JSON.stringify(r4b.decision_strength_ceiling));
+  ok("MISSING DATES AND MISSING PRICING TERM ARE NOT THE SAME FACT",
+    r4.needs_for_offer === "requested_dates" && r4b.needs_for_offer === "pricing_term",
+    JSON.stringify([r4.needs_for_offer, r4b.needs_for_offer]));
 
   // ══ MB-5 — ORDERING IS A NAMED RULE ══════════════════════════════
   console.log("\nMB-5 [DB] the ordering rule");
@@ -434,7 +449,7 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
     JSON.stringify(noTermHttp.qualification));
   ok("OFFER RESTRICTION HELD (HTTP): the door caps at likely_fit and names the missing fact",
     noTermHttp.decision_strength_ceiling === "likely_fit"
-      && noTermHttp.needs_for_offer === "term_required",
+      && noTermHttp.needs_for_offer === "requested_dates",
     JSON.stringify([noTermHttp.decision_strength_ceiling, noTermHttp.needs_for_offer]));
 
   // ══ MB-8 / §40.8 — THE PERSON WALL ═══════════════════════════════
@@ -553,7 +568,7 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
     (gm.options || []).every((o) => Array.isArray(o.satisfies) && Array.isArray(o.unconfirmed)),
     JSON.stringify(gm.options || []).slice(0, 200));
   ok("OFFER RESTRICTION HELD (ASK): the ceiling is likely_fit and the missing fact is named",
-    gm.decision_strength_ceiling === "likely_fit" && gm.needs_from_caller === "term_required",
+    gm.decision_strength_ceiling === "likely_fit" && gm.needs_from_caller === "requested_dates",
     JSON.stringify([gm.decision_strength_ceiling, gm.needs_from_caller]));
   ok("§40.7: a missing CALLER INPUT never manufactures attention on the property",
     gm.attention_state === null || gm.attention_state === "QUIET",
