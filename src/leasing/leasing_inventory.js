@@ -497,8 +497,17 @@ module.exports = function leasingInventoryModule({ pool }) {
     }
     //  null only when the refusal was fatal, which returned above.
     const strengthCeiling = decisionStrength.ceilingFor(refusal);
-    //  A term was genuinely supplied only when the gate did not ask for one.
-    const termChosen = refusal == null;
+    /*  ⚠ DERIVED FROM THE CEILING, NOT FROM "refusal == null".
+     *  That earlier form was correct only while the caller pre-filtered
+     *  the qualification to null on success. Once the predicate began
+     *  allowlisting success, a SUCCESSFUL gate returns a non-null
+     *  qualification — so `refusal == null` read false on the happy path
+     *  and reported "no term chosen" for a call that supplied one.
+     *
+     *  After the fatal return above, the qualification is exactly one of:
+     *  absent, a success value, or a term-not-chosen refusal. Only the
+     *  last caps the ceiling, so the ceiling IS the answer.             */
+    const termChosen = strengthCeiling === decisionStrength.STRENGTH.OFFERABLE;
 
     const term = { requested_start, requested_end, lease_term_months };
     const prospect = await readProspectFacts(q, { person_id, property_id });
@@ -746,6 +755,13 @@ module.exports = function leasingInventoryModule({ pool }) {
       return { read_state: "OK", truth_state: "NOT_ESTABLISHED",
         attention_state: null, as_of: new Date().toISOString(),
         qualification: r.qualification, why: r.note || null,
+        //  ⚠ NOW UNREACHABLE FOR THE TERM CASES. Since showing and
+        //  offering were separated, term_required and
+        //  pricing_term_required produce a MATCHED answer with a capped
+        //  ceiling, so they never arrive here; only fatal refusals do.
+        //  Kept rather than deleted because the mapping is still the
+        //  correct one if a nested read ever surfaces them as fatal, and
+        //  a reader should not have to guess whether that was intended.
         needs_from_caller: r.qualification === "term_required"
           || r.qualification === "pricing_term_required" ? r.qualification : null,
         capability_class: "retrieval", claims_not_made: ["comparison", "causal_explanation"],
