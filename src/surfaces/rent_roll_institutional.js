@@ -73,27 +73,72 @@ const ymd = (v) => {
 
 // Occupancy / exception state in language an owner or lender reads without a
 // glossary. The canonical axes stay available in the raw rows beneath.
+/*  ── THE BUCKET IS THE WORD; QUALIFIERS ARE APPENDED, NEVER SUBSTITUTED ──
+ *
+ *  Two rules meet here and the earlier versions each kept only one.
+ *
+ *  RULE A — the operating Rent Roll and this formal schedule must not
+ *  disagree about WHICH bucket a position is in. The axis-only chain this
+ *  function used to be re-derived the word from tenancy_state, so the print
+ *  page could call a needs-review or activation-pending position "Occupied"
+ *  while the operating table correctly separated it. The bucket is decided
+ *  once, server-side, in rentRollBucketOf; it is the base of every status
+ *  here and is never recomputed.
+ *
+ *  RULE B — the bucket deliberately does NOT carry everything a lender
+ *  reads, and THIS SCHEDULE HAS NO OTHER COLUMN FOR ANY OF IT (COLUMNS
+ *  above is the whole list). Returning `bucket_label` alone therefore lost
+ *  four facts outright, on the one surface that travels to a lender.
+ *
+ *  So: the bucket supplies the word, and each fact the bucket cannot
+ *  express is appended to it. The base word still matches the operating
+ *  table character for character, which is what Rule A actually asked for
+ *  — a refinement is not a disagreement.  */
 function statusLabel(r) {
-  // The operating Rent Roll and this formal schedule must show the same
-  // server-decided bucket. Falling back to the older axis-only wording lets
-  // the print page call a needs-review or activation-pending position
-  // "Occupied" even while the operating table correctly separates it.
-  if (r.bucket_label) return r.bucket_label;
+  //  THE PRIOR QUESTION, answered first and separately: no basis is not a
+  //  fifth tenancy state, so it gets no bucket and no qualifier.
   if (r.bucket == null) return "Occupancy Unconfirmed";
-  if (r.tenancy_state === "contested") return "Contested — overlapping leases";
-  if (r.is_down) return "Down";
-  /*  ⚠ WITHOUT THIS LINE THE NEW STATE FALLS THROUGH TO "Occupied".
-   *  When `occupied_terms_not_established` was split out of `unresolved`,
-   *  every one of those positions stopped matching the test below and
-   *  reached the final `return "Occupied"` — silently upgrading beds with
-   *  no established rent, term or legal right to plain Occupied on the
-   *  ONE surface a lender reads. Found by grepping every consumer of
-   *  tenancy_state === "unresolved" before the split, not afterwards.  */
-  if (r.tenancy_state === "occupied_terms_not_established") return "Occupied — terms not established";
-  if (r.tenancy_state === "unresolved") return "Unresolved occupancy evidence";
-  if (r.tenancy_state === "vacant") return "Vacant";
-  if (r.economics_state === "unavailable") return "Occupied — rent unavailable";
-  return "Occupied";
+  const base = r.bucket_label;
+  const qualifiers = [];
+
+  /*  (1) `occupied` IS ONE BUCKET OVER TWO FACTS. rentRollBucketOf returns
+   *  it both for `tenancy_state === "contractually_occupied"` and for
+   *  `basis_type === "opening_claim_occupied"` — and its own comment on the
+   *  second says: *"Occupied" must never secretly mean "a canonical lease
+   *  exists"*. Without this line every accepted-occupancy bed with no
+   *  established rent, term or legal right prints as plain "Occupied".
+   *
+   *  ⚠ THE DISCRIMINATOR IS contractual_terms_state, NOT tenancy_state.
+   *  Both would separate the same rows today, but only this one is derived
+   *  from the SAME `current_lease_position` that decides the bucket's first
+   *  branch — so the split is exact by construction rather than by two
+   *  independently-computed sets happening to coincide.  */
+  if (r.bucket === "occupied" && r.contractual_terms_state === "not_established") {
+    qualifiers.push("terms not established");
+  }
+
+  /*  (2) ECONOMICS. A spanning lease whose amount cannot support a
+   *  contractual claim leaves Monthly Contractual Rent blank. Without this
+   *  the row is "Occupied" beside an empty rent cell, and nothing on the
+   *  page says whether that means unavailable or simply not yet typed.  */
+  if (r.bucket === "occupied" && r.economics_state === "unavailable") {
+    qualifiers.push("rent unavailable");
+  }
+
+  /*  (3) CONTESTED. Needs Review has several causes; overlapping lease
+   *  claims are the one a lender must not read as a data-entry backlog.  */
+  if (r.bucket === "needs_review" && r.tenancy_state === "contested") {
+    qualifiers.push("overlapping leases");
+  }
+
+  /*  (4) DOWN. rentRollBucketOf does not read `is_down` AT ALL — a down,
+   *  vacant bed buckets as `open` and printed as a bare "Open": offered as
+   *  available to lease, on the one surface a lender reads. Down is a
+   *  physical hold and not a tenancy fact, which is precisely why it
+   *  belongs here as a qualifier and not in the bucket.  */
+  if (r.is_down) qualifiers.push("unit down");
+
+  return qualifiers.length ? `${base} — ${qualifiers.join(" · ")}` : base;
 }
 
 function institutionalRow(r) {
@@ -163,8 +208,37 @@ async function institutionalRentRoll(pool, { property_id, as_of = null } = {}) {
     // PASSED THROUGH, never recomputed.
     totals: {
       total_positions: t.inventory,
-      confirmed_contractual_occupancy: buckets.occupied,
-      occupancy_denominator: buckets.total,
+      /*  ⚠ THIS KEY'S NAME IS A CLAIM, AND IT MUST STAY TRUE.
+       *
+       *  It briefly read `buckets.occupied / buckets.total`. Both halves
+       *  moved, in opposite directions, under a name that says CONFIRMED
+       *  CONTRACTUAL: the numerator gained every accepted opening claim
+       *  with no lease (the `occupied` bucket counts those on purpose), and
+       *  the denominator gained back the down and contested positions the
+       *  canonical reader excludes on purpose. On a real portfolio where a
+       *  small minority of positions carry trusted rent economics, that
+       *  reports the claim-backed population to a lender as contractually
+       *  confirmed.
+       *
+       *  The canonical reader already computes this correctly and says so
+       *  in its own comment ("LANGUAGE: this is CONFIRMED contractual
+       *  occupancy"). Pass it through — the header three lines above says
+       *  PASSED THROUGH, never recomputed, and this is what that means.
+       *  The bucket counts live below, under names that say `positions_`.  */
+      confirmed_contractual_occupancy: t.confirmed_contractual_occupancy.occupied,
+      occupancy_denominator: t.confirmed_contractual_occupancy.of_leasable_resolved,
+      //  Named, not silent: a ratio with a narrower denominator has to say
+      //  what it left out, or the next reader re-derives a different one.
+      occupancy_excluded_down: t.confirmed_contractual_occupancy.excluded_from_denominator.down,
+      occupancy_excluded_contested: t.confirmed_contractual_occupancy.excluded_from_denominator.contested,
+      /*  THE OPERATING BUCKET, over EVERY position, under a name that says
+       *  so. This is deliberately NOT the same number as the contractual
+       *  numerator above whenever an accepted opening claim exists, and the
+       *  two are reported side by side so the gap is visible rather than
+       *  collapsed into whichever one a surface happened to pick.  */
+      positions_occupied_all_bases: buckets.occupied,
+      positions_occupied_terms_not_established:
+        t.confirmed_contractual_occupancy.reported_beside.occupied_terms_not_established,
       trusted_monthly_contractual_rent: t.contractual_rent_trusted,
       positions_contributing_rent: t.positions_contributing_rent,
       contested_rent_excluded: t.contractual_rent_excluded_contested,
@@ -217,7 +291,22 @@ function institutionalCsv(report) {
   lines.push("TOTALS");
   const t = report.totals;
   lines.push("Total canonical rentable positions," + t.total_positions);
+  /*  THE CSV IS THE ARTEFACT THAT TRAVELS. It carried the occupancy ratio
+   *  and nothing that qualified it — not what the denominator excluded, and
+   *  not one of the four bucket counts the JSON had gained. A lender opening
+   *  this file saw one number and no way to tell what it was over. Every
+   *  total in the JSON is emitted here, one label and one value per line,
+   *  so the export cannot be a narrower story than the response.  */
   lines.push("Confirmed contractual occupancy," + t.confirmed_contractual_occupancy + " of " + t.occupancy_denominator);
+  lines.push("Excluded from that denominator — down," + t.occupancy_excluded_down);
+  lines.push("Excluded from that denominator — contested," + t.occupancy_excluded_contested);
+  lines.push("Positions occupied on any recorded basis," + t.positions_occupied_all_bases);
+  lines.push("...of those, terms not established," + t.positions_occupied_terms_not_established);
+  lines.push("Positions pending activation," + t.positions_activation_pending);
+  lines.push("Positions open," + t.positions_open);
+  lines.push("Positions needing review," + t.positions_needs_review);
+  lines.push("Positions with occupancy unconfirmed," + t.positions_occupancy_unconfirmed);
+  lines.push("Positions down," + t.positions_down);
   lines.push("Trusted monthly contractual rent," + (t.trusted_monthly_contractual_rent == null ? "" : t.trusted_monthly_contractual_rent));
   lines.push("Positions contributing known rent," + t.positions_contributing_rent);
   lines.push("Contested rent excluded," + t.contested_rent_excluded);

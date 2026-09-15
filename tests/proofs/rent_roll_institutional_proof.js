@@ -23,7 +23,13 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
 (async () => {
   const url = process.env.DATABASE_URL;
   if (!url) { console.log("FATAL: DATABASE_URL required"); process.exit(1); }
-  const pool = new Pool({ connectionString: url, ssl: { rejectUnauthorized: false } });
+  //  SSL is decided by the one module that owns the answer. The hardcoded
+  //  object here refused every local non-SSL Postgres outright ("The
+  //  server does not support SSL connections"), so this harness could
+  //  only ever run against a remote database — the same defect class
+  //  already closed in migrate.js and import_rent_roll_truth.js.
+  const { databaseSsl } = require(path.join(REPO, "src/shared/database_ssl"));
+  const pool = new Pool({ connectionString: url, ssl: databaseSsl(url) });
   const { currentRentRoll } = require(path.join(REPO, "src/surfaces/rent_roll_canonical"));
   const { institutionalRentRoll, institutionalCsv, COLUMNS } = require(path.join(REPO, "src/surfaces/rent_roll_institutional"));
   const { rentRollBuckets } = require(path.join(REPO, "src/tenancy/dated_positions"));
@@ -37,13 +43,44 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
     `one row per canonical position in both (${inst.rows.length})`);
   ok(inst.totals.trusted_monthly_contractual_rent === op.totals.contractual_rent_trusted,
     `trusted rent identical ($${inst.totals.trusted_monthly_contractual_rent})`);
+  /*  ⚠ THIS HARNESS MEASURES NOTHING UNLESS THE FIXTURE EXISTS.
+   *  It is pinned to the hardcoded demo property id, which no migration
+   *  inserts and no seed here creates (CURRENT_STATE defect #20). With no
+   *  rows, `inst.rows.every(...)` is vacuously true and every total is
+   *  0 === 0, so the whole file reported PASS while looking at an empty
+   *  database. Refuse instead: a green that measured nothing is worse than
+   *  a red, because it launders the gap into evidence.  */
+  ok(inst.rows.length > 0, `the fixture property actually has positions (${inst.rows.length})`);
+  if (inst.rows.length === 0) {
+    console.log(`\nREFUSED: ${DEMO} has no canonical positions in this database.`);
+    console.log("Every assertion below would compare 0 to 0 and report PASS.");
+    console.log(`\n${pass} passed, ${fail} failed`);
+    await pool.end();
+    process.exit(1);
+  }
   const buckets = rentRollBuckets(op.rows);
-  ok(inst.rows.every((r, i) => r.status === (op.rows[i].bucket_label || "Occupancy Unconfirmed")),
-    "formal status labels relay the operating bucket decision");
-  ok(inst.totals.confirmed_contractual_occupancy === buckets.occupied,
-    `occupancy identical (${inst.totals.confirmed_contractual_occupancy})`);
-  ok(inst.totals.occupancy_denominator === buckets.total,
-    `occupancy denominator matches the operating position set (${inst.totals.occupancy_denominator})`);
+  /*  THE STATUS IS THE BUCKET LABEL, PLUS WHAT THE BUCKET CANNOT CARRY.
+   *  Asserting strict equality with `bucket_label` pinned the defect: it
+   *  made "Occupied" the correct output for a bed with no lease, and
+   *  "Open" correct for a bed in a unit that is physically down. The
+   *  contract is that the status BEGINS with the bucket label — the two
+   *  surfaces can never name different buckets — and may append
+   *  qualifiers after " — ".  */
+  ok(inst.rows.every((r, i) => {
+    const base = op.rows[i].bucket_label || "Occupancy Unconfirmed";
+    return r.status === base || r.status.startsWith(base + " — ");
+  }), "formal status labels begin with the operating bucket decision");
+  /*  CONFIRMED CONTRACTUAL means a lease. The `occupied` BUCKET also
+   *  counts accepted opening claims with no lease, over every position
+   *  including the down and contested ones the canonical denominator
+   *  excludes — so the bucket is asserted under its own key, and the
+   *  headline against the canonical contractual figure.  */
+  ok(inst.totals.confirmed_contractual_occupancy === op.totals.confirmed_contractual_occupancy.occupied,
+    `contractual occupancy identical (${inst.totals.confirmed_contractual_occupancy})`);
+  ok(inst.totals.occupancy_denominator === op.totals.confirmed_contractual_occupancy.of_leasable_resolved,
+    `occupancy denominator is the leasable, resolved population (${inst.totals.occupancy_denominator})`);
+  ok(inst.totals.positions_occupied_all_bases === buckets.occupied,
+    `the operating bucket is reported beside it under its own name (${inst.totals.positions_occupied_all_bases})`);
   ok(inst.totals.contested_rent_excluded === op.totals.contractual_rent_excluded_contested,
     `contested excluded identical ($${inst.totals.contested_rent_excluded})`);
   ok(inst.totals.total_positions === op.inventory, "position count identical");

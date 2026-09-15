@@ -173,23 +173,52 @@ function holdExpectation(label) {
         && occ.of_leasable_resolved === expected.denominator && occ.pct === expected.pct,
       JSON.stringify({ actual: occ, expected }));
       const instTotals = institutionalHttp.body.totals;
-      // The formal schedule is the print/export of the operator Rent Roll.
-      // Its headline must relay the server bucket decision, including the
-      // full position set and its explicit exceptions. The canonical
-      // tenancy projection above intentionally has a different historical
-      // denominator (it excludes contested/down rows); asserting that old
-      // projection here was the reason this proof stayed red after the
-      // production-facing consistency fix.
+      /*  ⚠ THIS ASSERTION WAS ONCE REWRITTEN TO MATCH THE CODE IT GUARDS.
+       *
+       *  It compared the institutional headline to `expected` — the
+       *  contractual contract this whole file is built around — went red
+       *  when the formal schedule switched its headline to
+       *  `buckets.occupied / buckets.total`, and was then changed to
+       *  compare against those buckets instead. The comment left behind
+       *  said asserting the old projection "was the reason this proof
+       *  stayed red". A proof that stays red is doing its job; the only
+       *  safe response is to examine the code, never to teach the proof
+       *  the new answer.
+       *
+       *  The key is named CONFIRMED CONTRACTUAL occupancy. `expected` is
+       *  the contractual contract. They belong together, and the operating
+       *  bucket is asserted too — beside it, under its own name.  */
       const operatingBuckets = rentRollBuckets(service.rows);
-      ok(`${label}: institutional JSON carries the operating occupancy`, instTotals.confirmed_contractual_occupancy === operatingBuckets.occupied
-        && instTotals.occupancy_denominator === operatingBuckets.total);
+      ok(`${label}: institutional JSON carries the CONTRACTUAL occupancy`,
+        instTotals.confirmed_contractual_occupancy === expected.occupied
+        && instTotals.occupancy_denominator === expected.denominator,
+        JSON.stringify({ actual: { n: instTotals.confirmed_contractual_occupancy,
+          d: instTotals.occupancy_denominator }, expected }));
+      ok(`${label}: institutional JSON reports the operating bucket under its own name`,
+        instTotals.positions_occupied_all_bases === operatingBuckets.occupied,
+        JSON.stringify({ actual: instTotals.positions_occupied_all_bases, bucket: operatingBuckets.occupied }));
+      ok(`${label}: institutional JSON names what the denominator excludes`,
+        instTotals.occupancy_excluded_down === service.totals.confirmed_contractual_occupancy.excluded_from_denominator.down
+        && instTotals.occupancy_excluded_contested === service.totals.confirmed_contractual_occupancy.excluded_from_denominator.contested);
       ok(`${label}: CSV carries the same occupancy`, csvHttp.text.includes(
-        `Confirmed contractual occupancy,${operatingBuckets.occupied} of ${operatingBuckets.total}`));
+        `Confirmed contractual occupancy,${expected.occupied} of ${expected.denominator}`));
+      /*  THE EXPORT MAY NOT BE A NARROWER STORY THAN THE RESPONSE. The CSV
+       *  is the file that travels; it carried the ratio and none of the
+       *  bucket counts the JSON had. Pinned BY NAME — an output key is a
+       *  contract, and a blunt rename is how one of these went silent
+       *  before.  */
+      ok(`${label}: CSV carries the bucket counts the JSON carries`,
+        csvHttp.text.includes(`Positions occupied on any recorded basis,${operatingBuckets.occupied}`)
+        && csvHttp.text.includes(`Positions open,${operatingBuckets.open}`)
+        && csvHttp.text.includes(`Positions needing review,${operatingBuckets.needs_review}`)
+        && csvHttp.text.includes(`Positions pending activation,${operatingBuckets.activation_pending}`)
+        && csvHttp.text.includes(`Positions with occupancy unconfirmed,${operatingBuckets.not_established}`));
       ok(`${label}: canonical service carries the expected occupancy`, service.totals.confirmed_contractual_occupancy.occupied === expected.occupied
         && service.totals.confirmed_contractual_occupancy.of_leasable_resolved === expected.denominator
         && service.totals.confirmed_contractual_occupancy.pct === expected.pct);
-      ok(`${label}: institutional service carries the operating occupancy`, institutional.totals.confirmed_contractual_occupancy === operatingBuckets.occupied
-        && institutional.totals.occupancy_denominator === operatingBuckets.total);
+      ok(`${label}: institutional service carries the CONTRACTUAL occupancy`,
+        institutional.totals.confirmed_contractual_occupancy === expected.occupied
+        && institutional.totals.occupancy_denominator === expected.denominator);
       ok(`${label}: canonical service and HTTP rows agree`, service.rows.length === canonicalHttp.body.rows.length);
       ok(`${label}: tenancy summary retains two occupied positions`, canonicalHttp.body.tenancy_summary.contractually_occupied === 2);
       ok(`${label}: trusted rent remains 1750`, canonicalHttp.body.totals.contractual_rent_trusted === 1750

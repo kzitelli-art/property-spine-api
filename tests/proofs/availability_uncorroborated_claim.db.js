@@ -45,6 +45,7 @@ const sessions = require(path.join(root, "src/identity/staff_session_service.js"
 const { readTenancyStanding } = require(path.join(root, "src/tenancy/tenancy_position_read.js"));
 const { unitRentRoll } = require(path.join(root, "src/surfaces/rent_roll_unit_view.js"));
 const { currentRentRoll } = require(path.join(root, "src/surfaces/rent_roll_canonical.js"));
+const { institutionalRentRoll } = require(path.join(root, "src/surfaces/rent_roll_institutional.js"));
 const { resolveApplicationTarget } = require(path.join(root, "src/applications/application_target_authority.js"));
 
 let passed = 0, failed = 0;
@@ -202,6 +203,8 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
     const targets = (lu.body && lu.body.eligible_targets || []).map((t) => `${t.unit_number}|${t.space_label}`).sort();
     const bucket = (k) => { const [u, l] = k.split("|"); const un = (rr.units || []).find((x) => x.unit_number === u); return un && (un.positions.find((p) => p.label === l) || {}).bucket; };
     const canonRow = (k) => { const [u, l] = k.split("|"); return (canon.rows || []).find((r) => r.unit_number === u && r.space_label === l) || {}; };
+    rung("institutionalRentRoll", "service"); const inst = await institutionalRentRoll(pool, { property_id: P.id, as_of: AS_OF });
+    const instStatus = (k) => { const [u, l] = k.split("|"); const r = (inst.rows || []).find((x) => x.position === `${u} · ${l}`); return r ? r.status : null; };
     const shape = (k) => { const r = row(k); return { state: r.marketing_state, reason: r.blocking_reason, evidence: r.evidence_state, tenancy: r.tenancy_state, basis_type: r.basis_type, available_from: r.available_from, blocking_fact: r.blocking_fact }; };
     const S = Object.fromEntries(["301|Room1", "301|Room2", "302|Room1", "303|Room1", "303|Room2", "304|Room1", "304|Room2", "305|Room2", "306|Room1", "306|Room2"].map((k) => [k, shape(k)]));
     evidence.rows = S; evidence.targets = targets; evidence.target_303_room2 = { offerable: target.offerable === true, refusal_code: target.refusal_code || null, refusal_reason: target.refusal_reason || null };
@@ -237,6 +240,58 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
     ok("control: a maintenance-only seat is refused 403 at the availability read", refused.status === 403);
     ok("reconciliation: unit Rent Roll buckets 303 Room2 'occupied'; standing counts it occupied; the canonical rent roll keeps it off 'contractually_occupied' — it reads 'occupied_terms_not_established' on its contractual axis — the claim supports occupancy, nothing supports an offer, and no measure was forced to agree",
       bucket("303|Room2") === "occupied" && standing.position.occupied === 4 && canonRow("303|Room2").tenancy_state === "occupied_terms_not_established" && canonRow("303|Room2").evidence_state === "uncorroborated", JSON.stringify([bucket("303|Room2"), evidence.standing, evidence.canonical_303_room2]));
+
+    /*  ── ONE ALTITUDE UP: THE FORMAL SCHEDULE A LENDER READS ──────────
+     *
+     *  Same fixture, same claims, the print/CSV surface. The operating
+     *  bucket decides the WORD — that rule is right and is asserted last.
+     *  But the bucket deliberately carries neither the terms question nor
+     *  a physical hold, and this schedule has NO OTHER COLUMN for either,
+     *  so a status that is only the bucket label loses them outright.
+     *
+     *  Each line below names the fact that disappears without its
+     *  qualifier. Every one of them was reachable on this fixture while
+     *  the schedule printed the bare bucket word.  */
+    console.log(`  formal statuses: ${JSON.stringify(Object.fromEntries(
+      ["301|Room1", "302|Room1", "302|Room2", "303|Room1", "303|Room2", "304|Room1", "305|Room2"]
+        .map((k) => [k, instStatus(k)])))}`);
+    console.log(`  formal totals: ${JSON.stringify(inst.totals)}`);
+    ok("formal schedule: a bed with a canonical lease reads plain 'Occupied'",
+      instStatus("301|Room1") === "Occupied", String(instStatus("301|Room1")));
+    ok("formal schedule: the accepted claim with NO lease does NOT read plain 'Occupied' — it says the terms are not established",
+      instStatus("303|Room2") === "Occupied — terms not established", String(instStatus("303|Room2")));
+    ok("formal schedule: a confirmed vacancy reads 'Open'",
+      instStatus("304|Room1") === "Open", String(instStatus("304|Room1")));
+    ok("formal schedule: a DOWN unit's vacant bed is NOT offered as plain 'Open' — the hold is named",
+      instStatus("302|Room2") === "Open — unit down", String(instStatus("302|Room2")));
+    ok("formal schedule: both facts survive together on the down unit's claimed bed",
+      instStatus("302|Room1") === "Occupied — terms not established · unit down", String(instStatus("302|Room1")));
+    ok("formal schedule: overlapping lease claims are named, not flattened into a bare 'Needs Review'",
+      instStatus("303|Room1") === "Needs Review — overlapping leases", String(instStatus("303|Room1")));
+    ok("formal schedule: a position with no basis at all reads 'Occupancy Unconfirmed', never a tenancy word",
+      instStatus("305|Room2") === "Occupancy Unconfirmed", String(instStatus("305|Room2")));
+    /*  THE RULE THE QUALIFIERS MUST NOT BREAK. Every status either IS the
+     *  operating bucket label or is that label followed by " — ". A
+     *  refinement is not a disagreement; a different base word would be.  */
+    ok("formal schedule: EVERY status begins with the operating bucket label, so the two surfaces cannot name different buckets",
+      inst.rows.every((r) => {
+        const c = (canon.rows || []).find((x) => x.space_id === r.space_id);
+        const base = c && c.bucket_label ? c.bucket_label : "Occupancy Unconfirmed";
+        return r.status === base || r.status.startsWith(base + " — ");
+      }),
+      JSON.stringify(inst.rows.map((r) => r.status)));
+    /*  AND THE HEADLINE. On this fixture beds are occupied by CLAIM and by
+     *  nobody's lease. Counting them in a figure named CONFIRMED
+     *  CONTRACTUAL occupancy is the precise overstatement this surface
+     *  must never make to a lender — so the two numbers are reported
+     *  apart, and the contractual one is the smaller.  */
+    ok("formal schedule: the contractual numerator counts leases only, and the larger all-bases bucket is reported beside it under its own name",
+      inst.totals.confirmed_contractual_occupancy < inst.totals.positions_occupied_all_bases
+      && inst.totals.positions_occupied_terms_not_established >= 2,
+      JSON.stringify({ contractual: inst.totals.confirmed_contractual_occupancy,
+        all_bases: inst.totals.positions_occupied_all_bases,
+        terms_not_established: inst.totals.positions_occupied_terms_not_established }));
+
     const leasesAfter = await leaseRows();
     evidence.lease_rows = { before: leasesBefore.length, after: leasesAfter.length, identical: JSON.stringify(leasesBefore) === JSON.stringify(leasesAfter) };
     ok("no lease row was created, replaced or changed by any read — 4 rows before, 4 after, every column of every row identical", leasesBefore.length === 4 && leasesAfter.length === 4 && evidence.lease_rows.identical, JSON.stringify(evidence.lease_rows));
