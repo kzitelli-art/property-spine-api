@@ -43,9 +43,15 @@ const ok = (label, cond, detail = "") => {
   //  operator door and this handoff both call. One instance, one behaviour.
   const leasePackets = leasePacketsModule({ pool,
     satisfyObligation: engine.satisfyObligation, completeObligation: engine.completeObligation })._service;
+  /*  The REAL communication boundary, with its transport disabled. It still
+   *  applies every consent and stop control; `sent:false` here means the
+   *  boundary refused or could not transmit, which is exactly the system
+   *  failure the handoff must report rather than call done.            */
+  const commBoundary = require(path.join(root, "src/comms/communications_boundary.js"))({
+    pool, sms: { enabled: () => false } });
   const handoff = leaseHandoffModule({ pool,
     spawnObligationFromEvent: engine.spawnObligationFromEvent,
-    completeObligation: engine.completeObligation, leasePackets });
+    completeObligation: engine.completeObligation, leasePackets, commBoundary });
 
   const tag = `handoff-${randomUUID().slice(0, 8)}`;
   try {
@@ -54,6 +60,10 @@ const ok = (label, cond, detail = "") => {
     const personOf = async (n) => (await one("insert into persons(name) values($1) returning id", [n])).id;
     const opPerson = await personOf(`${tag}-operator`);
     const applicant = await personOf(`${tag}-applicant`);
+    //  The applicant needs a reachable number, or delivery cannot even be
+    //  attempted and the proof would measure the wrong refusal.
+    await pool.query(`update persons set primary_phone_e164=$2 where id=$1`,
+      [applicant, "+12025550188"]);
     const operator = await one(`insert into users
       (name,email,platform_role,organization_id,person_id,is_active,status,account_kind)
       values($1,$2,'org_admin',$3,$4,true,'active','human_staff') returning id`,
@@ -74,6 +84,25 @@ const ok = (label, cond, detail = "") => {
     //  the property. A lead is the real way a prospect acquires one.
     await pool.query(`insert into leasing_leads(property_id,person_id)
       values($1,$2)`, [property.id, applicant]);
+    /*  A LEASE PACKAGE CANNOT BE GENERATED WITHOUT CONFIGURED LEASE TERMS.
+     *  generateLeasePacket fails closed with `lease_configuration_incomplete`
+     *  rather than rendering a plausible default that could be materially
+     *  wrong. That is the same requirement the Griv readiness sheet names as
+     *  a hard launch blocker: no approved lease configuration, no signing
+     *  package. The fixture therefore configures one explicitly.        */
+    //  A real street address is a required lease term, not decoration.
+    await pool.query(`update properties set address = $2 where id = $1`,
+      [property.id, '4233 Chestnut Street, Philadelphia, PA 19104']);
+    await pool.query(`update properties set lease_config = $2::jsonb where id = $1`,
+      [property.id, JSON.stringify({
+        landlord_entity: `${tag} Holdings, LLC`,
+        rent_payment_location: "the on-site manager's office",
+        application_fee: "50.00", amenity_fee: "300.00", telecom_fee: "0.00",
+        utility_responsibility: "Resident pays all utilities.",
+        late_fee: "75.00",
+        notice_requirement: "At least 60 days' written notice before the end of the term.",
+        insurance_note: "Renter's insurance is recommended.",
+      })]);
     const unit = await one("insert into units(property_id,unit_number) values($1,'401') returning id", [property.id]);
     const space = await one(`update spaces set space_label='Room1', position_kind='bed',
       use_type='residential' where unit_id=$1 returning id`, [unit.id]);
@@ -151,50 +180,84 @@ const ok = (label, cond, detail = "") => {
       [app.id, handoff.HANDOFF_TYPE])).rows.length;
     ok("re-recording the same handoff does not owe it twice", owedCount === 1, `rows: ${owedCount}`);
 
-    // ── 2 · THE RUNNER REACHES THE AUTHORITY BOUNDARY, BY DESIGN ───
-    /*  ⚠ THIS IS THE FINDING, NOT A FAILURE.
-     *  Preparing a signing package on the two-step (authored offer) basis
-     *  writes a DERIVED LINEAGE RECORD attributing the preparation to a
-     *  named staff actor — deriveConfirmationFromAuthoredOffer refuses
-     *  without one, and says why: "the key-gated legacy door cannot author
-     *  this record."
-     *
-     *  So the last step of the handoff is ATTRIBUTED WORK by design. A
-     *  system runner cannot discharge it without inventing an actor, and
-     *  inventing one is exactly the authority manufacture this codebase
-     *  forbids. The runner therefore stops here — and what it does when it
-     *  stops is the thing worth proving.                                */
+    // ── 2 · PREPARED AUTOMATICALLY, ON THE OFFER AUTHOR'S AUTHORITY ─
+    /*  The owner ruling (2026-09-15) grants Spine automatic preparation
+     *  against the current, authorized, applicant-acknowledged offer. Two
+     *  things must both be true and both are asserted: the AUTHOR remains
+     *  the commercial authority, and SPINE is recorded as the executor.
+     *  No staff session is minted, and none is implied.                */
     const run1 = await handoff.runOwedHandoffs({ application_id: app.id });
     const r1 = run1.results[0] || {};
-    ok("the runner reaches the actor boundary and refuses BY NAME, rather than inventing an actor",
-      r1.outcome === "failed" && r1.reason_code === "preparation_actor_required",
-      JSON.stringify(r1));
+    ok("the runner prepares the signing package with NO operator acting",
+      !!r1.packet_id && r1.outcome !== "failed", JSON.stringify(r1));
 
     const packets1 = (await pool.query(
       "select id, status from lease_packets where application_id=$1", [app.id])).rows;
-    ok("no packet is created without an attributed preparer",
-      packets1.length === 0, JSON.stringify(packets1));
+    ok("exactly one packet exists", packets1.length === 1, JSON.stringify(packets1));
 
-    const stillOwed1 = await one(
-      `select status from obligations where related_id=$1 and type=$2`,
-      [app.id, handoff.HANDOFF_TYPE]);
-    ok("the work stays OWED — a refusal is not a completion",
-      !!stillOwed1 && stillOwed1.status !== "complete", JSON.stringify(stillOwed1));
+    const conf = await one(
+      `select actor_user_id, source, authority_basis from application_proposed_terms_confirmations
+        where application_id=$1`, [app.id]);
+    ok("COMMERCIAL AUTHORITY is the offer's author, not an invented actor",
+      !!conf && String(conf.actor_user_id) === String(operator.id)
+        && conf.source === "authored_offer_acknowledged",
+      JSON.stringify(conf));
 
+    const execEvent = await one(
+      `select type, note from events
+        where type='application_terms_derived_from_authored_offer_by_spine'
+          and property_id=$1 order by occurred_at desc limit 1`, [property.id]);
+    ok("SPINE is recorded as the executor, in its own event type, saying the author did not perform it",
+      !!execEvent && /AUTOMATICALLY BY SPINE/.test(execEvent.note)
+        && /did not perform this preparation/.test(execEvent.note),
+      JSON.stringify(execEvent && execEvent.type));
+
+    //  THE APPLICATION IS NOT APPROVED BY ANY OF THIS.
     const after = await one("select status from lease_applications where id=$1", [app.id]);
-    ok("the completed application is untouched — recoverable work, not a lost step",
+    ok("the application is still `submitted` — preparing a package approves nothing",
       after.status === "submitted", after.status);
 
-    // ── 3 · AND RE-RUNNING CHANGES NOTHING ─────────────────────────
+    // ── 3 · DELIVERY IS THE FINISH LINE, NOT TOKEN ISSUANCE ────────
+    /*  With the transport disabled the boundary cannot transmit, so this
+     *  asserts the FAILURE semantics the ruling requires: a technical
+     *  delivery failure is reported as a SYSTEM failure and the work stays
+     *  owed. It is never recorded as the applicant not acting.         */
+    ok("an undelivered package is reported as a SYSTEM failure, not applicant inaction",
+      r1.outcome === "undelivered" && r1.failure_class === "system",
+      JSON.stringify({ outcome: r1.outcome, failure_class: r1.failure_class,
+        reason: r1.reason_code }));
+    const owedAfterUndelivered = await one(
+      `select status from obligations where related_id=$1 and type=$2`,
+      [app.id, handoff.HANDOFF_TYPE]);
+    ok("…and the handoff stays OWED until the applicant can actually reach it",
+      !!owedAfterUndelivered && owedAfterUndelivered.status !== "complete",
+      JSON.stringify(owedAfterUndelivered));
+    const attempted = await one(
+      `select type from events where type='lease_signing_link_delivery_attempted'
+        and property_id=$1 limit 1`, [property.id]);
+    ok("the delivery attempt itself is recorded, so an unreachable applicant is visible",
+      !!attempted, JSON.stringify(attempted));
+
+    //  RETRY: no duplicate packet. The remaining gap is named in source —
+    //  once a packet is `sent`, issueLeasePacketLink cannot return the URL
+    //  again, so the retry reports link_not_recoverable_after_issue rather
+    //  than pretending it delivered.
     const run2 = await handoff.runOwedHandoffs({ application_id: app.id });
+    const r2 = run2.results[0] || {};
     const packets2 = (await pool.query(
       "select id from lease_packets where application_id=$1", [app.id])).rows;
-    const owedStill = (await pool.query(
-      `select id from obligations where related_id=$1 and type=$2`,
-      [app.id, handoff.HANDOFF_TYPE])).rows.length;
-    ok("re-running creates no packet and no second obligation — a retry is safe at the boundary",
-      packets2.length === 0 && owedStill === 1 && run2.considered === 1,
-      JSON.stringify({ packets: packets2.length, owed: owedStill, considered: run2.considered }));
+    ok("a retry creates NO second packet",
+      packets2.length === 1, JSON.stringify({ packets: packets2.length }));
+    /*  ⚠ MEASURED, AND TIGHTER THAN EXPECTED. The retry does not reach link
+     *  issuance at all: generateLeasePacket refuses first with
+     *  `packet_already_issued` ("it will not be silently regenerated").
+     *  So after ONE failed delivery there is currently no path that
+     *  re-delivers access to an existing packet — not a missing URL, a
+     *  refused regeneration. That is the exact remaining break, and it is
+     *  asserted here rather than described.                            */
+    ok("…and the retry refuses to regenerate, naming the block instead of claiming delivery",
+      r2.outcome === "failed" && r2.reason_code === "packet_already_issued",
+      JSON.stringify(r2));
 
     // ── 4 · AN AGREEMENT THAT MOVED IS NOT SENT ────────────────────
     //  A second application, owed, whose offer is superseded before the

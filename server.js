@@ -657,6 +657,7 @@ const __applicationInputAuthority = createApplicationInputAuthority();
 const leaseHandoffModule = require("./src/applications/lease_handoff");
 const __leaseHandoff = leaseHandoffModule({
   pool, spawnObligationFromEvent, completeObligation, leasePackets: __leasePackets._service,
+  commBoundary,
 });
 
 const __applicationSubmission = applicationSubmissionModule({

@@ -985,6 +985,11 @@ module.exports = function leasePacketsModule(deps) {
     expectedPropertyId = null,
     createNewVersion = false,
     auditContext = null,
+    /*  Spine preparing the package itself against the applicant's
+     *  acknowledged offer (owner ruling, 2026-09-15). EXPLICIT — a caller
+     *  that simply has no actor still gets the refusal, so this cannot be
+     *  reached by forgetting to pass one.                               */
+    automatedPreparation = false,
   }) {
     if (!applicationId) {
       throw packetError(400, "application_id_required", "An application id is required.");
@@ -1055,6 +1060,7 @@ module.exports = function leasePacketsModule(deps) {
         confirmationId = await deriveConfirmationFromAuthoredOffer(client, {
           app, offer: authoredOffer, actorUserId,
           currentConfirmationId: app.proposed_terms_confirmation_id || null,
+          automatedPreparation,
         });
       } catch (e) {
         if (e && e.code && !e.httpStatus) throw packetError(e.http || 409, e.code, e.message);

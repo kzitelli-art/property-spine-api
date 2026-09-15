@@ -75,7 +75,7 @@ const NEVER = Object.freeze([
 ]);
 
 module.exports = function leaseHandoffModule(deps = {}) {
-  const { pool, spawnObligationFromEvent, completeObligation, leasePackets } = deps;
+  const { pool, spawnObligationFromEvent, completeObligation, leasePackets, commBoundary = null } = deps;
   if (!pool) throw new Error("lease_handoff requires a pool");
 
   /*  ── RECORDED WITH THE SUBMISSION, IN ITS TRANSACTION ──────────────
@@ -117,6 +117,55 @@ module.exports = function leaseHandoffModule(deps = {}) {
     return { owed: true, obligation_id: ob.id, created: true };
   }
 
+
+  /*  ── DELIVERY, THROUGH THE SENDER THAT ALREADY EXISTS ──────────────
+   *  commBoundary.sendPropertySms is the one governed outbound path and it
+   *  owns consent and stop controls. No second sender.
+   *
+   *  ⚠ A KNOWN GAP, NAMED RATHER THAN PAPERED OVER. Raw tokens are stored
+   *  only as a hash, and issueLeasePacketLink's already-issued branch
+   *  returns `tenant_url: null` with an empty `signing_links`. MEASURED, the
+   *  block is tighter still: a retry never reaches link issuance, because
+   *  generateLeasePacket refuses FIRST with `packet_already_issued` — "it
+   *  will not be silently regenerated". So after ONE failed delivery there
+   *  is currently NO path that re-delivers access to an existing packet.
+   *  The fix is a governed re-delivery door on that writer, not a second
+   *  sender here.                                                       */
+  async function deliverSigningLink(client, { application_id, property_id, packetId, link }) {
+    const url = link && (link.tenant_url
+      || (Array.isArray(link.signing_links) && link.signing_links[0] && link.signing_links[0].url));
+    if (!url) {
+      return { delivered: false,
+        reason: link && link.already_issued ? "link_not_recoverable_after_issue" : "no_signing_url" };
+    }
+    if (!commBoundary || typeof commBoundary.sendPropertySms !== "function") {
+      return { delivered: false, reason: "no_communication_boundary" };
+    }
+    const app = (await client.query(
+      `select person_id from lease_applications where id=$1`, [application_id])).rows[0] || {};
+    const signer = (await client.query(
+      `select phone_e164 from lease_packet_signers
+        where lease_packet_id=$1 and phone_e164 is not null
+        order by case when signer_role='tenant' then 0 else 1 end limit 1`,
+      [packetId])).rows[0];
+    if (!signer || !signer.phone_e164) return { delivered: false, reason: "no_applicant_phone_on_packet" };
+
+    const ev = (await client.query(
+      `insert into events (property_id, person_id, type, note)
+       values ($1,$2,'lease_signing_link_delivery_attempted',$3) returning id`,
+      [property_id, app.person_id || null,
+       `signing package ${packetId} delivery attempted to the applicant`])).rows[0];
+
+    const out = await commBoundary.sendPropertySms({
+      property_id, recipient: signer.phone_e164,
+      body: `Your lease is ready to sign: ${url}`,
+      purpose: "lease_signing", person_id: app.person_id || null, eventId: ev.id,
+    });
+    return out && out.sent
+      ? { delivered: true, masked: String(signer.phone_e164).replace(/.(?=.{4})/g, "\u2022"), channel: "sms" }
+      : { delivered: false, reason: (out && out.reason) || "send_refused" };
+  }
+
   /*  ── DISCHARGED AFTER COMMIT, AND SAFE TO RE-RUN FOREVER ───────────
    *  Reads the owed work from the database rather than from a callback, so
    *  a process that died between submission and execution loses nothing —
@@ -153,6 +202,10 @@ module.exports = function leaseHandoffModule(deps = {}) {
         const gen = await svc.generateLeasePacket(client, {
           applicationId: row.application_id,
           expectedPropertyId: row.property_id,
+          //  Spine is the executor; the offer's author remains the
+          //  commercial authority the record rests on. No staff session is
+          //  minted and none is implied — see deriveConfirmationFromAuthoredOffer.
+          automatedPreparation: true,
         });
         const packetId = gen && (gen.packet_id || (gen.packet && gen.packet.id));
         //  REACHABILITY IS THE POINT, not packet creation. A packet nobody
@@ -160,17 +213,36 @@ module.exports = function leaseHandoffModule(deps = {}) {
         const link = await svc.issueLeasePacketLink(client, {
           packetId, expectedPropertyId: row.property_id,
         });
-        /*  ⚠ THE ENGINE TAKES { obligation_id, completed_by } AND NOTHING
-         *  ELSE. An earlier draft of this call passed resolution_code and a
-         *  note; both would have been silently dropped, and a parameter a
-         *  function never reads is worse than no parameter, because it
-         *  reads as a record that was never written. The outcome is
-         *  returned to the caller instead, and the packet itself is the
-         *  durable evidence.                                             */
+        /*  ── ISSUING A TOKEN IS NOT DELIVERY ──────────────────────────
+         *  Nothing in the product sent this link: the operator route issued
+         *  it and a person read the URL off a screen. A packet the applicant
+         *  cannot reach is the same unfinished handoff in a tidier state, so
+         *  the work is NOT complete until the link has gone to them through
+         *  the governed communication boundary — consent and stop controls
+         *  intact, because this reuses that sender rather than adding one. */
+        const delivery = await deliverSigningLink(client, {
+          application_id: row.application_id, property_id: row.property_id, packetId, link });
+        if (!delivery.delivered) {
+          /*  ⚠ A DELIVERY FAILURE IS A SYSTEM FAILURE, NOT APPLICANT
+           *  INACTION, and it is reported as one. The work stays owed.
+           *  Rolling back would discard a correctly prepared packet;
+           *  completing would call an unreachable package done.          */
+          await client.query("commit");
+          results.push({ application_id: row.application_id, obligation_id: row.id,
+            outcome: "undelivered", packet_id: packetId,
+            failure_class: "system", reason_code: delivery.reason || "delivery_failed" });
+          continue;
+        }
+        /*  ⚠ completeObligation TAKES { obligation_id, completed_by } AND
+         *  NOTHING ELSE. An earlier draft passed resolution_code and a note;
+         *  both would have been silently dropped, and a parameter a function
+         *  never reads is worse than no parameter, because it reads as a
+         *  record that was never written.                                */
         await completeObligation(client, { obligation_id: row.id });
         await client.query("commit");
         results.push({ application_id: row.application_id, obligation_id: row.id,
-          outcome: "prepared", packet_id: packetId,
+          outcome: "delivered", packet_id: packetId,
+          delivered_to: delivery.masked, channel: delivery.channel,
           already_issued: !!(link && link.already_issued) });
       } catch (e) {
         await client.query("rollback").catch(() => {});
