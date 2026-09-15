@@ -102,16 +102,16 @@ function safeLinks(text) {
 // This remains model-free: tone must never invent a fact or turn a missing
 // topic into a negative claim.
 const CONVERSATIONAL_LEADS = Object.freeze({
-  leasing_highlights: "Here are the main reasons to consider this property:",
-  amenities: "Here are the confirmed amenities and inclusions:",
-  layouts: "Here are the confirmed layouts:",
-  dimensions: "Here are the measurements I have on file:",
-  photos: "Here are the approved photo resources I have:",
-  floor_plans: "Here are the approved floor-plan resources I have:",
-  virtual_tours: "Here are the approved virtual-tour resources I have:",
-  neighborhood: "Here are the local recommendations I have:",
-  leasing_faq: "Here are the confirmed answers to common leasing questions:",
-  move_in_guidance: "Here is the confirmed move-in guidance:",
+  leasing_highlights: "The main highlights I can confirm are:",
+  amenities: "For this property, I can confirm these amenities and inclusions:",
+  layouts: "For this property, I have these layouts recorded:",
+  dimensions: "I have these measurements on file:",
+  photos: "I have these approved photo resources:",
+  floor_plans: "I have these approved floor-plan resources:",
+  virtual_tours: "I have these approved virtual-tour resources:",
+  neighborhood: "Here are the local recommendations Mike confirmed:",
+  leasing_faq: "Here's what I can confirm from the leasing notes:",
+  move_in_guidance: "Here's the move-in guidance I can confirm:",
 });
 
 function listTopicNames(keys) {

@@ -46,7 +46,7 @@ async function run() {
   assert.doesNotMatch(result.answer,/^Virtual tours:/);
   const natural = await knowledge.answer({query:async()=>({rows:[{fact_key:"amenities",rendered_text:"Laundry is on every floor."}]})},
     {property_id:"property-a",allowed_modules:["leasing"],question:"what amenities are there?"});
-  assert.match(natural.answer,/^Here are the confirmed amenities and inclusions:/);
+  assert.match(natural.answer,/^For this property, I can confirm these amenities and inclusions:/);
   assert.doesNotMatch(natural.answer,/^Amenities:/m);
   result = await knowledge.answer({query:async()=>{throw new Error("offline");}},{property_id:"property-a",allowed_modules:["leasing"],question:"show photos"});
   assert.equal(result.grounded_on.leasing_knowledge,"READ_FAILED");
