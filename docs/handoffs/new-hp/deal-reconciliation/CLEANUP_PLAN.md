@@ -115,6 +115,36 @@ Solo. Merging by address. Recreating a property to obtain a clean card.
 
 ## 4 · Where the existing Solo and Uno work lives
 
+### ⛔ ANSWERED BY THE PRODUCTION RUN — AND I WAS WRONG
+
+Sections 1, 2, 3, 4A and 4B were run against production on 2026-09-15. Across
+**all 41 properties**, sections 4B returns zero for `legal_entities`,
+`capital_stack_positions`, `insurance_coverage_properties`,
+`tax_obligation_properties` and `documents` — every row, no exceptions. The
+only non-zero cells in the entire section are:
+
+| Property | What it holds |
+|---|---|
+| Uno `260b6bac` | 1 debt instrument |
+| Real Solo `9e2bb96e` | 1 compliance item |
+| **Demo building `a50fbdd0`** | **10 compliance items** |
+| Skyline `14e41b7c` | 1 deal file |
+| greenery `a29181cd` | 8 deal files |
+
+**I asserted that Solo and Uno carry asset-management, legal-entity, capital,
+tax, insurance, debt and document work. They carry one debt instrument and one
+compliance item between them.** That claim came from the consultant memo and
+from my own inference; I never established it and should have marked it as
+unestablished. It is retracted here and in the map's header.
+
+The method survives the error — you look before you retire — but the
+preservation risk this section was built around is **not present in the data**,
+and the cleanup is correspondingly simpler and safer than the plan assumed.
+
+**Ten of the eleven compliance items in production sit on the demo building.**
+
+### What the section was originally for
+
 The first version of the audit counted six operating classes — team, units,
 leases, import batches, activations, opening positions — and would have
 reported a property with asset-management setup as carrying nothing.

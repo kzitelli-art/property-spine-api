@@ -8,10 +8,28 @@
 --  three ways that would have made an unsafe change plan:
 --
 --    1. It counted six dependency classes and implied that zero across
---       them made a record disposable. It does not. Solo and Uno carry
---       asset-management, legal-entity, capital, tax, insurance, debt and
---       document work that v1 never looked at — sections 4A and 4B exist
---       because of that gap.
+--       them made a record disposable. It does not — that reasoning stays
+--       wrong regardless of what the counts turn out to be.
+--
+--       ⛔ BUT THE EXAMPLE I USED WAS FALSE, AND THE RUN PROVED IT.
+--       v2 of this header said "Solo and Uno carry asset-management,
+--       legal-entity, capital, tax, insurance, debt and document work."
+--       I asserted that; I never established it. Section 4B run against
+--       production on 2026-09-15 returns, across ALL 41 properties:
+--         legal_entities        0   (every row)
+--         capital_positions     0   (every row)
+--         insurance_coverages   0   (every row)
+--         tax_obligations       0   (every row)
+--         documents             0   (every row)
+--         debt_instruments      1   (Uno, 260b6bac, and nowhere else)
+--         compliance_items     11   (1 on real Solo 9e2bb96e, 10 on the
+--                                    DEMO building a50fbdd0)
+--         deal_files            9   (1 Skyline, 8 greenery)
+--       Solo and Uno carry one debt instrument and one compliance item
+--       between them. The preservation risk I argued for is not there.
+--       Sections 4A and 4B still earn their place — looking before
+--       retiring is the method, and the method was right even though my
+--       claim about what it would find was wrong.
 --
 --    2. It identified related properties by NAME. A change plan keyed on
 --       names is exactly the failure this cleanup exists to avoid. Every
