@@ -31,6 +31,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
+const { localYmd } = require("../shared/date_column");
 
 /*  Canonical field → the header spellings that mean it.
  *
@@ -173,8 +174,12 @@ const DATE = (v) => {
     const yr = yrRaw.length === 2 ? (Number(yrRaw) > 70 ? `19${yrRaw}` : `20${yrRaw}`) : yrRaw;
     return `${yr}-${String(mo).padStart(2, "0")}-${String(da).padStart(2, "0")}`;
   }
+  //  LAST RESORT, and the only branch that builds a Date at all — the two
+  //  above are pure string work and were always right. `new Date("Aug 1
+  //  2026")` is LOCAL midnight, so toISOString() moved the date a human
+  //  typed into their own rent roll back by a day east of UTC.
   const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  return isNaN(d.getTime()) ? null : localYmd(d);
 };
 
 const TEXT = (v) => {

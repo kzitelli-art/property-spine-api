@@ -45,17 +45,20 @@ const money = (n) => Math.round(Number(n || 0) * 100) / 100;
  *
  *  Deliberately NOT a global pg type parser: that would change how every
  *  date in the process is decoded, for every consumer, to fix a rendering
- *  bug in two fields. One helper, used in both places, changes exactly
- *  what is wrong. Uses the UTC calendar date — these are `date` columns
- *  with no time or zone, and a local-time slice can move them a day.   */
-const isoDate = (v) => {
-  if (v == null || v === "") return null;
-  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
-  const s = String(v);
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
-};
+ *  bug in two fields.
+ *
+ *  ⚠ THE SENTENCE THAT USED TO END THIS COMMENT WAS BACKWARDS. It said the
+ *  helper "uses the UTC calendar date — these are `date` columns with no
+ *  time or zone, and a local-time slice can move them a day." That is the
+ *  rule for a TIMESTAMP. For a DATE it is exactly inverted: node-pg builds
+ *  the Date at LOCAL midnight, so the local components ARE the recorded
+ *  day and toISOString() is the thing that moves it — by one, in every
+ *  zone ahead of UTC. Measured: TZ=Europe/Berlin turned a pinned
+ *  2026-08-01 into 2026-07-31. CI and the deployed host run UTC, so
+ *  nothing observed was ever wrong; it was armed, not firing.
+ *
+ *  The rule now lives in one module with that measurement as its test.  */
+const { dateColumnToIso: isoDate } = require("../shared/date_column");
 
 async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
   const dp = await datedPropertyPositions(pool, { property_id, as_of });

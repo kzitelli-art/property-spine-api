@@ -32,7 +32,15 @@ SERVER_ROOT="${E2E_SERVER_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 PROOF_OPERATOR_KEY="e2e-key"
 if [ "${E2E_WITHOUT_OPERATOR_KEY:-0}" = "1" ]; then PROOF_OPERATOR_KEY=""; fi
 cd "$SERVER_ROOT" || exit 1
-exec env -i PATH="$PATH" HOME="$HOME" \
+#  TZ IS PASSED THROUGH, AND THAT IS THE POINT. proof_boundary.js already
+#  whitelists TZ in serverEnvironment(); this launcher did not, so the
+#  owned server always ran in the container's zone and NO proof could
+#  exercise a host ahead of UTC. That is precisely the class of defect
+#  that hides there: a `date` column rendered through toISOString() is
+#  correct in UTC and a day early everywhere east of it. Unset, env -i
+#  gives the server UTC exactly as before, so this changes nothing for
+#  any existing run.
+exec env -i PATH="$PATH" HOME="$HOME" ${TZ:+TZ="$TZ"} \
   E2E_PROOF_MANIFEST="$E2E_PROOF_MANIFEST" E2E_DATABASE_URL="$E" E2E_EGRESS_LOG="$E2E_EGRESS_LOG" \
   E2E_SESSION_LOG="$E2E_SESSION_LOG" \
   E2E_SERVER_APPLICATION_NAME="$E2E_SERVER_APPLICATION_NAME" \

@@ -228,6 +228,20 @@ function holdExpectation(label) {
         && canonicalHttp.body.evidence_summary.inconclusive === 8);
       ok(`${label}: contested claims retain both lease facts`, canonicalHttp.body.contested_claims.claims.length === 2
         && canonicalHttp.body.contested_claims.claims.every((claim) => claim.space_id === spaces["303|Room1"]));
+      /*  THE DATES ARE THE ONES THE FIXTURE INSERTED, TO THE DAY.
+       *  These two claims are the only place this reader renders a `date`
+       *  column through a JS Date, and the renderer used toISOString(),
+       *  which reads a local-midnight Date back in UTC. Measured on this
+       *  fixture: under TZ=Europe/Berlin the pair came back as
+       *  2025-12-31/2027-12-30 and 2026-02-28/2027-02-27 — every date a day
+       *  early, on the overlapping lease claims a lender scrutinises most.
+       *  Asserted as LITERALS rather than against the row, because a
+       *  comparison that re-renders the same value the same wrong way
+       *  agrees with itself.  */
+      ok(`${label}: contested claim dates are the recorded days, not a timezone's reading of them`,
+        canonicalHttp.body.contested_claims.claims.map((c) => `${c.start_date}/${c.end_date}`).sort().join(" ")
+          === "2026-01-01/2027-12-31 2026-03-01/2027-02-28",
+        JSON.stringify(canonicalHttp.body.contested_claims.claims.map((c) => `${c.start_date}/${c.end_date}`)));
       const askTenancy = askFacts && askFacts.tenancy;
       const askPosition = askTenancy && askTenancy.position;
       if(label === "baseline") baselineAskPosition = JSON.stringify(askPosition);

@@ -1,4 +1,5 @@
 "use strict";
+const { dateColumnToIso } = require("../shared/date_column");
 
 const { createHash } = require("node:crypto");
 const artifacts = require("./source_artifact_service.js");
@@ -20,7 +21,19 @@ function folded(value) {
 
 function sourceDate(value, refusal) {
   if (value == null || value === "") return null;
-  const out = value instanceof Date ? value.toISOString().slice(0, 10) : String(value);
+  //  ⚠ THIS COMPARISON REFUSED A RENT ROLL THAT WAS PERFECTLY CONSISTENT.
+  //  The three dates compared below are the requested date (a string), the
+  //  date inside the file (a string) and the RETAINED artifact's date — a
+  //  `date` column, which node-pg hands back as a Date at LOCAL midnight.
+  //  toISOString() read that back a day early on any host ahead of UTC, so
+  //  the set held two values and the upload was refused with
+  //  source_date_mismatch for a disagreement that did not exist. Witnessed
+  //  on the owned server with TZ=Europe/Berlin.
+  //
+  //  The round trip below is UNAFFECTED and stays: it builds an explicit
+  //  UTC instant from the rendered string, so it validates the shape
+  //  without reintroducing a conversion.
+  const out = value instanceof Date ? dateColumnToIso(value) : String(value);
   const parsed = new Date(out + "T00:00:00Z");
   if (!/^\d{4}-\d{2}-\d{2}$/.test(out) || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== out) {
     throw refusal(400, "invalid_source_date", "Use a valid rent-roll date in YYYY-MM-DD form.");

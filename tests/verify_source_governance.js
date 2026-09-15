@@ -190,6 +190,8 @@ const GATES = [
     what: "Future applications: the governed turn-ready date survives invitation, tenant submission, and application birth" },
   { file: "unit/interval_position_hostile.test.js",
     what: "Interval tenancy: closed-interval arithmetic, which rights count, honest refusals, and the line it does not cross" },
+  { file: "unit/date_column_timezone.test.js",
+    what: "Date columns: a `date` renders the recorded day in five real timezones, run in child processes with TZ set — and the test proves the old toISOString() expression really does lose a day in every zone ahead of UTC" },
   { file: "unit/meeting_evidence_ingress.test.js",
     what: "Meeting Evidence: Read AI raw-byte ingress, immutable inbox shape, and no Ask Spine/transcript fan-out" },
   { file: "unit/meeting_receipt_v0.test.js",

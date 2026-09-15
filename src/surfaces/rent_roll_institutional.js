@@ -62,14 +62,21 @@ const COLUMNS = [
 // Dates arrive as either an ISO string or a pg Date. String(date).slice(0,10)
 // on a Date yields "Wed Jul 22" — a locale string, not a date — which is
 // exactly the kind of thing that reads as fine until a lender opens the CSV.
-const ymd = (v) => {
-  if (!v) return "";
-  if (v instanceof Date) return Number.isNaN(v.getTime()) ? "" : v.toISOString().slice(0, 10);
-  const s = String(v);
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
-};
+//
+// The fix for that locale string was toISOString(), which is correct for a
+// timestamp and wrong for a `date` column, where node-pg builds the Date at
+// LOCAL midnight. So the helper carried the same latent off-by-one.
+//
+// ⚠ SAY WHAT WAS MEASURED. On the observed path it never fired: the lease
+// dates reaching institutionalRow arrive from dated_positions as STRINGS, so
+// they take the slice branch, and Lease Start / Lease Expiration were
+// byte-identical under TZ=UTC and TZ=Europe/Berlin BOTH before and after this
+// change. What moved under Berlin was the canonical reader's contested-claim
+// dates (2026-01-01 read back as 2025-12-31). This change therefore disarms a
+// trap rather than repairing an observed wrong value — any future caller
+// handing this helper a real Date gets the recorded day. One module owns the
+// rule, with the measurement as its test.
+const { dateColumnToIsoOrBlank: ymd } = require("../shared/date_column");
 
 // Occupancy / exception state in language an owner or lender reads without a
 // glossary. The canonical axes stay available in the raw rows beneath.
