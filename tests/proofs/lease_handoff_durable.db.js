@@ -70,10 +70,12 @@ const ok = (label, cond, detail = "") => {
     require(path.join(root, "src/comms/communications_boundary.js"))({ pool, sms });
   const handoff = leaseHandoffModule({ pool,
     spawnObligationFromEvent: engine.spawnObligationFromEvent,
+    satisfyObligation: engine.satisfyObligation,
     completeObligation: engine.completeObligation, leasePackets,
     commBoundary: boundaryWith(capturingSms) });
   const handoffDisabled = leaseHandoffModule({ pool,
     spawnObligationFromEvent: engine.spawnObligationFromEvent,
+    satisfyObligation: engine.satisfyObligation,
     completeObligation: engine.completeObligation, leasePackets,
     commBoundary: boundaryWith({ enabled: () => false }) });
 
@@ -256,11 +258,19 @@ const ok = (label, cond, detail = "") => {
     // ── 3 · DELIVERED, AND THE LINK ACTUALLY OPENS ─────────────────
     /*  THE POSITIVE ACCEPTANCE TEST. Measured through the approved
      *  capturing transport, behind the real line, consent and stop gates.  */
-    ok("the package is DELIVERED, not merely prepared",
-      r1.outcome === "delivered", JSON.stringify(r1));
+    /*  ⚠ ACCEPTED, NOT DELIVERED, and the proof says so. The fake transport
+     *  returns Twilio's shape — sent:true with a sid and status "queued".
+     *  That is the WIRE TAKING the message, not a handset receiving it, and
+     *  the receipt must not upgrade it. Carrier delivery lands later on
+     *  comm_events.provider_status through recordProviderStatus.        */
+    ok("the package is ACCEPTED BY THE TRANSPORT, not merely prepared",
+      r1.outcome === "accepted", JSON.stringify(r1));
+    ok("…and the receipt does not claim delivery it has not observed",
+      !JSON.stringify(r1).includes("\"delivered\""), JSON.stringify(r1));
     ok("every required signer was reached — a partial send is not a success",
       Array.isArray(r1.per_signer) && r1.per_signer.length > 0
-        && r1.per_signer.every((x) => x.delivered), JSON.stringify(r1.per_signer));
+        && r1.per_signer.every((x) => x.accepted && x.transport_state === "accepted"),
+      JSON.stringify(r1.per_signer));
 
     const msg = captured[captured.length - 1];
     ok("the transport captured a real recipient and a real body",
@@ -292,7 +302,7 @@ const ok = (label, cond, detail = "") => {
     //  ── AND NOW OPEN IT, THE WAY THE APPLICANT WOULD ────────────────
     const token = String(msg.body).split("/t/lease/")[1];
     const reached = token ? await leasePackets.resolveSignerAccess(pool, token) : null;
-    ok("the applicant can OPEN the delivered link through the real signer route",
+    ok("the applicant can OPEN the dispatched link through the real signer route",
       !!(reached && (reached.packet || reached.signer)),
       JSON.stringify(reached ? Object.keys(reached) : null));
     ok("…and it opens THEIR packet — the one this handoff prepared",
@@ -328,7 +338,7 @@ const ok = (label, cond, detail = "") => {
     const runN = await handoffDisabled.runOwedHandoffs({ application_id: appN.id });
     const rN = runN.results[0] || {};
     ok("an unreachable applicant is a SYSTEM failure and the work stays owed",
-      rN.outcome === "undelivered" && rN.failure_class === "system", JSON.stringify(rN));
+      rN.outcome === "not_accepted" && rN.failure_class === "system", JSON.stringify(rN));
     const owedN = await one(`select status from obligations where related_id=$1 and type=$2`,
       [appN.id, handoff.HANDOFF_TYPE]);
     ok("…and it is not closed as done", !!owedN && owedN.status !== "complete", JSON.stringify(owedN));
@@ -346,8 +356,8 @@ const ok = (label, cond, detail = "") => {
     const capturedBefore = captured.length;
     const runR = await handoff.runOwedHandoffs({ application_id: appN.id });
     const rR = runR.results[0] || {};
-    ok("an undelivered package RESUMES and is delivered on the next run",
-      rR.outcome === "delivered", JSON.stringify(rR));
+    ok("an undispatched package RESUMES and is accepted on the next run",
+      rR.outcome === "accepted", JSON.stringify(rR));
     const packetsN = (await pool.query(
       "select id from lease_packets where application_id=$1", [appN.id])).rows;
     /*  ⚠ RECOVERY IS A NEW VERSION, AND THAT IS THE SCHEMA'S CHOICE.
@@ -366,7 +376,7 @@ const ok = (label, cond, detail = "") => {
       JSON.stringify({ before: capturedBefore, after: captured.length }));
     const tokenR = String(captured[captured.length - 1].body).split("/t/lease/")[1];
     const reachedR = tokenR ? await leasePackets.resolveSignerAccess(pool, tokenR) : null;
-    ok("…and the delivered link opens the CURRENT version through the real signer route",
+    ok("…and the dispatched link opens the CURRENT version through the real signer route",
       !!reachedR && String((reachedR.packet && reachedR.packet.id) || "") !== String(packetN1.id),
       JSON.stringify({ opened: reachedR && reachedR.packet && reachedR.packet.id, superseded: packetN1.id }));
 
@@ -386,9 +396,19 @@ const ok = (label, cond, detail = "") => {
       await cS.query("commit"); } finally { cS.release(); }
     ok("the sweep refuses to start unless explicitly enabled",
       handoff.startHandoffRecovery({ enabled: false }).started === false);
-    const sweep = handoff.startHandoffRecovery({ enabled: true, intervalMs: 3600000,
+    /*  ⚠ ENABLED IS NOT ENOUGH. An unattended sweep with no property scope
+     *  reaches every property Spine holds, and what it does at the end is
+     *  text a real person a bearer link to a governing agreement. Enabling
+     *  it without naming properties is refused rather than read as "all".  */
+    const unscoped = handoff.startHandoffRecovery({ enabled: true, intervalMs: 3600000,
       log: { log() {}, error() {} } });
-    ok("…and when enabled it starts", sweep.started === true);
+    ok("…and enabled with NO property scope still refuses, rather than sweeping everything",
+      unscoped.started === false && unscoped.reason === "no_property_scope",
+      JSON.stringify(unscoped));
+    const sweep = handoff.startHandoffRecovery({ enabled: true, intervalMs: 3600000,
+      propertyIds: [property.id], log: { log() {}, error() {} } });
+    ok("…and it starts once the properties it may touch are named",
+      sweep.started === true && sweep.property_ids.length === 1, JSON.stringify(sweep.property_ids));
     await new Promise((r) => setTimeout(r, 2500));
     if (sweep.stop) sweep.stop();
     const sweptObl = await one(`select status from obligations where related_id=$1 and type=$2`,
@@ -449,6 +469,266 @@ const ok = (label, cond, detail = "") => {
     const app2After = await one("select status from lease_applications where id=$1", [app2.id]);
     ok("…and the completed application is untouched — recoverable work, not a lost step",
       app2After.status === "submitted", app2After.status);
+
+    /*  ══════════════════════════════════════════════════════════════
+     *   5 · SUBMITTING IS NOT COMPLETING
+     *  ══════════════════════════════════════════════════════════════
+     *  The boundary this whole module exists behind. An application that
+     *  arrives missing something owes APPLICANT FOLLOW-UP, and an unattended
+     *  sweep must not turn it into a delivered lease because nobody is
+     *  watching. Proven by making an application genuinely incomplete — a
+     *  guarantor named with no contact — and then running the sweep at it.  */
+    const space5 = await one(`insert into spaces (unit_id, space_label, position_kind, use_type)
+      values($1,'Room5','bed','residential') returning id`, [unit.id]);
+    const c5o = await pool.connect();
+    let offer5;
+    try {
+      await c5o.query("begin");
+      offer5 = await prepareApplicationOffer(c5o, {
+        actor: { id: operator.id, property_id: property.id },
+        person_id: applicant, space_id: space5.id,
+        lease_start_date: "2026-12-01", lease_end_date: "2027-11-30",
+        rent: 1500, security_deposit: 1500, fees: [], concessions: { status: "none" },
+        idempotency_key: `${tag}-offer-5`,
+      });
+      await c5o.query("commit");
+    } catch (e) { await c5o.query("rollback").catch(() => {}); throw e; }
+    finally { c5o.release(); }
+
+    //  A guarantor is NAMED and their contact is absent. This is exactly the
+    //  application lease_packets refuses with `guarantor_contact_not_established`
+    //  — observed at submission instead of at 3am inside a sweep.
+    const app5 = await one(`insert into lease_applications
+      (property_id, person_id, unit_id, space_id, applicant_name, guarantor_name, status,
+       submitted_at, application_offer_id, application_terms_acknowledged_at, application_terms_hash)
+      values($1,$2,$3,$4,$5,$6,'submitted', now(), $7, now(), $8) returning *`,
+      [property.id, applicant, unit.id, space5.id, `${tag} incomplete`,
+       `${tag} guarantor`, offer5.offer.id,
+       offer5.offer.offered_terms_snapshot.application_terms_hash]);
+
+    const c5 = await pool.connect();
+    let owed5;
+    try { await c5.query("begin");
+      owed5 = await handoff.recordCompletionOwed(c5, { application: app5 });
+      await c5.query("commit"); } finally { c5.release(); }
+
+    ok("an incomplete application owes APPLICANT WORK, and names what is missing",
+      owed5.complete === false
+        && owed5.required_inputs.includes(handoff.COMPLETION_INPUTS.GUARANTOR_CONTACT),
+      JSON.stringify(owed5.required_inputs));
+    ok("…and NO lease handoff is owed — submitting is not completing",
+      owed5.handoff === null
+        && (await pool.query(`select 1 from obligations where related_id=$1 and type=$2`,
+             [app5.id, handoff.HANDOFF_TYPE])).rows.length === 0);
+
+    /*  THE OWED WORK IS A PERSON'S, AND IT CARRIES THE 30-DAY CLOCK.
+     *  Spine cannot supply a guarantor's mobile number, so this is not
+     *  system work, and the clock lives on the obligation's own due_at
+     *  where the board escalates it like anything else.                  */
+    const ob5 = await one(`select owner_type, assigned_role, due_at, required_inputs
+                             from obligations where related_id=$1 and type=$2`,
+      [app5.id, handoff.COMPLETION_TYPE]);
+    ok("…owed by a PERSON, not by Spine — Spine cannot supply a missing contact",
+      ob5.owner_type === "human" && !!ob5.assigned_role, JSON.stringify(ob5));
+    const days5 = Math.round(
+      (new Date(ob5.due_at) - new Date(app5.submitted_at)) / (24 * 3600 * 1000));
+    ok(`…and the completion clock is ${handoff.COMPLETION_WINDOW_DAYS} days from submission`,
+      days5 === handoff.COMPLETION_WINDOW_DAYS, `${days5} days`);
+
+    /*  ⚠ THE CENTRAL ASSERTION. Nobody is watching; the sweep runs.       */
+    const sweep5 = await handoff.runOwedHandoffs({ application_id: app5.id });
+    ok("an unattended sweep prepares NOTHING for an incomplete application",
+      sweep5.considered === 0
+        && (await pool.query("select 1 from lease_packets where application_id=$1",
+             [app5.id])).rows.length === 0, JSON.stringify(sweep5));
+
+    /*  AND THE GUARD HOLDS EVEN IF THE WRITER IS BYPASSED. A handoff owed
+     *  directly beside an open completion obligation is deferred by name,
+     *  not silently executed — the boundary is not one edit from being gone. */
+    const c5b = await pool.connect();
+    try { await c5b.query("begin");
+      await handoff.recordHandoffOwed(c5b, { application: app5 });
+      await c5b.query("commit"); } finally { c5b.release(); }
+    const forced5 = await handoff.runOwedHandoffs({ application_id: app5.id });
+    ok("…and a handoff owed by any other route is DEFERRED while completion is open",
+      (forced5.results[0] || {}).reason_code === "application_completion_outstanding",
+      JSON.stringify(forced5.results[0]));
+    ok("…still with no packet, and the deferral names what is outstanding",
+      (await pool.query("select 1 from lease_packets where application_id=$1",
+        [app5.id])).rows.length === 0
+      && ((forced5.results[0] || {}).outstanding || []).includes(
+           handoff.COMPLETION_INPUTS.GUARANTOR_CONTACT),
+      JSON.stringify(forced5.results[0]));
+
+    /*  THE FACT CLOSES THE INPUT — NOT A BUTTON.
+     *  Reconcile with the guarantor contact still missing: nothing moves.
+     *  There is deliberately no way to assert completeness over a fact that
+     *  is not there.                                                      */
+    const c5c = await pool.connect();
+    let noop5;
+    try { await c5c.query("begin");
+      noop5 = await handoff.reconcileApplicationCompletion(c5c, { application_id: app5.id });
+      await c5c.query("commit"); } finally { c5c.release(); }
+    ok("re-observation cannot satisfy an input the facts still find missing",
+      noop5.reconciled === false && noop5.reason === "nothing_resolved",
+      JSON.stringify(noop5));
+
+    //  Now the guarantor's contact genuinely arrives, through the application
+    //  record the packet writer reads. Nothing tells this module about it.
+    await pool.query(
+      `update lease_applications set captured = $2::jsonb where id=$1`,
+      [app5.id, JSON.stringify({
+        guarantor_contact: { name: `${tag} guarantor`, phone: "+12025550199",
+          email: "guarantor@example.test" } })]);
+
+    const c5d = await pool.connect();
+    let fixed5;
+    try { await c5d.query("begin");
+      fixed5 = await handoff.reconcileApplicationCompletion(c5d, { application_id: app5.id });
+      await c5d.query("commit"); } finally { c5d.release(); }
+    ok("the FACT arriving closes the input, through the engine's own satisfyObligation",
+      fixed5.reconciled === true && fixed5.complete === true
+        && fixed5.satisfied.includes(handoff.COMPLETION_INPUTS.GUARANTOR_CONTACT),
+      JSON.stringify(fixed5));
+    const satEvt = (await pool.query(
+      `select 1 from events where property_id=$1 and type=$2`,
+      [property.id, `input_satisfied:${handoff.COMPLETION_INPUTS.GUARANTOR_CONTACT}`])).rows;
+    ok("…leaving the engine's own durable proof that it was satisfied",
+      satEvt.length > 0);
+    ok("…and only NOW is the lease handoff owed",
+      !!fixed5.handoff && fixed5.handoff.owed === true, JSON.stringify(fixed5.handoff));
+
+    const standing5 = await handoff.readApplicationHandoffStanding(null, app5.id);
+    ok("the standing read says the package is owed, with nothing outstanding",
+      standing5.position === "package_owed" && standing5.outstanding.length === 0,
+      JSON.stringify(standing5));
+
+    /*  ── 5b · THE 30-DAY CLOCK HAS TEETH ──────────────────────────
+     *  An application nobody completed does not sit open pretending an
+     *  applicant is still coming. It lapses through the lifecycle authority
+     *  — the only writer of lease_applications.status — and the obligation
+     *  closes as `expired`, never as satisfied.                           */
+    const space6 = await one(`insert into spaces (unit_id, space_label, position_kind, use_type)
+      values($1,'Room6','bed','residential') returning id`, [unit.id]);
+    const stale = await one(`insert into lease_applications
+      (property_id, person_id, unit_id, space_id, applicant_name, guarantor_name,
+       status, submitted_at)
+      values($1,$2,$3,$4,$5,$6,'submitted', now() - interval '40 days') returning *`,
+      [property.id, applicant, unit.id, space6.id, `${tag} lapsed`, `${tag} g2`]);
+    const c6 = await pool.connect();
+    try { await c6.query("begin");
+      await handoff.recordCompletionOwed(c6, { application: stale });
+      await c6.query("commit"); } finally { c6.release(); }
+
+    const early = await handoff.expireStaleCompletions({
+      application_id: stale.id, now: new Date(Date.now() - 20 * 24 * 3600 * 1000) });
+    ok("the clock does not fire early — 20 days in, the application is still open",
+      early.considered === 0, JSON.stringify(early));
+
+    const lapsed = await handoff.expireStaleCompletions({ application_id: stale.id });
+    ok("past the window the application lapses, through the lifecycle authority",
+      (lapsed.results[0] || {}).outcome === "expired", JSON.stringify(lapsed.results[0]));
+    const staleAfter = await one(
+      `select status, terminal_code, decision_reason from lease_applications where id=$1`,
+      [stale.id]);
+    ok("…recorded as `expired` by the one writer of application status",
+      staleAfter.status === "expired" && staleAfter.terminal_code === "expired",
+      JSON.stringify(staleAfter));
+    const staleObl = await one(
+      `select status, resolution_code, required_inputs from obligations
+        where related_id=$1 and type=$2`, [stale.id, handoff.COMPLETION_TYPE]);
+    ok("…and the obligation closes as EXPIRED, never as satisfied — nothing was supplied",
+      staleObl.status === "complete" && staleObl.resolution_code === "expired"
+        && (staleObl.required_inputs || []).length > 0,
+      JSON.stringify(staleObl));
+    ok("…and no signing package was prepared for an application that lapsed",
+      (await pool.query("select 1 from lease_packets where application_id=$1",
+        [stale.id])).rows.length === 0);
+
+    /*  ── 5c · A COMPLETE APPLICATION IS COMPLETE AT SUBMISSION ─────
+     *  The two-step leasing design (migration 195), unchanged: an applicant
+     *  who acknowledged an authored offer and left nothing outstanding has
+     *  COMPLETED, and the handoff is owed in the same transaction. The
+     *  boundary is a boundary, not a brake.                              */
+    const space7 = await one(`insert into spaces (unit_id, space_label, position_kind, use_type)
+      values($1,'Room7','bed','residential') returning id`, [unit.id]);
+    const c7o = await pool.connect();
+    let offer7;
+    try { await c7o.query("begin");
+      offer7 = await prepareApplicationOffer(c7o, {
+        actor: { id: operator.id, property_id: property.id },
+        person_id: applicant, space_id: space7.id,
+        lease_start_date: "2027-01-01", lease_end_date: "2027-12-31",
+        rent: 1500, security_deposit: 1500, fees: [], concessions: { status: "none" },
+        idempotency_key: `${tag}-offer-7`,
+      });
+      await c7o.query("commit");
+    } catch (e) { await c7o.query("rollback").catch(() => {}); throw e; }
+    finally { c7o.release(); }
+    const app7 = await one(`insert into lease_applications
+      (property_id, person_id, unit_id, space_id, applicant_name, status, submitted_at,
+       application_offer_id, application_terms_acknowledged_at, application_terms_hash)
+      values($1,$2,$3,$4,$5,'submitted', now(), $6, now(), $7) returning *`,
+      [property.id, applicant, unit.id, space7.id, `${tag} complete`, offer7.offer.id,
+       offer7.offer.offered_terms_snapshot.application_terms_hash]);
+    const c7 = await pool.connect();
+    let owed7;
+    try { await c7.query("begin");
+      owed7 = await handoff.recordCompletionOwed(c7, { application: app7 });
+      await c7.query("commit"); } finally { c7.release(); }
+    ok("an application with nothing outstanding is COMPLETE at submission…",
+      owed7.complete === true && owed7.required_inputs.length === 0,
+      JSON.stringify(owed7.required_inputs));
+    ok("…and owes the handoff in the SAME transaction — the boundary is not a brake",
+      !!owed7.handoff && owed7.handoff.owed === true, JSON.stringify(owed7.handoff));
+    const run7 = await handoff.runOwedHandoffs({ application_id: app7.id });
+    ok("…which the runner then discharges with no person acting",
+      (run7.results[0] || {}).outcome === "accepted", JSON.stringify(run7.results[0]));
+
+    /*  ── 5d · A SWEEP DOES NOT REACH HISTORY ──────────────────────
+     *  An imported application records something that ALREADY HAPPENED
+     *  somewhere else. Spine did not run it and does not now finish it —
+     *  least of all by texting its applicant a bearer link years later.   */
+    const space8 = await one(`insert into spaces (unit_id, space_label, position_kind, use_type)
+      values($1,'Room8','bed','residential') returning id`, [unit.id]);
+    /*  ⚠ FULLY SENDABLE ON PURPOSE. Given a real acknowledged offer, this
+     *  application would be prepared and texted if the exclusion were the
+     *  only thing stopping it — so the assertion measures the exclusion and
+     *  not some other refusal the fixture happened to trip.              */
+    const c8o = await pool.connect();
+    let offer8;
+    try { await c8o.query("begin");
+      offer8 = await prepareApplicationOffer(c8o, {
+        actor: { id: operator.id, property_id: property.id },
+        person_id: applicant, space_id: space8.id,
+        lease_start_date: "2027-02-01", lease_end_date: "2028-01-31",
+        rent: 1500, security_deposit: 1500, fees: [], concessions: { status: "none" },
+        idempotency_key: `${tag}-offer-8`,
+      });
+      await c8o.query("commit");
+    } catch (e) { await c8o.query("rollback").catch(() => {}); throw e; }
+    finally { c8o.release(); }
+    const imported = await one(`insert into lease_applications
+      (property_id, person_id, unit_id, space_id, applicant_name, status, submitted_at, source,
+       application_offer_id, application_terms_acknowledged_at, application_terms_hash)
+      values($1,$2,$3,$4,$5,'submitted', now() - interval '400 days', 'import', $6, now(), $7) returning *`,
+      [property.id, applicant, unit.id, space8.id, `${tag} historical`, offer8.offer.id,
+       offer8.offer.offered_terms_snapshot.application_terms_hash]);
+    const c8 = await pool.connect();
+    try { await c8.query("begin");
+      await handoff.recordHandoffOwed(c8, { application: imported });
+      await c8.query("commit"); } finally { c8.release(); }
+    const sweptAll = await handoff.runOwedHandoffs({ property_ids: [property.id], limit: 50 });
+    ok("a scoped sweep passes over an IMPORTED application entirely",
+      !sweptAll.results.some((r) => r.application_id === imported.id)
+        && (await pool.query("select 1 from lease_packets where application_id=$1",
+             [imported.id])).rows.length === 0,
+      JSON.stringify(sweptAll.results.map((r) => r.outcome)));
+    const importedObl = await one(
+      `select status from obligations where related_id=$1 and type=$2`,
+      [imported.id, handoff.HANDOFF_TYPE]);
+    ok("…and leaves it owed and untouched rather than closing it as done",
+      importedObl.status !== "complete", JSON.stringify(importedObl));
 
     console.log(`\n${pass} passed, ${fail} failed`);
     if (fail) console.log("FAILED: " + failures.join(" | "));

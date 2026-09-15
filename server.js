@@ -656,14 +656,19 @@ const __applicationInputAuthority = createApplicationInputAuthority();
  *  already proves.                                                      */
 const leaseHandoffModule = require("./src/applications/lease_handoff");
 const __leaseHandoff = leaseHandoffModule({
-  pool, spawnObligationFromEvent, completeObligation, leasePackets: __leasePackets._service,
-  commBoundary,
+  pool, spawnObligationFromEvent, satisfyObligation, completeObligation,
+  leasePackets: __leasePackets._service, commBoundary,
 });
 
 /*  Recovery sweep: owed handoffs resume through normal execution after a
- *  restart, not because someone re-submits or calls a runner by hand. OFF
- *  unless LEASE_HANDOFF_RECOVERY_ENABLED=true — preparation working is not
- *  a reason to point automation at real applicants.                      */
+ *  restart, not because someone re-submits or calls a runner by hand. It
+ *  also runs the 30-day application-completion clock.
+ *
+ *  OFF twice over: LEASE_HANDOFF_RECOVERY_ENABLED=true turns it on, and
+ *  LEASE_HANDOFF_RECOVERY_PROPERTIES must name the properties it may touch
+ *  — enabled with no allowlist refuses to sweep rather than sweeping
+ *  everything. Both stay off for live properties until the inventory hold
+ *  and approver follow-through are connected.                            */
 __leaseHandoff.startHandoffRecovery();
 
 const __applicationSubmission = applicationSubmissionModule({

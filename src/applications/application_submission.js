@@ -86,22 +86,9 @@ module.exports = function applicationSubmissionModule(deps) {
       const out = await fn(client);
       await client.query("commit");
       res.json(out);
-      /*  ── AFTER COMMIT, NEVER BEFORE, AND NEVER IN THE RESPONSE PATH ──
-       *  The durable statement that the handoff is owed went in with the
-       *  transaction above. This only DISCHARGES it, and it runs after the
-       *  applicant already has their answer.
-       *
-       *  Its failure is deliberately swallowed: the obligation is still on
-       *  disk, so the work is recoverable by the next run, and turning a
-       *  completed application into an error because a later step could not
-       *  finish would undo the one thing that definitely succeeded. That is
-       *  the whole reason the record is written first and acted on second.  */
-      if (out && out.handoff_obligation_id && leaseHandoff
-          && typeof leaseHandoff.runOwedHandoffs === "function") {
-        leaseHandoff.runOwedHandoffs({ application_id: out.application && out.application.id })
-          .catch((err) => console.error("[handoff] deferred, still owed:",
-            (err && err.message) || "unknown"));
-      }
+      /*  ⚠ NOTHING IS DISPATCHED HERE ANY MORE. Submission owes the
+       *  applicant's remaining work, not a lease. The handoff is recorded —
+       *  and then executed — only once that work is finished.            */
     } catch (e) {
       await client.query("rollback");
       //  The retired-inventory wall (180/197 triggers) is a refusal, not a fault.
@@ -336,29 +323,31 @@ module.exports = function applicationSubmissionModule(deps) {
       [gate.id, app.id]
     );
 
-    /*  5) THE HANDOFF IS OWED, AND SAYING SO IS PART OF THIS TRANSACTION.
-     *  The applicant has finished. Until now the next step — preparing the
-     *  signing package — waited on a person opening a screen, because
-     *  generateLeasePacket's only caller in the product is a staff route.
-     *  A statement that the work is owed now commits WITH the application
-     *  or not at all, so a restart one instruction later loses nothing.
+    /*  5) WHAT IS OWED AT SUBMISSION IS THE APPLICANT'S REMAINING WORK.
      *
-     *  ⚠ THIS APPROVES NOTHING. The approval gate spawned above stays open
-     *  and the application stays `submitted`. Eligibility is decided later,
-     *  at the moment of action, by the one predicate — which may well
-     *  refuse. Owing the work and being allowed to do it are separate
-     *  questions, and this is only the first.
+     *  ⚠ AN EARLIER VERSION RECORDED THE LEASE HANDOFF HERE, AND THAT WAS
+     *  THE WRONG BOUNDARY. Submitting is not completing. An application
+     *  arriving without income verification is missing something, and the
+     *  work owed is chasing that specific item — not preparing a lease.
+     *  With a background recovery sweep running, owing the handoff at
+     *  submission would have turned every unfinished application into a
+     *  delivered lease as soon as nobody was watching.
      *
-     *  Absent by choice: the handoff service is optional, so a caller that
-     *  does not wire it submits exactly as before rather than failing.   */
-    let handoff = null;
-    if (leaseHandoff && typeof leaseHandoff.recordHandoffOwed === "function") {
-      handoff = await leaseHandoff.recordHandoffOwed(client, { application: app });
+     *  The handoff is recorded when this obligation's required inputs are
+     *  all satisfied — see completeApplicationRequirement in
+     *  src/applications/lease_handoff.js. No second notion of
+     *  "complete" is introduced: completion IS this obligation having
+     *  nothing outstanding, expressed in the engine's own required_inputs.  */
+    let completion = null;
+    if (leaseHandoff && typeof leaseHandoff.recordCompletionOwed === "function") {
+      completion = await leaseHandoff.recordCompletionOwed(client, {
+        application: app, source_event_id: null });
     }
 
     return { application: app, approval_obligation_id: gate.id, rung_closed,
       gate_role: approvalGateRole(),
-      handoff_obligation_id: handoff ? handoff.obligation_id : null };
+      completion_obligation_id: completion ? completion.obligation_id : null,
+      outstanding_requirements: completion ? completion.required_inputs : null };
   }
 
   // ════════════════════════════════════════════════════════════════════
@@ -1145,7 +1134,8 @@ module.exports = function applicationSubmissionModule(deps) {
       //  Carried out of the service so tx()'s after-commit step can see it.
       //  Without this the route's own response shape silently drops the id
       //  and the handoff would be recorded and never discharged.
-      handoff_obligation_id: out.handoff_obligation_id || null,
+      completion_obligation_id: out.completion_obligation_id || null,
+      outstanding_requirements: out.outstanding_requirements || null,
     };
   }, res));
 
@@ -1167,7 +1157,8 @@ module.exports = function applicationSubmissionModule(deps) {
     return {
       receipt: `Internal application created for ${applicant_name} (source: ${source}). With ${out.gate_role} for approval.`,
       application: out.application, approval_obligation_id: out.approval_obligation_id,
-      handoff_obligation_id: out.handoff_obligation_id || null,
+      completion_obligation_id: out.completion_obligation_id || null,
+      outstanding_requirements: out.outstanding_requirements || null,
     };
   }, res));
 
