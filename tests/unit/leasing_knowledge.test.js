@@ -14,6 +14,8 @@ async function run() {
   assert.deepEqual(knowledge.topicsFor("Does Skyline have a gym or package room?"), ["amenities"]);
   assert.deepEqual(knowledge.topicsFor("How close is the Fresh Grocer to Temple's campus?"), ["neighborhood"]);
   assert.equal(knowledge.isKnowledgeRead("What is the rent for a furnished apartment?"), false);
+  assert.equal(ask.questionSubject("What is the rent for a furnished apartment?"), "economics");
+  assert.equal(ask.questionSubject("What is the rent roll?"), "tenancy");
   for (const q of ["send Maria the floor plans", "send the floor plans to Maria", "send me floor plans to Maria", "show photos and loan balance", "update the amenities", "the laundry is broken", "send me photos and then text Maria"]) {
     assert.notEqual(ask.questionSubject(q), "leasing_knowledge", q);
   }
