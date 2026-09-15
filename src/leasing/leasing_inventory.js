@@ -476,11 +476,27 @@ module.exports = function leasingInventoryModule({ pool }) {
     const REFUSALS = ["term_required", "invalid_term", "pricing_term_required",
       "invalid_pricing_term", "invalid_preferences", "term_check_unavailable",
       "pricing_read_unavailable", "no_property"];
-    if (REFUSALS.includes(gate.qualification)) {
+    /*  ── THE REFUSAL BOUNDS THE ANSWER; IT DOES NOT ALWAYS EMPTY IT ───
+     *  MB-7 inherits this vocabulary rather than retyping it, which is
+     *  right. What was wrong is that EVERY inherited qualification was
+     *  fatal, so "you have not chosen a term" deleted the showing answer
+     *  as well as the offer — and the composer always calls without a
+     *  term, so an operator asking which homes to walk to got nothing.
+     *
+     *  Showing and offering are different decisions with different
+     *  requirements. match_decision_strength.js says which refusals bound
+     *  which decision. The offer decision is UNCHANGED: everything that
+     *  blocked a contractual offer still blocks one.                    */
+    const refusal = REFUSALS.includes(gate.qualification) ? gate.qualification : null;
+    if (decisionStrength.blocksEverything(refusal)) {
       return { matched: false, qualification: gate.qualification, note: gate.note,
         refusal_inherited_from: "availableUnits(exact_spaces)", homes: [],
         ordering_rule: MATCH_ORDER_RULE, capability_class: "retrieval" };
     }
+    //  null only when the refusal was fatal, which returned above.
+    const strengthCeiling = decisionStrength.ceilingFor(refusal);
+    //  A term was genuinely supplied only when the gate did not ask for one.
+    const termChosen = refusal == null;
 
     const term = { requested_start, requested_end, lease_term_months };
     const prospect = await readProspectFacts(q, { person_id, property_id });
@@ -562,11 +578,25 @@ module.exports = function leasingInventoryModule({ pool }) {
       //  The home is in eligible_targets FOR this exact term, which is the
       //  governed statement that it can support it. The prospect fact is the
       //  requested term itself, supplied by the caller and named as such.
-      basis.push(basisEntry("term", STATE.SATISFIED, {
-        prospect: { key: "requested_term", value: `${requested_start}..${requested_end}`,
-          source: "caller_supplied_term", recorded_at: null },
-        home: { read: "application_target_read.leaseableApplicationTargets",
-          value: "eligible_for_requested_term", as_of: requested_start } }));
+      /*  ⚠ SATISFIED ONLY WHEN A TERM WAS ACTUALLY CHOSEN. The home is in
+       *  eligible_targets FOR a term only if one was supplied; with none,
+       *  membership says the home exists and is governed inventory, NOT
+       *  that it supports a term nobody named. Recording SATISFIED here
+       *  without a term would manufacture the exact agreement this read
+       *  exists to establish (§5).                                       */
+      if (!termChosen) {
+        basis.push(basisEntry("term", STATE.NOT_ESTABLISHED, {
+          prospect: null,
+          home: { read: "application_target_read.leaseableApplicationTargets",
+            value: "governed_inventory", as_of: null },
+          why: "no_term_chosen" }));
+      } else {
+        basis.push(basisEntry("term", STATE.SATISFIED, {
+          prospect: { key: "requested_term", value: `${requested_start}..${requested_end}`,
+            source: "caller_supplied_term", recorded_at: null },
+          home: { read: "application_target_read.leaseableApplicationTargets",
+            value: "eligible_for_requested_term", as_of: requested_start } }));
+      }
 
       // ── READINESS ─────────────────────────────────────────────────
       //  COMPARED, not assumed. The first version of this decided the state
@@ -605,6 +635,23 @@ module.exports = function leasingInventoryModule({ pool }) {
         governed_ready_date: t.available_from || null,
         basis, constraint_counts: counts,
         all_recorded_constraints_satisfied: counts.violated === 0 && counts.not_established === 0,
+        /*  ── WHAT MAY BE CLAIMED ABOUT THIS HOME, AND NO MORE ──────────
+         *  Attached per home rather than stated once for the answer,
+         *  because homes in one answer differ: a violated recorded need
+         *  makes a home worth showing but not a likely fit, while the
+         *  missing term caps every home in the answer alike. The ceiling
+         *  is applied last so nothing exceeds what the caller's inputs
+         *  can support.                                                  */
+        decision_strength: (() => {
+          const own = counts.violated > 0
+            ? decisionStrength.STRENGTH.SHOWABLE
+            : (counts.not_established === 0
+                ? decisionStrength.STRENGTH.OFFERABLE
+                : decisionStrength.STRENGTH.LIKELY_FIT);
+          const order = [decisionStrength.STRENGTH.SHOWABLE,
+            decisionStrength.STRENGTH.LIKELY_FIT, decisionStrength.STRENGTH.OFFERABLE];
+          return order.indexOf(own) <= order.indexOf(strengthCeiling) ? own : strengthCeiling;
+        })(),
         selection_eligible: false,
       });
     }
@@ -630,7 +677,9 @@ module.exports = function leasingInventoryModule({ pool }) {
       readiness: homes.length ? "evaluable" : "no_governed_homes",
       unit_type: homes.some((h) => h.basis.find((b) => b.constraint === "unit_type").home_fact)
         ? "evaluable" : "unavailable_for_this_property",
-      term: "evaluable",
+      //  A term nobody chose was never evaluated. Saying "evaluable" here
+      //  would report coverage for a comparison that did not happen.
+      term: termChosen ? "evaluable" : "term_not_chosen",
       bedrooms: "not_a_recorded_prospect_fact",
     };
 
@@ -643,12 +692,23 @@ module.exports = function leasingInventoryModule({ pool }) {
       prospect: { person_id: person_id || null, recorded_facts: prospect.facts,
         missing_fact_keys: prospect.missing },
       ordering_rule: MATCH_ORDER_RULE,
+      /*  ── THE CEILING, AND THE SECOND HALF OF THE HANDSHAKE ─────────
+       *  The reader already declared what it needed; nothing ever read
+       *  that declaration and came back with it. `needs_for_offer` names
+       *  the ONE fact that stands between this answer and a contractual
+       *  offer, so a caller can ask for exactly that and nothing else —
+       *  never reopen a blank form for a fact Spine already holds.     */
+      decision_strength_ceiling: strengthCeiling,
+      needs_for_offer: termChosen ? null : (gate.qualification || "term_required"),
       constraint_coverage: coverage,
       home_count: homes.length,
       homes: homes.slice(0, Math.min(Math.max(Number(limit) || 25, 1), 100)),
       truncated: homes.length > Math.min(Math.max(Number(limit) || 25, 1), 100),
       may_promise: false,
-      note: "Retrieval on a declared basis. Each home names every constraint compared, "
+      note: (termChosen ? "" : "No lease term was chosen, so no home here is stated as "
+        + "contractually offerable; each carries the strongest claim its recorded facts "
+        + "support. ")
+        + "Retrieval on a declared basis. Each home names every constraint compared, "
         + "the recorded prospect fact behind it and the governed home fact it was compared "
         + "against. Homes that fail a constraint are RETURNED and marked violated, never "
         + "hidden. Unknowns stay unknown. These are informational; no home is held or "
@@ -703,6 +763,16 @@ module.exports = function leasingInventoryModule({ pool }) {
         h.basis.find((b) => b.constraint === "price" && b.state === "violated")).length,
       recorded_prospect_facts: Object.keys(r.prospect.recorded_facts),
       missing_prospect_facts: r.prospect.missing_fact_keys,
+      /*  ── HOW STRONG A CLAIM THIS ANSWER SUPPORTS ───────────────────
+       *  Carried into the standing projection because the conversational
+       *  reader must be able to say "worth showing" without implying
+       *  "can be offered". `needs_from_caller` keeps the vocabulary the
+       *  unmatched branch already uses, so both paths ask for a term the
+       *  same way and a caller can answer either one identically.      */
+      decision_strength_ceiling: r.decision_strength_ceiling || null,
+      showable: r.homes.filter((h) => h.decision_strength).length,
+      offerable: r.homes.filter((h) => h.decision_strength === "offerable").length,
+      needs_from_caller: r.needs_for_offer || null,
       constraint_coverage: r.constraint_coverage,
       ordering_rule: r.ordering_rule,
       basis: "each home carries the constraint, the recorded prospect fact and the governed home fact",

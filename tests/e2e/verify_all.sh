@@ -171,6 +171,7 @@ step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.j
 step "institutional rent projection" node tests/unit/rent_roll_institutional_projection.test.js
 step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js
 step "availability occupancy basis" node --test tests/unit/availability_occupancy_basis.test.js
+step "match decision strength" node tests/unit/match_decision_strength.test.js
 
 # ── build the schema from the REAL chain ────────────────────────────
 node tests/e2e/proof_boundary.js create >"$RUN_DIR/env.sh" || exit 1
