@@ -2602,6 +2602,11 @@ module.exports = function leasePacketsModule(deps) {
     resolveApprovalAuthority,
     getBundle,
     publicPacket,
+    //  The applicant-side reader. Exposed so a proof can establish that the
+    //  issued link actually REACHES the packet, rather than asserting that a
+    //  token row exists — a token nobody can redeem is not reachability.
+    resolveSignerAccess,
+    signerPacket,
     propertyLeaseConfiguration,
     configurePropertyLeaseTemplate,
   });

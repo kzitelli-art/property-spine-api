@@ -648,10 +648,22 @@ function createApplicationInputAuthority() {
 }
 const __applicationInputAuthority = createApplicationInputAuthority();
 
+/*  ── THE APPLICATION-TO-LEASE HANDOFF, OWED DURABLY ──────────────────
+ *  Built from the pieces that already exist — the obligation engine for
+ *  "this is owed", and the lease packets service for preparing and issuing
+ *  the signing package. No second sender and no second workflow engine.
+ *  See src/applications/lease_handoff.js for what each existing guard
+ *  already proves.                                                      */
+const leaseHandoffModule = require("./src/applications/lease_handoff");
+const __leaseHandoff = leaseHandoffModule({
+  pool, spawnObligationFromEvent, completeObligation, leasePackets: __leasePackets._service,
+});
+
 const __applicationSubmission = applicationSubmissionModule({
   pool, spawnObligationFromEvent, completeObligation,
   conversionService: __leasingConversion._service, commBoundary,
   applicationInputAuthority: __applicationInputAuthority,
+  leaseHandoff: __leaseHandoff,
 });
 app.use("/", __applicationSubmission);
 

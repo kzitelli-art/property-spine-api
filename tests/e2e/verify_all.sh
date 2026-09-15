@@ -371,6 +371,7 @@ else
   step "greenery staff onboarding" node tests/proofs/greenery_staff_onboarding.db.js
   step "source-to-home identity review and Greenery inventory contract" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/source_home_identity_review.db.js
   step "current rent-roll reconciliation into an onboarded property" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/current_rent_roll_reconciliation.db.js
+  step "application-to-lease handoff is owed durably and safe to retry" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/lease_handoff_durable.db.js
   #  Matching is retrieval on a declared basis (MATCHING_BASIS_RULING_20260914,
   #  MB-1..MB-9). It establishes its OWN governed inventory and its own
   #  published pricing, so it does not depend on the Skyline fixture or on
