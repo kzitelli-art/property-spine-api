@@ -43,15 +43,39 @@ const ok = (label, cond, detail = "") => {
   //  operator door and this handoff both call. One instance, one behaviour.
   const leasePackets = leasePacketsModule({ pool,
     satisfyObligation: engine.satisfyObligation, completeObligation: engine.completeObligation })._service;
-  /*  The REAL communication boundary, with its transport disabled. It still
-   *  applies every consent and stop control; `sent:false` here means the
-   *  boundary refused or could not transmit, which is exactly the system
-   *  failure the handoff must report rather than call done.            */
-  const commBoundary = require(path.join(root, "src/comms/communications_boundary.js"))({
-    pool, sms: { enabled: () => false } });
+  /*  ── TWO TRANSPORTS, TWO DIFFERENT CLAIMS ──────────────────────────
+   *  CAPTURING is the approved test transport for the POSITIVE acceptance
+   *  test: it records the actual recipient, the actual body (which carries
+   *  the link) and the outcome, so "delivered" is a measurement rather than
+   *  a return value nobody checked. Every consent, line and stop control in
+   *  the real boundary still runs in front of it.
+   *
+   *  DISABLED keeps its place as NEGATIVE coverage — it proves the handoff
+   *  reports an unreachable applicant as a system failure. It is not, and
+   *  was never, evidence that delivery works.                          */
+  const runId = randomUUID().slice(0, 8);
+  const captured = [];
+  const capturingSms = {
+    enabled: () => true,
+    sendSms: async ({ to, from, body }) => {
+      captured.push({ to, from, body, at: new Date().toISOString() });
+      //  comm_events.sms_sid is UNIQUE-INDEXED (it is the inbound idempotency
+      //  key). A fixed sid collides with earlier runs on a shared database,
+      //  the boundary's insert is caught and logged, and the receipt silently
+      //  reads null — which looked like a product defect and was not.
+      return { sent: true, sid: `PROOF-${runId}-${captured.length}`, status: "queued" };
+    },
+  };
+  const boundaryWith = (sms) =>
+    require(path.join(root, "src/comms/communications_boundary.js"))({ pool, sms });
   const handoff = leaseHandoffModule({ pool,
     spawnObligationFromEvent: engine.spawnObligationFromEvent,
-    completeObligation: engine.completeObligation, leasePackets, commBoundary });
+    completeObligation: engine.completeObligation, leasePackets,
+    commBoundary: boundaryWith(capturingSms) });
+  const handoffDisabled = leaseHandoffModule({ pool,
+    spawnObligationFromEvent: engine.spawnObligationFromEvent,
+    completeObligation: engine.completeObligation, leasePackets,
+    commBoundary: boundaryWith({ enabled: () => false }) });
 
   const tag = `handoff-${randomUUID().slice(0, 8)}`;
   try {
@@ -103,6 +127,18 @@ const ok = (label, cond, detail = "") => {
         notice_requirement: "At least 60 days' written notice before the end of the term.",
         insurance_note: "Renter's insurance is recommended.",
       })]);
+    //  A property-facing outbound line and recorded text consent. Both are
+    //  real gates in the boundary: without either, a send refuses before the
+    //  transport is reached — which is the correct behaviour, and would make
+    //  a "delivered" claim meaningless.
+    await pool.query(`insert into communication_lines
+        (e164, line_type, property_id, authority_ceiling, permitted_audience,
+         inbound_enabled, outbound_enabled, outbound_policy, status)
+       values ($1,'property_facing',$2,'external','residents_and_prospects',
+               true,true,'proactive','active')`,
+      [`+1202555${String(Math.floor(Math.random() * 9000) + 1000)}`, property.id]);
+    await pool.query(`insert into contact_preferences (person_id, channel, consent_state)
+       values ($1,'text','opted_in')`, [applicant]);
     const unit = await one("insert into units(property_id,unit_number) values($1,'401') returning id", [property.id]);
     const space = await one(`update spaces set space_label='Room1', position_kind='bed',
       use_type='residential' where unit_id=$1 returning id`, [unit.id]);
@@ -217,63 +253,187 @@ const ok = (label, cond, detail = "") => {
     ok("the application is still `submitted` — preparing a package approves nothing",
       after.status === "submitted", after.status);
 
-    // ── 3 · DELIVERY IS THE FINISH LINE, NOT TOKEN ISSUANCE ────────
-    /*  With the transport disabled the boundary cannot transmit, so this
-     *  asserts the FAILURE semantics the ruling requires: a technical
-     *  delivery failure is reported as a SYSTEM failure and the work stays
-     *  owed. It is never recorded as the applicant not acting.         */
-    ok("an undelivered package is reported as a SYSTEM failure, not applicant inaction",
-      r1.outcome === "undelivered" && r1.failure_class === "system",
-      JSON.stringify({ outcome: r1.outcome, failure_class: r1.failure_class,
-        reason: r1.reason_code }));
-    const owedAfterUndelivered = await one(
-      `select status from obligations where related_id=$1 and type=$2`,
-      [app.id, handoff.HANDOFF_TYPE]);
-    ok("…and the handoff stays OWED until the applicant can actually reach it",
-      !!owedAfterUndelivered && owedAfterUndelivered.status !== "complete",
-      JSON.stringify(owedAfterUndelivered));
-    const attempted = await one(
-      `select type from events where type='lease_signing_link_delivery_attempted'
-        and property_id=$1 limit 1`, [property.id]);
-    ok("the delivery attempt itself is recorded, so an unreachable applicant is visible",
-      !!attempted, JSON.stringify(attempted));
+    // ── 3 · DELIVERED, AND THE LINK ACTUALLY OPENS ─────────────────
+    /*  THE POSITIVE ACCEPTANCE TEST. Measured through the approved
+     *  capturing transport, behind the real line, consent and stop gates.  */
+    ok("the package is DELIVERED, not merely prepared",
+      r1.outcome === "delivered", JSON.stringify(r1));
+    ok("every required signer was reached — a partial send is not a success",
+      Array.isArray(r1.per_signer) && r1.per_signer.length > 0
+        && r1.per_signer.every((x) => x.delivered), JSON.stringify(r1.per_signer));
 
-    //  RETRY: no duplicate packet. The remaining gap is named in source —
-    //  once a packet is `sent`, issueLeasePacketLink cannot return the URL
-    //  again, so the retry reports link_not_recoverable_after_issue rather
-    //  than pretending it delivered.
+    const msg = captured[captured.length - 1];
+    ok("the transport captured a real recipient and a real body",
+      !!msg && /^\+1\d{10}$/.test(String(msg.to)) && /Your lease is ready to sign/.test(msg.body),
+      JSON.stringify(msg && { to: msg.to, body: String(msg.body).slice(0, 40) }));
+
+    /*  ⚠ THE RECEIPT HAS TO LAND ON THE COMMUNICATION RECORD, not just be
+     *  returned. An earlier version passed an `events` id where the
+     *  boundary updates `comm_events`, so every receipt wrote zero rows.  */
+    const commRow = await one(
+      `select id, person_id, channel, direction, sms_sid, sms_status, body
+         from comm_events where id = $1`, [r1.per_signer[0].comm_event_id]);
+    ok("the delivery receipt landed on the correct comm_events row, with the sid and status",
+      !!commRow && commRow.channel === "sms" && commRow.direction === "outbound"
+        && !!commRow.sms_sid && !!commRow.sms_status,
+      JSON.stringify(commRow && { sid: commRow.sms_sid, status: commRow.sms_status }));
+    ok("…and it is bound to the SIGNER'S OWN person, so the relationship is right",
+      !!commRow && String(commRow.person_id) === String(applicant),
+      JSON.stringify({ on_record: commRow && commRow.person_id, applicant }));
+
+    /*  ⚠ BEARER MATERIAL STAYS IN THE MESSAGE RECORD. An earlier version
+     *  copied the signing URL into a general `events` note, which is read
+     *  across the product.                                               */
+    const leaked = await one(
+      `select count(*)::int as n from events where note like '%/t/lease/%'`);
+    ok("no signing URL leaked into general activity history",
+      leaked && leaked.n === 0, JSON.stringify(leaked));
+
+    //  ── AND NOW OPEN IT, THE WAY THE APPLICANT WOULD ────────────────
+    const token = String(msg.body).split("/t/lease/")[1];
+    const reached = token ? await leasePackets.resolveSignerAccess(pool, token) : null;
+    ok("the applicant can OPEN the delivered link through the real signer route",
+      !!(reached && (reached.packet || reached.signer)),
+      JSON.stringify(reached ? Object.keys(reached) : null));
+    ok("…and it opens THEIR packet — the one this handoff prepared",
+      !!reached && String((reached.packet && reached.packet.id) || reached.packet_id || "")
+        === String(packets1[0].id),
+      JSON.stringify({ opened: (reached && reached.packet && reached.packet.id) || null,
+        prepared: packets1[0].id }));
+
+    //  ── RETRY: NO SECOND PACKET, NO SECOND MESSAGE ──────────────────
+    const sentBefore = captured.length;
     const run2 = await handoff.runOwedHandoffs({ application_id: app.id });
-    const r2 = run2.results[0] || {};
     const packets2 = (await pool.query(
       "select id from lease_packets where application_id=$1", [app.id])).rows;
-    ok("a retry creates NO second packet",
-      packets2.length === 1, JSON.stringify({ packets: packets2.length }));
-    /*  ⚠ MEASURED, AND TIGHTER THAN EXPECTED. The retry does not reach link
-     *  issuance at all: generateLeasePacket refuses first with
-     *  `packet_already_issued` ("it will not be silently regenerated").
-     *  So after ONE failed delivery there is currently no path that
-     *  re-delivers access to an existing packet — not a missing URL, a
-     *  refused regeneration. That is the exact remaining break, and it is
-     *  asserted here rather than described.                            */
-    ok("…and the retry refuses to regenerate, naming the block instead of claiming delivery",
-      r2.outcome === "failed" && r2.reason_code === "packet_already_issued",
-      JSON.stringify(r2));
+    ok("a retry creates NO second packet", packets2.length === 1,
+      JSON.stringify({ packets: packets2.length }));
+    ok("…and sends no second message — the obligation is complete, so nothing is owed",
+      captured.length === sentBefore && run2.considered === 0,
+      JSON.stringify({ before: sentBefore, after: captured.length, considered: run2.considered }));
+
+    // ── 3b · NEGATIVE COVERAGE: AN UNREACHABLE APPLICANT ───────────
+    /*  Same code path, transport disabled. This is what the earlier 18/18
+     *  actually proved, and it is kept — as negative coverage, not as
+     *  evidence of delivery.                                            */
+    const appN = await one(`insert into lease_applications
+      (property_id, person_id, unit_id, space_id, applicant_name, status,
+       application_offer_id, application_terms_acknowledged_at, application_terms_hash)
+      values($1,$2,$3,$4,$5,'submitted',$6, now(), $7) returning *`,
+      [property.id, applicant, unit.id, space.id, `${tag} unreachable`, offerId, offerHash]);
+    const cN = await pool.connect();
+    try { await cN.query("begin");
+      await handoffDisabled.recordHandoffOwed(cN, { application: appN });
+      await cN.query("commit"); } finally { cN.release(); }
+    const runN = await handoffDisabled.runOwedHandoffs({ application_id: appN.id });
+    const rN = runN.results[0] || {};
+    ok("an unreachable applicant is a SYSTEM failure and the work stays owed",
+      rN.outcome === "undelivered" && rN.failure_class === "system", JSON.stringify(rN));
+    const owedN = await one(`select status from obligations where related_id=$1 and type=$2`,
+      [appN.id, handoff.HANDOFF_TYPE]);
+    ok("…and it is not closed as done", !!owedN && owedN.status !== "complete", JSON.stringify(owedN));
+    const packetN1 = await one(
+      `select id, status from lease_packets where application_id=$1`, [appN.id]);
+    ok("…and the package itself was still committed, so nothing has to be rebuilt",
+      !!packetN1 && ["sent", "tenant_in_progress"].includes(packetN1.status),
+      JSON.stringify(packetN1));
+
+    // ── 3c · RECOVERY: THE SAME PACKAGE, REACHED ON THE NEXT RUN ────
+    /*  The previous attempt left an issued packet nobody could reach. This
+     *  is the case that used to stop permanently at packet_already_issued.
+     *  It must now RESUME — same packet, same version, same signers, new
+     *  tokens — and never regenerate a different agreement to get a link.  */
+    const capturedBefore = captured.length;
+    const runR = await handoff.runOwedHandoffs({ application_id: appN.id });
+    const rR = runR.results[0] || {};
+    ok("an undelivered package RESUMES and is delivered on the next run",
+      rR.outcome === "delivered", JSON.stringify(rR));
+    const packetsN = (await pool.query(
+      "select id from lease_packets where application_id=$1", [appN.id])).rows;
+    /*  ⚠ RECOVERY IS A NEW VERSION, AND THAT IS THE SCHEMA'S CHOICE.
+     *  Migration 192 freezes signer token authority once a packet leaves
+     *  draft, so the undelivered link cannot be re-minted. The prior version
+     *  is PRESERVED and superseded, not deleted, and its access must stop
+     *  working the moment it is.                                        */
+    const priorAfter = await one(
+      `select superseded_at from lease_packets where id=$1`, [packetN1.id]);
+    ok("…the prior version is preserved and marked superseded, not deleted",
+      !!priorAfter && priorAfter.superseded_at !== null, JSON.stringify(priorAfter));
+    ok("…and the agreement is the same application's, at a new version",
+      packetsN.length === 2, JSON.stringify({ versions: packetsN.length }));
+    ok("…and exactly one message went out for it",
+      captured.length === capturedBefore + 1,
+      JSON.stringify({ before: capturedBefore, after: captured.length }));
+    const tokenR = String(captured[captured.length - 1].body).split("/t/lease/")[1];
+    const reachedR = tokenR ? await leasePackets.resolveSignerAccess(pool, tokenR) : null;
+    ok("…and the delivered link opens the CURRENT version through the real signer route",
+      !!reachedR && String((reachedR.packet && reachedR.packet.id) || "") !== String(packetN1.id),
+      JSON.stringify({ opened: reachedR && reachedR.packet && reachedR.packet.id, superseded: packetN1.id }));
+
+    // ── 3d · RECOVERY RUNS WITHOUT ANYONE CALLING THE RUNNER ────────
+    /*  The after-commit call accelerates the first attempt; it cannot be the
+     *  only path. This asserts the sweep itself picks owed work off the
+     *  database — which is what makes a restart survivable rather than
+     *  merely recorded.                                                  */
+    const appS = await one(`insert into lease_applications
+      (property_id, person_id, unit_id, space_id, applicant_name, status,
+       application_offer_id, application_terms_acknowledged_at, application_terms_hash)
+      values($1,$2,$3,$4,$5,'submitted',$6, now(), $7) returning *`,
+      [property.id, applicant, unit.id, space.id, `${tag} swept`, offerId, offerHash]);
+    const cS = await pool.connect();
+    try { await cS.query("begin");
+      await handoff.recordHandoffOwed(cS, { application: appS });
+      await cS.query("commit"); } finally { cS.release(); }
+    ok("the sweep refuses to start unless explicitly enabled",
+      handoff.startHandoffRecovery({ enabled: false }).started === false);
+    const sweep = handoff.startHandoffRecovery({ enabled: true, intervalMs: 3600000,
+      log: { log() {}, error() {} } });
+    ok("…and when enabled it starts", sweep.started === true);
+    await new Promise((r) => setTimeout(r, 2500));
+    if (sweep.stop) sweep.stop();
+    const sweptObl = await one(`select status from obligations where related_id=$1 and type=$2`,
+      [appS.id, handoff.HANDOFF_TYPE]);
+    ok("owed work is discharged by the sweep alone — no applicant request, no manual runner call",
+      !!sweptObl && sweptObl.status === "complete", JSON.stringify(sweptObl));
 
     // ── 4 · AN AGREEMENT THAT MOVED IS NOT SENT ────────────────────
     //  A second application, owed, whose offer is superseded before the
     //  runner reaches it — the exact window the durable record creates.
+    /*  ⚠ ITS OWN OFFER, ON ITS OWN SPACE. An earlier version superseded the
+     *  single offer every application in this run shared, which retroactively
+     *  made the delivered applications' offers unreadable and broke a sibling
+     *  read-only proof on the same database. A fixture that reaches back into
+     *  another case's facts is measuring the wrong thing.               */
+    const space2 = await one(`insert into spaces (unit_id, space_label, position_kind, use_type)
+      values($1,'Room2','bed','residential') returning id`, [unit.id]);
+    const c2o = await pool.connect();
+    let offer2;
+    try {
+      await c2o.query("begin");
+      offer2 = await prepareApplicationOffer(c2o, {
+        actor: { id: operator.id, property_id: property.id },
+        person_id: applicant, space_id: space2.id,
+        lease_start_date: "2026-11-01", lease_end_date: "2027-10-31",
+        rent: 1500, security_deposit: 1500, fees: [], concessions: { status: "none" },
+        idempotency_key: `${tag}-offer-2`,
+      });
+      await c2o.query("commit");
+    } catch (e) { await c2o.query("rollback").catch(() => {}); throw e; }
+    finally { c2o.release(); }
+    const offer2Id = offer2.offer.id;
+    const offer2Hash = offer2.offer.offered_terms_snapshot.application_terms_hash;
     const app2 = await one(`insert into lease_applications
       (property_id, person_id, unit_id, space_id, applicant_name, status,
        application_offer_id, application_terms_acknowledged_at, application_terms_hash)
       values($1,$2,$3,$4,$5,'submitted',$6, now(), $7) returning *`,
-      [property.id, applicant, unit.id, space.id, `${tag} applicant 2`, offerId, offerHash]);
+      [property.id, applicant, unit.id, space2.id, `${tag} applicant 2`, offer2Id, offer2Hash]);
     const c3 = await pool.connect();
     try {
       await c3.query("begin");
       await handoff.recordHandoffOwed(c3, { application: app2 });
       await c3.query("commit");
     } finally { c3.release(); }
-    await pool.query("update lease_offers set status='superseded' where id=$1", [offerId]);
+    await pool.query("update lease_offers set status='superseded' where id=$1", [offer2Id]);
 
     const run3 = await handoff.runOwedHandoffs({ application_id: app2.id });
     const r3 = run3.results[0] || {};

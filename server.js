@@ -660,6 +660,12 @@ const __leaseHandoff = leaseHandoffModule({
   commBoundary,
 });
 
+/*  Recovery sweep: owed handoffs resume through normal execution after a
+ *  restart, not because someone re-submits or calls a runner by hand. OFF
+ *  unless LEASE_HANDOFF_RECOVERY_ENABLED=true — preparation working is not
+ *  a reason to point automation at real applicants.                      */
+__leaseHandoff.startHandoffRecovery();
+
 const __applicationSubmission = applicationSubmissionModule({
   pool, spawnObligationFromEvent, completeObligation,
   conversionService: __leasingConversion._service, commBoundary,

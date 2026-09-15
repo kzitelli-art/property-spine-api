@@ -118,52 +118,91 @@ module.exports = function leaseHandoffModule(deps = {}) {
   }
 
 
-  /*  ── DELIVERY, THROUGH THE SENDER THAT ALREADY EXISTS ──────────────
-   *  commBoundary.sendPropertySms is the one governed outbound path and it
-   *  owns consent and stop controls. No second sender.
+  /*  ── DISPATCH: EACH SIGNER'S OWN LINK, TO THEIR OWN NUMBER ────────
    *
-   *  ⚠ A KNOWN GAP, NAMED RATHER THAN PAPERED OVER. Raw tokens are stored
-   *  only as a hash, and issueLeasePacketLink's already-issued branch
-   *  returns `tenant_url: null` with an empty `signing_links`. MEASURED, the
-   *  block is tighter still: a retry never reaches link issuance, because
-   *  generateLeasePacket refuses FIRST with `packet_already_issued` — "it
-   *  will not be silently regenerated". So after ONE failed delivery there
-   *  is currently NO path that re-delivers access to an existing packet.
-   *  The fix is a governed re-delivery door on that writer, not a second
-   *  sender here.                                                       */
-  async function deliverSigningLink(client, { application_id, property_id, packetId, link }) {
-    const url = link && (link.tenant_url
-      || (Array.isArray(link.signing_links) && link.signing_links[0] && link.signing_links[0].url));
-    if (!url) {
-      return { delivered: false,
+   *  ⚠ THREE DEFECTS THIS REPLACES, ALL IN ONE EARLIER VERSION.
+   *
+   *  1. IT COULD SEND ONE PERSON'S BEARER LINK TO ANOTHER PERSON. It took
+   *     `link.tenant_url`, then separately took the first signer row that
+   *     happened to have a phone, ordered tenant-first. A tenant with no
+   *     number and a guarantor with one paired the TENANT'S signing link
+   *     with the GUARANTOR'S phone. A signing link is bearer access to a
+   *     governing agreement; whoever opens it can sign as that signer.
+   *     Links and destinations are now resolved together, per signer, by
+   *     role, and a missing number is an explicit outstanding item for
+   *     THAT signer — never a reason to use someone else's.
+   *
+   *  2. THE RECEIPT LANDED NOWHERE. It inserted a row into `events` and
+   *     passed that id as `eventId`, but sendPropertySms records its
+   *     outcome with `update comm_events set sms_status...` and reads
+   *     `select sms_sid, sms_status from comm_events` for its already-sent
+   *     guard. With an `events` id both statements touch zero rows: no
+   *     delivery receipt, and no retry identity either. It now uses the
+   *     canonical outbound pattern — insert the comm_events row FIRST
+   *     ("the message is real whether or not the wire cooperates"), then
+   *     send against that id.
+   *
+   *  3. THE SIGNING URL WENT INTO A GENERAL ACTIVITY NOTE. Bearer access
+   *     material belongs in the message record that carries it, not in
+   *     `events`, which is read all over the product. No `events` row is
+   *     written here at all.
+   *
+   *  Called AFTER the packet transaction commits — see the runner.      */
+  async function dispatchSigningLinks({ application_id, property_id, packetId, link }) {
+    const links = Array.isArray(link && link.signing_links) ? link.signing_links : [];
+    if (!links.length) {
+      return { delivered: false, per_signer: [],
         reason: link && link.already_issued ? "link_not_recoverable_after_issue" : "no_signing_url" };
     }
     if (!commBoundary || typeof commBoundary.sendPropertySms !== "function") {
-      return { delivered: false, reason: "no_communication_boundary" };
+      return { delivered: false, per_signer: [], reason: "no_communication_boundary" };
     }
-    const app = (await client.query(
+    const app = (await pool.query(
       `select person_id from lease_applications where id=$1`, [application_id])).rows[0] || {};
-    const signer = (await client.query(
-      `select phone_e164 from lease_packet_signers
-        where lease_packet_id=$1 and phone_e164 is not null
-        order by case when signer_role='tenant' then 0 else 1 end limit 1`,
-      [packetId])).rows[0];
-    if (!signer || !signer.phone_e164) return { delivered: false, reason: "no_applicant_phone_on_packet" };
 
-    const ev = (await client.query(
-      `insert into events (property_id, person_id, type, note)
-       values ($1,$2,'lease_signing_link_delivery_attempted',$3) returning id`,
-      [property_id, app.person_id || null,
-       `signing package ${packetId} delivery attempted to the applicant`])).rows[0];
-
-    const out = await commBoundary.sendPropertySms({
-      property_id, recipient: signer.phone_e164,
-      body: `Your lease is ready to sign: ${url}`,
-      purpose: "lease_signing", person_id: app.person_id || null, eventId: ev.id,
-    });
-    return out && out.sent
-      ? { delivered: true, masked: String(signer.phone_e164).replace(/.(?=.{4})/g, "\u2022"), channel: "sms" }
-      : { delivered: false, reason: (out && out.reason) || "send_refused" };
+    const per_signer = [];
+    for (const l of links) {
+      //  Joined on the SIGNER ROLE this link was minted for. The role is
+      //  unique per packet, so this cannot drift onto another signer.
+      const signer = (await pool.query(
+        `select id, person_id, phone_e164, display_name from lease_packet_signers
+          where lease_packet_id=$1 and signer_role=$2 limit 1`,
+        [packetId, l.signer_role])).rows[0];
+      if (!signer) {
+        per_signer.push({ signer_role: l.signer_role, delivered: false, reason: "signer_row_missing" });
+        continue;
+      }
+      if (!signer.phone_e164) {
+        //  EXPLICIT OUTSTANDING ITEM, not a substitution.
+        per_signer.push({ signer_role: l.signer_role, delivered: false,
+          reason: "no_contact_for_this_signer", display_name: signer.display_name });
+        continue;
+      }
+      //  SAVE FIRST — the canonical outbound pattern. This row is both the
+      //  delivery receipt target and the stable retry identity.
+      const commId = (await pool.query(
+        `insert into comm_events (property_id, person_id, channel, direction, body, occurred_at, sender_role)
+         values ($1,$2,'sms','outbound',$3, now(), 'ai') returning id`,
+        [property_id, signer.person_id || app.person_id || null,
+         `Your lease is ready to sign: ${l.url}`])).rows[0].id;
+      let out = null;
+      try {
+        out = await commBoundary.sendPropertySms({
+          property_id, recipient: signer.phone_e164,
+          body: `Your lease is ready to sign: ${l.url}`,
+          purpose: "lease_signing", person_id: signer.person_id || app.person_id || null,
+          eventId: commId,
+        });
+      } catch (e) { out = { sent: false, reason: (e && e.message) || "send_threw" }; }
+      per_signer.push({ signer_role: l.signer_role, comm_event_id: commId,
+        delivered: !!(out && out.sent), reason: out && out.sent ? null : ((out && out.reason) || "send_refused"),
+        to: String(signer.phone_e164).replace(/.(?=.{4})/g, "\u2022") });
+    }
+    //  Every required signer must be reachable. One delivered link out of
+    //  two is an unfinished handoff, not a partial success.
+    const delivered = per_signer.length > 0 && per_signer.every((r) => r.delivered);
+    return { delivered, per_signer,
+      reason: delivered ? null : (per_signer.find((r) => !r.delivered) || {}).reason || "delivery_failed" };
   }
 
   /*  ── DISCHARGED AFTER COMMIT, AND SAFE TO RE-RUN FOREVER ───────────
@@ -194,56 +233,70 @@ module.exports = function leaseHandoffModule(deps = {}) {
     const results = [];
     for (const row of owed) {
       const client = await pool.connect();
+      let committed = null;
       try {
         await client.query("begin");
-        //  generateLeasePacket locks the application and runs the one
-        //  eligibility predicate, reading the authored offer fresh. If the
-        //  agreement moved since submission, this is where it refuses.
-        const gen = await svc.generateLeasePacket(client, {
-          applicationId: row.application_id,
-          expectedPropertyId: row.property_id,
-          //  Spine is the executor; the offer's author remains the
-          //  commercial authority the record rests on. No staff session is
-          //  minted and none is implied — see deriveConfirmationFromAuthoredOffer.
-          automatedPreparation: true,
-        });
-        const packetId = gen && (gen.packet_id || (gen.packet && gen.packet.id));
-        //  REACHABILITY IS THE POINT, not packet creation. A packet nobody
-        //  can open is the same unfinished handoff in a tidier state.
-        const link = await svc.issueLeasePacketLink(client, {
-          packetId, expectedPropertyId: row.property_id,
-        });
-        /*  ── ISSUING A TOKEN IS NOT DELIVERY ──────────────────────────
-         *  Nothing in the product sent this link: the operator route issued
-         *  it and a person read the URL off a screen. A packet the applicant
-         *  cannot reach is the same unfinished handoff in a tidier state, so
-         *  the work is NOT complete until the link has gone to them through
-         *  the governed communication boundary — consent and stop controls
-         *  intact, because this reuses that sender rather than adding one. */
-        const delivery = await deliverSigningLink(client, {
-          application_id: row.application_id, property_id: row.property_id, packetId, link });
-        if (!delivery.delivered) {
-          /*  ⚠ A DELIVERY FAILURE IS A SYSTEM FAILURE, NOT APPLICANT
-           *  INACTION, and it is reported as one. The work stays owed.
-           *  Rolling back would discard a correctly prepared packet;
-           *  completing would call an unreachable package done.          */
-          await client.query("commit");
-          results.push({ application_id: row.application_id, obligation_id: row.id,
-            outcome: "undelivered", packet_id: packetId,
-            failure_class: "system", reason_code: delivery.reason || "delivery_failed" });
-          continue;
+        /*  ── RESUME BEFORE REGENERATING ────────────────────────────
+         *  An existing package is a reason to RECOVER access to it, not a
+         *  permanent stop. Only when there is no current package does this
+         *  prepare one. Regenerating to obtain another link would create a
+         *  different agreement to solve a delivery problem.            */
+        const current = (await client.query(
+          `select id, status from lease_packets
+            where application_id=$1 and superseded_at is null
+            order by version desc limit 1`, [row.application_id])).rows[0];
+
+        let packetId = null;
+        let link = null;
+        if (current && ["sent", "in_progress", "tenant_in_progress"].includes(current.status)) {
+          /*  ── RECOVERY IS A NEW VERSION, BECAUSE ACCESS IS FROZEN ────
+           *  This obligation being open is the durable evidence that the
+           *  package was never delivered. Access to it cannot be reissued:
+           *  migration 192's signer guard freezes token_hash, expiry and
+           *  link_issued_at once a packet leaves `draft`, and raw tokens are
+           *  stored only as a hash — so an undelivered link is unrecoverable
+           *  BY DESIGN, and that rule is not worked around.
+           *
+           *  The existing mechanism for this is a new VERSION of the SAME
+           *  agreement: same application, same acknowledged offer, same
+           *  terms. generateLeasePacket stamps `superseded_at` on the prior
+           *  version, which resolveSignerAccess already refuses — so the
+           *  obsolete access is invalidated at the same moment, and the
+           *  prior version is preserved as evidence rather than deleted.  */
+          const regen = await svc.generateLeasePacket(client, {
+            applicationId: row.application_id,
+            expectedPropertyId: row.property_id,
+            createNewVersion: true,
+            automatedPreparation: true,
+          });
+          packetId = regen && (regen.packet_id || (regen.packet && regen.packet.id));
+          link = await svc.issueLeasePacketLink(client, {
+            packetId, expectedPropertyId: row.property_id });
+        } else {
+          //  generateLeasePacket locks the application and runs the one
+          //  eligibility predicate, reading the authored offer fresh. If the
+          //  agreement moved since submission, this is where it refuses.
+          const gen = await svc.generateLeasePacket(client, {
+            applicationId: row.application_id,
+            expectedPropertyId: row.property_id,
+            //  Spine is the executor; the offer's author remains the
+            //  commercial authority the record rests on. No staff session is
+            //  minted and none is implied — see deriveConfirmationFromAuthoredOffer.
+            automatedPreparation: true,
+          });
+          packetId = gen && (gen.packet_id || (gen.packet && gen.packet.id));
+          link = await svc.issueLeasePacketLink(client, {
+            packetId, expectedPropertyId: row.property_id });
         }
-        /*  ⚠ completeObligation TAKES { obligation_id, completed_by } AND
-         *  NOTHING ELSE. An earlier draft passed resolution_code and a note;
-         *  both would have been silently dropped, and a parameter a function
-         *  never reads is worse than no parameter, because it reads as a
-         *  record that was never written.                                */
-        await completeObligation(client, { obligation_id: row.id });
+        /*  ⚠ COMMIT THE PACKAGE AND ITS ACCESS BEFORE ANY EXTERNAL SEND.
+         *  An earlier version dispatched the SMS while this transaction was
+         *  still open. A successful send followed by a rollback would leave
+         *  the applicant holding a link to a packet that never existed —
+         *  unusable bearer access, and no record of why. The durable work
+         *  is committed first; dispatch happens below, outside it, and the
+         *  obligation stays OPEN until the link has actually gone.      */
         await client.query("commit");
-        results.push({ application_id: row.application_id, obligation_id: row.id,
-          outcome: "delivered", packet_id: packetId,
-          delivered_to: delivery.masked, channel: delivery.channel,
-          already_issued: !!(link && link.already_issued) });
+        committed = { packetId, link };
       } catch (e) {
         await client.query("rollback").catch(() => {});
         const code = (e && (e.code || e.reason_code)) || null;
@@ -269,10 +322,87 @@ module.exports = function leaseHandoffModule(deps = {}) {
       } finally {
         client.release();
       }
+
+      /*  ── DISPATCH, OUTSIDE THE TRANSACTION ─────────────────────────
+       *  The package and its access are durable by now. Delivery is the
+       *  finish line, so the obligation is completed only once every
+       *  required signer has actually been reached.                    */
+      if (committed) {
+        const delivery = await dispatchSigningLinks({
+          application_id: row.application_id, property_id: row.property_id,
+          packetId: committed.packetId, link: committed.link });
+        if (!delivery.delivered) {
+          /*  ⚠ A TECHNICAL DELIVERY FAILURE IS A SYSTEM FAILURE, NOT
+           *  APPLICANT INACTION, and is reported as one. The work stays
+           *  owed; the packet is not discarded.                        */
+          results.push({ application_id: row.application_id, obligation_id: row.id,
+            outcome: "undelivered", packet_id: committed.packetId,
+            failure_class: "system", reason_code: delivery.reason,
+            per_signer: delivery.per_signer });
+          continue;
+        }
+        const c3 = await pool.connect();
+        try {
+          await c3.query("begin");
+          //  completeObligation takes { obligation_id, completed_by } and
+          //  nothing else; a parameter it never reads would read as a
+          //  record that was never written.
+          await completeObligation(c3, { obligation_id: row.id });
+          await c3.query("commit");
+        } catch (e) {
+          await c3.query("rollback").catch(() => {});
+          //  Delivered but not closed out: still owed, and the already-sent
+          //  guard on each comm_events row stops a duplicate message.
+          results.push({ application_id: row.application_id, obligation_id: row.id,
+            outcome: "delivered_not_closed", packet_id: committed.packetId,
+            per_signer: delivery.per_signer, reason_code: (e && e.message) || "complete_failed" });
+          continue;
+        } finally { c3.release(); }
+        results.push({ application_id: row.application_id, obligation_id: row.id,
+          outcome: "delivered", packet_id: committed.packetId,
+          per_signer: delivery.per_signer,
+          already_issued: !!(committed.link && committed.link.already_issued) });
+      }
     }
     return { considered: owed.length, results };
   }
 
-  return { HANDOFF_TYPE, NOT_YET, NEVER, recordHandoffOwed, runOwedHandoffs };
+  /*  ── RECOVERY IS NORMAL EXECUTION, NOT A TEST CALLING THE RUNNER ───
+   *  The after-commit call accelerates the FIRST attempt. It cannot be the
+   *  only path, or work owed when a process died would wait for another
+   *  applicant to submit something. This sweeps the owed work on boot and
+   *  then periodically, which is what makes "a restart must not lose it"
+   *  true rather than merely durable.
+   *
+   *  ⚠ OFF UNLESS EXPLICITLY ENABLED. Preparation working is not a reason
+   *  to point automation at real applicants. LEASE_HANDOFF_RECOVERY_ENABLED
+   *  turns it on, and it inherits every gate below it — the boundary's
+   *  consent and stop controls, and the per-property send mode.        */
+  function startHandoffRecovery({ intervalMs = 5 * 60 * 1000, enabled = null, log = console } = {}) {
+    const on = enabled === null
+      ? String(process.env.LEASE_HANDOFF_RECOVERY_ENABLED || "").toLowerCase() === "true"
+      : !!enabled;
+    if (!on) return { started: false, reason: "not_enabled" };
+    let running = false;
+    const sweep = async () => {
+      if (running) return;               // never overlap a sweep with itself
+      running = true;
+      try {
+        const out = await runOwedHandoffs({ limit: 50 });
+        if (out.considered) {
+          log.log(`[handoff] swept ${out.considered} owed; `
+            + out.results.map((r) => `${r.outcome}`).join(","));
+        }
+      } catch (e) {
+        log.error("[handoff] sweep failed, work remains owed:", (e && e.message) || "unknown");
+      } finally { running = false; }
+    };
+    sweep();                              // on boot: this IS the restart recovery
+    const timer = setInterval(sweep, intervalMs);
+    if (typeof timer.unref === "function") timer.unref();
+    return { started: true, intervalMs, stop: () => clearInterval(timer) };
+  }
+
+  return { HANDOFF_TYPE, NOT_YET, NEVER, recordHandoffOwed, runOwedHandoffs, startHandoffRecovery };
 };
 module.exports.HANDOFF_TYPE = HANDOFF_TYPE;

@@ -4257,8 +4257,38 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           if (application.conversion_id !== req.params.conversionId || application.property_id !== conv.property_id ||
               application.person_id !== conv.person_id || application.space_id !== invitation.space_id)
             throw Object.assign(new Error("This invitation does not resolve to its original application and home."),{httpStatus:409});
-          if ((await client.query("select id from lease_packets where application_id=$1 limit 1",[application.id])).rows.length)
-            throw Object.assign(new Error("A lease packet already exists. Resolve it before changing agreed terms."),{httpStatus:409});
+          /*  ── A PACKET EXISTING IS NO LONGER THE QUESTION ────────────
+           *  This refused whenever ANY packet row existed, including one
+           *  already superseded. That held while packets only appeared
+           *  because a person pressed a button, so a correction always came
+           *  first. Automatic preparation (owner ruling 2026-09-15) creates
+           *  the packet at submission, so this now blocks every legitimate
+           *  successor-offer correction.
+           *
+           *  THE PROTECTIVE REFUSAL IS KEPT AND MADE PRECISE, not removed.
+           *  What must never be silently changed is an agreement the
+           *  applicant has ACKNOWLEDGED or that has been executed — the
+           *  same line assessLeasePacketEligibility already draws when it
+           *  calls a submitted packet "frozen evidence" and sends changes
+           *  down the governed correction path.
+           *
+           *  A packet still in preparation (draft / sent / tenant_in_progress)
+           *  is superseded by the existing mechanism: the next
+           *  generateLeasePacket version stamps `superseded_at` on it, and
+           *  resolveSignerAccess already refuses any packet with
+           *  `superseded_at` set — so the obsolete link stops opening
+           *  without anything new being built to revoke it.            */
+          const FROZEN_PACKET_STATES = ['submitted','resident_executed','executed'];
+          const blocking = (await client.query(
+            `select id, status from lease_packets
+              where application_id=$1 and superseded_at is null and status = any($2::text[])
+              limit 1`, [application.id, FROZEN_PACKET_STATES])).rows[0];
+          if (blocking)
+            throw Object.assign(new Error(
+              blocking.status === 'submitted'
+                ? "The applicant has already acknowledged this package. Changing agreed terms now is a governed correction, not a new offer."
+                : "This lease has already been executed. Changing agreed terms now is a governed correction, not a new offer."),
+              {httpStatus:409});
         }
         if (b.application_id && (!application || application.id !== b.application_id))
           throw Object.assign(new Error("The requested application does not belong to this invitation."),{httpStatus:409});

@@ -1401,6 +1401,20 @@ module.exports = function leasePacketsModule(deps) {
     }
 
     if (["sent", "in_progress", "tenant_in_progress"].includes(row.status)) {
+      /*  ⚠ ACCESS TO AN ISSUED PACKET CANNOT BE REISSUED. Migration 192's
+       *  trg_lease_packet_signer_mutation_guard freezes token_hash,
+       *  token_expires_at and link_issued_at the moment a packet leaves
+       *  `draft`; the only UPDATE it permits is setting submitted_at. An
+       *  attempt to re-mint raises `lease packet signer identity and link
+       *  authority are frozen after issue` (restrict_violation).
+       *
+       *  That rule is deliberate and is not worked around here. Raw tokens
+       *  are stored only as a hash, so an undelivered link is unrecoverable
+       *  BY DESIGN. Recovering delivery therefore means a new packet
+       *  VERSION of the same agreement through generateLeasePacket
+       *  (createNewVersion), which supersedes the prior version and — via
+       *  resolveSignerAccess's `superseded_at is null` filter — invalidates
+       *  its access at the same moment. See src/applications/lease_handoff.js.  */
       return {
         receipt: "The signing links were already issued. No new token was created.",
         already_issued: true,
