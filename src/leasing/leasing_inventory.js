@@ -473,9 +473,6 @@ module.exports = function leasingInventoryModule({ pool }) {
      *  second copy of the rule that could drift from it.  */
     const gate = await availableUnits({ property_id, requested_start, requested_end,
       lease_term_months, discovery_mode: "exact_spaces", limit: 1 }, q);
-    const REFUSALS = ["term_required", "invalid_term", "pricing_term_required",
-      "invalid_pricing_term", "invalid_preferences", "term_check_unavailable",
-      "pricing_read_unavailable", "no_property"];
     /*  ── THE REFUSAL BOUNDS THE ANSWER; IT DOES NOT ALWAYS EMPTY IT ───
      *  MB-7 inherits this vocabulary rather than retyping it, which is
      *  right. What was wrong is that EVERY inherited qualification was
@@ -487,7 +484,12 @@ module.exports = function leasingInventoryModule({ pool }) {
      *  requirements. match_decision_strength.js says which refusals bound
      *  which decision. The offer decision is UNCHANGED: everything that
      *  blocked a contractual offer still blocks one.                    */
-    const refusal = REFUSALS.includes(gate.qualification) ? gate.qualification : null;
+    /*  ⚠ THE RAW QUALIFICATION, NOT A PRE-FILTERED ONE. Mapping anything
+     *  outside a local list to `null` here is what silently defeated the
+     *  predicate's fail-closed guarantee: an unknown refusal arrived as
+     *  "no refusal" and proceeded. The predicate allowlists success, so
+     *  it must see exactly what the seam returned.                       */
+    const refusal = gate.qualification || null;
     if (decisionStrength.blocksEverything(refusal)) {
       return { matched: false, qualification: gate.qualification, note: gate.note,
         refusal_inherited_from: "availableUnits(exact_spaces)", homes: [],
@@ -643,7 +645,14 @@ module.exports = function leasingInventoryModule({ pool }) {
          *  is applied last so nothing exceeds what the caller's inputs
          *  can support.                                                  */
         decision_strength: (() => {
-          const own = counts.violated > 0
+          /*  ⚠ "NOTHING RULES IT OUT" IS NOT "PROBABLY A GOOD FIT".
+           *  The first version called every unviolated home likely_fit,
+           *  including one where NOTHING was known — all constraints
+           *  not_established. That is a candidate worth walking to, not
+           *  evidence of fit, and a label that says otherwise is the
+           *  confident-wrong §5 forbids. likely_fit now requires at least
+           *  one recorded need actually SATISFIED.                       */
+          const own = (counts.violated > 0 || counts.satisfied === 0)
             ? decisionStrength.STRENGTH.SHOWABLE
             : (counts.not_established === 0
                 ? decisionStrength.STRENGTH.OFFERABLE
@@ -773,6 +782,32 @@ module.exports = function leasingInventoryModule({ pool }) {
       showable: r.homes.filter((h) => h.decision_strength).length,
       offerable: r.homes.filter((h) => h.decision_strength === "offerable").length,
       needs_from_caller: r.needs_for_offer || null,
+      /*  ── THE ANSWER, NOT THE COUNT OF ANSWERS ──────────────────────
+       *  This projection reduced a ranked, reasoned home list to
+       *  tallies, and its next action told the operator to go open the
+       *  matching screen. The backend had an answer to "WHICH home?" and
+       *  the conversation received an answer to "how many homes?" — the
+       *  exact re-entry this product exists to remove.
+       *
+       *  ⚠ LABELS, NEVER IDS (§40.8, MB-8). unit_number and space_label
+       *  are what a person says out loud; a record id handed to a model
+       *  lets it compose a link Spine never resolved. The ids stay in
+       *  the detail read behind the staff door.
+       *
+       *  Top three, because this is the compact projection gathered on
+       *  every question — homes_considered carries the rest, and the
+       *  detail read is one step away.                                  */
+      options: r.homes.slice(0, 3).map((h) => ({
+        home: [h.unit_number, h.space_label].filter(Boolean).join(" · "),
+        decision_strength: h.decision_strength,
+        //  Why it is here, and what is still unknown — the two halves an
+        //  operator needs to decide whether to walk to it.
+        satisfies: h.basis.filter((b) => b.state === "satisfied").map((b) => b.constraint),
+        unconfirmed: h.basis.filter((b) => b.state === "not_established").map((b) => b.constraint),
+        conflicts: h.basis.filter((b) => b.state === "violated").map((b) => b.constraint),
+        governed_ready_date: h.governed_ready_date || null,
+        governed_price: h.governed_price == null ? null : h.governed_price,
+      })),
       constraint_coverage: r.constraint_coverage,
       ordering_rule: r.ordering_rule,
       basis: "each home carries the constraint, the recorded prospect fact and the governed home fact",

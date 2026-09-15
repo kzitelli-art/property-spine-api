@@ -68,15 +68,33 @@ const NO_SUBJECT = Object.freeze(["no_property"]);
 
 const FATAL = Object.freeze([...CALLER_INPUT_INVALID, ...READ_FAILED, ...NO_SUBJECT]);
 
-/*  Does this qualification make EVERY claim unsafe?
+/*  ── THE ONLY QUALIFICATIONS THAT MEAN "PROCEED" ────────────────────
+ *  availableUnits(exact_spaces) succeeds with exactly these. Everything
+ *  else it can return is a refusal of some kind, INCLUDING refusals that
+ *  bubble up from reads nested inside it.
  *
- *  ⚠ FAILS CLOSED ON PURPOSE. An unrecognised qualification returns true.
- *  availableUnits owns this vocabulary and may grow it; a refusal this
- *  file has never been taught about must not become a showing answer
- *  because a list here was not updated. New refusals get classified
- *  deliberately, or they block — never "probably fine".  */
+ *  ⚠ THIS IS AN ALLOWLIST OF SUCCESS, NOT A DENYLIST OF REFUSALS, AND
+ *  THE POLARITY IS THE WHOLE POINT. The first version of this file
+ *  denylisted refusals and called itself fail-closed. It was not: the
+ *  caller filtered the qualification against its own fixed refusal list
+ *  first and passed `null` for anything it did not recognise, so an
+ *  unknown qualification arrived here as "no refusal at all" and was
+ *  waved through. The helper was correct in isolation and the
+ *  integration defeated it — which is worse than no guarantee, because
+ *  it reads as one.
+ *
+ *  Classified by what PROCEEDS, an unknown value cannot be mistaken for
+ *  success by either layer.  */
+const PROCEEDS = Object.freeze([
+  "exact_space_matches_informational",
+  "matching_incomplete_pricing_unresolved",
+]);
+
+/*  Does this qualification make EVERY claim unsafe?
+ *  Takes the RAW qualification. Callers must not pre-filter it.  */
 function blocksEverything(qualification) {
   if (qualification == null) return false;
+  if (PROCEEDS.includes(qualification)) return false;
   if (TERM_NOT_CHOSEN.includes(qualification)) return false;
   return true;
 }
@@ -85,12 +103,12 @@ function blocksEverything(qualification) {
  *  null when no claim is safe at all — which is not the same as
  *  `showable`, and callers must not treat it as an empty home list.  */
 function ceilingFor(qualification) {
-  if (qualification == null) return STRENGTH.OFFERABLE;
+  if (qualification == null || PROCEEDS.includes(qualification)) return STRENGTH.OFFERABLE;
   if (TERM_NOT_CHOSEN.includes(qualification)) return STRENGTH.LIKELY_FIT;
   return null;
 }
 
 module.exports = {
   STRENGTH, ceilingFor, blocksEverything,
-  _classes: { TERM_NOT_CHOSEN, CALLER_INPUT_INVALID, READ_FAILED, NO_SUBJECT, FATAL },
+  _classes: { PROCEEDS, TERM_NOT_CHOSEN, CALLER_INPUT_INVALID, READ_FAILED, NO_SUBJECT, FATAL },
 };

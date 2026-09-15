@@ -365,14 +365,32 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
   // ══ ACCEPTANCE 4 — NO TERM ═══════════════════════════════════════
   console.log("\nACCEPTANCE 4 [DB/HTTP] no term");
   const r4 = await inv.matchProspectHomes({ property_id: skyline, person_id: person }, pool);
-  ok("MB-7: refused with the EXISTING reason, inherited from the seam",
-    r4.matched === false && r4.qualification === "term_required"
-      && r4.refusal_inherited_from === "availableUnits(exact_spaces)", JSON.stringify(r4.qualification));
-  ok("MB-7: the refusal carries the sentence that keeps 'I need your dates' distinct from 'nothing available'",
-    typeof r4.note === "string" && /dates/i.test(r4.note) && /not an answer about inventory|nothing being/i.test(r4.note),
-    JSON.stringify(r4.note || "").slice(0, 200));
-  ok("MB-7: and it returns no homes at all rather than an empty match set that reads as inventory",
-    Array.isArray(r4.homes) && r4.homes.length === 0);
+  //  ⚠ CONTRACT CHANGED DELIBERATELY. This block used to assert that a
+  //  term-less match REFUSED and returned no homes. Showing and offering
+  //  are different decisions: a missing lease term prevents a priced
+  //  contractual offer, it does not make the homes unknown, and the
+  //  composer always gathers without a term — so the old contract meant
+  //  an operator asking "what can I show?" got nothing. The old concern
+  //  is still honoured, and more strongly: the risk was an EMPTY set
+  //  reading as "no inventory", and this now returns a populated one.
+  ok("SHOWING: a term-less match ANSWERS instead of refusing",
+    r4.matched === true, JSON.stringify(r4.qualification));
+  ok("SHOWING: it returns candidate homes, not an empty set that reads as no inventory",
+    Array.isArray(r4.homes) && r4.homes.length > 0, `homes=${(r4.homes || []).length}`);
+  ok("OFFER RESTRICTION HELD: with no term the ceiling is likely_fit, never offerable",
+    r4.decision_strength_ceiling === "likely_fit", JSON.stringify(r4.decision_strength_ceiling));
+  ok("OFFER RESTRICTION HELD: NO home claims it is offerable without a chosen term",
+    (r4.homes || []).every((h) => h.decision_strength !== "offerable"),
+    JSON.stringify((r4.homes || []).map((h) => h.decision_strength).slice(0, 6)));
+  ok("SHOWING: the one missing fact is NAMED so a caller can ask for exactly it",
+    r4.needs_for_offer === "term_required", JSON.stringify(r4.needs_for_offer));
+  ok("§5: the term constraint is NOT recorded satisfied when no term was chosen",
+    (r4.homes || []).every((h) => {
+      const t = h.basis.find((b) => b.constraint === "term");
+      return t && t.state === "not_established";
+    }), "a term nobody chose was recorded as agreed");
+  ok("COVERAGE: term coverage says the comparison did not happen",
+    r4.constraint_coverage.term === "term_not_chosen", JSON.stringify(r4.constraint_coverage.term));
   const r4b = await inv.matchProspectHomes({ property_id: skyline, person_id: person,
     requested_start: "2027-01-05", requested_end: "2027-12-31" }, pool);
   ok("MB-7: a term with no published pricing months is a DIFFERENT refusal, not the same one",
@@ -408,9 +426,16 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
   const noAuth = await call("GET", `/operator/leasing/prospect-match${q}`, null);
   ok("MB-8: the door refuses an unauthenticated caller", noAuth.status === 401 || noAuth.status === 403,
     String(noAuth.status));
-  ok("MB-7 (HTTP): no term is refused through the door too, with the reason",
-    (await call("GET", `/operator/leasing/prospect-match?person_id=${person}`, H))
-      .body.qualification === "term_required");
+  //  The same ruling through the real door: this is the MATCHING door, not
+  //  an offer door — no contractual authority is exercised here.
+  const noTermHttp = (await call("GET", `/operator/leasing/prospect-match?person_id=${person}`, H)).body;
+  ok("SHOWING (HTTP): the door answers without a term instead of refusing",
+    noTermHttp.matched === true && Array.isArray(noTermHttp.homes) && noTermHttp.homes.length > 0,
+    JSON.stringify(noTermHttp.qualification));
+  ok("OFFER RESTRICTION HELD (HTTP): the door caps at likely_fit and names the missing fact",
+    noTermHttp.decision_strength_ceiling === "likely_fit"
+      && noTermHttp.needs_for_offer === "term_required",
+    JSON.stringify([noTermHttp.decision_strength_ceiling, noTermHttp.needs_for_offer]));
 
   // ══ MB-8 / §40.8 — THE PERSON WALL ═══════════════════════════════
   //  The door takes person_id from the query string and reads that person's
@@ -517,9 +542,19 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
   const gm = gathered.prospect_match || {};
   ok("§40.7: the term-less gather is a successful read, not a failed one",
     gm.read_state === "OK", JSON.stringify(gm).slice(0, 200));
-  ok("§40.7: it is NOT_ESTABLISHED and says why — the caller gave no dates",
-    gm.truth_state === "NOT_ESTABLISHED" && gm.qualification === "term_required"
-      && typeof gm.why === "string", JSON.stringify(gm).slice(0, 220));
+  ok("ASK: the term-less gather now carries NAMED options, not just counts",
+    Array.isArray(gm.options) && gm.options.length > 0
+      && typeof gm.options[0].home === "string" && gm.options[0].home.length > 0,
+    JSON.stringify(gm.options || []).slice(0, 220));
+  ok("§40.8: the options carry LABELS and no record ids",
+    (gm.options || []).every((o) => !("space_id" in o) && !("unit_id" in o)),
+    JSON.stringify(gm.options || []).slice(0, 200));
+  ok("ASK: each option says what it satisfies and what is still unconfirmed",
+    (gm.options || []).every((o) => Array.isArray(o.satisfies) && Array.isArray(o.unconfirmed)),
+    JSON.stringify(gm.options || []).slice(0, 200));
+  ok("OFFER RESTRICTION HELD (ASK): the ceiling is likely_fit and the missing fact is named",
+    gm.decision_strength_ceiling === "likely_fit" && gm.needs_from_caller === "term_required",
+    JSON.stringify([gm.decision_strength_ceiling, gm.needs_from_caller]));
   ok("§40.7: a missing CALLER INPUT never manufactures attention on the property",
     gm.attention_state === null || gm.attention_state === "QUIET",
     `attention_state=${JSON.stringify(gm.attention_state)}`);
@@ -553,9 +588,16 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
     proj1.capability_class === "retrieval" && proj1.claims_not_made.includes("comparison"),
     JSON.stringify(proj1.capability_class));
   const projNoTerm = await inv.readProspectMatchStanding(pool, { property_id: skyline, person_id: person });
-  ok("MB-7 (ASK): with no term the projection is NOT_ESTABLISHED and says why — never 'no homes'",
-    projNoTerm.truth_state === "NOT_ESTABLISHED" && projNoTerm.qualification === "term_required"
-      && typeof projNoTerm.why === "string", JSON.stringify(projNoTerm.qualification));
+  ok("ASK: with no term the projection names options rather than only counting them",
+    Array.isArray(projNoTerm.options) && projNoTerm.options.length > 0,
+    JSON.stringify((projNoTerm.options || []).map((o) => o.home)));
+  ok("OFFER RESTRICTION HELD (ASK projection): nothing reads offerable without a term",
+    projNoTerm.offerable === 0 && projNoTerm.decision_strength_ceiling === "likely_fit",
+    JSON.stringify([projNoTerm.offerable, projNoTerm.decision_strength_ceiling]));
+  ok("§5: likely_fit is not claimed for a home where nothing is known",
+    (projNoTerm.options || []).every((o) =>
+      o.decision_strength !== "likely_fit" || (o.satisfies || []).length > 0),
+    JSON.stringify(projNoTerm.options || []).slice(0, 220));
 
   // ══ MB-9 — NO SCHEMA ═════════════════════════════════════════════
   console.log("\nMB-9 [DB] no schema was added");

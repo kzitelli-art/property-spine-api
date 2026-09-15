@@ -63,5 +63,25 @@ check("an unknown qualification has no ceiling", ceilingFor("some_new_refusal"),
 check("no refusal reaches offerable", ceilingFor(null), STRENGTH.OFFERABLE);
 check("no refusal blocks nothing", blocksEverything(null), false);
 
+//  ── SUCCESS IS AN ALLOWLIST, WHICH IS WHAT MAKES FAIL-CLOSED REAL ───
+//  The first version denylisted refusals, and the caller filtered the
+//  qualification against its own list and passed null for anything it did
+//  not recognise — so an unknown refusal arrived as "no refusal" and was
+//  waved through. The helper passed its own examples while the integrated
+//  behaviour had no guarantee at all. Classifying by what PROCEEDS means
+//  neither layer can mistake an unknown value for success.
+for (const okq of ["exact_space_matches_informational", "matching_incomplete_pricing_unresolved"]) {
+  check(`${okq} proceeds to offerable`, ceilingFor(okq), STRENGTH.OFFERABLE);
+  check(`${okq} blocks nothing`, blocksEverything(okq), false);
+}
+//  The regression that defeated it: a refusal the predicate has never seen.
+check("an unseen REFUSAL is not treated as success", blocksEverything("some_future_refusal"), true);
+check("an unseen refusal yields no ceiling", ceilingFor("some_future_refusal"), null);
+//  And the shape the caller used to send: a real refusal must never arrive
+//  as null. This asserts the CONTRACT, not the caller — the caller is
+//  proved by the db-backed matcher proof.
+check("a known refusal is not null-equivalent",
+  blocksEverything("term_check_unavailable") === blocksEverything(null), false);
+
 console.log(`\n  match decision strength: ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);
