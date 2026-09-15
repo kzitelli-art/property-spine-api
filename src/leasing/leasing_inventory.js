@@ -15,6 +15,36 @@
 //  it is not enabled by returning an informational exact-space candidate.
 // ════════════════════════════════════════════════════════════════════
 
+/*  ── MB-5: ONE NAMED DETERMINISTIC RULE, NO SCORE ───────────────────
+ *  Module scope and exported so the ordering can be exercised directly
+ *  with constructed homes. It was an inline lambda, which is why the
+ *  defect below could only be found by reasoning about it rather than by
+ *  running it.
+ *
+ *  ⚠ A RECORDED CONFLICT OUTRANKS EVERY COUNT OF UNKNOWNS.
+ *  The previous first key was all_recorded_constraints_satisfied, which
+ *  requires ZERO unknowns — so with no term chosen every home has an
+ *  unknown and that key separates nothing. Ranking then fell through to
+ *  "fewest unknowns", and a home known to be over budget AND the wrong
+ *  unit type outranked a home within budget with nothing against it,
+ *  purely because more of its facts had been resolved. Better-documented
+ *  mismatch beat plausible candidate — and the conversation shows the
+ *  top three.
+ *
+ *  Conflicting homes are still RETURNED, never hidden, just not ahead of
+ *  candidates nothing rules out. No score and no weighting: one
+ *  deterministic tuple of recorded facts, closed by space_label so two
+ *  equal beds in one unit cannot depend on database row arrival.      */
+function compareMatchedHomes(a, b) {
+  return ((a.constraint_counts.violated > 0) - (b.constraint_counts.violated > 0))
+    || (a.constraint_counts.not_established - b.constraint_counts.not_established)
+    || String(a.governed_ready_date || "9999-12-31").localeCompare(String(b.governed_ready_date || "9999-12-31"))
+    || ((a.governed_price == null ? Infinity : a.governed_price)
+        - (b.governed_price == null ? Infinity : b.governed_price))
+    || String(a.unit_number).localeCompare(String(b.unit_number))
+    || String(a.space_label || "").localeCompare(String(b.space_label || ""));
+}
+
 module.exports = function leasingInventoryModule({ pool }) {
   /*  Which refusals bound which decision. Required HERE, at module-factory
    *  scope, because matchProspectHomes consults it on every call — an
@@ -392,9 +422,9 @@ module.exports = function leasingInventoryModule({ pool }) {
 
   //  The ordering rule is DATA, named in every payload, so changing it is a
   //  visible diff and a ruling rather than a tweak (MB-5).
-  const MATCH_ORDER_RULE = "all_recorded_constraints_satisfied "
+  const MATCH_ORDER_RULE = "no_recorded_conflict "
     + "→ fewest_not_established → earliest_governed_ready_date "
-    + "→ lowest_governed_price → unit_number";
+    + "→ lowest_governed_price → unit_number → space_label";
 
   //  The prospect fact keys that exist. person_facts.js is the one writer;
   //  tour completion records exactly these three (leasing_leads OBS_KEYS).
@@ -503,6 +533,9 @@ module.exports = function leasingInventoryModule({ pool }) {
     const gateRead = decisionStrength.interpretGate(gate.qualification);
     if (gateRead.blocks) {
       return { matched: false, qualification: gate.qualification, note: gate.note,
+        //  Carried so the standing projection can PROJECT this outcome
+        //  rather than classify it again (§40.7).
+        refusal_kind: gateRead.refusal_kind,
         refusal_inherited_from: "availableUnits(exact_spaces)", homes: [],
         ordering_rule: MATCH_ORDER_RULE, capability_class: "retrieval" };
     }
@@ -522,6 +555,7 @@ module.exports = function leasingInventoryModule({ pool }) {
         .leaseableApplicationTargets(q, { property_id, requested_start, requested_end });
     } catch (e) {
       return { matched: false, qualification: "term_check_unavailable",
+        refusal_kind: decisionStrength.REFUSAL.READ_FAILED,
         note: "Spine could not read the homes and check those dates. This is not an empty inventory result.",
         homes: [], ordering_rule: MATCH_ORDER_RULE, capability_class: "retrieval" };
     }
@@ -677,13 +711,7 @@ module.exports = function leasingInventoryModule({ pool }) {
     /*  MB-5 — ONE NAMED DETERMINISTIC RULE, NO SCORE.
      *  Every tiebreak is a recorded fact, and unit_number closes it so the
      *  order cannot depend on row arrival.  */
-    homes.sort((a, b) =>
-      (b.all_recorded_constraints_satisfied - a.all_recorded_constraints_satisfied)
-      || (a.constraint_counts.not_established - b.constraint_counts.not_established)
-      || String(a.governed_ready_date || "9999-12-31").localeCompare(String(b.governed_ready_date || "9999-12-31"))
-      || ((a.governed_price == null ? Infinity : a.governed_price)
-          - (b.governed_price == null ? Infinity : b.governed_price))
-      || String(a.unit_number).localeCompare(String(b.unit_number)));
+    homes.sort(compareMatchedHomes);
 
     /*  MB-6 — COVERAGE IS REPORTED, NOT ASSUMED. A property with no published
      *  pricing says so and still evaluates readiness; it does not answer
@@ -752,7 +780,16 @@ module.exports = function leasingInventoryModule({ pool }) {
        *  because SPINE did not ask for dates. The read succeeded; the
        *  property is silent; the question is simply not answerable yet,
        *  and `why` says so in the seam's own vocabulary.  */
-      return { read_state: "OK", truth_state: "NOT_ESTABLISHED",
+      /*  ⚠ A READ THAT FAILED IS NOT A SUCCESSFUL "NOTHING ESTABLISHED".
+       *  Every unmatched result used to be flattened to read_state OK,
+       *  so "Spine could not read pricing" and "the caller gave no dates"
+       *  arrived identically — and the first is a fact about SPINE, which
+       *  §40.7 keeps separate from a fact about the property. The kind is
+       *  decided once, upstream; this PROJECTS it.                      */
+      const failedRead = r.refusal_kind === decisionStrength.REFUSAL.READ_FAILED;
+      return { read_state: failedRead ? "READ_FAILED" : "OK",
+        truth_state: failedRead ? null : "NOT_ESTABLISHED",
+        refusal_kind: r.refusal_kind || null,
         attention_state: null, as_of: new Date().toISOString(),
         qualification: r.qualification, why: r.note || null,
         //  ⚠ NOW UNREACHABLE FOR THE TERM CASES. Since showing and
@@ -818,9 +855,24 @@ module.exports = function leasingInventoryModule({ pool }) {
         decision_strength: h.decision_strength,
         //  Why it is here, and what is still unknown — the two halves an
         //  operator needs to decide whether to walk to it.
-        satisfies: h.basis.filter((b) => b.state === "satisfied").map((b) => b.constraint),
-        unconfirmed: h.basis.filter((b) => b.state === "not_established").map((b) => b.constraint),
-        conflicts: h.basis.filter((b) => b.state === "violated").map((b) => b.constraint),
+        /*  ⚠ THE EVIDENCE, NOT THREE LISTS OF CONSTRAINT NAMES. The
+         *  matcher already compared a recorded prospect value against a
+         *  governed home value for every constraint. Projecting only the
+         *  NAMES let the conversation say "the unit type conflicts" and
+         *  left it unable to say what was asked for versus what the home
+         *  is, or by how much a price is over budget — so anything
+         *  downstream would have to reconstruct facts that were already
+         *  in hand. One compact row per constraint replaces all three
+         *  lists; no second explanation generator.                      */
+        basis: h.basis.map((b) => ({
+          constraint: b.constraint,
+          result: b.state,
+          prospect: b.prospect_fact ? b.prospect_fact.value : null,
+          prospect_source: b.prospect_fact ? b.prospect_fact.source || null : null,
+          home: b.home_fact ? b.home_fact.value : null,
+          home_read: b.home_fact ? b.home_fact.read || null : null,
+          why: b.why || null,
+        })),
         governed_ready_date: h.governed_ready_date || null,
         governed_price: h.governed_price == null ? null : h.governed_price,
       })),
@@ -833,3 +885,5 @@ module.exports = function leasingInventoryModule({ pool }) {
   return { availableUnits, attachSelectedUnit, matchConfirmationToOffer,
            matchProspectHomes, readProspectMatchStanding };
 };
+
+module.exports.compareMatchedHomes = compareMatchedHomes;

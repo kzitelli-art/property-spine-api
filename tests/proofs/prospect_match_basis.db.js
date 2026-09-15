@@ -414,10 +414,24 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
 
   // ══ MB-5 — ORDERING IS A NAMED RULE ══════════════════════════════
   console.log("\nMB-5 [DB] the ordering rule");
+  //  ⚠ SUPERSEDED LEAD KEY. This asserted all_recorded_constraints_satisfied
+  //  came first. That key requires ZERO unknowns, so with no term chosen it
+  //  separated nothing and ranking fell through to "fewest unknowns" — which
+  //  put a home known to be over budget and the wrong type ahead of a home
+  //  nothing ruled out. The named-rule and no-score guarantees are kept and
+  //  the lead key is now the conflict test; the constructed case is proved
+  //  directly against the comparator in tests/unit/match_ordering.test.js.
   ok("MB-5: the rule is named in the payload and mentions no weight or score",
-    /all_recorded_constraints_satisfied/.test(r1.ordering_rule)
+    /no_recorded_conflict/.test(r1.ordering_rule)
       && /fewest_not_established/.test(r1.ordering_rule)
       && !/weight|score/i.test(r1.ordering_rule), JSON.stringify(r1.ordering_rule));
+  ok("MB-5: a recorded CONFLICT is the first key, ahead of counting unknowns",
+    r1.ordering_rule.indexOf("no_recorded_conflict") === 0
+      && r1.ordering_rule.indexOf("no_recorded_conflict")
+         < r1.ordering_rule.indexOf("fewest_not_established"),
+    JSON.stringify(r1.ordering_rule));
+  ok("MB-5: the rule closes on the exact space, not merely the unit",
+    /space_label/.test(r1.ordering_rule), JSON.stringify(r1.ordering_rule));
   const twice = await inv.matchProspectHomes({ property_id: skyline, person_id: person, ...TERM }, pool);
   ok("MB-5: the same inputs produce the same order (deterministic, not arrival-dependent)",
     JSON.stringify(twice.homes.map((h) => h.unit_number + "|" + h.space_label))
@@ -564,9 +578,19 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
   ok("§40.8: the options carry LABELS and no record ids",
     (gm.options || []).every((o) => !("space_id" in o) && !("unit_id" in o)),
     JSON.stringify(gm.options || []).slice(0, 200));
-  ok("ASK: each option says what it satisfies and what is still unconfirmed",
-    (gm.options || []).every((o) => Array.isArray(o.satisfies) && Array.isArray(o.unconfirmed)),
-    JSON.stringify(gm.options || []).slice(0, 200));
+  ok("ASK: each option carries the compact BASIS, not three lists of names",
+    (gm.options || []).every((o) => Array.isArray(o.basis) && o.basis.length > 0
+      && o.basis.every((b) => "constraint" in b && "result" in b
+        && "prospect" in b && "home" in b)),
+    JSON.stringify((gm.options || [])[0] || {}).slice(0, 260));
+  ok("ASK: the basis carries VALUES, so a tradeoff can be explained without refetching",
+    (gm.options || []).some((o) => (o.basis || []).some((b) =>
+      b.prospect !== null || b.home !== null)),
+    JSON.stringify((gm.options || [])[0] || {}).slice(0, 260));
+  ok("ASK: an unresolved comparison says WHY it is unresolved",
+    (gm.options || []).every((o) => (o.basis || []).every((b) =>
+      b.result !== "not_established" || b.why !== null || b.prospect === null)),
+    JSON.stringify((gm.options || [])[0] || {}).slice(0, 260));
   ok("OFFER RESTRICTION HELD (ASK): the ceiling is likely_fit and the missing fact is named",
     gm.decision_strength_ceiling === "likely_fit" && gm.needs_from_caller === "requested_dates",
     JSON.stringify([gm.decision_strength_ceiling, gm.needs_from_caller]));
@@ -611,7 +635,8 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
     JSON.stringify([projNoTerm.offerable, projNoTerm.decision_strength_ceiling]));
   ok("§5: likely_fit is not claimed for a home where nothing is known",
     (projNoTerm.options || []).every((o) =>
-      o.decision_strength !== "likely_fit" || (o.satisfies || []).length > 0),
+      o.decision_strength !== "likely_fit"
+      || (o.basis || []).some((b) => b.result === "satisfied")),
     JSON.stringify(projNoTerm.options || []).slice(0, 220));
 
   // ══ MB-9 — NO SCHEMA ═════════════════════════════════════════════

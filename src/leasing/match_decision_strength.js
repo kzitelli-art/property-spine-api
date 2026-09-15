@@ -58,6 +58,20 @@ const MISSING = Object.freeze({
   PRICING_TERM: "pricing_term",
 });
 
+/*  WHY A BLOCKING RESULT BLOCKED. Carried so the standing projection can
+ *  PROJECT the outcome instead of classifying it a second time.
+ *  §40.7: a read that failed is a fact about SPINE. Rendering it as a
+ *  successful NOT_ESTABLISHED tells an operator the property has nothing,
+ *  when Spine could not look.                                          */
+const REFUSAL = Object.freeze({
+  READ_FAILED: "read_failed",
+  INVALID_INPUT: "invalid_input",
+  NO_SUBJECT: "no_subject",
+  UNRECOGNISED: "unrecognised",
+});
+const READ_FAILURES = Object.freeze(["term_check_unavailable", "pricing_read_unavailable"]);
+const INVALID_INPUT = Object.freeze(["invalid_term", "invalid_pricing_term", "invalid_preferences"]);
+
 /*  ══ ONE INTERPRETATION OF THE GATE, CONSUMED DIRECTLY ═══════════════
  *  The same qualification used to be interpreted three times: whether it
  *  blocked, what strength it allowed, and whether a term had been chosen.
@@ -89,8 +103,14 @@ function interpretGate(qualification) {
     return { qualification: q, blocks: false, ceiling: STRENGTH.LIKELY_FIT,
       dates_established: true, pricing_term_established: false, missing: MISSING.PRICING_TERM };
   }
+  const kind = q === null ? REFUSAL.UNRECOGNISED
+    : READ_FAILURES.includes(q) ? REFUSAL.READ_FAILED
+    : INVALID_INPUT.includes(q) ? REFUSAL.INVALID_INPUT
+    : q === "no_property" ? REFUSAL.NO_SUBJECT
+    : REFUSAL.UNRECOGNISED;
   return { qualification: q, blocks: true, ceiling: null,
-    dates_established: false, pricing_term_established: false, missing: null };
+    dates_established: false, pricing_term_established: false, missing: null,
+    refusal_kind: kind };
 }
 
-module.exports = { STRENGTH, MISSING, PROCEEDS, interpretGate };
+module.exports = { STRENGTH, MISSING, REFUSAL, PROCEEDS, interpretGate };
