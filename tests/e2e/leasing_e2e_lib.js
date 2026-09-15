@@ -69,6 +69,33 @@ async function ctx({ wipe = true } = {}) {
               where executed_lease_record_id in (select id from executed_lease_records where property_id=$1)`, [prop]);
     await q(`delete from executed_lease_records where property_id=$1`, [prop]);
     await q(`delete from leases where property_id=$1`, [prop]);
+    /*  ── AND THE PACKAGES PRIOR SCENARIOS SIGNED ───────────────────
+     *  Every scenario on this fixture shares ONE bed ("Bed B"), and each
+     *  leaves behind an application whose packet a resident signed. Those
+     *  used to be inert once the lease rows above were gone. They are not
+     *  any more: `application_inventory_hold` reads a signed, current,
+     *  non-terminal package as A HOME SOMEBODY HAS SIGNED FOR, so the bed
+     *  stops being offerable and the NEXT scenario is refused with
+     *  `application_target_held_for_signed_applicant`.
+     *
+     *  That is the product working — two people must not sign for one bed
+     *  — and it is why this wipe has to clear it. It turned CI red one
+     *  rung later (tests/e2e/tour_application_lease.e2e.js, "Spine retains
+     *  the tour receipt and requests complete terms before send
+     *  confirmation"), where the post-tour reply correctly said someone
+     *  had already signed for the home instead of asking for terms.
+     *  Reproduced by leaving a signed packet on Bed B and watching that
+     *  exact assertion fail.
+     *
+     *  ⚠ SUPERSEDED, NOT DELETED. Migration 192's mutation guard freezes
+     *  signer identity once a packet leaves `draft` ("lease packet signer
+     *  identity is frozen after issue"), and that wall is not worked
+     *  around. `superseded_at` is the product's own way of saying a
+     *  package is no longer the current one, it is what resolveSignerAccess
+     *  and the hold read both already honour, and it is true of a finished
+     *  scenario's package. Scoped to this fixture property.            */
+    await q(`update lease_packets set superseded_at = now(), updated_at = now()
+              where property_id=$1 and superseded_at is null`, [prop]);
   }
   const mike = (await q("select id from users where name='Mike Grivna' limit 1")).rows[0].id;
   const c = await pool.connect();
