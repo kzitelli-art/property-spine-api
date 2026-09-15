@@ -7,10 +7,13 @@ async function run() {
   const followup = require('../../src/leasing/followup_runner')({pool:{}});
   assert.match(followup.composeRung(2,{name:'Alex',virtualTourText:'Approved property tour https://example.com/tour'}),/https:\/\/example.com\/tour/);
   assert.equal(followup.composeRung(2,{name:'Alex',layout:'studio'}),'Hey Alex, would you like help arranging a tour?');
-  for (const q of ["send me Skyline Matterport", "could you send me Greenery floor plans?", "show me photos", "does Skyline have laundry?", "what are the leasing highlights?", "what are the room dimensions?"]) {
+  for (const q of ["send me Skyline Matterport", "could you send me Greenery floor plans?", "show me photos", "does Skyline have laundry?", "does Skyline have a gym?", "is there a package room?", "where is the Fresh Grocer?", "what are the move-in instructions?", "what are the leasing highlights?", "what are the room dimensions?"]) {
     assert.equal(routeStaffSmsTurn({ text: q }).destination, "ask_spine", q);
     assert.equal(ask.questionSubject(q), "leasing_knowledge", q);
   }
+  assert.deepEqual(knowledge.topicsFor("Does Skyline have a gym or package room?"), ["amenities"]);
+  assert.deepEqual(knowledge.topicsFor("How close is the Fresh Grocer to Temple's campus?"), ["neighborhood"]);
+  assert.equal(knowledge.isKnowledgeRead("What is the rent for a furnished apartment?"), false);
   for (const q of ["send Maria the floor plans", "send the floor plans to Maria", "send me floor plans to Maria", "show photos and loan balance", "update the amenities", "the laundry is broken", "send me photos and then text Maria"]) {
     assert.notEqual(ask.questionSubject(q), "leasing_knowledge", q);
   }

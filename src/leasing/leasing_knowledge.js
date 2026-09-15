@@ -53,15 +53,15 @@ function buildCoverage(facts, now = new Date()) {
 }
 const MATCHES = [
   ["leasing_highlights", /\b(highlights?|selling points?|what makes .+ special)\b/i],
-  ["amenities", /\b(amenit(?:y|ies)|laundry|furnish(?:ed|ing|ings)|roof deck|courtyard|packages?|balcon(?:y|ies))\b/i],
+  ["amenities", /\b(amenit(?:y|ies)|laundry|furnish(?:ed|ing|ings)|roof deck|courtyard|packages?|package room|bike storage|vending|gym|fitness(?: room| center)?|kitchens?|cooktops?|microwaves?|refrigerators?|central (?:heat|air)|air conditioning|balcon(?:y|ies))\b/i],
   ["layouts", /\b(layouts?)\b/i],
   ["dimensions", /\b(dimensions?|measurements?|square feet|square footage|room size)\b/i],
-  ["photos", /\b(photos?|pictures?)\b/i],
+  ["photos", /\b(photos?|pictures?|images?)\b/i],
   ["floor_plans", /\bfloor\s*plans?\b/i],
   ["virtual_tours", /\b(matterports?|materports?|virtual tours?|3d tours?|walkthroughs?)\b/i],
-  ["neighborhood", /\b(neighbou?rhood|local recommendations?|nearby (?:coffee|groceries|restaurants?|transit))\b/i],
+  ["neighborhood", /\b(neighbou?rhood|local recommendations?|nearby (?:coffee|groceries|restaurants?|transit)|fresh grocer|temple(?:'s)? campus|center city|walking distance)\b/i],
   ["leasing_faq", /\b(faqs?|common questions|leasing answers)\b/i],
-  ["move_in_guidance", /\b(move[- ]in (?:instructions|guidance|directions)|key pickup)\b/i],
+  ["move_in_guidance", /\b(move[- ]in(?: instructions?| guidance| directions)?|key pickup|unload(?:ing)?)\b/i],
 ];
 function topicsFor(question) {
   return MATCHES.filter(([, rx]) => rx.test(String(question || ""))).map(([key]) => key);
