@@ -63,6 +63,34 @@ that materially changes the starting point for the next conversation.
 
 ### The gap, stated precisely
 
+> ## ⛔ CORRECTED 2026-09-15 — THIS CLAIM IS FALSE, AND WAS FALSE WHEN WRITTEN
+>
+> **`deal_intake_properties` already exists.** It landed in
+> `migrations/025_deal_properties.sql` on **11 June 2026**, two months before this
+> closeout was written, and five source files use it. It is many-to-many by
+> constraint — `unique (intake_id, property_id)` — and its own header states the
+> model this section says is missing:
+>
+> > *A deal is the unit of acquisition and can hold multiple properties — that was
+> > locked long ago; this table finally makes it explicit. The HUMAN picks which
+> > properties are in the deal… a mention is never membership.*
+>
+> The section below is left intact as the record of what was believed on 10 August.
+> **Do not act on it.** It has already been cited once, in a 15 September naming
+> briefing, as justification for considering a new membership table — which is
+> exactly the rebuild this repo's opening warning exists to prevent.
+>
+> **What is genuinely open** is narrower and worth keeping: how the intake-scope
+> membership connects to the ongoing operating deal, the legal-entity setup, and the
+> financial readers. Membership existing does not prove the consolidated accounting
+> is connected.
+>
+> Method note, because it is the transferable part: this claim was made by searching
+> documents and prose, not `migrations/`. The resolution order in `CLAUDE.md` puts
+> current source first and handoff documents last, and an absence claim is the one
+> kind of claim a document can never establish. Four characters of table name against
+> `migrations/` would have settled it.
+
 **There is no durable statement that a deal contains a property.**
 
 A deal's properties are *inferred* from which of its files happened to resolve —
