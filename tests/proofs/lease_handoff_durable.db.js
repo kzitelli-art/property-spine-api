@@ -22,6 +22,23 @@ const boundary = require("../e2e/proof_boundary.js");
 require("../e2e/proof_fence_preload.js");
 const { Pool } = require("pg");
 
+/*  ⚠ THE PROOF OWNS ITS SEND MODE. sendPropertySms refuses before it ever
+ *  reaches a transport when SMS_SEND_MODE is unset — it defaults to
+ *  `disabled` and fails closed, which is correct. verify_all.sh does not
+ *  set it for this step, so in CI every acceptance assertion here failed
+ *  with `send_mode_disabled` while it passed locally, purely because the
+ *  shell that ran it happened to export the variable. That is a proof
+ *  depending on its operator's environment, which is exactly the class of
+ *  thing this file exists to catch.
+ *
+ *  Set here, the way agent_booking_xturn_proof.js and
+ *  inbound_prospect_resolution_proof.js already do, so the proof means the
+ *  same thing wherever it runs. Every other gate in the boundary — the
+ *  property line, recorded consent, the stop controls — still runs in
+ *  front of the fake transport; this only opens the mode those gates are
+ *  evaluated under.                                                      */
+process.env.SMS_SEND_MODE = "customer_care";
+
 const root = path.resolve(__dirname, "..", "..");
 const engine = require(path.join(root, "src/shared/obligation_engine.js"));
 const leasePacketsModule = require(path.join(root, "src/applications/lease_packets.js"));

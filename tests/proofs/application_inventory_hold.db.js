@@ -23,6 +23,11 @@ const boundary = require("../e2e/proof_boundary.js");
 require("../e2e/proof_fence_preload.js");
 const { Pool } = require("pg");
 
+//  The proof owns its send mode — see the note in lease_handoff_durable.db.js.
+//  Unset, SMS_SEND_MODE defaults to `disabled` and every send refuses before
+//  the transport, so this would pass or fail on the caller's shell.
+process.env.SMS_SEND_MODE = "customer_care";
+
 const root = path.resolve(__dirname, "..", "..");
 const engine = require(path.join(root, "src/shared/obligation_engine.js"));
 const leasePacketsModule = require(path.join(root, "src/applications/lease_packets.js"));
