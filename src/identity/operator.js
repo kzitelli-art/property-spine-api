@@ -4278,49 +4278,42 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
            *  resolveSignerAccess already refuses any packet with
            *  `superseded_at` set — so the obsolete link stops opening
            *  without anything new being built to revoke it.            */
-          /*  ⚠ STATUS IS NOT THE ONLY THING THAT FREEZES A PACKAGE, AND
-           *  NARROWING TO STATUS ALONE DROPPED A CONTRACT THIS SUITE
-           *  ASSERTS: "a prepared lease packet blocks further
-           *  application-offer revision"
-           *  (tests/e2e/tour_application_lease.e2e.js). A staff-generated
-           *  packet is `draft` the moment it is made, so a status-only
-           *  check let a successor offer through after a human had
-           *  deliberately committed those terms to a package.
+          /*  ── ANY CURRENT PACKAGE BLOCKS A SUCCESSOR OFFER ──────────
+           *  Two suites pin this from opposite sides and BOTH are right:
            *
-           *  The two cases are genuinely different and the record already
-           *  tells them apart — `application_proposed_terms_confirmations
-           *  .source` (migration 195):
+           *    two_step_leasing.e2e.js   "a prepared packet blocks a further
+           *                              offer change (changed terms need a
+           *                              new package, never a silent swap)"
+           *                              — 409, on a packet prepared from the
+           *                              acknowledged offer.
+           *    tour_application_lease    "a prepared lease packet blocks
+           *                              further application-offer revision"
+           *                              — 409, on a staff-generated packet.
            *
-           *    operator_proposed_terms      A PERSON confirmed these terms
-           *                                 and generated a package from
-           *                                 them. That is a commitment;
-           *                                 changing it is a governed
-           *                                 correction, not a new offer.
-           *    authored_offer_acknowledged  SPINE prepared the package from
-           *                                 the applicant's acknowledged
-           *                                 authored offer. Nobody chose
-           *                                 this moment, so it must not
-           *                                 block a correction — blocking
-           *                                 it is what turned every
-           *                                 legitimate successor offer into
-           *                                 "A lease packet already exists."
+           *  ⚠ AND THE THIRD CASE THAT SEEMED TO CONTRADICT THEM IS GONE.
+           *  The tour journey's legitimate successor offers were refused
+           *  once — "A lease packet already exists" — because submission
+           *  itself owed AND dispatched the handoff, so a package existed
+           *  before anyone tried to correct anything. Two attempts were made
+           *  to carve an exception for that (frozen states only; then frozen
+           *  states plus operator-confirmed lineage), and BOTH let a real
+           *  silent swap through. The exception was never needed: moving the
+           *  handoff from submission to COMPLETION removed the after-commit
+           *  dispatch, so no package exists at those revision points at all.
+           *  A rule with a hole in it, carved for a condition that no longer
+           *  exists, is worse than the plain rule.
            *
-           *  Frozen STATES block either way: once the applicant has
-           *  acknowledged the package, or it has executed, the origin of
-           *  the packet stops mattering. A packet Spine prepared and left
-           *  in preparation is superseded by the next version, whose
-           *  `superseded_at` resolveSignerAccess already refuses.        */
+           *  So: a CURRENT package blocks. Superseded and void ones do not —
+           *  a superseded version is history, and its access is already dead
+           *  because resolveSignerAccess refuses it. The package's state only
+           *  chooses which sentence the operator reads.                   */
           const FROZEN_PACKET_STATES = ['submitted','resident_executed','executed'];
           const blocking = (await client.query(
-            `select p.id, p.status,
-                    (p.status = any($2::text[]))            as frozen_state,
-                    (c.source = 'operator_proposed_terms')  as operator_committed
-               from lease_packets p
-               left join application_proposed_terms_confirmations c
-                 on c.id = p.proposed_terms_confirmation_id
-              where p.application_id=$1 and p.superseded_at is null
-                and (p.status = any($2::text[]) or c.source = 'operator_proposed_terms')
-              order by p.version desc limit 1`,
+            `select id, status, (status = any($2::text[])) as frozen_state
+               from lease_packets
+              where application_id=$1 and superseded_at is null
+                and coalesce(status,'') <> 'void'
+              order by version desc limit 1`,
             [application.id, FROZEN_PACKET_STATES])).rows[0];
           if (blocking)
             throw Object.assign(new Error(
@@ -4328,7 +4321,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
                 ? "The applicant has already acknowledged this package. Changing agreed terms now is a governed correction, not a new offer."
                 : blocking.frozen_state
                   ? "This lease has already been executed. Changing agreed terms now is a governed correction, not a new offer."
-                  : "A signing package has already been prepared from these confirmed terms. Changing them now is a governed correction, not a new offer."),
+                  : "A signing package has already been prepared for these terms. Changing them now needs a new package, not a silent swap."),
               {httpStatus:409});
         }
         if (b.application_id && (!application || application.id !== b.application_id))
