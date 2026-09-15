@@ -40,7 +40,14 @@ async function run() {
   result = await ask.answer(db,null,{property_id:"property-a",allowed_modules:["maintenance"],question:"send me the Matterport"});
   assert.equal(result.outcome,"not_authorized"); assert.equal(reads,before);
   result = await knowledge.answer(db,{property_id:"property-a",allowed_modules:["leasing"],question:"show floor plans and Matterports"});
-  assert.deepEqual(result.grounded_on.missing_topics,["floor_plans"]); assert.match(result.answer,/Not established/);
+  assert.deepEqual(result.grounded_on.missing_topics,["floor_plans"]);
+  assert.match(result.answer,/approved answer yet for floor plans/i);
+  assert.match(result.answer,/approved virtual-tour resources/i);
+  assert.doesNotMatch(result.answer,/^Virtual tours:/);
+  const natural = await knowledge.answer({query:async()=>({rows:[{fact_key:"amenities",rendered_text:"Laundry is on every floor."}]})},
+    {property_id:"property-a",allowed_modules:["leasing"],question:"what amenities are there?"});
+  assert.match(natural.answer,/^Here are the confirmed amenities and inclusions:/);
+  assert.doesNotMatch(natural.answer,/^Amenities:/m);
   result = await knowledge.answer({query:async()=>{throw new Error("offline");}},{property_id:"property-a",allowed_modules:["leasing"],question:"show photos"});
   assert.equal(result.grounded_on.leasing_knowledge,"READ_FAILED");
   assert.deepEqual(knowledge.safeLinks("javascript:alert(1) https://user:pass@example.com https://example.com/plan"),["https://example.com/plan"]);

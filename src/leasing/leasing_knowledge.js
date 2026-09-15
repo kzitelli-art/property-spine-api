@@ -96,6 +96,54 @@ function safeLinks(text) {
   return [...new Set(String(text || "").match(/https:\/\/[^\s<>"\]\)]+/g) || [])]
     .filter(raw => { try { const u = new URL(raw); return u.protocol === "https:" && !u.username && !u.password; } catch (_) { return false; } });
 }
+// Stored wording is the approved source, but it is not itself a good chat
+// response. Keep that source intact and add a small deterministic spoken
+// wrapper so the dashboard and staff SMS use the same natural sentence.
+// This remains model-free: tone must never invent a fact or turn a missing
+// topic into a negative claim.
+const CONVERSATIONAL_LEADS = Object.freeze({
+  leasing_highlights: "Here are the main reasons to consider this property:",
+  amenities: "Here are the confirmed amenities and inclusions:",
+  layouts: "Here are the confirmed layouts:",
+  dimensions: "Here are the measurements I have on file:",
+  photos: "Here are the approved photo resources I have:",
+  floor_plans: "Here are the approved floor-plan resources I have:",
+  virtual_tours: "Here are the approved virtual-tour resources I have:",
+  neighborhood: "Here are the local recommendations I have:",
+  leasing_faq: "Here are the confirmed answers to common leasing questions:",
+  move_in_guidance: "Here is the confirmed move-in guidance:",
+});
+
+function listTopicNames(keys) {
+  const names = keys.map(key => TOPICS[key].toLowerCase());
+  if (names.length < 2) return names[0] || "that topic";
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+function composeConversationalAnswer(selected, missing, needsHomeScope) {
+  if (!selected.length) {
+    return missing.length
+      ? `I don't have an approved answer for ${listTopicNames(missing)} yet.`
+      : "I don't have approved leasing knowledge recorded for that yet.";
+  }
+  const lead = selected.length === 1
+    ? (CONVERSATIONAL_LEADS[selected[0].fact_key] || "Here is what I can confirm:")
+    : "Here is what I can confirm:";
+  const sections = selected.map(row => {
+    const text = String(row.rendered_text || "").trim();
+    return selected.length === 1 ? text : `${TOPICS[row.fact_key]}: ${text}`;
+  }).filter(Boolean);
+  const notes = [];
+  if (needsHomeScope) {
+    notes.push("These details describe the property or a representative resource. They do not establish which apartment or bedroom they apply to, so I can't tie them to an exact home until that match is verified.");
+  }
+  if (missing.length) {
+    notes.push(`I don't have an approved answer yet for ${listTopicNames(missing)}.`);
+  }
+  return [lead, ...sections, ...notes].join("\n\n");
+}
+
 async function answer(db, { property_id, allowed_modules, question }) {
   if (!(allowed_modules || []).includes("leasing")) return {
     outcome: "not_authorized", answer: "Leasing knowledge is not available in your current access for this property.",
@@ -108,19 +156,16 @@ async function answer(db, { property_id, allowed_modules, question }) {
   const keys = topicsFor(question);
   const selected = rows.filter(r => keys.includes(r.fact_key));
   const missing = keys.filter(key => !selected.some(r => r.fact_key === key));
-  const parts = selected.map(r => `${TOPICS[r.fact_key]}:\n${r.rendered_text}`);
   // The stored wording is property-wide even when the question names a home.
   // Keep useful representative links without inventing a space association or
   // routing a media question into a different operating domain.
   const needsHomeScope = selected.some(r => ["layouts", "dimensions", "photos", "floor_plans", "virtual_tours"].includes(r.fact_key));
-  if (needsHomeScope) parts.push("These are property-wide descriptions or representative resources. They do not establish which apartment or bedroom they apply to; an exact-home match still needs verification.");
-  if (missing.length) parts.push(`Not established here: ${missing.map(k => TOPICS[k].toLowerCase()).join(", ")}.`);
   return { outcome: selected.length ? "answered" : "not_established",
-    answer: parts.join("\n\n") || "No approved leasing knowledge is recorded for that question.",
+    answer: composeConversationalAnswer(selected, missing, needsHomeScope),
     grounded_on: { leasing_knowledge: selected.length ? "ESTABLISHED" : "NOT_ESTABLISHED",
       topics: selected.map(r => r.fact_key), missing_topics: missing,
       scope: "property_wide", ...(needsHomeScope ? { exact_home_association: "NOT_ESTABLISHED" } : {}) },
     references: selected.flatMap(r => safeLinks(r.rendered_text).map(url => ({ kind: "leasing_knowledge_link", label: TOPICS[r.fact_key], url }))),
   };
 }
-module.exports = { TOPICS, CHECKLIST, selectCurrentFacts, buildCoverage, topicsFor, isSelfRead, isKnowledgeRead, readActive, safeLinks, answer };
+module.exports = { TOPICS, CHECKLIST, selectCurrentFacts, buildCoverage, topicsFor, isSelfRead, isKnowledgeRead, readActive, safeLinks, composeConversationalAnswer, answer };
