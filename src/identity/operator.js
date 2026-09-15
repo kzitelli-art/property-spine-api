@@ -32,24 +32,31 @@
 //       the operator-facing actions agent.js exposes. Mounted under "/".
 
 const crypto = require("crypto");
-const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
+const externalEmailReply = require("../leasing/external_email_reply");
+const staffSessions = require("./staff_session_service.js");
+const { resolveDemoProperty } = require("../shared/demo_property_identity.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const proposedTerms = require("../applications/proposed_terms_service"); // Part 3: governed proposed-terms confirmation (Part 2 service)
+const applicationOffers = require("../money/application_offer_terms");
 // Slice 9: the canonical application READ authority. One definition of
 // "did this ever reach approval", shared with the leasing desk.
 const lifecycleRead = require("../applications/application_lifecycle_read");
 const applicationSendCommand = require("../applications/application_send_command"); // composite Send-application command (intent→prepare→dispatch)
 const applicationTargetAuthority = require("../applications/application_target_authority"); // Slice 9 Commit A: the ONE application-target resolver
+const applicationTargetRead = require("../applications/application_target_read");
 
 module.exports = function operatorModule(deps) {
+  const { hasPresenceAtProperty } = require("./person_property_presence");
   const {
     pool, agentService, conversionService = null, leasingTourService = null,
+    tourAvailabilityService = null,
     applicationInvitations = null, interactionsService = null,
     // v3 (R3): the ONE canonical approveApplication service from applications.js
     // — the walled operator approve adapter below calls THIS, never a second
     // implementation. Absent (older server.js) → the route fails closed 503.
     applicationsService = null,
     leasePacketsService = null,
+    leaseTemplateUpload = null,
   } = deps;
   const { rankTurnPriority } = require("../maintenance/turn_priority"); // shared Turn-Priority ranking (slice 1)
   const { buildReviewList, buildReviewDetail } = require("../applications/application_review"); // application review reads (slice 2)
@@ -96,7 +103,6 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
 
   const DEMO_MODE = String(process.env.DEMO_MODE || "").toLowerCase() === "true";
   const DEMO_ACCESS_CODE = process.env.DEMO_ACCESS_CODE || ""; // high-entropy, single-purpose; DISTINCT from OPERATOR_KEY
-  const DEMO_PROP_NAME = "Property Spine Demo Building";
   const DEMO_MGR_EMAIL = "demo-manager@propertyspine.internal";
   const DEMO_SESSION_HOURS = 6;
 
@@ -189,11 +195,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           await client.query("begin");
 
           // the dedicated demo property (must already exist — created by the demo seed)
-          const prop = (await client.query(
-            "select id from properties where name=$1 order by created_at asc limit 1",
-            [DEMO_PROP_NAME]
-          )).rows[0];
-          if (!prop) throw httpErr(409, "No demo property yet — start the demo (it seeds the property) first.");
+          //  Was: `where name=$1 order by created_at asc limit 1`. Three rows
+          //  share that name, so it took the oldest and said nothing.
+          const demoRes = await resolveDemoProperty(client);
+          if (demoRes.status !== "resolved") throw httpErr(409, demoRes.receipt);
+          const prop = { id: demoRes.property_id };
 
           // the seeded leasing_manager (created by the demo seed)
           let mgr = (await client.query("select id from users where email=$1 limit 1", [DEMO_MGR_EMAIL])).rows[0];
@@ -273,7 +279,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   }
   // verify a fact belongs to the session's property; returns it or throws.
   async function scopedFact(client, factId, propertyId) {
-    const f = (await client.query("select * from agent_facts where id=$1", [factId])).rows[0];
+    const f = (await client.query("select * from agent_facts where id=$1 for update", [factId])).rows[0];
     if (!f) throw httpErr(404, "Fact not found.");
     if (f.property_id !== propertyId) throw httpErr(403, "Not in your property scope.");
     return f;
@@ -283,8 +289,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   //  VERIFIED FACTS — property-scoped to the session. approved_by from session.
   //  NO free :propertyId route — the property is INFERRED from req.operator.
   // ════════════════════════════════════════════════════════════════════
-  const FACT_KEYS = ["pet_policy","parking_rules","tour_window","fee_policy","required_documents","office_contact","communication_instructions"];
+  const leasingKnowledge = require("../leasing/leasing_knowledge");
+  const FACT_KEYS = ["pet_policy","parking_rules","tour_window","fee_policy","required_documents","office_contact","communication_instructions", ...Object.keys(leasingKnowledge.TOPICS)];
   const CATEGORY_FOR = {
+    ...Object.fromEntries(Object.keys(leasingKnowledge.TOPICS).map(key => [key, "leasing_knowledge"])),
     pet_policy:"pets", parking_rules:"parking", tour_window:"tours", fee_policy:"fees",
     required_documents:"documents", office_contact:"routing", communication_instructions:"routing",
   };
@@ -314,6 +322,80 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     }));
     return res.status(403).json({ error: "not_permitted" });
   }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  INVENTORY CORRECTION — review, retire, reinstate, history.
+  //  The door over src/tenancy/inventory_correction.js, which is itself the
+  //  door over the existing retirement owner (inventory_retirement.js).
+  //  Reads need a management-module session at the property; writes need
+  //  the governed override (can_manage_roles) — the SAME condition the
+  //  ai-rules governance routes enforce, re-verified inside the
+  //  transaction. A leasing assignment alone is not correction authority,
+  //  and knowledge of a unit id is not custody: the unit's own property_id
+  //  is compared with the session's property on every call.
+  // ═══════════════════════════════════════════════════════════════════
+  const inventoryCorrection = require("../tenancy/inventory_correction");
+  const sendCorrectionError = (res, e, label) => {
+    if (e && e.httpStatus && e.body) return res.status(e.httpStatus).json(e.body);
+    if (e && e.httpStatus) return res.status(e.httpStatus).json({ error: e.code || "refused", receipt: e.publicMessage || e.message, ...(e.refused ? { refused: e.refused } : {}), ...(e.held ? { held: e.held } : {}), ...(e.already ? { already: e.already } : {}) });
+    console.error(label, e);
+    return res.status(500).json({ error: "internal", receipt: "The inventory correction could not be completed." });
+  };
+  router.get("/operator/inventory/corrections", requireOperator, requireManagementModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const out = await inventoryCorrection.listUnits(pool, {
+        property_id: req.operator.property_id,
+        limit: req.query.limit, offset: req.query.offset, state: req.query.state, q: req.query.q,
+      });
+      return res.json({ ...out, may_correct: req.operator.can_manage_roles === true });
+    } catch (e) { return sendCorrectionError(res, e, "inventory corrections list:"); }
+  });
+  router.get("/operator/inventory/corrections/review", requireOperator, requireManagementModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const out = await inventoryCorrection.reviewUnit(pool, { property_id: req.operator.property_id, unit_id: req.query.unit_id });
+      return res.json({ ...out, may_correct: req.operator.can_manage_roles === true });
+    } catch (e) { return sendCorrectionError(res, e, "inventory correction review:"); }
+  });
+  router.get("/operator/inventory/corrections/history", requireOperator, requireManagementModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      return res.json(await inventoryCorrection.history(pool, { property_id: req.operator.property_id, limit: req.query.limit, offset: req.query.offset }));
+    } catch (e) { return sendCorrectionError(res, e, "inventory correction history:"); }
+  });
+  router.post("/operator/inventory/corrections/retire", requireOperator, requireManagementModuleAccess, requireGovernanceAuthority, async (req, res) => {
+    const b = req.body || {};
+    try {
+      const out = await inventoryCorrection.applyRetirement(pool, {
+        property_id: req.operator.property_id,
+        actor: { user_id: req.operator.id },                 // SERVER-DERIVED
+        unit_ids: Array.isArray(b.unit_ids) ? b.unit_ids : [],
+        review_tokens: b.review_tokens && typeof b.review_tokens === "object" ? b.review_tokens : {},
+        rationale: b.rationale, reason_code: b.reason_code === undefined ? undefined : b.reason_code,
+        superseded_by_import_batch_id: b.superseded_by_import_batch_id || null,
+        confirmed: b.confirmed === true, idempotency_key: b.idempotency_key || null,
+      });
+      //  A replayed command answers 200 with the recorded result and the
+      //  current state; a new decision answers 201.
+      if (out.idempotent === true) return res.status(200).json({ receipt: `This retirement was already recorded (${out.retired} unit record(s)). Nothing new was written.`, ...out });
+      return res.status(201).json({ receipt: `Retired ${out.retired} unit record(s) from current inventory. Identity and history are retained.`, ...out });
+    } catch (e) { return sendCorrectionError(res, e, "inventory retire:"); }
+  });
+  router.post("/operator/inventory/corrections/reinstate", requireOperator, requireManagementModuleAccess, requireGovernanceAuthority, async (req, res) => {
+    const b = req.body || {};
+    try {
+      const out = await inventoryCorrection.applyReinstatement(pool, {
+        property_id: req.operator.property_id, actor: { user_id: req.operator.id },
+        unit_id: b.unit_id, review_token: b.review_token, reason: b.reason, confirmed: b.confirmed === true,
+        idempotency_key: b.idempotency_key || null,
+        identity_decision: b.identity_decision == null ? null : String(b.identity_decision),
+        identity_reason: b.identity_reason == null ? null : String(b.identity_reason),
+      });
+      if (out.idempotent === true) return res.status(200).json({ receipt: "This reinstatement was already recorded. Nothing new was written.", ...out });
+      return res.status(201).json({ receipt: "Reinstated to current inventory. The retirement stays as history and names who reversed it.", ...out });
+    } catch (e) { return sendCorrectionError(res, e, "inventory reinstate:"); }
+  });
 
   router.get("/operator/leasing/ai-settings", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
@@ -477,13 +559,17 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     res.set("Cache-Control", "no-store");
     try {
       const rows = (await pool.query(
-        `select id, fact_key, category, rendered_text, source_type, source_record_id,
+        `select id, space_id, fact_key, category, rendered_text, source_type, source_record_id,
                 confirmed_at, effective_until, status, approved_by_user_id, created_at
            from agent_facts where property_id=$1
           order by status asc, fact_key asc, created_at desc`,
         [req.operator.property_id]
       )).rows;
-      return res.json({ property_id: req.operator.property_id, facts: rows });
+      const now = new Date();
+      return res.json({ property_id: req.operator.property_id, facts: rows,
+        topics: leasingKnowledge.TOPICS, checklist: leasingKnowledge.CHECKLIST,
+        current: leasingKnowledge.selectCurrentFacts(rows, now),
+        coverage: leasingKnowledge.buildCoverage(rows, now) });
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
 
@@ -493,10 +579,12 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     if (!FACT_KEYS.includes(fact_key)) throw httpErr(400, `fact_key must be one of: ${FACT_KEYS.join(", ")}`);
     const rendered_text = (b && b.rendered_text || "").trim();
     if (!rendered_text) throw httpErr(400, "rendered_text (the approved wording) is required.");
+    if (rendered_text.length > 8000) throw httpErr(400, "Keep each topic under 8,000 characters.");
     const source_type = (b && b.source_type || "").trim();
     if (!SOURCE_TYPES.includes(source_type)) throw httpErr(400, `source_type must be one of: ${SOURCE_TYPES.join(", ")}`);
     const confirmed_at = (b && b.confirmed_at) ? new Date(b.confirmed_at) : new Date();
     const effective_until = (b && b.effective_until) ? new Date(b.effective_until) : null;
+    if (!Number.isFinite(confirmed_at.getTime()) || (effective_until && !Number.isFinite(effective_until.getTime()))) throw httpErr(400, "Use valid confirmation and expiry dates.");
     return { fact_key, category: CATEGORY_FOR[fact_key], rendered_text, source_type, confirmed_at, effective_until };
   }
 
@@ -634,8 +722,8 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       if (v === "flexible" || (typeof v === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(v))) out.move_month = v;
     } catch (_) { /* honest null beats a bad parse */ }
     // 2) The REAL store (migration 061): typed, sourced person_attributes OVERLAY the
-    //    fallback — the newest confirmed capture wins. Fail-soft if the table is not
-    //    migrated yet: vitals degrade to the form fallback, never a 500.
+    //    fallback. A failed read is unavailable, never proof that the older form
+    //    value is current or that no preference was recorded.
     try {
       const attrs = (await client.query(
         `select attr_key, attr_value from person_attributes
@@ -643,7 +731,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         [personId, propertyId]
       )).rows;
       for (const a of attrs) if (a.attr_key in out && a.attr_value != null) out[a.attr_key] = a.attr_value;
-    } catch (_) { /* table may not exist yet — degrade to fallback */ }
+    } catch (cause) {
+      throw Object.assign(new Error('Prospect preferences could not be read. Retry before relying on them.', {cause}), {httpStatus:503});
+    }
     return out;
   }
 
@@ -762,10 +852,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   router.get("/operator/leasing/conversations/:conversationId", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      let vitals;
+      let vitals, conversationPersonId;
       const client = await pool.connect();
       try {
         const conv = await scopedConversation(client, req.params.conversationId, req.operator.property_id);
+        conversationPersonId = conv.person_id;
         vitals = await prospectVitals(client, { personId: conv.person_id, propertyId: req.operator.property_id });
       } finally { client.release(); }
       const state = await agentService.getConversationStateService({ conversationId: req.params.conversationId });
@@ -797,7 +888,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       // honest nulls, never a crash.
       const proj = (await pool.query(
         PROJECTION_CTE + `
-        select commercial_state, closure_reason, closure_note, closure_actor_id,
+        select commercial_state, waiting_on, control_bucket, bucket_reason_code, closure_reason, closure_note, closure_actor_id,
                closure_actor_name, closure_occurred_at, closure_recorded_at
         from projected where conversation_id=$2`,
         [req.operator.property_id, req.params.conversationId]
@@ -808,7 +899,12 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
             actor_id: proj.closure_actor_id, actor_name: proj.closure_actor_name,
             occurred_at: proj.closure_occurred_at, recorded_at: proj.closure_recorded_at }
         : null;
-      return res.json({ ...state, facts, vitals, commercial_state, closure });
+      const sendCap = await capability.evaluateApplicationLinkBirth(pool, { property_id: req.operator.property_id, person_id: conversationPersonId });
+      const manualCap = await capability.evaluateManualEmailPreparation(pool, { property_id: req.operator.property_id, person_id: conversationPersonId });
+      return res.json({ ...state, facts, vitals, commercial_state, closure,
+        send_application_capability: sendCap, manual_email_preparation: manualCap,
+        waiting_on: proj?.waiting_on || null, control_bucket: proj?.control_bucket || null,
+        bucket_reason_code: proj?.bucket_reason_code || null });
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
 
@@ -822,6 +918,8 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     const body = (req.body && typeof req.body.body === "string") ? req.body.body.trim() : "";
     if (!body) return res.status(400).json({ error: "Write a message first." });
     if (body.length > 1500) return res.status(400).json({ error: "Message is too long (1500 characters maximum)." });
+    const channel = req.body?.channel || "text";
+    if (!["text", "email"].includes(channel)) return res.status(400).json({ error: "Unsupported reply channel." });
     if (!interactionsService || typeof interactionsService.recordOutboundText !== "function") {
       return res.status(503).json({ error: "The canonical communications service is unavailable." });
     }
@@ -841,6 +939,19 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       if (life.close_seq != null && (life.reopen_seq == null || Number(life.reopen_seq) < Number(life.close_seq))) {
         const e = httpErr(409, "Reopen the relationship before sending another message.");
         throw e;
+      }
+
+      if (channel === "email") {
+        if (!interactionsService.recordExternalEmailReply || !agentService.assertExternalReplyOwner) throw httpErr(503, "External reply recording is unavailable.");
+        const work = await agentService.assertExternalReplyOwner(client, { conversationId: conv.id, actorUserId: req.operator.id });
+        const out = await interactionsService.recordExternalEmailReply(client, {
+          conversation: conv, actor_user_id: req.operator.id, obligation_id: work.id, body,
+          recipient: req.body.recipient, occurred_at: req.body.occurred_at,
+          idempotency_key: req.body.idempotency_key, external_reference: req.body.external_reference,
+          already_sent: req.body.already_sent,
+        });
+        await client.query("commit");
+        return res.json({ ...out, receipt: "Your report of the external email was recorded. Delivery is not verified; you still own the conversation." });
       }
 
       const person = (await client.query(
@@ -1041,14 +1152,20 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       order by conversation_id, created_at asc
     ),
     qual_in as (
-      select conversation_id, max(occurred_at) as at from comm_events
+      select distinct on (conversation_id) conversation_id, occurred_at as at, channel from comm_events
       where direction='inbound' and sender_role='prospect' and body is not null and btrim(body) <> ''
-      group by conversation_id
+      order by conversation_id, occurred_at desc, id desc
     ),
     qual_out as (
       select conversation_id, max(occurred_at) as at from comm_events
       where direction='outbound' and sender_role in ('agent','ai') and provider_status in ('sent','delivered')
       group by conversation_id
+    ),
+    manual_out as (
+      select ce.conversation_id, max(ce.occurred_at) as at from comm_events ce
+      join conversations mc on mc.id=ce.conversation_id and mc.property_id=ce.property_id and mc.person_id=ce.person_id
+      where ${externalEmailReply.predicateSql("ce")}
+      group by ce.conversation_id
     ),
     any_out as (
       select distinct on (conversation_id) conversation_id, occurred_at as at, provider_status
@@ -1074,6 +1191,12 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         pr.name as person_name,
         coalesce(ats.mode,'ai_active') as control_mode,
         qi.at as last_inbound_at, qo.at as last_delivered_outbound_at,
+        mo.at as last_manual_reply_at,
+        (qi.channel='website' and not exists (
+          select 1 from agent_runs ar left join agent_drafts ad on ad.agent_run_id=ar.id
+          where ar.conversation_id=e.conversation_id and ar.input_thread_version=ats.thread_version
+            and (ar.status='pending' or ad.status='ready')
+        )) as website_needs_staff,
         ao.at as last_any_outbound_at, ao.provider_status as last_outbound_status,
         greatest(coalesce(qi.at,'epoch'::timestamptz), coalesce(ao.at,'epoch'::timestamptz),
                  coalesce(c.last_message_at,'epoch'::timestamptz)) as last_meaningful_activity_at,
@@ -1081,7 +1204,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         cr.reason_note as closure_note, cr.actor_id as closure_actor_id,
         cr.closed_by_name as closure_actor_name, cr.closed_at as closure_occurred_at,
         cr.closed_recorded_at as closure_recorded_at,
-        (qi.at is not null and (qo.at is null or qi.at >= qo.at)) as inbound_unanswered,
+        (qi.at is not null and (greatest(qo.at,mo.at) is null or qi.at >= greatest(qo.at,mo.at))) as inbound_unanswered,
         (li.close_seq is not null and (li.reopen_seq is null or li.reopen_seq < li.close_seq)) as is_closed,
         (lt.conversation_id is not null) as is_booked,
         (qi.at is not null or ao.at is not null) as has_engagement,
@@ -1094,6 +1217,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       left join live_tour lt on lt.conversation_id = e.conversation_id
       left join qual_in qi on qi.conversation_id = e.conversation_id
       left join qual_out qo on qo.conversation_id = e.conversation_id
+      left join manual_out mo on mo.conversation_id = e.conversation_id
       left join any_out ao on ao.conversation_id = e.conversation_id
       left join attempts_since_inbound asi on asi.conversation_id = e.conversation_id
       left join agent_thread_state ats on ats.conversation_id = e.conversation_id
@@ -1112,8 +1236,12 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         case when is_closed then 'none'
              when is_booked and inbound_unanswered then 'manager'
              when is_booked then 'none'
-             when inbound_unanswered and control_mode in ('awaiting_review','human_takeover') then 'manager'
+             when inbound_unanswered and control_mode = 'human_takeover' then 'manager'
+             when inbound_unanswered and website_needs_staff then 'manager'
+             when inbound_unanswered and control_mode = 'awaiting_review' then 'manager'
              when inbound_unanswered and control_mode = 'ai_active' then 'ai'
+             when last_manual_reply_at > coalesce(last_inbound_at,'epoch')
+               and last_manual_reply_at >= coalesce(last_delivered_outbound_at,'epoch') then 'prospect'
              when last_delivered_outbound_at is not null
                   and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at)
                   and outreach_attempts >= 3 then 'manager'
@@ -1127,8 +1255,12 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           case when is_closed then 'latest_relevant_lifecycle_is_close'
                when is_booked and inbound_unanswered then 'booked_tour_inbound_unanswered_pending_human'
                when is_booked then 'live_linked_tour'
-               when inbound_unanswered and control_mode in ('awaiting_review','human_takeover') then 'qualifying_prospect_inbound_unanswered_pending_human'
+               when inbound_unanswered and control_mode = 'human_takeover' then 'qualifying_prospect_inbound_unanswered_pending_human'
+               when inbound_unanswered and website_needs_staff then 'website_inquiry_pending_human'
+               when inbound_unanswered and control_mode = 'awaiting_review' then 'qualifying_prospect_inbound_unanswered_pending_human'
                when inbound_unanswered then 'qualifying_prospect_inbound_unanswered'
+               when last_manual_reply_at > coalesce(last_inbound_at,'epoch')
+                 and last_manual_reply_at >= coalesce(last_delivered_outbound_at,'epoch') then 'recorded_external_reply_is_latest'
                when last_delivered_outbound_at is not null and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at) and outreach_attempts >= 3 then 'cadence_exhausted_pending_human'
                when last_delivered_outbound_at is not null and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at) then 'delivered_outreach_is_latest'
                when has_engagement then 'engaged_no_clear_owner'
@@ -1152,6 +1284,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         case
           when control_mode = 'human_takeover' then 'human_takeover'
           when waiting_on = 'manager' and (derivation->>'rule_code') = 'cadence_exhausted_pending_human' then 'cadence_exhausted_pending_human'
+          when waiting_on = 'manager' and (derivation->>'rule_code') = 'website_inquiry_pending_human' then 'website_inquiry_pending_human'
           when waiting_on = 'manager'          then 'draft_requires_review'
           when waiting_on = 'ai'               then 'ai_preparing_reply'
           when waiting_on = 'prospect'         then 'awaiting_prospect'
@@ -1243,7 +1376,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         PROJECTION_CTE + `
         select conversation_id, person_id, person_name, lead_status,
                commercial_state, waiting_on, control_mode, delivery_state,
-               last_inbound_at, last_delivered_outbound_at, last_meaningful_activity_at,
+               last_inbound_at, last_delivered_outbound_at, last_manual_reply_at, last_meaningful_activity_at,
                tour_id, tour_status, closure_reason, closure_note, closure_actor_id,
                closure_actor_name, closure_occurred_at, closure_recorded_at, outreach_attempts,
                last_any_outbound_at, last_outbound_status,
@@ -1342,6 +1475,343 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   });
 
   // ══════════════════════════════════════════════════════════════════
+  // NATIVE TOUR SCHEDULER — signed-in staff adapter
+  //
+  // Property and recorder are always derived from the staff session. These
+  // routes call the same tourAvailabilityService as the older operator-key
+  // adapters; neither surface owns an insert or status transition.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/tour-slots", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!tourAvailabilityService) {
+      return res.status(503).json({ error: "native_tour_scheduler_not_wired" });
+    }
+    try {
+      const statuses = String(req.query.status || "open,booked,blocked")
+        .split(",").map(s => s.trim()).filter(Boolean);
+      return res.json(await tourAvailabilityService.listSlots({
+        propertyId: req.operator.property_id,
+        from: req.query.from || null,
+        to: req.query.to || null,
+        statuses,
+        limit: req.query.limit || null,
+      }));
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  });
+
+  // Staff-session adapter; the native booking service remains the only writer.
+  router.post("/operator/leasing/conversations/:conversationId/book-tour", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const b = req.body || {};
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(b.slot_id||"")) || typeof b.idempotency_key !== "string" || !b.idempotency_key.trim() || b.idempotency_key.length > 200) {
+      return res.status(400).json({ receipt: "Choose a tour time and provide a booking request key." });
+    }
+    if (!leasingTourService || typeof leasingTourService.bookTourIntoSlot !== "function" || !tourAvailabilityService) {
+      return res.status(503).json({ receipt: "Tour booking is unavailable." });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const conv = await scopedConversation(client, req.params.conversationId, req.operator.property_id);
+      // Serialize this conversation's intent before replay or competing clicks.
+      await client.query("select id from conversations where id=$1 for update", [conv.id]);
+      const leads = (await client.query(
+        "select id, person_id from leasing_leads where person_id=$1 and property_id=$2 and status not in ('lost','leased') order by created_at limit 2 for update",
+        [conv.person_id, req.operator.property_id])).rows;
+      if (leads.length !== 1) throw httpErr(409, "This conversation needs one active inquiry before booking a tour.");
+      const lead = leads[0];
+      const key = 'staff-book-tour:' + crypto.createHash('sha256').update(JSON.stringify([req.operator.property_id, conv.id, lead.id, req.operator.id, b.idempotency_key])).digest('hex');
+      const prior = (await client.query("select * from leasing_tours where booking_idempotency_key=$1", [key])).rows[0];
+      if (prior && (String(prior.slot_id) !== b.slot_id || prior.lead_id !== lead.id || prior.property_id !== req.operator.property_id)) {
+        throw httpErr(409, "This booking request was already used for a different tour time. Start a new request.");
+      }
+      let tour, idempotent;
+      if (prior) { tour = prior; idempotent = true; }
+      else {
+        const slot = (await client.query("select * from tour_availability where id=$1 and property_id=$2 for update", [b.slot_id, req.operator.property_id])).rows[0];
+        if (!slot) throw httpErr(404, "Tour time not found at this property.");
+        const schedule = await tourAvailabilityService.getSchedulePolicy({ propertyId: req.operator.property_id, client });
+        if (!schedule.operating_timezone) throw httpErr(409, "The property timezone must be configured before booking.");
+        await require('../leasing/tour_availability_service').assertOptionalScope(client, { propertyId:req.operator.property_id, unitId:slot.unit_id, leasingAgentId:slot.leasing_agent_id });
+        const existing = (await client.query("select id from leasing_tours where lead_id=$1 and property_id=$2 and scheduled_for>now() and status in ('scheduled','confirmed','checked_in') limit 1", [lead.id,req.operator.property_id])).rows[0];
+        if (existing) throw httpErr(409, "This inquiry already has an upcoming tour. Review that appointment before booking another.");
+        const out = await leasingTourService.bookTourIntoSlot(client, { leadId:lead.id, slotId:slot.id, subjectPersonId:conv.person_id, idempotencyKey:key, via:'staff_conversation_booking', executionActorType:'human', executionActorId:req.operator.id });
+        tour=out.tour; idempotent=out.alreadyBooked;
+      }
+      await client.query("commit");
+      return res.json({ receipt:"Tour booked. No confirmation message was sent.", tour_id:tour.id, slot_id:tour.slot_id, scheduled_for:tour.scheduled_for, status:tour.status, idempotent });
+    } catch(e) {
+      try { await client.query("rollback"); } catch (_) {}
+      return res.status(e.httpStatus || 500).json({ receipt:e.publicMessage || "Could not book the tour." });
+    } finally { client.release(); }
+  });
+
+  router.get("/operator/leasing/lease-configuration", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasePacketsService || typeof leasePacketsService.propertyLeaseConfiguration !== "function") {
+      return res.status(503).json({
+        error: "lease_configuration_not_wired",
+        receipt: "Lease document setup is not wired on this deploy.",
+      });
+    }
+    try {
+      const configuration = await leasePacketsService.propertyLeaseConfiguration(
+        pool, req.operator.property_id);
+      return res.json({
+        configuration: {
+          ...configuration,
+          can_configure: ((req.operator && req.operator.allowed_modules) || []).includes("management"),
+        },
+      });
+    } catch (e) {
+      if (e && e.httpStatus) return res.status(e.httpStatus).json(e.body || { receipt: e.message });
+      console.error("lease-configuration read error", e);
+      return res.status(500).json({ receipt: "Lease document setup could not be loaded." });
+    }
+  });
+
+  const receiveLeaseTemplate = typeof leaseTemplateUpload === "function"
+    ? leaseTemplateUpload
+    : (_req, res) => res.status(503).json({
+        error: "lease_template_upload_not_wired",
+        receipt: "Lease document upload is not wired on this deploy.",
+      });
+
+  router.post(
+    "/operator/leasing/lease-configuration/template",
+    requireOperator,
+    requireManagementModuleAccess,
+    receiveLeaseTemplate,
+    async (req, res) => {
+      res.set("Cache-Control", "no-store");
+      if (!leasePacketsService || typeof leasePacketsService.configurePropertyLeaseTemplate !== "function") {
+        return res.status(503).json({
+          error: "lease_configuration_not_wired",
+          receipt: "Lease document setup is not wired on this deploy.",
+        });
+      }
+      const body = req.body || {};
+      const leaseTerms = Object.fromEntries([
+        "landlord_entity", "rent_payment_location", "application_fee", "amenity_fee",
+        "utility_responsibility", "utility_fee_total", "late_fee",
+        "notice_requirement", "insurance_note",
+      ].filter((key) => Object.prototype.hasOwnProperty.call(body, key))
+        .map((key) => [key, body[key]]));
+      const applicationOptions = {
+        ask_parking_interest: body.ask_parking_interest === "true",
+        parking_note: body.parking_note || null,
+        ask_utility_payment_preference: body.ask_utility_payment_preference === "true",
+        utility_payment_note: body.utility_payment_note || null,
+      };
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const out = await leasePacketsService.configurePropertyLeaseTemplate(client, {
+          propertyId: req.operator.property_id,
+          actorUserId: req.operator.id,
+          actorName: req.operator.name || null,
+          file: req.file,
+          formCode: body.form_code,
+          formVersion: body.form_version,
+          sourceAsOfDate: body.source_as_of_date,
+          leaseTerms,
+          applicationOptions,
+          confirmCompanySigner: body.confirm_company_signer === "true",
+        });
+        await client.query("commit");
+        return res.status(201).json(out);
+      } catch (e) {
+        await client.query("rollback").catch(() => {});
+        if (e && e.artifactRefusal) {
+          return res.status(400).json({ error: e.reason, receipt: e.receipt });
+        }
+        if (e && e.httpStatus) return res.status(e.httpStatus).json(e.body || { receipt: e.message });
+        console.error("lease-configuration write error", e);
+        return res.status(500).json({ receipt: "The lease document could not be established." });
+      } finally {
+        client.release();
+      }
+    }
+  );
+
+  router.post("/operator/leasing/tour-slots", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!tourAvailabilityService) {
+      return res.status(503).json({ error: "native_tour_scheduler_not_wired" });
+    }
+    const b = req.body || {};
+    try {
+      const out = await tourAvailabilityService.publishSlot({
+        propertyId: req.operator.property_id,
+        startsAt: b.starts_at,
+        endsAt: b.ends_at,
+        startsLocal: b.starts_local || null,
+        endsLocal: b.ends_local || null,
+        unitId: b.unit_id || null,
+        leasingAgentId: b.leasing_agent_id || null,
+        capacity: b.capacity,
+        actorUserId: req.operator.id,
+        actorType: "human_staff",
+        reason: b.reason || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+      });
+      return res.status(out.created ? 201 : 200).json({
+        receipt: out.created ? "Tour time published." : "That exact tour time is already published.",
+        ...out,
+      });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  });
+
+  router.post("/operator/leasing/tour-schedule", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!tourAvailabilityService) {
+      return res.status(503).json({ error: "native_tour_scheduler_not_wired" });
+    }
+    const b = req.body || {};
+    try {
+      const out = await tourAvailabilityService.publishSchedulePolicy({
+        propertyId: req.operator.property_id,
+        weeklyHours: b.weekly_hours,
+        slotDurationMinutes: b.slot_duration_minutes,
+        minimumNoticeMinutes: b.minimum_notice_minutes,
+        holidayCalendar: b.holiday_calendar,
+        defaultHostUserId: b.default_host_user_id || null,
+        horizonDays: b.horizon_days,
+        actorUserId: req.operator.id,
+        actorType: "human_staff",
+        reason: b.reason || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+      });
+      return res.json({ receipt: `${out.generated_count} new tour time(s) published.`, ...out });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  });
+
+  router.post("/operator/leasing/tour-schedule/adjust-day", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!tourAvailabilityService) {
+      return res.status(503).json({ error: "native_tour_scheduler_not_wired" });
+    }
+    const b = req.body || {};
+    try {
+      const out = await tourAvailabilityService.adjustDay({
+        propertyId: req.operator.property_id,
+        localDate: b.local_date,
+        action: b.action,
+        newHostUserId: b.new_host_user_id || null,
+        actorUserId: req.operator.id,
+        actorType: "human_staff",
+        reason: b.reason || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+      });
+      const verb = b.action === "close_open" ? "closed" : "reassigned";
+      return res.json({
+        receipt: `${out.changed_count} open tour time(s) ${verb}. ${out.booked_unchanged} booked tour(s) remain scheduled.`,
+        ...out,
+      });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  });
+
+  async function changeNativeTourSlot(req, res, action) {
+    res.set("Cache-Control", "no-store");
+    if (!tourAvailabilityService) {
+      return res.status(503).json({ error: "native_tour_scheduler_not_wired" });
+    }
+    const b = req.body || {};
+    try {
+      const out = await tourAvailabilityService.changeSlotStatus({
+        propertyId: req.operator.property_id,
+        slotId: req.params.slotId,
+        action,
+        actorUserId: req.operator.id,
+        actorType: "human_staff",
+        reason: b.reason || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+      });
+      return res.json({ receipt: action === "block" ? "Tour time blocked." : "Tour time reopened.", ...out });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  }
+
+  router.post("/operator/leasing/tour-slots/:slotId/block", requireOperator, requireLeasingModuleAccess,
+    (req, res) => changeNativeTourSlot(req, res, "block"));
+  router.post("/operator/leasing/tour-slots/:slotId/reopen", requireOperator, requireLeasingModuleAccess,
+    (req, res) => changeNativeTourSlot(req, res, "reopen"));
+
+  // ══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/leasing/prospect-match
+  //     ?person_id=&requested_start=&requested_end=&lease_term_months=
+  //   "Which homes satisfy this prospect's recorded constraints, and on
+  //   what basis." RETRIEVAL on a declared basis — not a score, not a
+  //   ranking, not an explanation (MB-1). Every home carries the
+  //   constraint, the recorded prospect fact and the governed home fact
+  //   it was compared against (MB-2); a home that fails one is RETURNED
+  //   and marked violated, never filtered away (MB-3).
+  //
+  //   STAFF SURFACE ONLY. The prospect's recorded budget is disclosed
+  //   here because this reader already sees the prospect's lead record;
+  //   the prospect-facing altitude is a separate, later decision and
+  //   Tenant Agent is reserved (MB-8).
+  //
+  //   property_id is SESSION-DERIVED, never from the query string.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/prospect-match", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      //  ── THE PERSON WALL (§40.8, MB-8) ──────────────────────────────
+      //  person_id arrives from the query string and decides whose recorded
+      //  facts get read — including person-level facts with a NULL
+      //  property_id, which prospect_capture.js writes. Without this, a
+      //  leasing user at one property could read another property's
+      //  prospect's budget, and could confirm which fact keys any person id
+      //  carries. Same predicate as the person card, through the one shared
+      //  helper. A refusal, never a filtered-down answer: a partial match
+      //  payload would itself disclose that the person exists.
+      const askedPerson = req.query.person_id || null;
+      if (askedPerson) {
+        const seen = await hasPresenceAtProperty(pool, {
+          person_id: askedPerson, property_id: req.operator.property_id });
+        if (!seen) {
+          return res.status(404).json({
+            error: "This property has no record of this person.",
+            note: "Spine will not read a person's recorded constraints at a property "
+                + "where they have never been seen. Find them in this property's leads, "
+                + "tours or conversations first, then match from there.",
+          });
+        }
+      }
+      const inventory = require("../leasing/leasing_inventory")({ pool });
+      const out = await inventory.matchProspectHomes({
+        property_id: req.operator.property_id,   // session only
+        person_id: req.query.person_id || null,
+        requested_start: req.query.requested_start || null,
+        requested_end: req.query.requested_end || null,
+        lease_term_months: req.query.lease_term_months == null || req.query.lease_term_months === ""
+          ? null : Number(req.query.lease_term_months),
+      });
+      //  A refusal is a 200 with a reason an agent can say out loud —
+      //  "I need your dates" is an answer, not an error, and it must not
+      //  render as an empty inventory result.
+      return res.json(out);
+    } catch (e) {
+      //  A failed read is UNAVAILABLE. It must never render as "no homes
+      //  match", which is a claim about inventory this read cannot make.
+      return res.status(e.httpStatus || 500).json({
+        error: e.publicMessage || e.message,
+        note: "Spine could not complete the match. This is not an answer about inventory.",
+      });
+    }
+  });
+
   // GET /operator/leasing/availability-canonical?as_of=&horizon_days=
   //   Availability as the LEASING INTERPRETATION of canonical positions.
   //   Consumes lease, notice, successor, conflict, proof and down state;
@@ -1757,9 +2227,17 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     res.set("Cache-Control", "no-store");
     try {
       const { economicShadowReport } = require("../money/economic_shadow");
+      // Economics reads use the active property session. Assignment elsewhere
+      // does not introduce a second read contract through a diagnostic option.
+      if (Object.prototype.hasOwnProperty.call(req.query, "other_property_id")) {
+        return res.status(400).json({
+          error: "Cross-property comparison is not supported. Switch to that property's session to read its economics.",
+          code: "cross_property_comparison_not_supported",
+          acting_on: req.operator.property_id,
+        });
+      }
       return res.json(await economicShadowReport(pool, {
         property_id: req.operator.property_id,
-        other_property_id: "9e2bb96e-08e2-41db-81c2-91055ceb50a3",
       }));
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
@@ -2302,39 +2780,14 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       }
       if (!personId) return res.status(400).json({ error: "person_id or lead_id required" });
       // the property wall: the person must actually have presence at THIS property
-      const p = (await client.query(`select id, name from persons where id=$1`, [personId])).rows[0];
+      const p = (await client.query(`select id, name, primary_phone_e164 as phone, email from persons where id=$1`, [personId])).rows[0];
       if (!p) return res.status(404).json({ error: "person not found" });
-      const presence = (await client.query(
-        `select 1 where exists (select 1 from leasing_leads where person_id=$1 and property_id=$2)
-             or exists (select 1 from conversations where person_id=$1 and property_id=$2)
-             or exists (select 1 from person_attributes where person_id=$1 and property_id=$2)
-             -- R3: a conversion IS presence — the card projects task events for
-             -- conversion-driven people, so the wall must recognize them.
-             or exists (select 1 from leasing_conversions where person_id=$1 and property_id=$2)
-             -- A LEASE IS PRESENCE (owner ruling, 2026-07-25). The card is
-             -- Person × Property, and a lease is the strongest possible
-             -- statement that a person has a relationship with a property.
-             -- Before this clause the wall tested leads/conversations/attrs/
-             -- conversions but NEVER leases, so 621 of 623 active-lease
-             -- residents got "person not found" — a bug that failed closed,
-             -- not a privacy control.
-             --   · Scoped to THIS property. Never portfolio-wide — that would
-             --     collide with the locked cross-deal rule.
-             --   · No lease_status filter, deliberately: 'active', 'pending'
-             --     and 'commercial' all evidence presence here, and a future
-             --     historical status must not silently drop a person off the
-             --     card. (relationship_stage.js still refuses to LABEL
-             --     former_resident — presence and stage are different jobs.)
-             --   · A PRESENCE test, not an entitlement. Which projection a
-             --     given viewer gets is a separate question and stays open.
-             -- $1/$2 are cast explicitly: every other use here is uuid, so the
-             -- inference stays uuid (see relationship_stage.js:52 for the
-             -- 42883 trap when a bare $1 meets a cast $1).
-             or exists (select 1 from leases
-                         where property_id = $2::uuid
-                           and tenant_ids is not null
-                           and tenant_ids @> array[$1::uuid])`,
-        [personId, propertyId])).rows[0];
+      //  THE PROPERTY WALL — one predicate, shared with
+      //  /operator/leasing/prospect-match. The reasoning behind each clause
+      //  (conversion is presence, a lease is presence, scoped to THIS
+      //  property, presence is not entitlement) moved into the helper with
+      //  the query, so the two doors cannot drift apart.
+      const presence = await hasPresenceAtProperty(client, { person_id: personId, property_id: propertyId });
       if (!presence) return res.status(404).json({ error: "person not found" }); // no presence here → the name does not leak across the wall
 
       const userName = async (uid) => {
@@ -2353,8 +2806,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           order by c.created_at desc limit 1`,
         [personId, propertyId])).rows[0] || null;
       const msgs = (await client.query(
-        `select ce.id, ce.conversation_id, ce.direction, ce.sender_role, ce.body,
+        `select ce.id, ce.conversation_id, ce.channel, ce.direction, ce.sender_role, ce.body,
                 ce.occurred_at, ce.provider_status, ce.sent_by_user_id,
+                ${externalEmailReply.evidenceSql("ce")} as external_email_reply,
                 su.name as sent_by_name
            from comm_events ce
            left join users su on su.id=ce.sent_by_user_id
@@ -2366,12 +2820,13 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           ? (p.name || "Prospect")
           : (m.sent_by_name || (m.sender_role === "ai" ? "AI leasing agent" : "Property team"));
         entries.push({
-          occurred_at: m.occurred_at, recorded_at: m.occurred_at,
-          source: "conversation", verb: "sent",
+          occurred_at: m.occurred_at, recorded_at: m.external_email_reply?.captured_at || m.occurred_at,
+          source: "conversation", verb: m.external_email_reply ? "recorded_external_email" : "sent",
           actor: { id: m.sent_by_user_id || null, name: who, kind: m.direction === "inbound" ? "person" : "user" },
-          summary: `${who} sent: ${String(m.body || "").slice(0, 140)}`,
-          claim_strength: "proven",
-          detail: { conversation_id: m.conversation_id, direction: m.direction, body: m.body, provider_status: m.provider_status || null },
+          summary: `${who} ${m.external_email_reply ? "reported an external email (delivery unverified)" : "sent"}: ${String(m.body || "").slice(0, 140)}`,
+          claim_strength: m.external_email_reply ? "asserted" : "proven",
+          detail: { conversation_id: m.conversation_id, channel: m.channel, direction: m.direction, body: m.body, provider_status: m.provider_status || null,
+            ...(m.external_email_reply ? {external_email_reply: m.external_email_reply} : {}) },
           supersedes: null,
         });
       }
@@ -2398,7 +2853,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         // completed/no-show truth from tour_events (occurred = when it happened,
         // recorded = when the event row was written)
         const evs = (await client.query(
-          `select event_type, actor_id, event_at, metadata
+          `select id, event_type, actor_id, event_at, metadata
              from tour_events where tour_id=$1 and event_type in ('completed','no_show','outcome_corrected')
              order by event_at asc`, [t.id])).rows;
         for (const ev of evs) {
@@ -2430,7 +2885,27 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
               detail: { tour_id: t.id }, supersedes: null,
             });
             // the outcome capture itself — recorded by whoever wrote it
-            if (md.outcome) {
+            if (Object.prototype.hasOwnProperty.call(md, "standing")) {
+              const outcomeOwner = require("../leasing/tour_outcome");
+              const normalized = outcomeOwner.normalizeStanding({ standing: md.standing });
+              const recId = md.recorded_by_user_id || ev.actor_id || null;
+              const recName = (await userName(recId)) || "staff";
+              const label = normalized.standing
+                ? outcomeOwner.STANDING_LABEL[normalized.standing] : "standing not established";
+              entries.push({
+                occurred_at: ev.event_at, recorded_at: ev.event_at,
+                source: "outcome", verb: "recorded",
+                actor: { id: recId, name: recName, kind: "user" },
+                summary: `${recName} recorded the tour outcome — ${label}`,
+                claim_strength: "asserted",
+                detail: { ...(md.outcome || {}), tour_id: t.id, source_event_id: ev.id,
+                  standing: normalized.standing,
+                  standing_unresolved_reason: md.standing_unresolved_reason || normalized.reason || null,
+                  judged_by: md.judged_by || null,
+                  notes: md.notes ?? (md.outcome && md.outcome.note) ?? null },
+                supersedes: null,
+              });
+            } else if (md.outcome) {
               const recId = md.recorded_by_user_id || ev.actor_id || null;
               const recName = (await userName(recId)) || "staff";
               entries.push({
@@ -2725,7 +3200,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       } catch (_) { /* honest null — the rest of the card is still true */ }
 
       return res.json({
-        person: { id: p.id, name: p.name },
+        person: { id: p.id, name: p.name, phone: p.phone || null, email: p.email || null },
         property_id: propertyId,
         conversation_id: conversation ? conversation.id : null,
         conversation: conversation ? { id: conversation.id, status: conversation.status, mode: conversation.mode || "ai_active" } : null,
@@ -2787,6 +3262,13 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     const mods = (req.operator && req.operator.allowed_modules) || [];
     if (!mods.includes("leasing")) return res.status(403).json({
       error: "leasing-module access required at this property (property_team_assignments.allowed_modules)." });
+    return next();
+  }
+
+  async function requireManagementModuleAccess(req, res, next) {
+    const mods = (req.operator && req.operator.allowed_modules) || [];
+    if (!mods.includes("management")) return res.status(403).json({
+      error: "management-module access required at this property (property_team_assignments.allowed_modules)." });
     return next();
   }
 
@@ -3629,9 +4111,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   //
   //  The return shape keeps `offerable` so existing call sites are untouched;
   //  callers that want to explain the refusal read refusal_code/refusal_reason.
-  async function unitOfferableState(property_id, unit_id, q = pool, space_id = null) {
+  async function unitOfferableState(property_id, unit_id, q = pool, space_id = null, intended_move_in = null) {
     return applicationTargetAuthority.resolveApplicationTarget(q, {
-      property_id, unit_id, space_id, require_offerable: true,
+      property_id, unit_id, space_id, intended_move_in, require_offerable: true,
     });
   }
 
@@ -3668,9 +4150,12 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     PROPERTY_NOT_ACTIVATED:    { status: 403, error: "property_not_activated" },
     NO_CONSENT:                { status: 403, error: "person_has_not_consented" },
     PERSON_UNKNOWN:            { status: 403, error: "person_unknown" },
+    EMAIL_MISSING:             { status: 403, error: "person_email_missing" },
+    EMAIL_OPTED_OUT:           { status: 403, error: "person_email_opted_out" },
   };
-  async function applicationBirthGate(req, person_id, q = pool) {
-    const verdict = await capability.evaluateApplicationLinkBirth(q, {
+  async function applicationBirthGate(req, person_id, q = pool, deliveryMethod = "sms") {
+    const evaluate = deliveryMethod === "manual_email" ? capability.evaluateManualEmailPreparation : capability.evaluateApplicationLinkBirth;
+    const verdict = await evaluate(q, {
       property_id: req.operator.property_id,
       person_id: person_id || null,
     });
@@ -3725,6 +4210,93 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   });
 
   // 2) PREPARE (birth) — against the EXACT prepare commitment. Raw token once.
+  router.post("/operator/leasing/conversions/:conversionId/application-offer", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const conv = (await client.query("select person_id,property_id,status from leasing_conversions where id=$1 for update", [req.params.conversionId])).rows[0];
+      if (!conv || conv.property_id !== req.operator.property_id) {
+        await client.query("rollback"); return res.status(404).json({receipt:"No application case in this property."});
+      }
+      if (conv.status !== "active") { await client.query("rollback"); return res.status(409).json({receipt:"This application case is closed."}); }
+      const b = req.body || {};
+      let invitation = null, application = null, draftRevision = false;
+      if (b.supersedes_application_offer_id || b.application_id) {
+        const invitations = (await client.query(`select * from application_invitations
+          where conversion_id=$1 and status in ('prepared','manually_sent','provider_dispatched','consumed')
+          order by created_at desc for update`, [req.params.conversionId])).rows;
+        if (invitations.length === 0 && b.supersedes_application_offer_id && !b.application_id) {
+          // Correction before the first invitation is an explicit successor,
+          // never an edit to the retained terms or a second unnamed draft.
+          // Any prior link/application keeps the existing revision boundary.
+          const draft = (await client.query(`select o.id from lease_offers o
+            where o.id=$1 and o.property_id=$2 and o.person_id=$3 and o.space_id=$4
+              and o.source='application_proposal' and o.status='draft'
+              and o.application_id is null and o.communicated_at is null
+              and not exists(select 1 from application_invitations i
+                where i.conversion_id=$5 or i.application_offer_id=o.id)
+              and not exists(select 1 from lease_applications a
+                where a.conversion_id=$5 or a.application_offer_id=o.id)`,
+            [b.supersedes_application_offer_id,conv.property_id,conv.person_id,b.space_id,req.params.conversionId])).rows[0];
+          if (!draft) throw Object.assign(new Error("Only an unsent draft without an invitation or application can be corrected here."),{httpStatus:409,code:"APPLICATION_DRAFT_REVISION_UNAVAILABLE"});
+          draftRevision = true;
+        } else {
+          if (invitations.length !== 1) throw Object.assign(new Error("One current invitation is required to revise these terms."),{httpStatus:409});
+          invitation = invitations[0];
+        }
+        if (invitation) {
+        if (invitation.property_id !== conv.property_id || invitation.person_id !== conv.person_id ||
+            invitation.space_id !== b.space_id)
+          throw Object.assign(new Error("The offer must retain this invitation's exact applicant and home."),{httpStatus:409});
+        if (invitation.expires_at && new Date(invitation.expires_at) <= new Date())
+          throw Object.assign(new Error("This application link has expired; resolve the link before revising terms."),{httpStatus:409});
+        if (invitation.lease_application_id) {
+          application = (await client.query("select * from lease_applications where id=$1 for update", [invitation.lease_application_id])).rows[0];
+          if (!application || !['submitted','approved','lease_ready'].includes(application.status))
+            throw Object.assign(new Error("This application is not open for revised terms."),{httpStatus:409});
+          if (application.conversion_id !== req.params.conversionId || application.property_id !== conv.property_id ||
+              application.person_id !== conv.person_id || application.space_id !== invitation.space_id)
+            throw Object.assign(new Error("This invitation does not resolve to its original application and home."),{httpStatus:409});
+          if ((await client.query("select id from lease_packets where application_id=$1 limit 1",[application.id])).rows.length)
+            throw Object.assign(new Error("A lease packet already exists. Resolve it before changing agreed terms."),{httpStatus:409});
+        }
+        if (b.application_id && (!application || application.id !== b.application_id))
+          throw Object.assign(new Error("The requested application does not belong to this invitation."),{httpStatus:409});
+        if (b.application_id && !b.supersedes_application_offer_id && application.application_offer_id)
+          throw Object.assign(new Error("Review the existing offer before proposing revised terms."),{httpStatus:409});
+        }
+      }
+      const made = await applicationOffers.prepareApplicationOffer(client, {
+        actor:{...req.operator,user_id:req.operator.id}, person_id:conv.person_id,
+        space_id:b.space_id, lease_start_date:b.lease_start_date, lease_end_date:b.lease_end_date,
+        rent:b.rent, security_deposit:b.security_deposit, fees:b.fees,
+        concessions:b.concessions, idempotency_key:b.idempotency_key,
+        supersedes_application_offer_id:b.supersedes_application_offer_id || null,
+        application_id:application ? application.id : null,
+        create_only:!invitation && !b.application_id,
+      });
+      const target = await applicationTargetAuthority.resolveApplicationTarget(client, {
+        property_id:req.operator.property_id, space_id:made.offer.space_id,
+        intended_move_in:made.application_terms.lease_start_date,
+        requested_end:made.application_terms.lease_end_date,
+      });
+      if (!target.ok) throw Object.assign(new Error(target.refusal_reason), {httpStatus:target.httpStatus || 409,code:target.refusal_code});
+      if (invitation) {
+        if (![b.supersedes_application_offer_id || null,made.offer.id].includes(invitation.application_offer_id))
+          throw Object.assign(new Error("The application terms changed again. Reload the current offer before revising it."),{httpStatus:409});
+        await client.query("update application_invitations set application_offer_id=$1,intended_move_in=$2,updated_at=now() where id=$3",
+          [made.offer.id,made.application_terms.lease_start_date,invitation.id]);
+      }
+      await client.query("commit");
+      return res.json({application_offer_id:made.offer.id,application_terms:made.application_terms,idempotent:made.idempotent,
+        applicant_review_required:!!invitation, draft_revision:draftRevision,
+        receipt:invitation ? "Revised terms are ready in the existing application link. Applicant review is required; no message was sent." : draftRevision ? "Application draft corrected. No invitation was created and no message was sent." : "Application offer prepared."});
+    } catch(e) {
+      await client.query("rollback").catch(()=>{});
+      return res.status(e.httpStatus||500).json({error:e.code,receipt:e.message});
+    } finally { client.release(); }
+  });
+
   router.post("/operator/leasing/application-invitations", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     if (!svcGuard(res, "prepareApplicationLinkForObligation")) return;
@@ -3737,7 +4309,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     //  property never sends one and the server derives the sole space exactly
     //  as before. For a by-the-bed unit it is required, and the authority
     //  refuses with space_choice_required when it is missing.
-    const { prepare_obligation_id, unit_id, space_id = null, expires_at = null } = req.body || {};
+    const { prepare_obligation_id, unit_id, space_id = null, intended_move_in = null, expires_at = null } = req.body || {};
     if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required — prepare acts on the exact open commitment." });
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
     const client = await pool.connect();
@@ -3752,10 +4324,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const gate = await applicationBirthGate(req, ob.person_id, client);
       if (!gate.ok) { await client.query("rollback"); return res.status(gate.status).json(gate); }
       const out = await applicationInvitations.prepareApplicationLinkForObligation(client, {
-        prepare_obligation_id, unit_id, space_id, expires_at,
+        prepare_obligation_id, unit_id, space_id, intended_move_in, expires_at,
+        application_offer_id:req.body.application_offer_id,
         actor_user_id: req.operator.id,
-        unitOfferable: async (c, { property_id, unit_id, space_id }) =>
-          unitOfferableState(property_id, unit_id, c, space_id),
+        unitOfferable: async (c, { property_id, unit_id, space_id, intended_move_in }) =>
+          unitOfferableState(property_id, unit_id, c, space_id, intended_move_in),
       });
       await client.query("commit");
       out.link = `${APPLICANT_ORIGIN}/t/application/${out.token}`;
@@ -3771,7 +4344,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   router.post("/operator/leasing/application-invitations/send", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     if (!svcGuard(res, "dispatchPreparedLinkProvider")) return;
-    const { prepare_obligation_id, unit_id, space_id = null, expires_at = null, message_prefix = "" } = req.body || {};
+    const { prepare_obligation_id, unit_id, space_id = null, intended_move_in = null, expires_at = null, message_prefix = "" } = req.body || {};
     if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required." });
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
     const client = await pool.connect();
@@ -3787,10 +4360,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const gate = await applicationBirthGate(req, ob.person_id, client);
       if (!gate.ok) { await client.query("rollback"); return res.status(gate.status).json(gate); }
       prepared = await applicationInvitations.prepareApplicationLinkForObligation(client, {
-        prepare_obligation_id, unit_id, space_id, expires_at,
+        prepare_obligation_id, unit_id, space_id, intended_move_in, expires_at,
+        application_offer_id:req.body.application_offer_id,
         actor_user_id: req.operator.id,
-        unitOfferable: async (c, { property_id, unit_id, space_id }) =>
-          unitOfferableState(property_id, unit_id, c, space_id),
+        unitOfferable: async (c, { property_id, unit_id, space_id, intended_move_in }) =>
+          unitOfferableState(property_id, unit_id, c, space_id, intended_move_in),
       });
       await client.query("commit");
     } catch (e) {
@@ -3842,12 +4416,18 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       }
 
       const {
+        delivery_method = "sms",
         unit_id,
+        space_id = null,
+        intended_move_in = null,
         idempotency_key,
         expires_at = null,
         message_prefix = "",
       } = req.body || {};
 
+      if (!["sms", "manual_email"].includes(delivery_method)) return res.status(400).json({ error: "invalid_delivery_method" });
+      const applicantOrigin = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "");
+      if (delivery_method === "manual_email" && !applicantOrigin) return res.status(503).json({ error: "applicant_link_origin_not_configured" });
       if (!unit_id) {
         return res.status(400).json({
           error: "unit_id is required.",
@@ -3888,7 +4468,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           });
         }
 
-        const gate = await applicationBirthGate(req, conv.person_id, client);
+        const gate = await applicationBirthGate(req, conv.person_id, client, delivery_method);
         if (!gate.ok) {
           await client.query("rollback");
           return res.status(gate.status).json(gate);
@@ -3898,27 +4478,54 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           client,
           { conversionService, applicationInvitations },
           {
+            deliveryMethod: delivery_method,
             conversionId,
             actorUserId: req.operator.id,
             unitId: unit_id,
+            spaceId: space_id,
+            intendedMoveIn: intended_move_in,
+            applicationOfferId: req.body.application_offer_id,
             idempotencyKey: idempotency_key,
             expiresAt: expires_at,
-            unitOfferable: async (c, { property_id, unit_id: candidateUnitId }) =>
-              unitOfferableState(property_id, candidateUnitId, c),
+            unitOfferable: async (c, {
+              property_id,
+              unit_id: candidateUnitId,
+              space_id: candidateSpaceId,
+              intended_move_in: candidateMoveIn,
+            }) => unitOfferableState(
+              property_id,
+              candidateUnitId,
+              c,
+              candidateSpaceId,
+              candidateMoveIn
+            ),
           }
         );
 
+        if (delivery_method === "manual_email") {
+          staged.email = (await client.query("select email from persons where id=$1", [conv.person_id])).rows[0]?.email?.trim();
+        }
         await client.query("commit");
       } catch (e) {
         await client.query("rollback").catch(() => {});
         return res.status(e.httpStatus || 500).json({
           error: e.code || e.publicMessage || e.message,
           receipt: e.publicMessage || e.message || "The application send could not be prepared.",
+          ...(e.recovery || {}),
         });
       } finally {
         client.release();
       }
 
+      if (delivery_method === "manual_email") return res.json({
+        prepared: true, sent: false, dispatched: false, delivery_method,
+        conversion_id: staged.conversion_id, invitation_id: staged.invitation_id,
+        send_obligation_id: staged.send_obligation_id, prepare_obligation_id: staged.prepare_obligation_id,
+        unit_id: staged.unit_id, space_id: staged.space_id, intended_move_in: staged.intended_move_in,
+        link: applicantOrigin + "/t/application/" + staged.token,
+        recipient_snapshot: staged.email, email: staged.email,
+        receipt: "Application link prepared. Nothing was sent. Email it externally, then record that you sent it.",
+      });
       try {
         const out = await applicationSendCommand.dispatchApplicationSend(
           { applicationInvitations },
@@ -4082,91 +4689,32 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
 
 
   // ══════════════════════════════════════════════════════════════════
-  //  LEASEABLE UNITS — the send-application selector.
+  //  LEASEABLE TARGETS — the send-application selector.
   //
   //  Session-gated, read-only, over CANONICAL availability and the ONE
   //  application-target authority. The legacy availability projection is gone
   //  from this route, which is what makes the module deletable.
   //
-  //  TWO LISTS, NOT ONE FILTERED LIST. A multi-space unit is not absent
-  //  because it failed a marketing test — it is present and unselectable
-  //  because the durable chain cannot carry a space choice. Dropping those
-  //  rows silently would leave an operator hunting for a unit they can see in
-  //  every other surface, with no statement of why it is missing here.
+  //  Migration 182 made space_id durable from invitation through application,
+  //  executed-lease evidence and tenancy. The selector therefore returns one
+  //  row per exact leaseable target: whole-unit properties still show one
+  //  simple unit row, while by-bed properties show the available beds. The
+  //  browser sends the chosen space_id back and the write authority validates
+  //  it again; a menu is never treated as a choice.
   //
-  //  ONE ROW PER UNIT, NEVER ONE PER SPACE. The application segment is
-  //  unit-grained; returning a selectable row per space would offer a choice
-  //  the invitation cannot preserve.
-  //
-  //  resolved_space_id on an eligible row is a SERVER-AUTHORED VALIDATION
-  //  RECEIPT — the space availability was evaluated against. It is not a
-  //  "selected space" and the browser must not send it back.
+  //  `eligible_units` and `unsupported_multi_space_units` remain as rolling-
+  //  deploy compatibility fields. Old apps keep their sole-space behavior;
+  //  the current app prefers `eligible_targets` and can operate at either
+  //  grain without a second endpoint.
   // ══════════════════════════════════════════════════════════════════
   router.get("/operator/leasing/leaseable-units", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const property_id = req.operator.property_id;         // SERVER-DERIVED, never the query string
-
-      // Space grain per unit, including units with none. LEFT JOIN so a
-      // zero-space unit is a row rather than an absence.
-      const shapes = (await pool.query(
-        `select u.id as unit_id, u.unit_number, count(s.id)::int as space_count
-           from units u
-           left join spaces s on s.unit_id = u.id
-          where u.property_id = $1
-          group by u.id, u.unit_number
-          order by u.unit_number asc`,
-        [property_id]
-      )).rows;
-
-      // ONE canonical availability read for the whole property. The authority's
-      // OWN policy function is then applied per row — resolveApplicationTarget
-      // per unit would re-read availability for the entire property once per
-      // unit, which is quadratic. Same rule, evaluated once per position.
-      const avail = await availabilityRead(pool, { property_id });
-      const byUnit = new Map(avail.rows.map((r) => [String(r.unit_id), r]));
-
-      const eligible_units = [];
-      const unsupported_multi_space_units = [];
-
-      for (const u of shapes) {
-        if (u.space_count > 1) {
-          unsupported_multi_space_units.push({
-            unit_id: u.unit_id,
-            unit_number: u.unit_number,
-            rentable_space_count: u.space_count,
-            reason_code: applicationTargetAuthority.REFUSAL.MULTI_SPACE,
-            reason: applicationTargetAuthority.REFUSAL_TEXT[applicationTargetAuthority.REFUSAL.MULTI_SPACE],
-          });
-          continue;
-        }
-        if (u.space_count === 0) continue;   // unconfigured: not eligible, not a grain refusal
-
-        const row = byUnit.get(String(u.unit_id));
-        if (!row) continue;                  // classified by nobody: not evidence of availability
-        const verdict = applicationTargetAuthority.evaluateOfferability(row);
-        if (!verdict.offerable) continue;    // ordinary not-offerable, not a grain refusal
-
-        eligible_units.push({
-          unit_id: row.unit_id,
-          unit_number: row.unit_number,
-          resolved_space_id: row.space_id,   // validation receipt, NOT a selection
-          position_kind: row.position_kind,
-          space_label: row.space_label,
-          marketing_state: row.marketing_state,
-          available_from: row.available_from,
-          availability_confidence: row.availability_confidence,
-          resolution_basis: "sole_space_unit",
-        });
-      }
-
-      return res.json({
-        property_id,
-        eligible_count: eligible_units.length,
-        unsupported_count: unsupported_multi_space_units.length,
-        eligible_units,
-        unsupported_multi_space_units,
-      });
+      return res.json(await applicationTargetRead.leaseableApplicationTargets(
+        pool,
+        { property_id, requested_start:req.query.requested_start ?? null, requested_end:req.query.requested_end ?? null }
+      ));
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.message || "leaseable-units read failed" });
     }
@@ -4373,10 +4921,16 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       [packetId]
     )).rows[0];
 
+  //  TWO-STEP LEASING (195): `submitted` is admitted at the perimeter so the
+  //  ONE eligibility predicate (lease_packet_eligibility.js) can decide on
+  //  the acknowledged-authored-offer basis. The perimeter stays the coarse
+  //  wall (session property, leasing module); a submitted application with
+  //  no acknowledged offer is still refused by the predicate, byte-for-byte
+  //  as before.
   const operatorGeneratePacketPerimeter = activationPerimeter({
     pool,
     loadApplication: _getAppForPerimeter,
-    eligibleStatuses: ["lease_ready", "tenant_signed", "approved"],
+    eligibleStatuses: ["lease_ready", "tenant_signed", "approved", "submitted"],
     action: "generate_lease_packet",
     requiredModule: "leasing",
   });
@@ -4384,7 +4938,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   const operatorIssuePacketPerimeter = activationPerimeter({
     pool,
     loadApplication: _getAppForPacketPerimeter,
-    eligibleStatuses: ["lease_ready", "tenant_signed", "approved"],
+    eligibleStatuses: ["lease_ready", "tenant_signed", "approved", "submitted"],
     action: "issue_lease_packet_link",
     requiredModule: "leasing",
   });

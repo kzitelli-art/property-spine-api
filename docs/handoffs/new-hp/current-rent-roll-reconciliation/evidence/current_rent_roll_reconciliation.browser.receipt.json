@@ -1,0 +1,80 @@
+{
+  "passed": 13,
+  "failed": 0,
+  "results": [
+    {
+      "label": "B1 the tracker's own labels are shown as received (101A / A), no home pre-selected, and the 0-of-4 counter is VISIBLE to the document (it carried a class with no CSS rule and was display:none)",
+      "ok": true,
+      "detail": "17-101 · Room2\n1417-102 · Room1\n1417-102 · Room2\nCreate new as source names it\n\n101B\tB\t1\tNo home has been selected.\t\n— choose —\n1417-101 · Room1\n1417-101 · Room2\n1417-102 · Room1\n1417-102 · Room2\nCreate new as source names it\n\n102A\tA\t1\tNo home has been selected.\t\n— choose —\n1417-101 · Room1\n1417-101 · Room2\n1417-102 · Room1\n1417-102 · Room2\nCreate new as source names it\n\n102B\tB\t1\tNo home has been selected.\t\n— choose —\n1417-101 · Room1\n1417-101 · Room2\n1417-102 · Room1\n1417-102 · Room2\nCreate new as source names it\nSIGN OUT\n⚙\nProperty\nCHOOSE A DESK.\nUNASSIGNED\nMANAGEMENT\nPROPERTY COMMAND.\nOPEN MANAGEMENT\nUNASSIGNED\nLEASING\nKEYS, TOURS, LEASES.\nOPEN LEASING\nUNASSIGNED\nMAINTENANCE\nREPAIRS AND PROOF.\nOPEN MAINTENANCE\nUNASSIGNED\nINVESTOR RELATIONS\nCAPITAL UPDATES.\nOPEN INVESTOR RELATIONS\n↓ OUTPUT\nMONTHLY REPORT\nReads from the rooms above — the system assembles it, you review it.\nOpen report → | counter={\"found\":true,\"text\":\"0 of 4 current source identities have a reviewed target.\",\"covered\":false}"
+    },
+    {
+      "label": "B2 every current source identity carries a picker, the blank current row included (a blank name is still a home the source names)",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "label": "B3 REPAIRED PICKER: existing beds are offered by canonical label (1417-101 · Room1 …) — the shipped picker filtered on a field the preview never sends and offered nothing",
+      "ok": true,
+      "detail": "— choose — | 1417-101 · Room1 | 1417-101 · Room2 | 1417-102 · Room1 | 1417-102 · Room2 | Create new as source names it"
+    },
+    {
+      "label": "B4 the picker is visible to the document (not covered)",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "label": "B5 the reviewed mapping shows 4 of 4 resolved before Apply",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "label": "B6 rows read: three signed rows are Ready with a blank term; the blank row Needs a look and is not vacancy",
+      "ok": true,
+      "detail": "SECTION\tUNIT\tRESIDENT\tACTUAL RENT\tASKING RENT\tTERM\tSTATE\t\nCurrent occupancy\t101A|A\tRehearsal Current Resident 05fdea\t$850\t—\t— → —\tREADY\tADD LEAVE OUT\nCurrent occupancy\t101B|B\tRehearsal New Resident 05fdea\t$875\t—\t— → —\tREADY\tADD LEAVE OUT\nCurrent occupancy\t102A|A\tRehearsal Another Resident 05fdea\t$860\t—\t— → —\tREADY\tADD LEAVE OUT\nCurrent occupancy\t102B|B\t—\t—\t—\t— → —\tNEEDS A LOOK\nThe source does not identify a resident or explicitly describe this position as vacant. A blank name cannot establish vacancy.\tLEAVE OUT"
+    },
+    {
+      "label": "B7 the mapping line names Monthly Rent as rent and the tracker columns as read",
+      "ok": true,
+      "detail": "Columns understood: Unit → unit number · Room → space label · Unit Type → unit type · Name → name · Signed/Pending → status · Monthly Rent → actual rent · Email → email · Phone → phone"
+    },
+    {
+      "label": "B8 a signed, dateless row is Added as current occupancy with contractual terms unknown (no lease)",
+      "ok": true,
+      "detail": "Current occupancy\t101B|B\tRehearsal New Resident 05fdea\t$875\t—\t— → —\tADDED\nAccepted as current occupancy as of 2026-09-13: Rehearsal New Resident 05fdea on Unit 1417-101 · Room2 (source \"101B\"). Contractual terms unknown — this source carries no lease dates, so no lease was created; the reported rent is retained as evidence.\t"
+    },
+    {
+      "label": "B9 the bed's current resident is offered as the identity candidate (recognition over re-entry)",
+      "ok": true,
+      "detail": "Current occupancy\t101A|A\tRehearsal Current Resident 05fdea\t$850\t—\t— → —\tNEEDS A LOOK\nThis home already has a resident on record. Choose whether this row names that resident or a different person; no person or lease was invented.\t\nChoose the resident identity. Spine will not choose a match for you.\nUSE REHEARSAL CURRENT RESIDENT 05FDEA CREATE NEW RESIDENT\nLEAVE OUT"
+    },
+    {
+      "label": "B10 Add recognises the existing tenancy: Already represented, tied to the lease in force, no second lease",
+      "ok": true,
+      "detail": "Current occupancy\t101A|A\tRehearsal Current Resident 05fdea\t$850\t—\t— → —\tADDED\nAlready represented: Rehearsal Current Resident 05fdea holds lease <id-6> (active, 2025-08-01 → 2026-12-31) on Unit 1417-101 · Room1 (source \"101A\"). This row is evidence about that tenancy; no second lease was created.\t"
+    },
+    {
+      "label": "B11 the blank row offers only Leave out — never Add, never vacancy",
+      "ok": true,
+      "detail": "Current occupancy\t102B|B\t—\t—\t—\t— → —\tNEEDS A LOOK\nThe source does not identify a resident or explicitly describe this position as vacant. A blank name cannot establish vacancy.\tLEAVE OUT"
+    },
+    {
+      "label": "B12 establishing records the position with the unresolved blank row still needing attention",
+      "ok": true,
+      "detail": "PROPERTY SPINE\nDEAL SETUP\n← BACK TO APP\nSIGN OUT\nDEALS\n✓\nLease & occupancy established as of 2026-09-13: 3 units, 1 still needing attention.\n← ALL DEALS\nCRR_BROWSER_05FDEA\nPROPERTY\tINVENTORY\tSETUP\t\nReconciliation (rehearsal)\n1417 Rehearsal Way\t2 units\tLease & occupancy established\nas of 2026-09-13 · 3 units · 1 need attention\tREVIEW\nADD AN EXISTING PROPERTY\n\nNo eligible existing properties were re"
+    },
+    {
+      "label": "B13 browser emitted no page errors",
+      "ok": true,
+      "detail": null
+    }
+  ],
+  "screenshots": [
+    "01-identity-review.png",
+    "02-reviewed-mapping-chosen.png",
+    "03-what-spine-read.png",
+    "04-occupancy-accepted.png",
+    "05-candidate-offered.png",
+    "06-already-represented.png",
+    "07-established.png"
+  ]
+}

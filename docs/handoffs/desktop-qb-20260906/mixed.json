@@ -1,0 +1,25 @@
+{
+  "proof": "canonical_onboarding_review",
+  "phase": "mixed",
+  "mode": "server_interpreted_retained_source",
+  "app_source": "successor_index_html",
+  "api_origin": "literal_loopback",
+  "external_requests_blocked_before_egress": 0,
+  "confirmations_attempted": 2,
+  "sources": [
+    {
+      "source": "synthetic_mixed_confirmation",
+      "ready_before": 2,
+      "added": 1,
+      "refused": 1,
+      "remaining": 0,
+      "refusal_error": "vacancy_contradicted_by_operative_lease",
+      "final_status_counts": {
+        "promoted": 1,
+        "needs_review": 1,
+        "staged": 0
+      },
+      "visible_persistent_result": true
+    }
+  ]
+}

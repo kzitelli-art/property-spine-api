@@ -54,16 +54,20 @@ const explainModule = require("./src/money/explain");
 const tenantLinkModule = require("./src/comms/tenant_link"); // tenant text line Phase 1: connection (invite link → verify → session)
 const legalRoutesModule = require("./src/identity/legal_routes_block"); // A2P 10DLC public legal pages (privacy + SMS terms) — carrier-reachable
 const teamAccessModule = require("./src/identity/team_access");
+const staffBridgeModule = require("./src/identity/staff_bridge");
 const staffSessions = require("./src/identity/staff_session_service");        // the ONE session resolver
 const propertyCreation = require("./src/identity/property_creation_service"); // Build 1A-1: THE property write
+const { makeTourAvailabilityService } = require("./src/leasing/tour_availability_service");
 const superAdminModule = require("./src/identity/super_admin");
 const orgAdminModule   = require("./src/identity/org_admin");
 const smsTransport = require("./src/comms/sms"); // SMS transport (Twilio) — fail-soft when unconfigured
 const communicationsBoundary = require("./src/comms/communications_boundary"); // the permanent communications boundary — one inbound resolver, one outbound gate
+const { makeStaffLeasingAction } = require("./src/leasing/staff_sms_action");
 const meetingEvidenceModule = require("./src/meeting_evidence/meeting_evidence_routes");
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+const leaseTemplateUpload = upload.single("file");
 
 // The AI client. ANTHROPIC_API_KEY is set as an environment variable in
 // Render — never hardcoded. This is the "rent the model" piece: the model
@@ -80,6 +84,15 @@ const app = express();
 // browser that holds the in-memory staff token to drive the operator surface.
 const OPERATOR_APP_ORIGIN = String(process.env.OPERATOR_APP_ORIGIN || "").trim();
 function isOperatorPath(p) { return p === "/operator" || p.startsWith("/operator/"); }
+// Phone-first team access predates /operator/*, but it is the same signed-in
+// staff surface. Keep its existing URLs while giving them the same browser
+// boundary: every matching handler resolves x-staff-session and derives the
+// property/actor from that live session. Exact shapes only; a lookalike path
+// must continue through the shared-key gate.
+function isTeamAccessPath(p) {
+  return /^\/properties\/[^/]+\/(?:team|team-invites|my-access)$/.test(p)
+      || /^\/property-team-assignments\/[^/]+$/.test(p);
+}
 //  Deal Setup. SESSION-GATED, not public: every route runs requireHuman
 //  (x-staff-session → a real users row) before it does anything, and every
 //  write records the human it resolved. It skips the operator-KEY gate for
@@ -104,7 +117,7 @@ const operatorCors = cors({
     return cb(null, false); // unset OR mismatch → denied (fail closed)
   },
   allowedHeaders: ["content-type", "x-staff-session"],
-  methods: ["GET", "POST", "OPTIONS"],
+  methods: ["GET", "POST", "PATCH", "OPTIONS"],
   credentials: false,
 });
 
@@ -117,7 +130,7 @@ const generalCors = cors({
 });
 
 app.use((req, res, next) => {
-  if (isOperatorPath(req.path)) return operatorCors(req, res, next);
+  if (isOperatorPath(req.path) || isTeamAccessPath(req.path)) return operatorCors(req, res, next);
   return generalCors(req, res, next);
 });
 app.set("trust proxy", 1); // Render = one proxy hop: makes req.ip the real client so per-IP rate limits actually bind per client
@@ -135,6 +148,7 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: databaseSsl(process.env.DATABASE_URL),
 });
+const tourAvailabilityService = makeTourAvailabilityService({ pool }); // the ONE native tour-slot publication command
 
 // ── READ AI WEBHOOK — raw bytes before JSON middleware ───────────────
 //  This route is mounted before global express.json() so X-Read-Signature
@@ -201,6 +215,7 @@ app.use((req, res, next) => {
   const p = req.path;
   if (PUBLIC_EXACT.has(p) || PUBLIC_PREFIXES.some((x) => p === x || p.startsWith(x))) return next();
   if (isOperatorPath(p)) return next(); // /operator/* applies its own staff-session auth
+  if (isTeamAccessPath(p)) return next(); // legacy URLs, same staff-session boundary
   if (isDealSetupPath(p)) return next(); // /deal-setup/* applies its own staff-session auth (requireHuman)
   if (p === "/admin" || p.startsWith("/admin/")) return next(); // /admin/* enforces its own super-admin session auth
   if (p === "/org" || p.startsWith("/org/")) return next();     // /org/* enforces its own org-admin session auth
@@ -290,7 +305,7 @@ const {
 
 // ── RELEASE-0 BASELINE ROUTES (health, build, properties, units, persons, events, ──
 // ── legacy obligations, users) — extracted verbatim; mounted at the same position. ──
-app.use("/", require("./src/baseline/baseline_routes")({ pool, spawnObligationFromEvent }));
+app.use("/", require("./src/baseline/baseline_routes")({ pool, spawnObligationFromEvent, staffSessions }));
 // ── LEASE LIFECYCLE (leases, schedule, payments, delinquency, approval, tenants) — ──
 // ── extracted verbatim; mounted at the same position, routes unchanged. ──
 app.use("/", require("./src/tenancy/lease_lifecycle_routes")({ pool, spawnObligationFromEvent }));
@@ -308,7 +323,7 @@ const identifyInstance = identifyModule({
 app.use("/", identifyInstance);
 
 // ── AI DOCUMENT INGEST ROUTES — extracted verbatim, mounted at the same position. ──
-app.use("/", require("./src/agent/document_ingest_routes")({ pool, upload, runIngestAuto, fileToText }));
+app.use("/", require("./src/agent/document_ingest_routes")({ pool, upload, runIngestAuto, fileToText, staffSessions }));
 
 // ── THE ONE CANONICAL WORK-ORDER SERVICE ──
 //  Built once, here, and injected into EVERY consumer. Its own header carries
@@ -400,17 +415,19 @@ app.use("/", require("./src/obligations/operator_obligation_actions")({ pool }))
 //  policy — a suggestion the human confirms, never a write.
 app.use("/", require("./src/surfaces/asset_management")({ pool, fileToText }));
 
-// ── ASK SPINE (SLICE 1) — read-only sibling of the staff agent ───────────
-//  Answers "What needs attention?" from live obligations, property-scoped by
-//  the operator session. No proposals, no confirmations, no writes, and the
-//  question is not recorded as a staff-agent message. It shares the authority
+let __staffLeasingAction = null;
+// ── ASK SPINE — governed reads + one explicit application action ─────────
+//  Answers property questions and exposes one explicitly named application
+//  proposal/confirmation action, all scoped by the operator session. Questions
+//  are not recorded as staff-agent messages. The action shares the authority
 //  seam above and nothing else.
 app.use("/", require("./src/agent/ask_spine")({ pool, anthropic,
   //  A THUNK, read at request time. Ask Spine mounts here; the
   //  applications module is composed further down, so a value captured
   //  now would be undefined forever. Same reason as the lease-packet
   //  execution services above.
-  applicationsService: () => __applications && __applications._service })); 
+  applicationsService: () => __applications && __applications._service,
+  conversationalApplicationAction: () => __staffLeasingAction }));
 
 // ── MEETING EVIDENCE — governed capture binding/read surface ─────────
 //  The provider webhook is mounted above express.json(); these operator
@@ -447,6 +464,9 @@ const __leasePackets = leasePacketsModule({
     executedLease: __executedLease,
     confirmTerm: __tenancyAnchor && __tenancyAnchor.confirmTermService,
     spawnObligationFromEvent,
+    //  Two-step Execute composes the ONE canonical approveApplication; the
+    //  applications module is composed ~230 lines below, hence the thunk.
+    applications: (typeof __applications !== "undefined" && __applications) ? __applications._service : null,
   }),
 });
 app.use("/", __leasePackets); // ONE packet service instance; legacy + operator doors share _service
@@ -491,7 +511,20 @@ const sms = smsTransport(); // SMS transport (Twilio) — disabled until env var
 const commBoundary = communicationsBoundary({ pool, sms }); // every business send goes through this gate; raw sms.sendSms is transport only
 
 app.use("/", require("./src/comms/sms_proof_route")({ commBoundary }));
-app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService: () => agentApp._service }));
+__staffLeasingAction = makeStaffLeasingAction({
+  getLeasingTourService: () => __leasingLeads && __leasingLeads._service,
+  getConversionService: () => __leasingConversion && __leasingConversion._service,
+  getApplicationInvitations: () => __applicationSubmission && __applicationSubmission._service,
+});
+app.use("/", tenantLinkModule({
+  pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService,
+  getAgentService: () => agentApp._service,
+  applicationsService: () => __applications && __applications._service,
+  getLeasingTourService: () => __leasingLeads && __leasingLeads._service,
+  getConversionService: () => __leasingConversion && __leasingConversion._service,
+  getApplicationInvitations: () => __applicationSubmission && __applicationSubmission._service,
+  staffLeasingAction: __staffLeasingAction,
+}));
 //  A2P 10DLC legal pages — /legal/privacy and /legal/sms-terms, plus .txt
 //  fallbacks. Public and unauthenticated by requirement: a carrier reviewer
 //  must be able to fetch them during campaign vetting with no session.
@@ -499,7 +532,8 @@ app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary
 //  consent checkbox links to. The module existed since June and was mounted
 //  NOWHERE, so both returned 404 while the file sat in the repo looking done.
 app.use("/", legalRoutesModule());
-app.use("/", teamAccessModule({ pool, sms, commBoundary }));
+const staffBridge = staffBridgeModule({ pool });
+app.use("/", teamAccessModule({ pool, sms, commBoundary, staffBridgeService: staffBridge._service }));
 app.use("/", superAdminModule({ pool }));
 app.use("/", orgAdminModule({ pool }));
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
@@ -558,7 +592,7 @@ app.use("/", __decisions);
 const commitmentLedgerModule = require("./src/money/commitment_ledger");   // pricing authority + lease offers (062–065)
 const __commitmentLedger = commitmentLedgerModule({ pool, spawnObligationFromEvent, completeObligation, decisionService: __decisions._service });
 app.use("/", __commitmentLedger);
-const __leasingLeads = leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services, commitmentLedger: __commitmentLedger._service, commBoundary });
+const __leasingLeads = leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services, commitmentLedger: __commitmentLedger._service, commBoundary, tourAvailabilityService });
 app.use("/", __leasingLeads); // instance captured: its ONE tour-completion service is handed to the operator door below (no fork)
 
 // ── APPLICATION SUBMISSION SLICE (invitation front + shared submit service +
@@ -683,12 +717,6 @@ app.use("/", demoModule({ pool, submissionService: __applicationSubmission._serv
 //    no deletes, reversible, fail-closed to the Demo Building. (demo_reset.js) ──
 app.use("/", require("./src/leasing/demo_reset")({ pool, leasingLifecycle }));
 
-// ── Agent Stage 0: model capability proof (operator-gated, NO schema, NO secrets
-//    exposed). One real generation to confirm the live model path works before any
-//    agent architecture is built on it. GET /agent/capability → { ok, reachable, model }. ──
-const agentCapabilityModule = require("./src/leasing/agent_capability");
-app.use("/", agentCapabilityModule({ anthropic, INGEST_MODEL }));
-
 // ── Agent Stage A: supervised, grounded, draft-first conversation loop. The agent
 //    PROPOSES; nothing reaches a lead until a human dispatches it. Two-transaction
 //    model call, monotonic thread versioning, obligation-backed review, server-derived
@@ -713,6 +741,7 @@ app.use("/", require("./src/identity/operator_properties")({ pool }));
 const operatorModule = require("./src/identity/operator");
 app.use("/", operatorModule({ pool, agentService: agentApp._service,
   leasingTourService: __leasingLeads._service, // the ONE completion service (leasing_leads.js) — session door calls the same tx
+  tourAvailabilityService, // one native slot command; dashboard/text adapters never insert directly
   // the invitation service (application_submission) — the session-gated operator
   // route calls its create/attest services; no duplicate invitation logic.
   applicationInvitations: __applicationSubmission._service,
@@ -737,7 +766,8 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
   // (built once at the movein mount). The operator keys-ready door is the PM
   // action delivery.js anticipated; without this injection it fails closed 503.
   deliveryHelper,
-  leasePacketsService: __leasePackets._service }));
+  leasePacketsService: __leasePackets._service,
+  leaseTemplateUpload }));
 
 // ── STAFF IDENTITY BRIDGE (067) — the authorized point-and-confirm workflow:
 // classify accounts, suggest candidates (exact verified email only, never
@@ -746,8 +776,7 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
 // audited acts by an admin staff session — never inference, never capture
 // flow. Eligibility resolution lives in staff_identity_resolver.js (the ONE
 // module allowed to join users.person_id to assignments). (staff_bridge.js)
-const staffBridgeModule = require("./src/identity/staff_bridge");
-app.use("/", staffBridgeModule({ pool }));
+app.use("/", staffBridge);
 
 // ── REMOVED 2026-07-28: the demo facts seed is no longer in the HTTP runtime.
 // It was mounted here as POST /demo/seed-solo-facts. `/demo/` is in

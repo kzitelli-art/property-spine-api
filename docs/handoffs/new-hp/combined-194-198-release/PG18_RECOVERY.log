@@ -1,0 +1,57 @@
+
+COMBINED MIGRATION 194-198 RELEASE/RECOVERY — owned spine_proof_71fbd5c925a9d3936ce0da23e2aecbea
+
+  ok    input fixture is exact 194
+  ok    input carries the old source-claim index and no 195-197 objects
+  ok    canonical child connection mechanism installs a positive statement_timeout
+  ok    195_two_step_leasing_authored_offer_basis.sql actual held lock fails the canonical migration
+  ok    195_two_step_leasing_authored_offer_basis.sql reports PostgreSQL's real lock timeout
+  ok    195_two_step_leasing_authored_offer_basis.sql release process is bounded
+  ok    failure leaves exact ledger 194
+  ok    normal verify-only startup refuses partial 194
+  ok    195 rollback uses ordinary --apply retry through exact 198
+  ok    196_source_home_identity_review.sql actual held lock fails the canonical migration
+  ok    196_source_home_identity_review.sql reports PostgreSQL's real lock timeout
+  ok    196_source_home_identity_review.sql release process is bounded
+  ok    failure leaves exact ledger 195
+  ok    normal verify-only startup refuses partial 195
+  ok    wrong --resume196 refuses exact 195
+  ok    exact 195 resumes explicitly through 198
+  ok    197_inventory_correction_hardening.sql actual held lock fails the canonical migration
+  ok    197_inventory_correction_hardening.sql reports PostgreSQL's real lock timeout
+  ok    197_inventory_correction_hardening.sql release process is bounded
+  ok    failure leaves exact ledger 196
+  ok    normal verify-only startup refuses partial 196
+  ok    wrong --resume197 refuses exact 196
+  ok    exact 196 resumes explicitly through 198
+  ok    198_proposed_source_claim_identity.sql actual held lock fails the canonical migration
+  ok    198_proposed_source_claim_identity.sql reports PostgreSQL's real lock timeout
+  ok    198_proposed_source_claim_identity.sql release process is bounded
+  ok    failure leaves exact ledger 197
+  ok    normal verify-only startup refuses partial 197
+  ok    wrong --resume196 refuses exact 197
+  ok    exact 197 resumes explicitly through 198
+  ok    one full --apply from 194 can commit 195-197 then fail real 198
+  ok    failure leaves exact ledger 197
+  ok    normal verify-only startup refuses partial 197
+  ok    full-apply 198 failure resumes explicitly from exact 197
+  ok    clean exact 194 applies the reviewed 195-198 suffix
+  ok    clean apply ends at 186 entries and ceiling 198
+  ok    195-198 create no business rows
+  ok    repeat verify-only is a no-write exact-198 check
+  ok    restart uses ordinary verify-only migrate.js at exact 198
+  ok    post-198 API start 1 answers owned health with the pinned build
+  ok    post-198 API start 2 answers owned health with the pinned build
+  ok    both post-198 starts make no external network attempt
+  ok    wrong 40-SHA pin refuses before database mutation
+  ok    ledger name drift refuses
+  ok    same-name constraint physical drift refuses
+  ok    same-name index196 physical drift refuses
+  ok    same-name function197 physical drift refuses
+  ok    same-name trigger197 physical drift refuses
+  ok    same-name trigger197when physical drift refuses
+  ok    same-name index198 physical drift refuses
+  ok    preflight refuses an incompatible pre-196 identity row
+  ok    hostile 196 preflight leaves exact 194
+
+  52 passed, 0 failed

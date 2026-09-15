@@ -1,0 +1,27 @@
+{
+  "mode": "positive_defect_witness",
+  "evidence": [
+    {
+      "case": "agreeing_alternate_keys",
+      "mode": "parent",
+      "positions": 1,
+      "unattached_promoted": 1
+    },
+    {
+      "case": "zero_current_positions",
+      "mode": "parent",
+      "positions": 0,
+      "relay_promoted": 1,
+      "rent_roll_relay": 1,
+      "standing_relay": null
+    },
+    {
+      "case": "fifty_one_unattached",
+      "mode": "parent",
+      "positions": 51,
+      "relay_promoted": 51,
+      "relay_rows": 50,
+      "relay_truncated": true
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "proof_kind": "actual staff shell, owned HTTP/database",
+  "complete": true,
+  "checks": 17,
+  "writes": [
+    {
+      "dialog": "Approve this application and sign the resident-executed lease for the company?\n\nThis is one decision with two consequences: the application is approved and the lease is executed at the terms the applicant acknowledged."
+    },
+    {
+      "path": "/operator/leasing/lease-packets/<id-103>/execute",
+      "status": 403,
+      "error": "execute_not_authorized"
+    },
+    {
+      "dialog": "Approve this application and sign the resident-executed lease for the company?\n\nThis is one decision with two consequences: the application is approved and the lease is executed at the terms the applicant acknowledged."
+    },
+    {
+      "path": "/operator/leasing/lease-packets/<id-103>/execute",
+      "status": 201,
+      "decisions": [
+        "application_approved",
+        "company_signed"
+      ]
+    }
+  ],
+  "screenshots": [
+    "execute_mike_before.png",
+    "execute_mike_refused.png",
+    "execute_kz_before.png",
+    "execute_kz_after.png"
+  ]
+}

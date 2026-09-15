@@ -74,7 +74,7 @@ const ART = "44444444-4444-4444-4444-444444444444";
  *  — so a defect at row 67 survives a sample checking rows 1, 49 and 120,
  *  and the endpoints still agree. Sampling a compounding series proves
  *  precisely the thing a broken middle can also do.                     */
-const { PUBLISHED, PUBLISHED_TOTALS } = require("./fixtures/lument_480010465_published_schedule.js");
+const { PUBLISHED, PUBLISHED_TOTALS } = require("../fixtures/lument_480010465_published_schedule.js");
 const c = (d) => Math.round(d * 100);
 
 (async () => {

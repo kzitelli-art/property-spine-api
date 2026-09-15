@@ -1,0 +1,69 @@
+{
+  "proof": "canonical_onboarding_review",
+  "phase": "restart",
+  "mode": "server_interpreted_retained_source",
+  "app_source": "successor_index_html",
+  "api_origin": "literal_loopback",
+  "external_requests_blocked_before_egress": 0,
+  "confirmations_attempted": 0,
+  "sources": [
+    {
+      "source": "july",
+      "source_sha256": "96b901af41a17d8268d218604f3d15d7ab018bc60f86f2825e9080b654853cda",
+      "source_byte_count": 35849,
+      "download_status": 200,
+      "retained_exact_hash_and_bytes": true,
+      "review_counts": {
+        "total": 164,
+        "current": 105,
+        "future": 59,
+        "assigned": 145,
+        "unassigned_future": 19,
+        "unassigned_current": 0,
+        "missing_actual_current_occupied": 46,
+        "missing_actual_assigned_future": 40
+      },
+      "status_counts": {
+        "staged": 59,
+        "needs_review": 86,
+        "blocked": 19,
+        "confirmed": 0,
+        "promoted": 0,
+        "rejected": 0,
+        "conflicted": 0
+      },
+      "vacancy_count": 53,
+      "visible_review_after_restart": true,
+      "confirmations_attempted": 0
+    },
+    {
+      "source": "skyline",
+      "source_sha256": "51ae5893b43a80308f88696156e9538972e8ea0212900f1fd71c5a068caa9f4a",
+      "source_byte_count": 40859,
+      "download_status": 200,
+      "retained_exact_hash_and_bytes": true,
+      "review_counts": {
+        "total": 262,
+        "current": 160,
+        "future": 102,
+        "assigned": 251,
+        "unassigned_future": 11,
+        "unassigned_current": 0,
+        "missing_actual_current_occupied": 0,
+        "missing_actual_assigned_future": 0
+      },
+      "status_counts": {
+        "staged": 160,
+        "needs_review": 91,
+        "blocked": 11,
+        "confirmed": 0,
+        "promoted": 0,
+        "rejected": 0,
+        "conflicted": 0
+      },
+      "vacancy_count": 123,
+      "visible_review_after_restart": true,
+      "confirmations_attempted": 0
+    }
+  ]
+}

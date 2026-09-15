@@ -17,14 +17,15 @@
 //                               separately with the rent they implicate, so
 //                               the money is visible without being counted
 //                               and no lease is chosen silently.
-//    resolved_leasable          the denominator: leasable positions whose
-//                               occupancy is actually resolved. down and
-//                               non_revenue are NOT silently included;
-//                               contested and evidence_disagrees are
-//                               excluded and reported beside it.
+//    occupancy population       non-down, non-contested positions. Unresolved
+//                               positions remain in this set without being
+//                               called vacant. Evidence is a separate axis.
+//                               The numerator counts occupied within this same
+//                               set; full tenancy and rent totals remain intact.
 //
-//  economics_unavailable increments its own count and adds zero to rent —
-//  a missing rent is never coerced to $0 at the row level.
+//  economics_unavailable increments its own count and adds no rent — an
+//  unavailable amount is never coerced to $0, including an all-unknown
+//  property total.
 //
 //  WRITES NOTHING.
 // ════════════════════════════════════════════════════════════════════
@@ -34,6 +35,27 @@
 const { datedPropertyPositions } = require("../tenancy/dated_positions");
 
 const money = (n) => Math.round(Number(n || 0) * 100) / 100;
+
+/*  ── A DATE IS A DATE, WHATEVER THE DRIVER HANDED BACK ───────────────
+ *  `String(date).slice(0, 10)` is correct for a string and WRONG for a JS
+ *  Date: node-postgres returns `date` columns as Date objects unless a type
+ *  parser is configured, and none is — so `String(d)` is
+ *  "Sat Aug 01 2026 00:00:00 GMT+0000" and the slice yields "Sat Aug 01".
+ *  Through the live API a lender read a weekday where a date belonged.
+ *
+ *  Deliberately NOT a global pg type parser: that would change how every
+ *  date in the process is decoded, for every consumer, to fix a rendering
+ *  bug in two fields. One helper, used in both places, changes exactly
+ *  what is wrong. Uses the UTC calendar date — these are `date` columns
+ *  with no time or zone, and a local-time slice can move them a day.   */
+const isoDate = (v) => {
+  if (v == null || v === "") return null;
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+};
 
 async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
   const dp = await datedPropertyPositions(pool, { property_id, as_of });
@@ -73,6 +95,8 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
   const occupied = byTenancy("contractually_occupied");
   const vacant = byTenancy("vacant");
   const unresolved = byTenancy("unresolved");
+  const termsNotEstablished = byTenancy("occupied_terms_not_established");
+  const activationPending = byTenancy("activation_pending");
   const contested = byTenancy("contested");
   const downRows = rows.filter((r) => r.is_down);
   const noEconomics = rows.filter((r) => r.economics_state === "unavailable");
@@ -82,8 +106,53 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
   // TRUSTED RENT — every uncontested spanning lease with populated rent,
   // whatever the opening evidence says. Opening evidence being inconclusive
   // or in disagreement does not un-occupy a position that holds a real lease.
-  const contractual_rent_trusted = money(
-    rows.filter((r) => r.contributes_trusted_rent).reduce((s, r) => s + Number(r.current_rent || 0), 0));
+  const rentBearing = rows.filter((r) => r.contributes_trusted_rent);
+  const contractual_rent_trusted = rentBearing.length
+    ? money(rentBearing.reduce((s, r) => s + Number(r.current_rent), 0))
+    : null;
+
+  /*  ── UNVERIFIED REVENUE HAS A MAGNITUDE, AND IT IS COUNTED NOWHERE ──
+   *  A position the operator accepted as occupied with terms unknown
+   *  carries no lease, so it contributes nothing to trusted rent — that is
+   *  correct and does not change here. But the source DID assert a rent for
+   *  it, and a read that shows only a count cannot say "$X claimed, $0
+   *  verified". The count without the magnitude is the same silence as no
+   *  line at all.
+   *
+   *  This mirrors `contested_claims.implicated_rent` exactly: VISIBLE
+   *  WITHOUT BEING COUNTED. It never enters contractual_rent_trusted,
+   *  occupancy, or any NOI figure, and the row carries it as `claimed_rent`
+   *  beside `current_rent` rather than inside it.
+   *
+   *  NULL WHEN THE SOURCE CARRIED NO RENT — never 0. An unknown Exposure is
+   *  a valid Exposure and is never zero (§5); writing 0 would turn "we do
+   *  not know what they pay" into "they pay nothing", which is the one
+   *  reading a lender must never be handed. Those positions are counted
+   *  separately so the gap in the claimed figure is itself visible.      */
+  const claimProposalIds = [...new Set(termsNotEstablished
+    .map((r) => r.basis_ref && r.basis_ref.proposal_id).filter(Boolean).map(String))];
+  const claimedRentByProposal = new Map();
+  if (claimProposalIds.length) {
+    const claimed = (await pool.query(
+      `select id, normalized_json->>'rent' as rent
+         from proposed_records where id = any($1::uuid[])`, [claimProposalIds])).rows;
+    for (const c of claimed) {
+      claimedRentByProposal.set(String(c.id),
+        c.rent == null || c.rent === "" ? null : Number(c.rent));
+    }
+  }
+  const claimedRentFor = (r) => {
+    if (r.tenancy_state !== "occupied_terms_not_established") return null;
+    const id = r.basis_ref && r.basis_ref.proposal_id;
+    if (!id) return null;
+    const v = claimedRentByProposal.get(String(id));
+    return v == null || Number.isNaN(v) ? null : v;
+  };
+  for (const r of rows) r.claimed_rent = claimedRentFor(r);
+  const claimedRows = termsNotEstablished.filter((r) => r.claimed_rent != null);
+  const claimed_rent_unverified = claimedRows.length
+    ? money(claimedRows.reduce((sum, r) => sum + Number(r.claimed_rent), 0))
+    : null;
 
   // The disputed claims, with the rent they implicate. Never counted.
   const contestedSpaceIds = contested.map((r) => r.space_id);
@@ -102,8 +171,8 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
       implicated_rent: money(claims.reduce((s, c) => s + Number(c.rent || 0), 0)),
       claims: claims.map((c) => ({
         lease_id: c.lease_id, space_id: c.space_id, lease_status: c.lease_status,
-        start_date: c.start_date ? String(c.start_date).slice(0, 10) : null,
-        end_date: c.end_date ? String(c.end_date).slice(0, 10) : null,
+        start_date: isoDate(c.start_date),
+        end_date: isoDate(c.end_date),
         rent: c.rent == null ? null : Number(c.rent),
       })),
     };
@@ -112,8 +181,11 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
   const inventory = rows.length;
   // Leasable excludes physically down positions. use_type is not yet a durable
   // field, so non-revenue cannot be excluded honestly — see the schema plan.
-  const leasable = inventory - downRows.length;
-  const occupancy_denominator = leasable - contested.length;   // contested makes no claim either way
+  const leasableRows = rows.filter((r) => !r.is_down);
+  const leasable = leasableRows.length;
+  const occupancyRows = leasableRows.filter((r) => r.tenancy_state !== "contested");
+  const occupancy_denominator = occupancyRows.length;
+  const occupancy_numerator = occupancyRows.filter((r) => r.tenancy_state === "contractually_occupied").length;
 
   return {
     property_id: dp.property_id,
@@ -126,7 +198,18 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
     tenancy_summary: {
       contractually_occupied: occupied.length,
       vacant: vacant.length,
+      /*  OCCUPIED, TERMS NOT ESTABLISHED — its own bucket, because it is
+       *  its own fact. Folding it into `unresolved` told a lender "we do
+       *  not know whether anyone lives there" about beds the operator had
+       *  explicitly accepted as occupied.  */
+      occupied_terms_not_established: termsNotEstablished.length,
       unresolved: unresolved.length,
+      /*  A LENDER ADDS THE COLUMN. Without this bucket the five numbers
+       *  summed to 146 of 160 and fourteen positions were simply missing:
+       *  a commenced lease awaiting economic activation is a tenancy fact
+       *  with no bucket. The header promises each summary balances within
+       *  its own axis; it now does, and the proof asserts the sum.     */
+      activation_pending: activationPending.length,
       contested: contested.length,
       total: rows.length,
     },
@@ -155,17 +238,22 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
       leasable,
       down: downRows.length,
 
-      // Occupancy from the TENANCY axis only. Evidence and economics do not
-      // move a position in or out of it.
+      // Occupied tenancy within the same leasable, uncontested population as
+      // the denominator. Full tenancy_summary and contractual rent above are
+      // independent of physical holds. Evidence and economics do not change it.
       // LANGUAGE: this is CONFIRMED contractual occupancy. Unresolved positions
       // remain in the denominator, and the wording must never imply they are
       // confirmed vacant — they are simply not yet established either way.
       confirmed_contractual_occupancy: {
-        occupied: occupied.length,
+        occupied: occupancy_numerator,
         of_leasable_resolved: occupancy_denominator,
-        pct: occupancy_denominator ? Math.round(occupied.length / occupancy_denominator * 10000) / 100 : null,
-        excluded_from_denominator: { down: downRows.length, contested: contested.length },
+        pct: occupancy_denominator ? Math.round(occupancy_numerator / occupancy_denominator * 10000) / 100 : null,
+        excluded_from_denominator: { down: downRows.length, contested: leasable - occupancy_denominator },
         reported_beside: {
+          //  Both are inside the denominator and neither is vacant. They
+          //  are reported apart because they send an operator to do
+          //  different work: one needs terms, the other needs settling.
+          occupied_terms_not_established: termsNotEstablished.length,
           unresolved_positions: unresolved.length,
           evidence_disagrees: disagrees.length,
           evidence_inconclusive: inconclusive.length,
@@ -173,8 +261,18 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
       },
 
       contractual_rent_trusted,
+      /*  BESIDE trusted rent, never inside it. This is the line between
+       *  verifiable and unverifiable revenue: what the source claims for
+       *  positions Spine accepted as occupied but holds no instrument for.
+       *  It is counted in no occupancy figure and no NOI.               */
+      claimed_rent_unverified,
+      positions_with_claimed_rent_unverified: claimedRows.length,
+      //  Accepted occupancy whose source named no rent at all. Not zero —
+      //  unknown, and visible as its own number so the gap in the figure
+      //  above cannot be mistaken for completeness.
+      positions_claimed_without_rent: termsNotEstablished.length - claimedRows.length,
       contractual_rent_excluded_contested: contested_claims.implicated_rent,
-      positions_contributing_rent: rows.filter((r) => r.contributes_trusted_rent).length,
+      positions_contributing_rent: rentBearing.length,
       occupied_without_known_rent: noEconomics.length,
     },
 
@@ -186,6 +284,7 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
       contested: contested.length,
       economics_unavailable: noEconomics.length,
       unresolved_tenancy: unresolved.length,
+      occupied_terms_not_established: termsNotEstablished.length,
       resident_not_linked: rows.filter((r) => r.lease && !r.resident).length,
     },
 

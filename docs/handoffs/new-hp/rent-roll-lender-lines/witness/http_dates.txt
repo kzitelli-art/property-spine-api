@@ -1,0 +1,10 @@
+HTTP WITNESS — the real operator door on the owned server, staff session, no fixture path.
+GET /operator/rent-roll/canonical
+
+HTTP 200 GET /operator/rent-roll/canonical
+  tenancy_summary : {"contractually_occupied":31,"vacant":0,"occupied_terms_not_established":92,"unresolved":10,"activation_pending":14,"contested":13,"total":160}
+  buckets sum     : 160 of 160
+  trusted         : 26350 / 31
+  claimed_unverif : 78200 / 92 | without rent: 0
+  FIRST CLAIM OVER THE WIRE: {"start_date":"2026-08-01","end_date":"2027-07-26"}
+  claims with a non-ISO start_date: 0 of 30

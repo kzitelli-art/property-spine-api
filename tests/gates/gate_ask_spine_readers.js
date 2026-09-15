@@ -62,6 +62,33 @@
 const fs = require("fs");
 const path = require("path");
 const readerCapabilities = require("../../src/shared/reader_capability_contract.js");
+/*  THE PRODUCER ITSELF, LOADED LAZILY AND DEFENSIVELY.
+ *
+ *  questionSubject is a pure function of its input string, so calling it
+ *  opens no database and starts no server and this stays a
+ *  source-governance gate. But the composer IMPORTS the domain reads it
+ *  composes, so requiring it at load time makes this gate die whenever any
+ *  one of those files is missing — which the falsification scenario proved
+ *  immediately: deleting the tenancy standing read stopped the gate from
+ *  reporting at all instead of failing on the assertion that names it.
+ *
+ *  A gate that dies is worse than a gate that reports: it fails for a
+ *  reason nobody can read. So the producer is loaded on first use, once,
+ *  and a load failure becomes a REPORTED reachability failure naming the
+ *  error, never a crash and never a silent skip.                          */
+let _producer = null;
+function loadQuestionSubject() {
+  if (_producer) return _producer;
+  try {
+    const mod = require("../../src/agent/ask_spine_answer.js");
+    _producer = typeof mod.questionSubject === "function"
+      ? { fn: mod.questionSubject, error: null }
+      : { fn: null, error: "ask_spine_answer exports no questionSubject" };
+  } catch (e) {
+    _producer = { fn: null, error: `could not load the composer: ${e.message}` };
+  }
+  return _producer;
+}
 const ROOT = path.join(__dirname, "..", "..");
 
 let pass = 0, fail = 0;
@@ -97,7 +124,17 @@ function readIf(rel) {
  *
  *  Any directory that OWNS canonical domain truth belongs here. When the
  *  next one lands, add it in the same breath as the read.                */
-const STANDING_READ_DIRS = ["src/asset", "src/tenancy"];
+/*  src/leasing was added 2026-09-14 on QB's ruling. A gate that scans less
+ *  than it asserts launders the gap into evidence — the same reasoning that
+ *  added src/tenancy after Tenancy turned out to be UNDISCOVERABLE. Four
+ *  leasing domains carry canonical standing reads and none was classified;
+ *  they are declared below, `pending`, which is a declaration and not other
+ *  lanes' work. None is `registered`: the detector proves gathering, and
+ *  today it proves none of them. leasing_standing_read.js IS required by
+ *  the composer, but its results land under other fact keys
+ *  (facts.leasing_signing and siblings), so `facts.leasing_standing =` does
+ *  not exist and the detector correctly refuses to call it registered.  */
+const STANDING_READ_DIRS = ["src/asset", "src/tenancy", "src/leasing"];
 const STANDING_READ_SUFFIXES = ["_position_read.js", "_establishment.js", "_read.js"];
 const NON_STANDING_READ_SUFFIXES = ["_document_read.js", "_funding_read.js"];
 
@@ -153,14 +190,104 @@ function domainsFromFilenames(filenames) {
  *  is enforced by the composer rather than used to block single-domain reads.
  *  A green gate reports this split; it does not erase it.  */
 const REGISTRY = {
+  /*  ── THE FOUR LEASING DOMAINS (QB ruling, 2026-09-14) ─────────────
+   *  Discovered the moment src/leasing entered the scan. Each owns
+   *  canonical standing truth and none is gathered by the composer today.
+   *  `pending` with an owner and a condition is the honest state; calling
+   *  any of them `registered` would be the lie this gate exists to catch.  */
+  forward_leasing: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "forward-leasing standing: which future terms are committed and which are open"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers the forward-leasing standing projection — committed " +
+            "future terms, open intervals and the dates behind them — under a fact " +
+            "key of its own, with the term refusal preserved so a missing caller " +
+            "term never reads as no forward inventory.",
+  },
+  leasing_standing: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "one person's leasing standing and the recorded basis for it"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "the composer assigns facts.leasing_standing from readLeasingStanding. " +
+            "The reader is already required and used, but its results land under " +
+            "facts.leasing_signing and siblings, so the domain itself is not yet " +
+            "gathered under its own name and the detector rightly refuses it.",
+  },
+  opportunity_lifecycle: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "where an opportunity stands in its lifecycle and what moved it there"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers the opportunity-lifecycle standing projection with " +
+            "stage transitions attributed, and close reasons (budget_mismatch and " +
+            "its siblings) carried as recorded reasons rather than as judgements.",
+  },
+  renewals: {
+    state: "pending",
+    owner: "leasing",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "which tenancies are in a renewal window and what has been offered or decided"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers the renewals standing projection — window, offer " +
+            "state and decision — with the §40.5 wall that an offered renewal is " +
+            "not an accepted one preserved in the projection's own vocabulary.",
+  },
+  //  Prospect-to-home matching. Retrieval on a declared basis only — the
+  //  registry records the class so a later build that starts ranking or
+  //  explaining goes red here rather than shipping as "matching".
+  prospect_match: {
+    state: 'registered',
+    entitled_by: ["leasing", "management"],
+    reached_by: [
+      "which homes fit this prospect",
+      "what can we offer a prospect with a 900 budget",
+    ],
+    capability_classes: readerCapabilities.retrievalOnly(
+      'which homes satisfy a prospect\'s recorded constraints and on what basis; ' +
+      'no ranking, no score, no causal explanation'),
+    composition_authorization: 'unsolved_cross_domain',
+    //  Exposed from the existing leasing seam, not a second *_read module.
+    owner: '../leasing/leasing_inventory',
+  },
+  maintenance: {
+    state: 'registered',
+    entitled_by: ["maintenance", "management"],
+    reached_by: [
+      "what work is outstanding",
+      "which work orders are open",
+    ],
+    capability_classes: readerCapabilities.retrievalOnly('required work and its explicitly recorded location; no readiness assertion'),
+    composition_authorization: 'unsolved_cross_domain',
+  },
   compliance: {
     state: "registered",
+    entitled_by: ["asset_management"],
+    /*  RESOLVED 2026-09-14 — this entry once carried a `composer_divergence`
+     *  block, because gatherFacts held no module guard on the compliance
+     *  branch while answer() refused without `asset_management`. The branch
+     *  now carries the guard its four sibling domains have, so the two
+     *  layers agree and the divergence is retired with the fix that closed
+     *  it. See docs/handoffs/new-hp/compliance-guard/RECEIPT.md.           */
+    reached_by: [
+      "are our licenses current",
+      "what inspections are due",
+    ],
     capability_classes: readerCapabilities.retrievalOnly(
       "canonical Compliance standing and recorded derivation basis"),
     composition_authorization: "unsolved_cross_domain",
   },
   utility: {
     state: "registered",
+    entitled_by: ["asset_management"],
+    reached_by: [
+      "what is the water bill",
+      "how much did we spend on electricity",
+    ],
     capability_classes: readerCapabilities.retrievalOnly(
       "canonical Utility standing and recorded derivation basis"),
     composition_authorization: "unsolved_cross_domain",
@@ -168,6 +295,11 @@ const REGISTRY = {
   },
   contracted_service: {
     state: "registered",
+    entitled_by: ["asset_management"],
+    reached_by: [
+      "what contracted services do we have",
+      "what does our pest control contract cover",
+    ],
     capability_classes: readerCapabilities.retrievalOnly(
       "canonical Contracted Services standing, evidence, and recorded derivation basis"),
     composition_authorization: "unsolved_cross_domain",
@@ -207,6 +339,23 @@ const REGISTRY = {
   //  every other registered domain.
   debt: {
     state: "registered",
+    entitled_by: ["asset_management"],
+    /*  The lender-facing vocabulary an asset manager actually types. Two of
+     *  these were the FOUND item from the reachability lane: `matur(...)`
+     *  beside a debt noun, and `outstanding principal` in the order a person
+     *  says it, both routed to `work` because DEBT_TERMS held only the
+     *  literal `loan maturity`, `maturity date` and `principal balance`.  */
+    reached_by: [
+      "what is our debt service",
+      "when is the maturity date on our debt",
+      "when does the loan mature",
+      "when does the debt mature",
+      "what is the outstanding principal",
+      "what do we owe on the mortgage",
+      "who is the lender",
+      "what is the interest rate on the loan",
+      "is there an extension option",
+    ],
     //  Matches docs/archive/DEBT_READ_CONTRACT_AND_SCHEMA.md and the header of
     //  debt_routes.js exactly: retrieval claimed, comparison and causal
     //  explanation explicitly not — a portfolio comparison needs a basis
@@ -227,6 +376,11 @@ const REGISTRY = {
   //  as every other registered domain.
   equity: {
     state: "registered",
+    entitled_by: ["asset_management"],
+    reached_by: [
+      "what is the preferred equity balance",
+      "who holds common equity",
+    ],
     //  Matches docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md: retrieval
     //  claimed narrowly, comparison and causal explanation explicitly
     //  not. Equity claims LESS than Debt did at the same build stage on
@@ -251,6 +405,11 @@ const REGISTRY = {
   //  conversational architecture" means in practice.
   tenancy: {
     state: "registered",
+    entitled_by: ["leasing", "management"],
+    reached_by: [
+      "how many beds are open",
+      "what is the rent roll",
+    ],
     //  Matches src/tenancy/tenancy_position_read.js exactly. Retrieval only:
     //  comparison needs a basis (per bed, per season, against what) that is a
     //  model nobody recorded, and causal explanation needs linkage between a
@@ -288,11 +447,65 @@ function stripComments(src) {
  *  Anchored on both ends now. A domain that genuinely needs a suffixed
  *  key is a convention change to make deliberately, in this function,
  *  not something a rename gets to do by accident.                       */
-function gathersDomain(gatherSrc, domain) {
+/*  A domain whose standing read lives in an EXISTING owner cannot be
+ *  detected by looking for its own name in a require path: `prospect_match`
+ *  is exposed from src/leasing/leasing_inventory.js, and nothing in that
+ *  path says "prospect_match". The substring rule is also weaker than it
+ *  looks in the other direction — it would accept a require of any path
+ *  that merely CONTAINS the domain word.
+ *
+ *  So a registry entry may declare `owner`, and when it does the detector
+ *  demands that exact path. Entries without one keep the original rule
+ *  unchanged, so nothing already green moves.  */
+function gathersDomain(gatherSrc, domain, owner = null) {
   const code = stripComments(gatherSrc);
-  const required = new RegExp(`require\\([^)]*${domain}[^)]*\\)`).test(code);
   const assigned = new RegExp(`facts\\.${domain}\\s*=`).test(code);
-  return required && assigned;
+  if (!assigned) return false;
+  if (owner) return code.includes(`require('${owner}')`) || code.includes(`require("${owner}")`);
+  return new RegExp(`require\\([^)]*${domain}[^)]*\\)`).test(code);
+}
+
+/*  ══ REACHABILITY — "ASSIGNED" IS NOT "GATHERED" ═══════════════════
+ *
+ *  gathersDomain proves the composer CONTAINS `facts.<domain> =` and the
+ *  right require. It cannot prove any question reaches that line. That gap
+ *  is not hypothetical: prospect_match shipped guarded by
+ *
+ *      if (subject === "leasing" || subject === "match")
+ *
+ *  and questionSubject yields NEITHER — its leasing vocabulary resolves to
+ *  `leasing_person`. The branch was unreachable, the domain was
+ *  `registered`, and this gate passed it twice. A gate that asserts less
+ *  than it says launders the gap into evidence.
+ *
+ *  So a `registered` entry declares `reached_by`: real questions an
+ *  operator might type. For each, the gate CALLS the live questionSubject
+ *  and demands the produced subject be one the domain's own branch is
+ *  guarded by. Runtime, not string-matching, because the producer is the
+ *  only authority on what it produces — and questionSubject is pure over
+ *  its input, so this stays a source-governance gate with no database and
+ *  no server.
+ *
+ *  ── FINDING THE GUARD ───────────────────────────────────────────────
+ *  Static, and deliberately narrow: from the `facts.<domain> =`
+ *  assignment, walk BACK to the nearest `if (subject === …` and read every
+ *  `subject === "literal"` in that condition. A domain whose assignment
+ *  sits under no subject guard at all is unguarded — reported as such
+ *  rather than silently passed, because "runs for every subject" is a
+ *  different claim from "runs for this one" and only the author knows
+ *  which was meant.                                                      */
+function subjectGuardsFor(gatherSrc, domain) {
+  const code = stripComments(gatherSrc);
+  const at = code.search(new RegExp(`facts\\.${domain}\\s*=`));
+  if (at === -1) return { found: false, guards: [], why: "no facts assignment" };
+  const before = code.slice(0, at);
+  const ifAt = before.lastIndexOf("if (subject === ");
+  if (ifAt === -1) return { found: false, guards: [], why: "no enclosing subject guard" };
+  //  The condition runs to the opening brace of its block.
+  const brace = code.indexOf("{", ifAt);
+  const condition = code.slice(ifAt, brace === -1 ? at : brace);
+  const guards = [...condition.matchAll(/subject === "([a-z_]+)"/g)].map((m) => m[1]);
+  return { found: guards.length > 0, guards, why: guards.length ? null : "guard names no subject literal" };
 }
 
 function gathersGovernedDetail(gatherSrc, domain) {
@@ -350,6 +563,52 @@ console.log("  ── detector self-test ──");
      !gathersDomain(`// TODO: require debt_position_read and set facts.debt = ...`, "debt"));
   ok("gathersDomain is not satisfied by a block comment",
      !gathersDomain(`/* facts.debt = require("../asset/debt_position_read.js") */`, "debt"));
+  //  The declared-owner branch, both ways round.
+  //  ── THE REACHABILITY EXTRACTOR, BOTH WAYS ROUND ─────────────────
+  //  Fed known-good and known-bad text before it is pointed at the real
+  //  composer, same discipline as every other detector here.
+  ok("subjectGuardsFor finds the guard above an assignment",
+     JSON.stringify(subjectGuardsFor(
+       `if (subject === "leasing_person") {\n  facts.prospect_match = read();\n}`,
+       "prospect_match").guards) === '["leasing_person"]');
+  ok("subjectGuardsFor finds EVERY subject a compound guard names",
+     JSON.stringify(subjectGuardsFor(
+       `if (subject === "leasing" || subject === "match") {\n  facts.prospect_match = read();\n}`,
+       "prospect_match").guards) === '["leasing","match"]');
+  ok("subjectGuardsFor reports an assignment under NO subject guard",
+     subjectGuardsFor(`facts.prospect_match = read();`, "prospect_match").found === false);
+  ok("subjectGuardsFor reports a missing assignment rather than guessing",
+     subjectGuardsFor(`if (subject === "leasing_person") { facts.other = read(); }`,
+       "prospect_match").found === false);
+  ok("subjectGuardsFor takes the NEAREST preceding guard, not the first in the file",
+     JSON.stringify(subjectGuardsFor(
+       `if (subject === "work") {\n  facts.maintenance = a();\n}\n` +
+       `if (subject === "tenancy") {\n  facts.tenancy = b();\n}`,
+       "tenancy").guards) === '["tenancy"]');
+  ok("subjectGuardsFor ignores a guard that lives only in a comment",
+     JSON.stringify(subjectGuardsFor(
+       `/* if (subject === "match") { */\nif (subject === "leasing_person") {\n  facts.prospect_match = r();\n}`,
+       "prospect_match").guards) === '["leasing_person"]');
+  //  And the producer is callable from here at all — if requiring the
+  //  composer ever needs a database, this gate stops being source-only and
+  //  must be moved, loudly, rather than quietly skipped.
+  {
+    const probe = loadQuestionSubject();
+    ok("the producer loads inside a source-only gate, or says why not",
+       probe.error === null && typeof probe.fn === "function"
+         && typeof probe.fn("what work is outstanding") === "string",
+       probe.error || "questionSubject did not return a subject");
+  }
+
+  ok("gathersDomain accepts a declared owner the composer actually requires",
+     gathersDomain(`const x = require('../leasing/leasing_inventory'); facts.prospect_match = x.read();`,
+       "prospect_match", "../leasing/leasing_inventory"));
+  ok("gathersDomain REFUSES a declared owner the composer never requires",
+     !gathersDomain(`const x = require('../leasing/something_else'); facts.prospect_match = x.read();`,
+       "prospect_match", "../leasing/leasing_inventory"));
+  ok("gathersDomain still refuses a declared owner with no assignment",
+     !gathersDomain(`const x = require('../leasing/leasing_inventory');`,
+       "prospect_match", "../leasing/leasing_inventory"));
   ok("gathersGovernedDetail detects a question-bound canonical detail read",
      gathersGovernedDetail(
        `const r=require("../asset/utility_ask_detail.js"); r.readForQuestion(db,{question});`,
@@ -371,6 +630,18 @@ for (const dir of STANDING_READ_DIRS) {
   }
   discovered.push(...domainsFromFilenames(fs.readdirSync(abs)));
 }
+// This owner exposes its standing read from an existing service rather than
+// inventing a second *_read module just to satisfy filename discovery.
+const maintenanceOwner = readIf('src/maintenance/work_acceptance_service.js') || '';
+if (/module\.exports\s*=\s*\{[^}]*\breadRequiredWorkStanding\b/.test(stripComments(maintenanceOwner))) discovered.push('maintenance');
+//  Same shape, same reason: matching extends the existing leasing inventory
+//  seam and exposes its standing read from that owner's factory rather than
+//  inventing a second *_read module to satisfy filename discovery. Scanning
+//  all of src/leasing instead would discover four OTHER domains that belong
+//  to other lanes and demand registry entries nobody has decided — that is a
+//  scope change, not a side effect of this one (recorded in the receipt).
+const leasingOwner = readIf('src/leasing/leasing_inventory.js') || '';
+if (/return\s*\{[^}]*\breadProspectMatchStanding\b/.test(stripComments(leasingOwner))) discovered.push('prospect_match');
 const domains = [...new Set(discovered)].sort();
 console.log(`        ${domains.length} domain(s) with a canonical standing read: ` +
             (domains.join(", ") || "none"));
@@ -439,9 +710,42 @@ if (gatherSrc === null) {
   }
   for (const [d] of registered) {
     ok(`${d} declared registered AND gathered in ${GATHER}`,
-       gathersDomain(gatherSrc, d),
+       gathersDomain(gatherSrc, d, (REGISTRY[d] || {}).owner || null),
        `${d} claims registration the composer does not implement`);
   }
+  /*  ── REACHABILITY: A SUBJECT THE PRODUCER ACTUALLY YIELDS ────────
+   *  The assignment exists; now prove a question can reach it. The live
+   *  questionSubject is the only authority on what it produces, so it is
+   *  CALLED, never string-matched.                                       */
+  console.log("\n  ── `registered` must be REACHABLE, not merely assigned ──");
+  for (const [d, declaration] of registered) {
+    const reachedBy = Array.isArray(declaration.reached_by) ? declaration.reached_by : [];
+    ok(`${d} declares reached_by questions`, reachedBy.length > 0,
+       `${d} is registered but names no question that reaches it. A branch nobody ` +
+       `can reach is a registration nobody can exercise.`);
+    if (!reachedBy.length) continue;
+
+    const guard = subjectGuardsFor(gatherSrc, d);
+    ok(`${d}'s gather branch is guarded by a named subject`, guard.found,
+       `${d}: ${guard.why}. An assignment under no subject guard claims to run for ` +
+       `every subject, which is a different claim from running for this one.`);
+    if (!guard.found) continue;
+
+    const producer = loadQuestionSubject();
+    for (const q of reachedBy) {
+      let produced = null, threw = producer.error;
+      if (!threw) { try { produced = producer.fn(q); } catch (e) { threw = e.message; } }
+      ok(`${d} is reached by ${JSON.stringify(q)}`,
+         !threw && guard.guards.includes(produced),
+         threw ? `questionSubject threw: ${threw}`
+               : `questionSubject produced ${JSON.stringify(produced)}, but the branch is ` +
+                 `guarded by ${JSON.stringify(guard.guards)} — nothing an operator types ` +
+                 `this way reaches ${d}.`);
+    }
+    console.log(`        ${d}: guard ${JSON.stringify(guard.guards)} · ` +
+                `${reachedBy.length} question(s) · runtime questionSubject`);
+  }
+
   for (const [d, declaration] of registered.filter(([, v]) => v.governed_detail)) {
     ok(`${d} declared governed detail AND question-bound in ${GATHER}`,
        gathersGovernedDetail(gatherSrc, d),

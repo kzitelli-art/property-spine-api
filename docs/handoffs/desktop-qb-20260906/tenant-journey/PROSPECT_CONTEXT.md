@@ -1,0 +1,11 @@
+# Recorded prospect context — local checkpoint
+
+API 9f2acff97af311e6ebdcd5e2219f8cf873894748 / app c05ae68f6f8bc49ca4b5bd752adc928e1f4e0d88 plus uncommitted working changes. Governing philosophy unchanged from prior complete read. Root owns integration.
+
+Existing shared application review now reads existing personCard relationship.vitals for the supplied person, checks returned identity, and shows recorded preferences in selection and terms review. Both callers pass the existing person identity. Literal zero and raw preference text survive. Successful empty, failed lookup and wrong identity remain distinct. No inferred exact dates, normalized budget, hard constraint, ranking or second fact store. Existing Person Card remains the route to the person's record.
+
+First red: no prospect context. DOM successor covers identity, zero, text, failed versus empty. A populated 390x844 actual post-tour modal then exposed Cancel outside the viewport. The existing sheet now has bounded height and scrolling; populated Cancel/Back/late-response checks pass. Existing date and frozen-offer retry DOM checks and app assertions pass. These are local UI checks, not provider sends.
+
+Fresh owned focused application_turn_window run d4a73c379f974430a20e8fbfd7176b09 exited 0. Real Postgres and HTTP competing-home/refusal/maintenance and prospect capture/correction/failure/recovery checks passed. Actual post-tour controller and shared picker in Chromium with actual inline styles displayed corrected preferences, preserved zero, required exact dates, loaded permitted homes and carried dates into terms. No send. Owned database dropped, server stopped and cluster data removal verified. Earlier browser attempts exposed a polling timeout despite loaded context and a case-sensitive assertion affected by CSS capitalization. Numeric polling and case/whitespace-normalized date assertions passed; no general browser reliability claim.
+
+Last source-governance run was 51 passing gates after the prior API repair; not rerun for this app-only product checkpoint. Full 163-assertion tenant journey is an older checkpoint, not freshly rerun here. No deployment, production migration, live application change or lease release. Automatic recommendation and prospective turn planning remain open.

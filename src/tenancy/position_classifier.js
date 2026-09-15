@@ -185,7 +185,9 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     && !CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease))
     && !ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease)));
 
-  const events = row.possession_events || [];
+  // Loading retains history and future facts. Possession at this date must
+  // consider only events effective by this date, just as leases do above.
+  const events = (row.possession_events || []).filter(e => e.effective_date && e.effective_date <= asOf);
   const ins = events.filter((e) => e.event_type === "move_in");
   const outs = events.filter((e) => e.event_type === "move_out");
   const lastIn = ins.length ? ins[ins.length - 1] : null;
@@ -329,6 +331,11 @@ function classifyPosition(row, { asOf, personNames } = {}) {
       event_recorded_at: lastIn.created_at,
       source: lastIn.source || null,
       details: lastIn.payload || {},
+    } : null,
+    last_possession_end: !possessed && lastOut ? {
+      event_id: lastOut.id || null,
+      lease_id: lastOut.lease_id || null,
+      effective_date: lastOut.effective_date,
     } : null,
     economic_tenancy_state: current ? "active" : activationPending ? "activation_pending" : future ? "forward" : "none",
     possession_state: possessed ? "delivered" : "pending",

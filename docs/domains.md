@@ -42,7 +42,6 @@ The full leasing funnel from lead to executed lease.
 | `leasing_condition_facts.js` | Unit condition facts for leasing |
 | `decisions.js` | Leasing decision routing and obligation creation |
 | `conversion_obligation_closure.js` | Closes conversion obligations on lease execution |
-| `agent_capability.js` | AI agent capabilities within leasing context |
 | `demo.js` / `demo_reset.js` / `demo_preflight.js` | Demo building data and reset |
 
 ---

@@ -1,0 +1,52 @@
+{
+  "source_lineage_verified": true,
+  "restart_unchanged": true,
+  "real_source_confirmations": 0,
+  "ask_spine_fact_gathering_verified": true,
+  "ask_spine_http_or_model_answer_tested": false,
+  "sources": [
+    {
+      "label": "july",
+      "counts": {
+        "units": 64,
+        "spaces": 105,
+        "leases": 0,
+        "persons": 0,
+        "positions": 0
+      },
+      "rows": 164,
+      "proposals": 164
+    },
+    {
+      "label": "skyline",
+      "counts": {
+        "units": 72,
+        "spaces": 160,
+        "leases": 0,
+        "persons": 0,
+        "positions": 0
+      },
+      "rows": 262,
+      "proposals": 262
+    }
+  ],
+  "custody": {
+    "api": {
+      "head": "43d30ed80be9eedc7b90f3fca27377aeb3fd99c6",
+      "tracked_diff_sha256": "347ab5c44dfa5736e86bb3cada46d13a6d467e8484fc094fb8ea562b2e29418a",
+      "working_tree_clean": false,
+      "changed_file_sha256": {
+        "QB_MIXED_TRANSACTION_CHALLENGE_20260907.md": "4c5af77bf935708f73bba80fbc186bd98bf08eb2475250fd794f5f81d8d6c3e3",
+        "tests/proofs/mixed_grain_writer_challenge.db.js": "ac2806fe56edacf891c2c463519c4a4147dec682830b429fcdd2356bea7eaebc"
+      }
+    },
+    "app": {
+      "head": "28df16d949a99ab4c907ed4b15969e4dde59079c",
+      "tracked_diff_sha256": "92053d9b40e36f676fb991846a5e7133e35cdf1ae348a839f2434dcf3a71114c",
+      "working_tree_clean": false,
+      "changed_file_sha256": {
+        "canonical_onboarding_review.browser.js": "b94262b07394d8ad6a5a681632b6aca85d3b5287a4d768eef07dc12942100b9f"
+      }
+    }
+  }
+}

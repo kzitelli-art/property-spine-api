@@ -222,7 +222,11 @@ async function cleanup(pool) {
     ok("the canonical read returns one position per rentable space",
       dp.count === 160, String(dp.count));
     const occupied = dp.positions.filter((p) => p.tenancy_state === "contractually_occupied");
-    const vacantPos = dp.positions.filter((p) => p.tenancy_state === "vacant" || p.tenancy_state === "unresolved");
+    //  Everything NOT contractually occupied. `occupied_terms_not_established`
+    //  was split out of `unresolved` and belongs to the same complement — the
+    //  assertions below sum this against `occupied` to the full inventory.
+    const vacantPos = dp.positions.filter((p) => p.tenancy_state === "vacant"
+      || p.tenancy_state === "unresolved" || p.tenancy_state === "occupied_terms_not_established");
     //  135 rows carry a NAME, but only 133 carry a lease that SPANS 2026-04-30.
     //  The model dates every position rather than trusting the column the source
     //  called "current", and that difference is two real residents:

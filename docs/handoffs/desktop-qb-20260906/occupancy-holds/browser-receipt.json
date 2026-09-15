@@ -1,0 +1,23 @@
+{
+  "proof": "canonical_onboarding_review",
+  "phase": "holds",
+  "mode": "server_interpreted_retained_source",
+  "app_source": "successor_index_html",
+  "api_origin": "literal_loopback",
+  "external_requests_blocked_before_egress": 0,
+  "confirmations_attempted": 0,
+  "sources": [
+    {
+      "source": "canonical_occupancy_holds",
+      "institutional_read_status": 200,
+      "canonical_property_verified": true,
+      "institutional_property_verified": true,
+      "total_positions": 8,
+      "confirmed_contractual_occupancy": 0,
+      "occupancy_denominator": 0,
+      "visible_occupancy": "0 of 0",
+      "client_csv_occupancy_verified": true,
+      "visible_at_paint": true
+    }
+  ]
+}

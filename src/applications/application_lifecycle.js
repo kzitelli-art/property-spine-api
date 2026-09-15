@@ -249,7 +249,7 @@ async function requireObligation(client, { obligationId, applicationId, type, st
 //  settled, and null is the honest record of that (§5). What it may never be
 //  is a bed nobody chose, which is what deriveSpaceGrain below enforces.
 const BIRTH_FIELDS = Object.freeze([
-  "property_id", "unit_id", "space_id", "person_id", "leasing_lead_id", "applicant_name",
+  "property_id", "unit_id", "space_id", "intended_move_in", "person_id", "leasing_lead_id", "applicant_name",
   "unit_label", "rent", "deposit", "guarantor_name", "captured", "source",
   "conversion_id",
 ]);

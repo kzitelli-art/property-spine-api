@@ -259,6 +259,10 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
     //  reading the right month.
     opening_baseline: dp.opening_baseline,
     opening_truth: dp.opening_truth,
+    //  A READ THAT EXCLUDES ROWS SAYS SO: the loader's retirement exclusion
+    //  rides with the unit view so the screen can label "current inventory"
+    //  and "retained records" as two different counts.
+    retired_excluded: dp.retired_excluded || null,
     totals: {
       units: units.length,
       rentable_positions: positions.length,
@@ -292,7 +296,14 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
       //  rents this is most of the building, and an operator seeing many
       //  blank rents deserves to know the count is expected.
       rent_not_in_source: rentUnknown,
+      //  Confirmed source rows under the chosen baseline that no position
+      //  reads — the reason a Rent Roll can say Not Established about a
+      //  bed whose source row Deal Setup shows as confirmed.
+      confirmed_rows_not_attached: (dp.opening_claims_unattached || {}).promoted || 0,
+      held_rows_not_attached: (dp.opening_claims_unattached || {}).held || 0,
     },
+    unattached_source_rows: (dp.opening_claims_unattached || {}).source_rows || [],
+    unattached_source_rows_truncated: (dp.opening_claims_unattached || {}).truncated === true,
     units,
   };
 }

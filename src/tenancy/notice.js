@@ -98,6 +98,31 @@ module.exports = function notice(deps) {
     return { lease: l, tenant_name: tenantName, space_id: spaceId };
   }
 
+  // A supersession corrects the date of an existing notice. It does not get
+  // to select a new tenancy. Older notice rows may carry an identity in only
+  // one of the promoted column or JSON snapshot, so either side may supply a
+  // missing value. If both sides exist they must agree; guessing through a
+  // contradiction would turn a correction into an unaudited retarget.
+  function priorIdentity(prior) {
+    const payload = prior && prior.payload && typeof prior.payload === "object"
+      && !Array.isArray(prior.payload) ? prior.payload : {};
+    const settle = (columnValue, payloadValue, field) => {
+      const column = columnValue == null || columnValue === "" ? null : String(columnValue);
+      const snapshot = payloadValue == null || payloadValue === "" ? null : String(payloadValue);
+      if (column && snapshot && column !== snapshot) {
+        return { error: `prior_${field}_contradicts_snapshot` };
+      }
+      if (!column && !snapshot) return { error: `prior_${field}_missing` };
+      return { value: column || snapshot };
+    };
+
+    const space = settle(prior.space_id, payload.space_id, "space_id");
+    if (space.error) return { error: space.error };
+    const lease = settle(prior.lease_id, payload.lease_id, "lease_id");
+    if (lease.error) return { error: lease.error };
+    return { space_id: space.value, lease_id: lease.value, payload };
+  }
+
   // ════════════════════════════════════════════════════════════════
   //  GIVE NOTICE  —  POST /units/:id/notice
   //  Body: { move_out_date (required, YYYY-MM-DD), given_by?, space_id? }
@@ -125,19 +150,6 @@ module.exports = function notice(deps) {
       if (uQ.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "unit not found" }); }
       const unit = uQ.rows[0];
 
-      // guard: don't stack two open notices on the same unit
-      const dup = await client.query(
-        `select id from unit_events where unit_id=$1 and event_type='notice_given' and status='scheduled' limit 1`,
-        [unit_id]);
-      if (dup.rows.length) {
-        await client.query("rollback");
-        return res.status(409).json({
-          error: "this unit already has an open notice",
-          unit_event_id: dup.rows[0].id,
-          hint: "cancel or supersede the existing notice instead of stacking a second one",
-        });
-      }
-
       // RESOLVE THE TENANCY FROM SERVER STATE (the authority)
       const t = await resolveActiveTenancy(client, unit_id, space_id);
       if (t.error === "no_space") {
@@ -164,6 +176,41 @@ module.exports = function notice(deps) {
         });
       }
 
+      //  ONE OPEN NOTICE PER BED, NOT PER UNIT.
+      //  A notice is given on a TENANCY, and on a by-bed unit each bed holds
+      //  its own. This guard was unit-grained while every other statement in
+      //  this module is space-grained: the resolver above refuses an
+      //  ambiguous unit, and the insert below writes space_id as a column
+      //  precisely so availability can find the notice per bed. Scoped to the
+      //  unit, bed A's notice refused bed B's resident outright, and the
+      //  refusal advised cancelling A's notice to record B's — destroying a
+      //  true fact to record another one.
+      //
+      //  It runs AFTER resolution because the space is what it scopes to, and
+      //  only the resolver may say which space this request means. That also
+      //  puts the honest refusals first: an unnamed bed on a by-bed unit is
+      //  now "name which space", not "this unit already has an open notice".
+      //
+      //  The row lock serializes concurrent notices on the SAME bed, which the
+      //  unscoped select never did — two simultaneous requests both read no
+      //  notice and both inserted. Same `for update` pattern the turnover
+      //  service already uses on units, one grain down.
+      await client.query("select id from spaces where id=$1 for update", [t.space_id]);
+      const dup = await client.query(
+        `select id from unit_events
+          where space_id=$1 and event_type='notice_given' and status='scheduled'
+          limit 1`,
+        [t.space_id]);
+      if (dup.rows.length) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "this space already has an open notice",
+          unit_event_id: dup.rows[0].id,
+          space_id: t.space_id,
+          hint: "cancel or supersede the existing notice on this space instead of stacking a second one",
+        });
+      }
+
       // the immutable tenancy SNAPSHOT — what was true at the moment of notice.
       // The authority is the server-resolved lease; these fields are recorded so
       // the notice is permanently tied to that specific tenancy, not a claim.
@@ -176,10 +223,16 @@ module.exports = function notice(deps) {
         given_by: given_by || null,
       };
 
+      //  space_id is a COLUMN, not only a payload key. The canonical space
+      //  reader (space_position.js) finds a notice by `ue.space_id`; written
+      //  only into the payload, a notice succeeded here — 201, receipt and
+      //  all — and was invisible to availability, the future rent roll and
+      //  every surface that reads space_position. The resolver above already
+      //  settled which space (a by-bed unit had to name it).
       const ins = await client.query(
-        `insert into unit_events (unit_id, property_id, event_type, effective_date, payload, source, status)
-         values ($1,$2,'notice_given',$3,$4,'manual','scheduled') returning *`,
-        [unit_id, unit.property_id, move_out_date, JSON.stringify(payload)]);
+        `insert into unit_events (unit_id, property_id, space_id, event_type, effective_date, payload, source, status)
+         values ($1,$2,$3,'notice_given',$4,$5,'manual','scheduled') returning *`,
+        [unit_id, unit.property_id, t.space_id, move_out_date, JSON.stringify(payload)]);
 
       await client.query("commit");
       res.status(201).json({
@@ -268,40 +321,98 @@ module.exports = function notice(deps) {
       if (uQ.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "unit not found" }); }
       const unit = uQ.rows[0];
 
-      // the current open notice (there is at most one, by the give-notice guard)
-      const priorQ = await client.query(
-        `select * from unit_events where unit_id=$1 and event_type='notice_given' and status='scheduled' for update`,
-        [unit_id]);
+      //  The open notice being corrected. This lookup was unit-grained and
+      //  its comment — "there is at most one, by the give-notice guard" —
+      //  was true only because that guard was also unit-grained. Now that a
+      //  by-bed unit may legitimately hold one open notice per bed, an
+      //  unscoped lookup would find several and refuse every supersession on
+      //  the unit. A supplied space_id selects which bed's notice is being
+      //  corrected; the identity assertion below still refuses to retarget.
+      //  Absent a space on a unit holding several, ambiguity is named rather
+      //  than guessed — the same answer give-notice gives.
+      const priorQ = space_id
+        ? await client.query(
+            `select * from unit_events
+              where unit_id=$1 and space_id=$2
+                and event_type='notice_given' and status='scheduled' for update`,
+            [unit_id, space_id])
+        : await client.query(
+            `select * from unit_events
+              where unit_id=$1 and event_type='notice_given' and status='scheduled' for update`,
+            [unit_id]);
       if (priorQ.rows.length === 0) {
         await client.query("rollback");
         return res.status(409).json({
-          error: "no open notice on this unit to supersede",
+          error: space_id
+            ? "no open notice on this space to supersede"
+            : "no open notice on this unit to supersede",
           hint: "use POST /units/:id/notice to give a first notice",
+        });
+      }
+      if (priorQ.rows.length !== 1) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "this unit has open notices on more than one space — supersession must name which space",
+          detail: "multiple_open_notices",
+          spaces: priorQ.rows.map((r) => r.space_id),
+          hint: "resend with space_id set to the bed whose notice is being corrected",
         });
       }
       const prior = priorQ.rows[0];
 
-      // re-resolve the tenancy from server state (authority), same as give-notice.
-      const t = await resolveActiveTenancy(client, unit_id, space_id || (prior.payload && prior.payload.space_id) || null);
+      const original = priorIdentity(prior);
+      if (original.error) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "the open notice has no safe original tenancy identity — supersession refused",
+          detail: original.error,
+        });
+      }
+
+      // A space in the request is only a consistency assertion. It cannot
+      // move the correction to another bed, even when that bed has a valid
+      // active lease of its own.
+      if (space_id && String(space_id) !== original.space_id) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "a notice correction cannot target a different space",
+          detail: "space_identity_mismatch",
+        });
+      }
+
+      // Re-resolve server authority on the ORIGINAL space. A newly active
+      // lease on the same bed is a different tenancy and must receive its own
+      // notice; silently binding the correction to it would rewrite history.
+      const t = await resolveActiveTenancy(client, unit_id, original.space_id);
       if (t.error) {
         await client.query("rollback");
         return res.status(409).json({ error: "could not resolve the active tenancy to supersede notice", detail: t.error });
       }
+      if (String(t.lease.id) !== original.lease_id) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "the notice belongs to a different tenancy than the active lease on its space",
+          detail: "lease_identity_mismatch",
+        });
+      }
 
       const newPayload = {
-        lease_id: t.lease.id,
-        space_id: t.space_id,
-        lease_end_date: t.lease.end_date,
-        tenant_name: t.tenant_name,
+        lease_id: original.lease_id,
+        space_id: original.space_id,
+        lease_end_date: original.payload.lease_end_date == null
+          ? t.lease.end_date : original.payload.lease_end_date,
+        tenant_name: original.payload.tenant_name == null
+          ? t.tenant_name : original.payload.tenant_name,
         notice_date: new Date().toISOString().slice(0, 10),
         given_by: given_by || null,
         supersedes_event_id: prior.id,
       };
 
       const ins = await client.query(
-        `insert into unit_events (unit_id, property_id, event_type, effective_date, payload, source, status)
-         values ($1,$2,'notice_given',$3,$4,'manual','scheduled') returning *`,
-        [unit_id, unit.property_id, move_out_date, JSON.stringify(newPayload)]);
+        `insert into unit_events (unit_id, property_id, lease_id, space_id, event_type, effective_date, payload, source, status)
+         values ($1,$2,$3,$4,'notice_given',$5,$6,'manual','scheduled') returning *`,
+        [unit_id, unit.property_id, original.lease_id, original.space_id,
+          move_out_date, JSON.stringify(newPayload)]);
 
       // mark the prior notice superseded, pointing forward to the new one.
       const priorPayload = Object.assign({}, prior.payload || {}, { superseded_by_event_id: ins.rows[0].id, superseded_at: new Date().toISOString() });
@@ -338,12 +449,16 @@ module.exports = function notice(deps) {
       if (property_id) { vals.push(property_id); where.push(`ue.property_id = $${vals.length}`); }
       if (status && status !== "all") { vals.push(status); where.push(`ue.status = $${vals.length}`); }
 
+      //  space_label joins because a by-bed unit can now hold one open
+      //  notice per bed, and unit_number alone renders both as "4125" —
+      //  two residents, two vacate dates, one indistinguishable label.
       const r = await pool.query(
-        `select ue.*, u.unit_number
+        `select ue.*, u.unit_number, s.space_label
            from unit_events ue
            join units u on u.id = ue.unit_id
+           left join spaces s on s.id = ue.space_id
           where ${where.join(" and ")}
-          order by ue.effective_date asc`,
+          order by ue.effective_date asc, s.space_label asc`,
         vals);
 
       const notices = r.rows.map(ue => ({
@@ -353,8 +468,13 @@ module.exports = function notice(deps) {
         property_id: ue.property_id,
         move_out_date: ue.effective_date,
         status: ue.status,
-        lease_id: ue.payload ? ue.payload.lease_id : null,
-        space_id: ue.payload ? ue.payload.space_id : null,
+        //  COLUMN FIRST, snapshot only as fallback. This read took space_id
+        //  from the payload alone — the exact failure this module's insert
+        //  comment warns about, one surface further on. Older rows may carry
+        //  the identity in only one of the two, so neither side is dropped.
+        lease_id: (ue.lease_id || (ue.payload ? ue.payload.lease_id : null)) || null,
+        space_id: (ue.space_id || (ue.payload ? ue.payload.space_id : null)) || null,
+        space_label: ue.space_label || null,
         tenant_name: ue.payload ? ue.payload.tenant_name : null,
         lease_end_date: ue.payload ? ue.payload.lease_end_date : null,
         notice_date: ue.payload ? ue.payload.notice_date : null,

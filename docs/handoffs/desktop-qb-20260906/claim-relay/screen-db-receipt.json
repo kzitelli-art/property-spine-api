@@ -1,0 +1,55 @@
+{
+  "source_lineage_verified": true,
+  "restart_unchanged": true,
+  "real_source_confirmations": 0,
+  "ask_spine_fact_gathering_verified": true,
+  "ask_spine_http_or_model_answer_tested": false,
+  "sources": [
+    {
+      "label": "july",
+      "counts": {
+        "units": 64,
+        "spaces": 105,
+        "leases": 0,
+        "persons": 0,
+        "positions": 0
+      },
+      "rows": 164,
+      "proposals": 164
+    },
+    {
+      "label": "skyline",
+      "counts": {
+        "units": 72,
+        "spaces": 160,
+        "leases": 0,
+        "persons": 0,
+        "positions": 0
+      },
+      "rows": 262,
+      "proposals": 262
+    }
+  ],
+  "custody": {
+    "api": {
+      "head": "94298bc989ad7c55e1b2e5ee6a0b73cadd76fe37",
+      "tracked_diff_sha256": "1c194271e5798c68aa56a4976f24162780bfc1bf55d830a61868660927b592a9",
+      "working_tree_clean": false,
+      "changed_file_sha256": {
+        "src/tenancy/tenancy_position_read.js": "03197f5222563a3afee0fef722d81f30d946ac3e49b77b5e3f40ee046a6cabcd",
+        "tests/e2e/onboarding_review_local.js": "84bd07ef58ed9f7c947f78f9298c09a49642451ac1b8f7392173c890e9f78387",
+        "tests/proofs/opening_claim_relay_edges.db.js": "1b376d175d5f46c39df07e6052a7e43152bcd1388007154111d0ce7afced61d4"
+      }
+    },
+    "app": {
+      "head": "8baf7401aa2a4ae527417e83035bc724270312eb",
+      "tracked_diff_sha256": "bf5257766986bdcfbb9475098a889aa7bc2cde3e009b662c2cef95764e27fea9",
+      "working_tree_clean": false,
+      "changed_file_sha256": {
+        "canonical_onboarding_review.browser.js": "80fc8ae9b68d999b2d212483e5194326a2773ba3eb34e460a35a947515df486c",
+        "index.html": "2aa4ad9e03b9ff145f2fbb850251e8889448892db5c432df5ffbd75939bff1ba",
+        "rent_roll_cutover_app.test.js": "d91d1537209a16d62a07d18cd429bbbe461a8fd9da6e28023a9ac1f244c1958f"
+      }
+    }
+  }
+}

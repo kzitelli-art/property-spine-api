@@ -26,6 +26,7 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
   const pool = new Pool({ connectionString: url, ssl: { rejectUnauthorized: false } });
   const { currentRentRoll } = require(path.join(REPO, "src/surfaces/rent_roll_canonical"));
   const { institutionalRentRoll, institutionalCsv, COLUMNS } = require(path.join(REPO, "src/surfaces/rent_roll_institutional"));
+  const { rentRollBuckets } = require(path.join(REPO, "src/tenancy/dated_positions"));
 
   const op = await currentRentRoll(pool, { property_id: DEMO });
   const inst = await institutionalRentRoll(pool, { property_id: DEMO });
@@ -36,8 +37,13 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
     `one row per canonical position in both (${inst.rows.length})`);
   ok(inst.totals.trusted_monthly_contractual_rent === op.totals.contractual_rent_trusted,
     `trusted rent identical ($${inst.totals.trusted_monthly_contractual_rent})`);
-  ok(inst.totals.confirmed_contractual_occupancy === op.totals.confirmed_contractual_occupancy.occupied,
+  const buckets = rentRollBuckets(op.rows);
+  ok(inst.rows.every((r, i) => r.status === (op.rows[i].bucket_label || "Occupancy Unconfirmed")),
+    "formal status labels relay the operating bucket decision");
+  ok(inst.totals.confirmed_contractual_occupancy === buckets.occupied,
     `occupancy identical (${inst.totals.confirmed_contractual_occupancy})`);
+  ok(inst.totals.occupancy_denominator === buckets.total,
+    `occupancy denominator matches the operating position set (${inst.totals.occupancy_denominator})`);
   ok(inst.totals.contested_rent_excluded === op.totals.contractual_rent_excluded_contested,
     `contested excluded identical ($${inst.totals.contested_rent_excluded})`);
   ok(inst.totals.total_positions === op.inventory, "position count identical");

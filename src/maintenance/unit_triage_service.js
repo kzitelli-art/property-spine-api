@@ -37,6 +37,36 @@ const {
 
 const { readNextCommittedMoveIn } = require("./unit_move_in_read");
 
+function workScopeLabel(work) {
+  if (work.scope_kind === 'unit_wide') return 'Whole unit';
+  if (work.scope_kind === 'rentable_space') return work.space_label || 'Selected rentable space';
+  return 'Location not established';
+}
+
+// Shared by the existing triage and detailed-scope writers. Both have already
+// checked their unit against the authenticated property before this validation.
+async function validateWorkTargets(client, { required_work, unit_id }) {
+  const bad = message => Object.assign(new Error(message),{httpStatus:400});
+  const targets = new Map();
+  for (const w of required_work) {
+    if (!w || !w.work_text || !String(w.work_text).trim()) continue;
+    const kind = w.scope_kind === undefined ? 'unspecified' : w.scope_kind;
+    if (!['unspecified','unit_wide','rentable_space'].includes(kind)) throw bad('invalid work scope_kind');
+    if (kind !== 'rentable_space') {
+      if (w.space_id != null) throw bad('space_id requires rentable_space work scope');
+      continue;
+    }
+    if (typeof w.space_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(w.space_id))
+      throw bad('a valid space_id is required for rentable_space work');
+    const target = (await client.query(
+      'select id, space_label from spaces where id=$1 and unit_id=$2 for key share',
+      [w.space_id,unit_id])).rows[0];
+    if (!target) throw bad('work target is not a space in this unit');
+    targets.set(target.id,target);
+  }
+  return targets;
+}
+
 // ── READINESS VOCABULARY ────────────────────────────────────────────
 //  `ready` is deliberately ABSENT. A first walk cannot prove a unit is
 //  ready, so this service cannot express it. Final readiness confirmation is
@@ -286,6 +316,19 @@ function makeUnitTriageService(deps) {
         { httpStatus: 403 });
     }
 
+    if (supersedes_id) {
+      if (typeof supersedes_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(supersedes_id))
+        throw bad('invalid correction predecessor');
+      const prior = (await client.query(
+        'select id from unit_triage_confirmations where id=$1 and unit_id=$2 and property_id=$3',
+        [supersedes_id,unit_id,property_id])).rows[0];
+      if (!prior) throw bad('correction predecessor must belong to this unit and property');
+    }
+
+    // Explicit target only. Resolve membership before any observation or work
+    // write; the caller's transaction preserves all-or-nothing confirmation.
+    const workTargets = await validateWorkTargets(client,{required_work,unit_id});
+
     // 1) the attributed observation — verbatim, never edited
     const obs = (await client.query(
       `insert into unit_observations
@@ -332,11 +375,14 @@ function makeUnitTriageService(deps) {
           : null;
       const row = (await client.query(
         `insert into unit_triage_required_work
-           (finding_id, confirmation_id, property_id, unit_id, work_text, origin)
-         values ($1,$2,$3,$4,$5,$6) returning *`,
+           (finding_id, confirmation_id, property_id, unit_id, work_text, origin, scope_kind, space_id)
+         values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
         [linked, conf.id, property_id, unit_id, String(w.work_text).trim(),
-         w.origin === "operator_added" ? "operator_added" : "proposed"]
+         w.origin === "operator_added" ? "operator_added" : "proposed",
+         w.scope_kind === undefined ? 'unspecified' : w.scope_kind, w.space_id || null]
       )).rows[0];
+      row.space_label = workTargets.get(row.space_id)?.space_label || null;
+      row.scope_label = workScopeLabel(row);
       workRows.push(row);
     }
 
@@ -513,8 +559,9 @@ function makeUnitTriageService(deps) {
       "select * from unit_triage_findings where confirmation_id=$1 order by created_at asc",
       [current.id])).rows;
     const requiredWork = (await db.query(
-      "select * from unit_triage_required_work where confirmation_id=$1 order by created_at asc",
+      "select w.*, s.space_label from unit_triage_required_work w left join spaces s on s.id=w.space_id where confirmation_id=$1 order by w.created_at asc",
       [current.id])).rows;
+    requiredWork.forEach(w => { w.scope_label = workScopeLabel(w); });
 
     return {
       unit_id,
@@ -552,4 +599,4 @@ function makeUnitTriageService(deps) {
   };
 }
 
-module.exports = { makeUnitTriageService, deriveReadiness, READINESS, OBLIGATION_TYPES };
+module.exports = { makeUnitTriageService, deriveReadiness, workScopeLabel, validateWorkTargets, READINESS, OBLIGATION_TYPES };

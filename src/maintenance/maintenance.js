@@ -38,6 +38,7 @@ module.exports = function maintenance(deps) {
   // ── the closed operational vocabularies + the surviving supply-request
   //    derivation, all owned by the canonical service ──
   const { deriveCategories, CAUSES, WORK_NATURES } = require("./work_order_service");
+  const { isRetiredInventoryRefusal } = require("../tenancy/inventory_retirement");
   //  THE READ. No second status layer — it derives everything from canonical
   //  rows that already exist. See src/surfaces/work_order_status_read.js.
   const workOrderStatusRead = require("../surfaces/work_order_status_read");
@@ -405,6 +406,8 @@ module.exports = function maintenance(deps) {
       res.status(201).json({ work_order: workOrder, event, obligation });
     } catch (e) {
       try { await client.query("rollback"); } catch (_) {}
+      //  The retired-inventory wall (197 trigger) is a refusal, not a fault.
+      if (isRetiredInventoryRefusal(e)) return res.status(409).json({ error: "retired_inventory", receipt: e.message });
       res.status(e.httpStatus || 500).json({ error: e.message, ...(e.allowed ? { allowed: e.allowed } : {}) });
     } finally {
       client.release();
@@ -643,6 +646,8 @@ module.exports = function maintenance(deps) {
       });
     } catch (e) {
       try { await client.query("rollback"); } catch (_) {}
+      //  The retired-inventory wall (197 trigger) is a refusal, not a fault.
+      if (isRetiredInventoryRefusal(e)) return res.status(409).json({ error: "retired_inventory", receipt: e.message });
       res.status(e.httpStatus || 500).json({ error: e.message, ...(e.allowed ? { allowed: e.allowed } : {}) });
     } finally {
       client.release();

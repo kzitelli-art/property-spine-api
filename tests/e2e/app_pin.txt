@@ -1,0 +1,34 @@
+# ════════════════════════════════════════════════════════════════════
+#  THE OPERATOR APP PIN — ONE DECLARED COMMIT, READ BY ONE SCRIPT.
+#
+#  property-spine-app is a separate repository. Until now CI had no
+#  checkout of it, so every rung that needs the shipped operator UI
+#  printed SKIPPED in every run — and the two first reds found this week
+#  (the "Choose a property" layer appearing above Deal Setup) were of
+#  exactly the class CI could not see.
+#
+#  This file is the single place that says WHICH app commit the API's
+#  proofs are entitled to assume. tests/e2e/verify_all.sh reads it;
+#  .github/workflows/verify.yml reads it to check the app out at that
+#  exact commit. Nothing infers the app version from anywhere else.
+#
+#  ── DRIFT IS A FAILURE, NOT A WARNING ──────────────────────────────
+#  When E2E_APP_ROOT names a checkout, verify_all.sh compares that
+#  checkout's HEAD against `sha` below. A mismatch FAILS the run and
+#  prints both commits. A rung that runs against an app the API never
+#  declared is worse than a skipped rung: it reports green about a
+#  surface nobody pinned.
+#
+#  ── HOW TO MOVE THE PIN ────────────────────────────────────────────
+#  Edit `sha` and `branch` together, in one commit, and say in that
+#  commit message what app change you are adopting. The diff of this
+#  file is the record of every app version the API has ever claimed.
+#
+#  CLASS 1 — permanent. This file is removed only if the two
+#  repositories merge into one, at which point the pin is the checkout.
+#
+#  Format: one `key value` pair per line. `#` begins a comment.
+# ════════════════════════════════════════════════════════════════════
+sha    b0be9f46b5dc0240a1b6c2cb898ecca4fc85a09c
+branch claude/coupled-browser-acceptance-20260914
+repo   kzitelli-art/property-spine-app

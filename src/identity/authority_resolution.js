@@ -36,6 +36,52 @@ const NON_STAFF_LIFECYCLES = new Set(["lead", "applicant", "tenant", "resident",
 
 const check = (id, passed, detail) => ({ id, passed, detail });
 
+function evaluateReviewerPrecondition({
+  reviewer_user_id = null,
+  grantee_user_id = null,
+  grantee_person_id = null,
+  reason = null,
+  reviewer_context = null,
+  reviewer_staff_context_state = "absent",
+  caller_granted_by_person_id = null,
+} = {}) {
+  const reviewerPersonId = reviewer_context && reviewer_context.person
+    ? reviewer_context.person.person_id : null;
+  const reasonRecorded = typeof reason === "string" && reason.trim().length > 0;
+  const distinctLogin = !!reviewer_user_id
+    && String(reviewer_user_id) !== String(grantee_user_id || "");
+  const distinctPerson = !!reviewerPersonId
+    && String(reviewerPersonId) !== String(grantee_person_id || "");
+  const humanStaff = !!(reviewer_context && reviewer_context.user
+    && reviewer_context.user.account_kind === "human_staff");
+  const staffContext = reviewer_staff_context_state === "present";
+  const mayManage = !!(reviewer_context && reviewer_context.capabilities
+    && reviewer_context.capabilities.may_manage_concession_authority);
+  const suppliedGrantorMatches = !caller_granted_by_person_id
+    || (reviewerPersonId && String(caller_granted_by_person_id) === String(reviewerPersonId));
+  const passed = !!reviewer_user_id && reasonRecorded && reviewer_context && reviewer_context.ok
+    && humanStaff && staffContext && distinctLogin && distinctPerson && mayManage
+    && suppliedGrantorMatches;
+
+  let detail;
+  if (!reviewer_user_id) detail = "No reviewer named.";
+  else if (!reasonRecorded) detail = "No reason recorded.";
+  else if (!reviewer_context || !reviewer_context.ok) {
+    detail = `The reviewer did not resolve to an active governed actor (${reviewer_context && reviewer_context.failure_reason || "unresolved"}).`;
+  } else if (!humanStaff) detail = "The reviewer login is not classified human_staff.";
+  else if (reviewer_staff_context_state === "read_failed") detail = "The reviewer's staff-context read failed; authority review fails closed.";
+  else if (!staffContext) detail = "The reviewer has no active staff context covering this property.";
+  else if (!distinctLogin || !distinctPerson) detail = "The reviewer must be a different governed human from the person receiving authority.";
+  else if (!mayManage) detail = "The reviewer lacks may_manage_concession_authority on this property.";
+  else if (!suppliedGrantorMatches) detail = "granted_by_person_id does not match the governed reviewer identity.";
+  else {
+    detail = `Reviewed by a distinct authorized human (${reviewerPersonId}); authority basis: `
+      + `${reviewer_context.basis.may_manage_concession_authority}. No comparison reads a display name.`;
+  }
+
+  return check("reviewed_by_distinct_authorized_human", passed, detail);
+}
+
 /**
  * @param spec {
  *   user_id, person_id, property_id,
@@ -181,10 +227,41 @@ async function resolveAuthority(pool, { spec = {}, apply = false } = {}) {
       : !effective_from ? "A grant must state when it begins."
       : "Window is valid."));
 
-  // ── 9. the decision is reviewed, and not name-based ─────────────
-  push(check("reviewed_and_not_name_based", !!reviewer_user_id && !!reason,
-    !reviewer_user_id ? "No reviewer named." : !reason ? "No reason recorded."
-      : "Reviewed by a named human with a recorded reason. No comparison in this tool reads a display name."));
+  // ── 9. a different governed human with grant authority reviews it ─
+  // A user id and a reason used to be enough. That made self-review pass and
+  // never established that the named reviewer had standing to grant authority.
+  // Resolve the reviewer through the same property-scoped authority reader the
+  // product uses, then independently require the governed staff classification.
+  let reviewerContext = null;
+  let reviewerStaffContextState = "absent";
+  if (reviewer_user_id && property_id) {
+    reviewerContext = await resolveActorContext(pool, { user_id: reviewer_user_id, property_id });
+    if (reviewerContext && reviewerContext.person) {
+      try {
+        const rows = (await pool.query(
+          `select id from person_contexts
+            where person_id=$1 and context_type='staff' and active_to is null
+              and (property_id is null or property_id=$2)
+            limit 1`, [reviewerContext.person.person_id, property_id])).rows;
+        reviewerStaffContextState = rows.length ? "present" : "absent";
+      } catch (_) {
+        reviewerStaffContextState = "read_failed";
+      }
+    }
+  }
+  push(evaluateReviewerPrecondition({
+    reviewer_user_id,
+    grantee_user_id: user_id,
+    grantee_person_id: person_id,
+    reason,
+    reviewer_context: reviewerContext,
+    reviewer_staff_context_state: reviewerStaffContextState,
+    caller_granted_by_person_id: spec.granted_by_person_id || null,
+  }));
+  const reviewerPersonId = reviewerContext && reviewerContext.person
+    ? reviewerContext.person.person_id : null;
+  const reviewerAuthorityBasis = reviewerContext && reviewerContext.basis
+    ? reviewerContext.basis.may_manage_concession_authority : null;
 
   const ok = checks.every((c) => c.passed);
 
@@ -210,7 +287,8 @@ async function resolveAuthority(pool, { spec = {}, apply = false } = {}) {
       path: requested_role ? "assignment" : requested_verbs ? "explicit_grant" : null,
       requested_role, requested_verbs,
       effective_from, effective_until,
-      reviewer_user_id, reason,
+      reviewer_user_id, reviewer_person_id: reviewerPersonId,
+      reviewer_authority_basis: reviewerAuthorityBasis, reason,
     },
     authority_consequence: wouldGrant.length
       ? `Would confer ${wouldGrant.join(", ")} on ${property ? property.name : "the property"}` +
@@ -222,6 +300,10 @@ async function resolveAuthority(pool, { spec = {}, apply = false } = {}) {
       basis: requested_role ? `assignment:${requested_role}` : "grant",
     } : { capabilities: before ? before.capabilities : null, basis: null, note: "unchanged — refused" },
     reviewer: reviewer_user_id || null,
+    reviewer_resolution: reviewer_user_id ? {
+      person_id: reviewerPersonId,
+      authority_basis: reviewerAuthorityBasis,
+    } : null,
     applied_at: null,
   };
 
@@ -257,9 +339,11 @@ async function resolveAuthority(pool, { spec = {}, apply = false } = {}) {
       created = (await client.query(
         `insert into assignments (person_id, property_id, role, is_active, provenance)
          values ($1,$2,$3,true,$4) returning id`,
-        [person_id, property_id, requested_role,
-         JSON.stringify({ source: "authority_resolution", reviewer_user_id, reason,
-                          resolved_at: new Date().toISOString() })])).rows[0];
+         [person_id, property_id, requested_role,
+          JSON.stringify({ source: "authority_resolution", reviewer_user_id,
+                           reviewer_person_id: reviewerPersonId,
+                           reviewer_authority_basis: reviewerAuthorityBasis, reason,
+                           resolved_at: new Date().toISOString() })])).rows[0];
     } else {
       created = (await client.query(
         `insert into concession_authority_grants
@@ -272,7 +356,7 @@ async function resolveAuthority(pool, { spec = {}, apply = false } = {}) {
          (requested_verbs || []).includes("may_review_pricing"),
          (requested_verbs || []).includes("may_publish_pricing"),
          (requested_verbs || []).includes("may_manage_concession_authority"),
-         spec.granted_by_person_id || null, reason])).rows[0];
+          reviewerPersonId, reason])).rows[0];
     }
     await client.query("commit");
     return { mode: "applied", disposition: "authority_write_performed",
@@ -283,4 +367,5 @@ async function resolveAuthority(pool, { spec = {}, apply = false } = {}) {
   } finally { client.release(); }
 }
 
-module.exports = { resolveAuthority, VERBS, ASSIGNABLE_ROLES, NON_STAFF_LIFECYCLES };
+module.exports = { resolveAuthority, evaluateReviewerPrecondition,
+  VERBS, ASSIGNABLE_ROLES, NON_STAFF_LIFECYCLES };

@@ -43,15 +43,19 @@
 //  READ-ONLY. Nothing here writes. Class 1 — permanent product primitive.
 // ════════════════════════════════════════════════════════════════════
 "use strict";
+const externalEmailReply = require("./external_email_reply");
 
 const { resolveRelationshipStage } = require("../shared/relationship_stage");
 const { resolveSpaceEconomics } = require("../money/effective_pricing");
+const { readBoundApplicationOffer, readCurrentTermsConfirmation } = require("../applications/proposed_terms_service");
+const { normalizeStanding } = require("./tour_outcome");
 
 //  A source that could not be read is reported, never silently emptied.
 async function attempt(label, fn, notes) {
   try { return await fn(); }
   catch (e) {
-    notes.push({ kind: "read_failed", subject: label, detail: e.message });
+    notes.push({ kind: "read_failed", subject: label, detail: e.message,
+      ...(e.code === "READ_TIMED_OUT" ? {read_state:"READ_TIMED_OUT"} : {}) });
     return null;
   }
 }
@@ -81,16 +85,107 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
   const stageOut = await attempt("relationship_stage",
     () => resolveRelationshipStage(db, { personId: person_id, propertyId: property_id, asOf: as_of }), notes);
 
+  // The inbound ledger owns what the prospect submitted, not whether its
+  // statements are true. Only website events linked to this person's scoped
+  // intake captures belong here; private staff messages are not gathered.
+  const inquiryRows = await attempt("website_inquiries", async () => (await db.query(
+    `select ce.id, ce.body, ce.occurred_at, le.id as source_event_id,
+            le.metadata->>'source' as source, count(*) over() as total_events
+       from lead_events le join leasing_leads l on l.id=le.lead_id
+       join comm_events ce on ce.id=le.comm_event_id
+        and ce.property_id=l.property_id and ce.person_id=l.person_id
+      where l.person_id=$1 and l.property_id=$2 and le.event_type='lead_received'
+        and ce.channel='website' and ce.direction='inbound' and ce.body is not null
+      order by ce.occurred_at desc, ce.id desc limit 10`, [person_id, property_id])).rows, notes);
+  const inquiryHistory = inquiryRows === null ? {
+    read_state: notes.find(n => n.subject === "website_inquiries")?.read_state || "READ_FAILED", messages: null,
+  } : {
+    read_state: "OK", interpretation: "Recorded website submissions; prospect statements are not verified property facts or contact consent.",
+    truncated: inquiryRows.length > 0 && Number(inquiryRows[0].total_events) > inquiryRows.length,
+    messages: inquiryRows.map(row => ({ source_event_id: row.source_event_id,
+      comm_event_id: row.id, channel: "website", source: row.source || null,
+      recorded_at: row.occurred_at instanceof Date ? row.occurred_at.toISOString() : row.occurred_at,
+      body: String(row.body).slice(0,4000),
+      body_truncated: String(row.body).length > 4000 })).reverse(),
+  };
+
+  // Staff external replies remain attributed assertions, never prospect words
+  // or provider-confirmed delivery. Capture time is separate from occurrence.
+  const externalRows = await attempt("external_replies", async () => (await db.query(
+    `select ce.id, ce.body, ce.occurred_at, ce.actor_user_id, u.name as actor_name,
+            ${externalEmailReply.evidenceSql("ce")} as claim, count(*) over() as total_events
+       from comm_events ce left join users u on u.id=ce.actor_user_id
+      where ce.person_id=$1 and ce.property_id=$2 and ${externalEmailReply.predicateSql("ce")}
+      order by ce.occurred_at desc, ce.id desc limit 10`, [person_id,property_id])).rows, notes);
+  const externalReplies = externalRows === null ? {read_state:"READ_FAILED",messages:null} : {
+    read_state:"OK", interpretation:"Staff reports of external email replies; provider delivery and substantive resolution are not verified.",
+    truncated:externalRows.length>0 && Number(externalRows[0].total_events)>externalRows.length,
+    messages:externalRows.map(r=>({comm_event_id:r.id,channel:"email",body:r.body,
+      actor_user_id:r.actor_user_id,actor_name:r.actor_name,occurred_at:r.occurred_at,
+      captured_at:r.claim.captured_at,recipient:r.claim.recipient,external_reference:r.claim.external_reference,
+      provenance:"staff_external_email_attestation",claim_strength:"asserted",provider_delivery:"not_verified"})).reverse(),
+  };
+
+  // Recorded history, not a current recommendation. Keep corrections as
+  // separate events and never infer today's standing from an earlier tour.
+  // Only published tour events are read here, never private staff threads.
+  const tourEvents = await attempt("tour_history", async () => (await db.query(
+    `select te.id, te.tour_id, te.event_type, te.event_at, te.actor_id,
+            te.metadata, u.name as actor_name, count(*) over() as total_events
+       from tour_events te
+       join leasing_tours t on t.id=te.tour_id
+       join leasing_leads l on l.id=t.lead_id
+       left join users u on u.id=te.actor_id
+      where t.property_id=$2 and l.property_id=$2 and l.person_id=$1
+        and te.event_type in ('completed','no_show','outcome_corrected')
+      order by te.event_at desc, te.id desc limit 5`, [person_id, property_id])).rows, notes);
+  const tourHistory = tourEvents === null ? {
+    read_state: notes.find(n => n.subject === "tour_history")?.read_state || "READ_FAILED", events: null,
+  } : {
+    read_state: "OK", interpretation: "Historical captures, not current readiness or application delivery.",
+    truncated: tourEvents.length > 0 && Number(tourEvents[0].total_events) > tourEvents.length,
+    events: tourEvents.map(e => {
+      const md=e.metadata || {};
+      const legacy=e.event_type === "outcome_corrected" ? (md.revised || {}) : (md.outcome || {});
+      const normalized=normalizeStanding(Object.prototype.hasOwnProperty.call(md,"standing")
+        ? {standing:md.standing} : {...legacy,interest_level:md.tour_outcome || null});
+      return { source_event_id:e.id, tour_id:e.tour_id, event_type:e.event_type,
+        recorded_at:e.event_at, recorded_by_user_id:e.actor_id, recorded_by_name:e.actor_name || null,
+        standing:normalized.standing,
+        standing_unresolved_reason:md.standing_unresolved_reason || normalized.reason || null,
+        notes:md.notes ?? legacy.note ?? null,
+        correction:e.event_type === "outcome_corrected"
+          ? {corrects_event_id:md.corrects_event || null,reason:md.reason || null} : null };
+    }),
+  };
+
   // ── THE OPPORTUNITY AND ITS TARGET ────────────────────────────────
   const app = await attempt("application", async () => (await db.query(
     `select a.id, a.status, a.unit_id, a.space_id, a.applicant_name,
-            a.terms_review_obligation_id, a.executed_lease_record_id, a.created_at,
+            count(*) over() as application_count,
+            a.property_id, a.person_id,
+            a.application_offer_id, a.application_terms_hash,
+            a.application_terms_acknowledged_at,
+            a.terms_review_obligation_id, a.proposed_terms_confirmation_id, a.executed_lease_record_id, a.created_at,
             u.unit_number, s.space_label
        from lease_applications a
        left join units  u on u.id = a.unit_id
        left join spaces s on s.id = a.space_id
       where a.person_id=$1 and a.property_id=$2
-      order by a.created_at desc limit 1`, [person_id, property_id])).rows[0] || null, notes);
+       order by a.created_at desc limit 1`, [person_id, property_id])).rows[0] || null, notes);
+
+  // The application-offer service owns immutable accepted terms and the exact
+  // invitation-linked pending offer. Standing only projects that result; it
+  // never reconstructs terms from legacy application columns or asking rent.
+  const termsReview = app ? await attempt("application_offer", async () => {
+    const state = await readBoundApplicationOffer(db, app, { allowHistorical: true, lock: false });
+    if (!state) return null;
+    return {
+      acknowledged_at: state.id ? (app.application_terms_acknowledged_at || null) : null,
+      acknowledged: state.id ? state.terms : null,
+      pending: state.pending_review ? state.pending_review.terms : null,
+    };
+  }, notes) : null;
 
   const conversion = await attempt("opportunity", async () => (await db.query(
     `select id, current_stage from leasing_conversions
@@ -104,11 +199,34 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
     //  reported a blocked next action against the review's available one.
     `select id, version, status, is_placeholder, superseded_at,
             instrument_form_code, instrument_body_sha256,
+            instrument_source_artifact_id, instrument_terms_sha256,
+            instrument_package_sha256,
             resident_executed_at, company_executed_at,
             proposed_terms_confirmation_id
        from lease_packets
       where application_id=$1 and superseded_at is null
       order by version desc limit 1`, [app.id])).rows[0] || null, notes) : null;
+
+  const signingParties = packet ? await attempt("lease_packet_signers", async () => (await db.query(
+    `select s.signer_role, s.display_name, s.link_issued_at,
+            s.token_expires_at, s.submitted_at,
+            sf.completed_at as signature_completed_at
+       from lease_packet_signers s
+       left join lease_packet_fields sf
+         on sf.lease_packet_id=s.lease_packet_id
+        and sf.signer_role=s.signer_role
+        and sf.field_type='signature'
+      where s.lease_packet_id=$1
+      order by case s.signer_role when 'tenant' then 1 else 2 end`,
+    [packet.id])).rows.map((s) => ({
+      signer_role: s.signer_role,
+      display_name: s.display_name,
+      link_issued_at: s.link_issued_at || null,
+      token_expires_at: s.token_expires_at || null,
+      submitted_at: s.submitted_at || null,
+      signature_completed_at: s.signature_completed_at || null,
+      complete: !!(s.submitted_at && s.signature_completed_at),
+    })), notes) : [];
 
   const executed = app ? await attempt("executed_lease", async () => (await db.query(
     //  admission_blockers is read, not re-derived. The admission evaluator
@@ -134,15 +252,8 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
   //  term is a governed fact — it is whatever the current proposed-terms
   //  confirmation named — so it is READ, and when nothing has been confirmed
   //  the answer stays honestly unresolved.
-  const confirmation = app ? await attempt("proposed_terms", async () => (await db.query(
-    //  `id` is SELECTED. Lineage is compared on it, and without it every
-    //  packet looked like a lineage mismatch — this read reported a blocked
-    //  next action where the review reported an available one, which is the
-    //  exact two-surfaces-disagree failure this projection exists to remove.
-    //  Caught by running both surfaces against the same application.
-    `select id, rent, security_deposit, lease_start_date, lease_end_date, concession_status
-       from application_proposed_terms_confirmations
-      where application_id=$1 order by created_at desc limit 1`, [app.id])).rows[0] || null, notes) : null;
+  const confirmation = app ? await attempt("proposed_terms",
+    () => readCurrentTermsConfirmation(db, app), notes) : null;
 
   //  THE ONE PIECE OF ARITHMETIC IN THIS FILE, AND WHY IT IS SAFE.
   //  The confirmation stores DATES, not a term length, so asking the pricing
@@ -260,10 +371,15 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
     packet_id: packet.id,
     packet_version: packet.version,
     packet_status: packet.status,
-    carries_governing_instrument: !!packet.instrument_body_sha256,
+    carries_governing_instrument: !!(packet.instrument_source_artifact_id
+      && packet.instrument_body_sha256
+      && packet.instrument_terms_sha256
+      && packet.instrument_package_sha256),
     instrument_form_code: packet.instrument_form_code || null,
+    instrument_package_sha256: packet.instrument_package_sha256 || null,
     resident_executed_at: packet.resident_executed_at || null,
     company_executed_at: packet.company_executed_at || null,
+    signing_parties: signingParties || [],
     executed_lease: executed ? {
       present: true,
       record_id: executed.id,
@@ -278,6 +394,9 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
     as_of: asOf,
     person: person ? { id: person.id, name: person.name } : null,
     property_id,
+    inquiry_history: inquiryHistory,
+    external_replies: externalReplies,
+    tour_history: tourHistory,
     opportunity: conversion ? { id: conversion.id, current_stage: conversion.current_stage } : null,
     target: app ? {
       property_id,
@@ -296,7 +415,19 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
       executed: lease ? { rent: lease.rent, security_deposit: lease.security_deposit,
                           lease_start_date: lease.start_date, lease_end_date: lease.end_date } : null,
     },
-    application: app ? { id: app.id, status: app.status, applied_at: app.created_at } : null,
+    application: app ? {
+      id: app.id, status: app.status, applied_at: app.created_at,
+      selection: {basis:"latest_created", candidate_count:Number(app.application_count)},
+      terms_review: termsReview,
+      proposed_terms_confirmation: confirmation ? {
+        id: confirmation.id, source: confirmation.source,
+        confirmed_by: confirmation.confirmed_by, confirmed_at: confirmation.confirmed_at,
+        prepared_by: confirmation.prepared_by, prepared_at: confirmation.prepared_at,
+        offer_author: confirmation.offer_author,
+        application_offer_id: confirmation.application_offer_id || null,
+        application_terms_hash: confirmation.application_terms_hash || null,
+      } : null,
+    } : null,
     lease: leaseBand,
     tenancy: lease
       ? { state: lease.lease_status, lease_id: lease.id, space_id: lease.space_id }
@@ -349,28 +480,52 @@ async function resolveLeasingSubject(db, { property_id, text } = {}) {
   if (!q) return { resolved: false, reason: "no_person_named", candidates: [] };
 
   const rows = (await db.query(
-    `select distinct p.id, p.name
-       from persons p
-      where p.name is not null and length(btrim(p.name)) >= 3
-        and (exists (select 1 from leasing_leads   l where l.person_id=p.id and l.property_id=$2)
-          or exists (select 1 from conversations   c where c.person_id=p.id and c.property_id=$2)
-          or exists (select 1 from lease_applications a where a.person_id=p.id and a.property_id=$2)
-          or exists (select 1 from leasing_conversions v where v.person_id=p.id and v.property_id=$2))
-        --  Both sides are normalised to space-separated alphanumerics and
-        --  compared with a PADDED LIKE. That is a true word-boundary match
-        --  with no pattern escaping anywhere: a person named "A." or
-        --  "O'Brien" cannot become a wildcard, because no part of the name
-        --  is ever interpreted as a pattern.
-        and (' ' || lower(regexp_replace($1, '[^a-zA-Z0-9]+', ' ', 'g')) || ' ')
-            like ('% ' || lower(regexp_replace(p.name, '[^a-zA-Z0-9]+', ' ', 'g')) || ' %')
+    `with input as (
+       select btrim(lower(regexp_replace($1, '[^a-zA-Z0-9]+', ' ', 'g'))) as normalized_question
+     ), scoped_people as (
+       select distinct p.id, p.name,
+              btrim(lower(regexp_replace(p.name, '[^a-zA-Z0-9]+', ' ', 'g'))) as normalized_name
+         from persons p
+        where p.name is not null and length(btrim(p.name)) >= 3
+          and (exists (select 1 from leasing_leads   l where l.person_id=p.id and l.property_id=$2)
+            or exists (select 1 from conversations   c where c.person_id=p.id and c.property_id=$2)
+            or exists (select 1 from lease_applications a where a.person_id=p.id and a.property_id=$2)
+            or exists (select 1 from leasing_conversions v where v.person_id=p.id and v.property_id=$2))
+     ), matches as (
+       select p.id, p.name,
+              case
+                when (' ' || i.normalized_question || ' ')
+                       like ('% ' || p.normalized_name || ' %') then 2
+                else 1
+              end as match_strength
+         from scoped_people p
+         cross join input i
+        where (' ' || i.normalized_question || ' ')
+                like ('% ' || p.normalized_name || ' %')
+           or exists (
+                select 1
+                  from unnest(regexp_split_to_array(p.normalized_name, '\\s+')) as name_token
+                 where length(name_token) >= 2
+                   and (' ' || i.normalized_question || ' ')
+                         like ('% ' || name_token || ' %')
+              )
+     )
+     select id, name, match_strength
+       from matches
+      order by match_strength desc, lower(name), id
       limit 25`, [q, property_id])).rows;
 
   if (!rows.length) return { resolved: false, reason: "no_person_named", candidates: [] };
-  if (rows.length > 1) {
+  // A complete recorded name always outranks a partial token. This preserves
+  // the existing exact-address contract when another person happens to share
+  // a first or last name. Equal-strength matches remain ambiguous.
+  const strongest = rows[0].match_strength;
+  const candidates = rows.filter((row) => row.match_strength === strongest);
+  if (candidates.length > 1) {
     return { resolved: false, reason: "ambiguous",
-             candidates: rows.map((r) => ({ id: r.id, name: r.name })) };
+             candidates: candidates.map((r) => ({ id: r.id, name: r.name })) };
   }
-  return { resolved: true, person: { id: rows[0].id, name: rows[0].name } };
+  return { resolved: true, person: { id: candidates[0].id, name: candidates[0].name } };
 }
 
 module.exports = { readLeasingStanding, resolveLeasingSubject };

@@ -44,6 +44,7 @@ const lifecycle = require("./lifecycle_service");
 const evidence = require("./evidence_service");
 const residentUpdate = require("./resident_update");
 const { operatingReceipt } = require("../conversation/receipt");
+const staffThread = require("../comms/staff_thread");
 
 /*  Which field verb each intent records. `accept` and `list_work` are not
  *  field facts; they are handled on their own branches. */
@@ -59,14 +60,6 @@ const INTENT_TO_OUTCOME = {
   blocked: "blocked_recorded",
   finding: "finding_recorded",
 };
-
-async function staffThreadFor(client, { organizationId, userId }) {
-  const r = await client.query(
-    `insert into staff_threads (organization_id, user_id) values ($1,$2)
-     on conflict (organization_id, user_id) do update set last_message_at = now()
-     returning id`, [organizationId, userId]);
-  return r.rows[0].id;
-}
 
 async function actorScope(client, { organizationId, userId }) {
   const { rows } = await client.query(
@@ -142,13 +135,9 @@ async function residentConversationFor(client, { propertyId, personId }) {
 async function runOperationsTurn(client, {
   organizationId, userId, lineId, body, providerMessageId, attachments = [],
 }, { fetchMedia = null } = {}) {
-  const threadId = await staffThreadFor(client, { organizationId, userId });
-
-  const inbound = (await client.query(
-    `insert into comm_events (channel, direction, body, communication_line_id, staff_thread_id,
-       actor_user_id, sms_sid, needs_human)
-     values ('sms','inbound',$1,$2,$3,$4,$5,true) returning id`,
-    [body, lineId, threadId, userId, providerMessageId || null])).rows[0];
+  const { threadId, inbound } = await staffThread.recordInbound(client, {
+    organizationId, userId, lineId, body, providerMessageId,
+  });
 
   const propertyIds = await actorScope(client, { organizationId, userId });
   const candidates = await candidateWork(client, { userId, propertyIds });
@@ -322,21 +311,17 @@ async function runOperationsTurn(client, {
     throw new Error(`receipt refused (${receipt.refusal}) — no reply composed for outcome ${receipt.outcome}`);
   }
 
-  await client.query(
-    `update comm_events set needs_human = false, classification = $2,
-            created_object_type = $3, created_object_id = $4 where id = $1`,
-    [inbound.id, receipt.outcome, createdObject && createdObject.type, createdObject && createdObject.id]);
-
-  const correlationKey = `${providerMessageId || inbound.id}:${reason}`;
-  const outbound = (await client.query(
-    `insert into comm_events (channel, direction, body, communication_line_id, staff_thread_id,
-       in_reply_to_comm_event_id, to_user_id, reply_reason, correlation_key,
-       created_object_type, created_object_id)
-     values ('sms','outbound',$1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,
-    [receipt.text, lineId, threadId, inbound.id, userId, reason, correlationKey,
-     createdObject && createdObject.type, createdObject && createdObject.id])).rows[0];
-
-  await client.query(`update staff_threads set last_message_at = now() where id = $1`, [threadId]);
+  const outbound = await staffThread.recordReply(client, {
+    threadId,
+    inboundId: inbound.id,
+    userId,
+    lineId,
+    providerMessageId,
+    body: receipt.text,
+    replyReason: reason,
+    classification: receipt.outcome,
+    createdObject,
+  });
 
   return { inbound, outbound, threadId, operating: receipt, replyReason: reason,
            resolution, residentIntent, residentEvent, intent };

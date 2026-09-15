@@ -20,13 +20,16 @@
 // with an explicit reason, so a misconfigured property surfaces as unknown
 // rather than as a confidently-wrong unit number.
 //
-// RENTABLE EXCLUSIONS (governed, per grain):
+// Current inventory at every grain excludes recorded inventory retirements,
+// using the same owner as canonical inventory reads. The counts below describe
+// that current universe; excluded_count still describes non-revenue labels.
+// RENTABLE EXCLUSIONS WITHIN CURRENT INVENTORY (governed, per grain):
 //   - SPACE/BED grain: non-revenue spaces (model/down/offline) are excluded from
 //     rentable via the space_label. This is the ALREADY-ESTABLISHED read-model
 //     behavior (management-read). NOTE: it is LABEL-DERIVED, not a normalized
 //     status column — a future normalization seam. Documented, not silently
 //     changed.
-//   - UNIT grain: NO exclusions are applied. All units count as rentable and
+//   - UNIT grain: NO status exclusions are applied. All current units count as rentable and
 //     exclusions_governed=false. We do NOT infer a governed exclusion rule from
 //     the mere existence of a column named status/unit_status/availability_status
 //     — schema shape is not domain semantics, and occupancy must not silently
@@ -37,6 +40,7 @@
 
 // Label rule for non-revenue SPACES only (established, label-derived, and a known
 // future normalization seam). Never applied to units.
+const { NOT_RETIRED_SQL } = require('../tenancy/inventory_retirement');
 const NON_REVENUE_SPACE_LABEL = /model|down|offline/i;
 
 // Canonical vocabulary for a basis. Beds are a space grain; the noun differs.
@@ -82,7 +86,7 @@ async function occupancyByBasis(pool, propertyId) {
                         where l.space_id = s.id and l.lease_status = 'active') as occupied
          from spaces s
          join units u on u.id = s.unit_id
-        where u.property_id = $1`, [propertyId])).rows;
+        where u.property_id = $1 and ${NOT_RETIRED_SQL('u')}`, [propertyId])).rows;
     let rentable = 0, occupied = 0, excluded = 0;
     for (const r of rows) {
       const label = r.space_label || '';
@@ -103,14 +107,17 @@ async function occupancyByBasis(pool, propertyId) {
     };
   }
 
-  // Unit grain. NO exclusions — all units are rentable. We do not inspect the
+  // Unit grain. All current units are rentable. We do not inspect the
   // schema for a status column; occupancy does not change when a column appears.
   const r = (await pool.query(
     `select
-       (select count(*)::int from units where property_id = $1) as rentable_units,
+       (select count(*)::int from units u
+         where u.property_id = $1 and ${NOT_RETIRED_SQL('u')}) as rentable_units,
        (select count(distinct s.unit_id)::int
           from leases l join spaces s on s.id = l.space_id
-         where l.property_id = $1 and l.lease_status = 'active') as occupied_units`,
+          join units u on u.id = s.unit_id
+         where l.property_id = $1 and u.property_id = $1
+           and l.lease_status = 'active' and ${NOT_RETIRED_SQL('u')}) as occupied_units`,
     [propertyId])).rows[0];
   const rentable = Number(r && r.rentable_units) || 0;
   const occupied = Number(r && r.occupied_units) || 0;

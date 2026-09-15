@@ -1,0 +1,100 @@
+{
+  "server": "<hash>",
+  "summary": {
+    "passed": 6,
+    "failed": 0
+  },
+  "results": [
+    {
+      "section": "fixture · Greenery-shaped property, an unrelated property, four actors",
+      "label": "the retained legacy vocabulary is the production shape (64 parents, 107 other)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "parents": 64,
+        "legacy": 107
+      }
+    },
+    {
+      "section": "fixture · Greenery-shaped property, an unrelated property, four actors",
+      "label": "171 legacy unit records with one placeholder each, identities retained",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "units": 171,
+        "spaces": 171
+      }
+    },
+    {
+      "section": "fixture · Greenery-shaped property, an unrelated property, four actors",
+      "label": "a future tour slot names the tour-example unit",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Tour time published.",
+          "slot": {
+            "id": "<id-1>",
+            "property_id": "<id-2>",
+            "unit_id": "<id-3>",
+            "leasing_agent_id": "<id-4>",
+            "starts_at": "2026-09-16T12:24:20.563Z",
+            "ends_at": "2026-09-16T13:24:20.563Z",
+            "capacity": 1,
+            "status": "open",
+            "booked_tour_id": null,
+            "created_by": "<id-4>",
+            "created_at": "2026-09-13T12:24:20.612Z",
+            "updated_at": "2026-09-13T12:24:20.612Z"
+          },
+          "created": true
+        }
+      }
+    },
+    {
+      "section": "fixture · Greenery-shaped property, an unrelated property, four actors",
+      "label": "designations are fixture choices: E1/E2 retirable examples, E3 stale-review example, five blocked examples, one parent claimed by the current representation, 100+ legacy records left unresolved",
+      "ok": true,
+      "kind": "observe",
+      "detail": {
+        "E1": "101 - 1",
+        "E2": "101 - 2",
+        "E3": "107 - 1",
+        "blocked": {
+          "leased": "102 - 2",
+          "work": "109 - 1",
+          "tour": "107 - 2",
+          "application": "110 - 1",
+          "possession": "109 - 2"
+        },
+        "parent": "1325-101"
+      }
+    },
+    {
+      "section": "fixture · Greenery-shaped property, an unrelated property, four actors",
+      "label": "fixture ready",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "witness · what an authorized person meets on the unchanged baseline",
+      "label": "WITNESS: no staff door exists for inventory correction (list, review and retire all 404); the owner is reachable only from proofs",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "list": 404,
+        "review": 404,
+        "retire": 404
+      }
+    },
+    {
+      "section": "witness · what an authorized person meets on the unchanged baseline",
+      "label": "WITNESS: nothing can be retired through staff HTTP",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    }
+  ]
+}

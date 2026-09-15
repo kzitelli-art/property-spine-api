@@ -1,0 +1,107 @@
+OWNED_API_READY
+
+════════════════════════════════════════════════════════════════
+  HARNESS   current_rent_roll_reconciliation.db.js
+  COMMIT    <hash>
+  BRANCH    claude/release-hash-pin-20260914
+  DATABASE  <proof-db>  @  127.0.0.1:5432  (user postgres)
+  ENDPOINT  (not a Neon endpoint host)
+  ISOLATED  yes — target differs from DATABASE_URL (which is unset here)
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+== fixture · organization, actors, Skyline-shaped property with the actual wrong-kind rooms ==
+  ok    [fixture · organization, actors, Skyline-shaped property with the actual wrong-kind rooms] 72 units / 160 beds; all 160 room-labelled spaces carry position_kind='unit' (the actual wrong-kind shape)
+
+== legacy seed · the July source as it was established in August, later pending rights, no possession events ==
+  ok    [legacy seed · the July source as it was established in August, later pending rights, no possession events] the deal holds both properties
+  ok    [legacy seed · the July source as it was established in August, later pending rights, no possession events] July shape: 37 named (31 leases + 6 held), 123 vacancies promoted, 91 future rows with no proposal, established 2026-08-17
+  ok    [legacy seed · the July source as it was established in August, later pending rights, no possession events] later records: 44 pending leases on 27 spaces spanning 2026-09-13 (22 future spaces), 13 positions overlapping; no possession events
+  NOTE  [legacy seed · the July source as it was established in August, later pending rights, no possession events] canonical dated rent roll on the seeded shape (buckets) | {"total":160,"occupied":31,"activation_pending":14,"open":96,"needs_review":19,"not_established":0}
+  ok    [legacy seed · the July source as it was established in August, later pending rights, no possession events] the seeded shape reads 160 positions with the July baseline (31 occupied by lease)
+  ok    [legacy seed · the July source as it was established in August, later pending rights, no possession events] the current source has 160 rows: 148 Signed (keys TRUE, positive rent) and 12 blank; two identity conflicts (both cells 'A - Reno' with Room A/B; Unit A/B with Room A/A)
+  NOTE  [legacy seed · the July source as it was established in August, later pending rights, no possession events] designated reconciliation classes (fixture choices, not findings) | {"already_represented_active":28,"conflict_overlapping_pending":13,"conflict_active_other_person":3,"new_claim_on_held":6,"blank_with_pending_right":2,"already_represented_pending":12,"blank_on_vacancy":10,"new_claim_on_vacancy":86}
+
+== A · newer current source on the established property: upload, open, preview (the run as far as it goes) ==
+  ok    [A · newer current source on the established property: upload, open, preview (the run as far as it goes)] Mike-shaped session uploads the current source; bytes retained
+  ok    [A · newer current source on the established property: upload, open, preview (the run as far as it goes)] a new setup opens on the already-established property (the July setup stays activated)
+  ok    [A · newer current source on the established property: upload, open, preview (the run as far as it goes)] preview parses the tracker shape: 160 grouped source identities, Unit + Room understood, tracker-only columns reported
+  ok    [A · newer current source on the established property: upload, open, preview (the run as far as it goes)] no source home is auto-matched: tracker labels (101A / A) are not the canonical labels (1417-101 / Room1); every group is unfamiliar
+  ok    [A · newer current source on the established property: upload, open, preview (the run as far as it goes)] the '- Reno' conflict yields two distinct source identities (A and B) that still require an explicit reviewed choice
+  ok    [A · newer current source on the established property: upload, open, preview (the run as far as it goes)] the Unit-A/Unit-B-with-Room-A conflict yields two distinct identities requiring explicit choices
+  ok    [A · newer current source on the established property: upload, open, preview (the run as far as it goes)] preview reports the rooms' actual position_kind ('unit') — the shape the reviewer will be offered
+
+== B · first red on the actual shape: the explicit bed selection is refused because the rooms carry position_kind='unit' ==
+  ok    [B · first red on the actual shape: the explicit bed selection is refused because the rooms carry position_kind='unit'] FIRST RED: read-source refuses the reviewed selection with inventory_target_changed — grainMatches requires position_kind='bed' for a bed-basis selection and every Skyline room reads 'unit'
+  ok    [B · first red on the actual shape: the explicit bed selection is refused because the rooms carry position_kind='unit'] the refusal wrote nothing: one batch (July), no proposals on the new setup, basis unchanged
+  NOTE  [B · first red on the actual shape: the explicit bed selection is refused because the rooms carry position_kind='unit'] DEPENDENCY: the classification is corrected by the governed mapping tool (Codex Luna's lane), not by this proof and not by relaxing the source-home rule. What follows applies that correction as a labelled stand-in. | {"rooms":160,"from":"unit","to":"bed","owner":"tools/apply_unit_type_mapping.js (Luna)"}
+
+== C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies ==
+  ok    [C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies] stand-in: 160 rooms reclassified to position_kind='bed' without replacing any unit/space identity
+  ok    [C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies] preview after the correction still offers no automatic match (labels differ) — the mapping remains an explicit reviewed choice
+  ok    [C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies] decisions carrying the pre-correction fingerprints are refused (inventory changed under the review)
+  ok    [C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies] a decision naming another property's home is refused
+  ok    [C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies] the explicit reviewed mapping applies: 160 rows read, one evidence row per source row, no unit or space created
+  ok    [C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies] re-reading the same file into the same setup is refused by name; evidence is not doubled
+  ok    [C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies] the two conflict rows keep their raw cells ('212A - Reno') while their reviewed homes are the canonical rooms
+  ok    [C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies] 148 signed rows stage (resident + rent, no dates); the 12 blank rows are needs_review, never vacancy
+  NOTE  [C · classification stand-in (Luna's correction), then the explicit reviewed mapping applies] term column for every signed row is blank (the tracker carries no lease dates); semester labels were read and not used | {"sample":[["101A|A",null,null],["101B|B",null,null]]}
+
+== D · person/lease comparison and acceptance — each reconciliation class through Add ==
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D1 a signed row naming a resident nobody on this home is: the confirmation creates the person under the operator's authority (no candidate to choose)
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D1 SUCCESSOR: Add accepts current occupancy with contractual terms unknown — NO lease is manufactured from a dateless signed row
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D1 the evidence row names the resident and the exact home, and no lease
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D2 SUCCESSOR: the identity review offers the tenant of the lease in force on this home as a candidate (recognition over re-entry)
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D2 the reviewer picks the offered existing resident
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D2 SUCCESSOR: Add recognizes the same existing tenancy — tied to the lease in force, no duplicate lease
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D3 a different current claimant on a bed with a lease in force holds for review; the prior tenancy is not ended and no second lease is written
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D4 SUCCESSOR: the pending applicant on this bed is offered as a candidate
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D4 SUCCESSOR: tied to the pending lease; it is NOT activated and no possession is recorded by a later as-of date
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D5 a signed row over overlapping pending rights is refused and held for review
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D5b recognising one resident cannot pick a winner among competing rights
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D6 a blank row (no name, no status, keys unchecked) cannot be added as anything — not vacancy
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D6 the same for a blank row on a July-vacant bed
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D7 a bed whose July claim was held accepts the current signed claim (terms unknown) — the held July claim stays as history
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D8 a replayed Add on an accepted row is refused by name (already_promoted) and writes nothing
+  ok    [D · person/lease comparison and acceptance — each reconciliation class through Add] D8 an actor without leasing/management access to the property cannot add
+
+== E · authority: revoked while waiting, suspended actor, no partial state ==
+  ok    [E · authority: revoked while waiting, suspended actor, no partial state] E1 the Add waits on the setup lock
+  ok    [E · authority: revoked while waiting, suspended actor, no partial state] E1 after the wait, revoked access is refused and nothing was accepted
+  ok    [E · authority: revoked while waiting, suspended actor, no partial state] E2 a suspended actor cannot add
+
+== F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission ==
+  NOTE  [F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission] proposal states before establishing | {"promoted":132,"needs_review":15,"staged":13,"accepted_this_pass":90,"tied_this_pass":38}
+  ok    [F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission] the current position is established and supersedes the July position (both retained)
+  ok    [F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission] July position reads superseded and names its successor; the new one is established
+  NOTE  [F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission] canonical dated rent roll after establishing (buckets) | {"total":160,"occupied":122,"activation_pending":12,"open":0,"needs_review":26,"not_established":0,"occupied_by_accepted_claim_terms_unknown":92}
+  ok    [F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission] beds accepted from the current source read Occupied with contractual terms unknown; leases in force keep their own basis
+  ok    [F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission] the reviewed fixture establishes exact counts without turning 148 signed claims into 148 occupied leases
+  ok    [F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission] the blank rows' beds are NOT open: their unresolved current rows read needs review (never vacancy by omission)
+  ok    [F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission] availability accounts for every unresolved or conflicting bed and offers none
+  ok    [F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission] Rent Roll unit view, tenancy standing and the dated read agree on occupied / open / needs review / not established
+  NOTE  [F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission] occupancyByBasis (lease-based occupied count, bed grain) | {"rentable":160,"occupied":31,"pct":19.4}
+  ok    [F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission] entitled Ask gathering reads the same tenancy standing (occupied / needs review / not established) with no ids
+  NOTE  [F · establish: the current position supersedes July; every reader agrees; nothing marketable by omission] standing unknowns after the current position | {"occupied_positions_with_no_recorded_rent":92,"occupied_positions_with_unavailable_contract_economics":0,"positions_with_unresolved_occupancy_evidence":13,"positions_with_overlapping_lease_claims":13,"occupied_positions_proven_only_by_the_opening_import":0,"occupied_positions_with_no_linked_resident":0,"confirmed_source_rows_not_attached_to_a_position":0,"held_source_rows_not_attached_to_a_positi
+
+== G · idempotency and integrity of the source command ==
+  ok    [G · idempotency and integrity of the source command] re-uploading the identical bytes is accepted as the same retained source (same sha256 in the preview)
+  ok    [G · idempotency and integrity of the source command] a new setup over the same bytes offers the earlier reviewed mapping for every home (reuse), nothing re-decided by text
+  ok    [G · idempotency and integrity of the source command] a changed payload under the same source identity is refused (source_rows_mismatch)
+  ok    [G · idempotency and integrity of the source command] a different as-of date for the same retained bytes is refused (source_date_mismatch)
+  NOTE  [G · idempotency and integrity of the source command] previewing the July artifact on the new setup (same property, retained bytes) | {"status":200,"counts":{"needs_identity_review":160}}
+  NOTE  [G · idempotency and integrity of the source command] a session scoped to the other property attempting this setup | {"status":200}
+  NOTE  [G · idempotency and integrity of the source command] retired-target refusal is asserted by the source-home proof (inventory_target_changed on a retired selection); not repeated here | {"proof":"tests/proofs/source_home_identity_review.db.js"}
+
+== H · second property shape (unit basis): the same doors, no Skyline-specific branch ==
+  ok    [H · second property shape (unit basis): the same doors, no Skyline-specific branch] unit-basis preview auto-suggests the exact whole-unit homes
+  ok    [H · second property shape (unit basis): the same doors, no Skyline-specific branch] applies
+  ok    [H · second property shape (unit basis): the same doors, no Skyline-specific branch] a dated row still creates a lease with the source's dates and rent (unchanged behaviour)
+  ok    [H · second property shape (unit basis): the same doors, no Skyline-specific branch] an undated signed row accepts occupancy with terms unknown on the unit shape too
+  ok    [H · second property shape (unit basis): the same doors, no Skyline-specific branch] an explicit VACANT row still records a vacant position (source states vacancy)
+  ok    [H · second property shape (unit basis): the same doors, no Skyline-specific branch] the other property establishes: 2 occupied (one by lease, one by accepted claim), 1 open
+  ok    [H · second property shape (unit basis): the same doors, no Skyline-specific branch] Skyline is unchanged by the other property's establishment
+  ok    [H · second property shape (unit basis): the same doors, no Skyline-specific branch] a dated recognised row whose supplied rent and dates differ stays needs review with both values and no lease link
+  ok    [H · second property shape (unit basis): the same doors, no Skyline-specific branch] a dateless current observation of the same person does not link or rewrite their future-only pending lease
+
+current rent-roll reconciliation: 63 passed, 0 failed

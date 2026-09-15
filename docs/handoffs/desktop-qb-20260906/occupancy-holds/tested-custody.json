@@ -1,0 +1,41 @@
+{
+  "api_base": "edceeb5ebb8a8e4041f63c3057876329015f548d",
+  "app_base": "8d1da846c7954036325afc0e30ea63e026f4c36c",
+  "files": [
+    {
+      "repo": "api",
+      "file": "src/surfaces/rent_roll_canonical.js",
+      "sha256": "f2e17d84678c8cafaa9a31bc6c812c3bc8b547ea2c7b79725882bd822f221477"
+    },
+    {
+      "repo": "api",
+      "file": "tests/proofs/canonical_occupancy_holds.db.js",
+      "sha256": "fd56c9acbe70d1828aba6000669ca88957b9e1c332be6bb3b831febd6460d73b"
+    },
+    {
+      "repo": "api",
+      "file": "tests/proofs/rent_roll_canonical_proof.js",
+      "sha256": "321103b770c37c3d3b539a22c4303d46ed874897ef619d37f9cb6180f066b99f"
+    },
+    {
+      "repo": "api",
+      "file": "tests/e2e/onboarding_review_local.js",
+      "sha256": "0acaf2dc5533279c5935b499b73c526e95e2c49de49b73d3678d9416e2e4be5c"
+    },
+    {
+      "repo": "api",
+      "file": "tests/e2e/verify_all.sh",
+      "sha256": "35f6ed5442fad42a3034cd6ad7c833908b64d0a473da317e320481340f4b190c"
+    },
+    {
+      "repo": "app",
+      "file": "canonical_onboarding_review.browser.js",
+      "sha256": "8b70002e3cf1f548561cc3dee0df1ebbd00c8cdf5365a3517330e4fb975b6a20"
+    },
+    {
+      "repo": "app",
+      "file": "index.html",
+      "sha256": "2aa4ad9e03b9ff145f2fbb850251e8889448892db5c432df5ffbd75939bff1ba"
+    }
+  ]
+}

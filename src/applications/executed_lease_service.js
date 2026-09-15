@@ -175,10 +175,12 @@ async function verifyExecutedLease(client, {
   // retained; confirm-term refuses with premises_conflict until an
   // authorized correction resolves it. Recording truth is never blocked;
   // operational activation is.
-  const premises_conflict = (app.unit_id && String(space.unit_id) !== String(app.unit_id))
-    ? { application_unit_id: app.unit_id, executed_space_unit_id: space.unit_id,
+  const premises_conflict = ((app.space_id && String(space.id) !== String(app.space_id))
+    || (app.unit_id && String(space.unit_id) !== String(app.unit_id)))
+    ? { application_unit_id: app.unit_id, application_space_id: app.space_id || null,
+        executed_space_unit_id: space.unit_id,
         executed_space_id: space_id,
-        note: "The executed lease's premises are not in the unit this application named. " +
+        note: "The executed lease's premises differ from the premises this application named. " +
               "The record stands; term confirmation is blocked until this is corrected." }
     : null;
 
@@ -455,12 +457,15 @@ async function computeAdmissionBlockers(client, { application_id }) {
     "select id, unit_id from spaces where id=$1 for update", [record.space_id])).rows[0];
   sources.executed_unit_id = sp ? sp.unit_id : null;
   sources.application_unit_id = app.unit_id || null;
+  sources.application_space_id = app.space_id || null;
   if (!sp) {
     blockers.push({ code: "premises_conflict", detail: "The executed lease's space no longer exists." });
-  } else if (app.unit_id && String(sp.unit_id) !== String(app.unit_id)) {
+  } else if ((app.space_id && String(sp.id) !== String(app.space_id))
+      || (app.unit_id && String(sp.unit_id) !== String(app.unit_id))) {
     blockers.push({ code: "premises_conflict",
-      detail: "The executed lease's premises are not in the unit this application named.",
-      application_unit_id: app.unit_id, executed_space_id: record.space_id, executed_unit_id: sp.unit_id });
+      detail: "The executed lease's premises differ from the premises this application named.",
+      application_unit_id: app.unit_id, application_space_id: app.space_id || null,
+      executed_space_id: record.space_id, executed_unit_id: sp.unit_id });
   }
 
   // ── 2b. OVERLAPPING OPERATIVE LEASE — one space, one tenancy ────────

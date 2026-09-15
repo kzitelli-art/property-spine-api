@@ -1,0 +1,6 @@
+# The release gate checks the reviewed migration bytes on every workstation.
+# Preserve those bytes in Windows checkouts as well as Linux deployments.
+migrations/195_two_step_leasing_authored_offer_basis.sql text eol=lf
+migrations/196_source_home_identity_review.sql text eol=lf
+migrations/197_inventory_correction_hardening.sql text eol=lf
+migrations/198_proposed_source_claim_identity.sql text eol=lf

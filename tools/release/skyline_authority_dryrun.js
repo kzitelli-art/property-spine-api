@@ -7,7 +7,7 @@
     code answers as "dry_run_no_write_performed". It writes nothing.
 
     WHY THIS AND NOT AN INSERT. src/identity/authority_resolution.js is the
-    governed door for conferring pricing authority: seven preconditions, a
+    governed door for conferring pricing authority: nine preconditions, a
     receipt, and exactly one write when it does apply. An insert into
     `assignments` would produce the same row while skipping every check —
     the precise defect class the audit named, where the canonical mechanism
@@ -18,8 +18,8 @@
     worth recording; going around the resolver because it lacks a door is
     not.
 
-        DATABASE_URL="..." node tools/release/skyline_authority_dryrun.js
-        DATABASE_URL="..." PERSON_QUERY=zitelli node tools/release/skyline_authority_dryrun.js
+        DATABASE_URL="..." REVIEWER_USER_ID=<uuid> node tools/release/skyline_authority_dryrun.js
+        DATABASE_URL="..." PERSON_QUERY=zitelli REVIEWER_USER_ID=<uuid> node tools/release/skyline_authority_dryrun.js
     ════════════════════════════════════════════════════════════════════ */
 "use strict";
 const path = require("path");
@@ -36,6 +36,7 @@ const { resolveAuthority, ASSIGNABLE_ROLES } = require(path.join(ROOT, "src/iden
 const SKYLINE_OVERRIDE = process.env.SKYLINE_ID || null;
 const QUERY   = process.env.PERSON_QUERY || "zitelli";
 const ROLE    = process.env.REQUESTED_ROLE || "asset_manager";
+const REVIEWER = process.env.REVIEWER_USER_ID || null;
 
 const url = process.env.DATABASE_URL;
 if (!url) { console.error("DATABASE_URL is required."); process.exit(64); }
@@ -152,7 +153,7 @@ const rule = () => L("═══════════════════�
   try {
     out = await resolveAuthority(pool, {
       spec: { user_id: pair.u.id, person_id: pair.p.id, property_id: SKYLINE,
-              requested_role: ROLE, reviewer_user_id: pair.u.id,
+              requested_role: ROLE, reviewer_user_id: REVIEWER,
               reason: "dry run: establish Skyline pricing authority" },
       apply: false,
     });

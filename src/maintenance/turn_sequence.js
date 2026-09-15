@@ -185,6 +185,7 @@ function computeTurnFlow({ scope = null, work = [] } = {}) {
     return {
       work_id: w.id,
       work_text: w.work_text,
+      scope_kind:w.scope_kind,space_id:w.space_id,scope_label:w.scope_label,
       stage: w.stage || null,
       stage_label: STAGE_LABEL[w.stage || "unstaged"],
       owner_user_id: w.owner_user_id || null,

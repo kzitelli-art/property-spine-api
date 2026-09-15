@@ -1,0 +1,76 @@
+{
+  "mode": "successor",
+  "as_of": "2026-07-31",
+  "table": [
+    {
+      "unit": "301",
+      "shape": "nothing_recorded",
+      "availability": "marketable_now",
+      "blocking": null,
+      "row_physical_readiness": "unknown",
+      "row_certified": false,
+      "owner_readiness": "unknown",
+      "owner_reason": "no_initial_walk_recorded"
+    },
+    {
+      "unit": "302",
+      "shape": "walk_assigned_not_done",
+      "availability": "readiness_unknown",
+      "blocking": "initial_inspection_pending",
+      "row_physical_readiness": "unknown",
+      "row_certified": false,
+      "owner_readiness": "unknown",
+      "owner_reason": "no_initial_walk_recorded"
+    },
+    {
+      "unit": "303",
+      "shape": "walked_no_blocker",
+      "availability": "readiness_unknown",
+      "blocking": "walked_no_blocker_found_readiness_unconfirmed",
+      "row_physical_readiness": "unknown",
+      "row_certified": false,
+      "owner_readiness": "unknown",
+      "owner_reason": "initial_triage_only"
+    },
+    {
+      "unit": "304",
+      "shape": "walked_not_ready",
+      "availability": "not_ready_confirmed",
+      "blocking": "severe_condition_confirmed",
+      "row_physical_readiness": "not_ready",
+      "row_certified": false,
+      "owner_readiness": "not_ready",
+      "owner_reason": "severe_condition_confirmed"
+    },
+    {
+      "unit": "305",
+      "shape": "certified_ready",
+      "availability": "marketable_now",
+      "blocking": null,
+      "row_physical_readiness": "ready",
+      "row_certified": true,
+      "owner_readiness": "ready",
+      "owner_reason": "certified_final_walk"
+    },
+    {
+      "unit": "306",
+      "shape": "certified_then_revoked",
+      "availability": "marketable_now",
+      "blocking": null,
+      "row_physical_readiness": "unknown",
+      "row_certified": false,
+      "owner_readiness": "unknown",
+      "owner_reason": "no_initial_walk_recorded"
+    },
+    {
+      "unit": "307",
+      "shape": "turn_completed",
+      "availability": "marketable_now",
+      "blocking": null,
+      "row_physical_readiness": "unknown",
+      "row_certified": false,
+      "owner_readiness": "unknown",
+      "owner_reason": "no_initial_walk_recorded"
+    }
+  ]
+}

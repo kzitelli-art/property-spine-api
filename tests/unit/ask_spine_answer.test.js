@@ -194,9 +194,9 @@ function modelFacts(spy) {
      !/"open"\s*:/.test(spy.lastRequest.messages[0].content),
      "the model was handed navigation targets; it can now compose a link " +
      "Spine never resolved");
-  ok("G4  …and the facts it was given name the server-derived property",
-     spy.lastRequest.messages[0].content.includes(PROP),
-     "the model was not told which property it is talking about");
+  ok("G4  …and the final model envelope keeps the server-derived property identifier server-side",
+     !spy.lastRequest.messages[0].content.includes(PROP),
+     "a database scope identifier crossed the final model serialization boundary");
 
   //  THE INSTRUCTION IS THE PRODUCT. If these sentences go missing, the
   //  surface can fabricate and nothing else here would notice.
@@ -311,7 +311,8 @@ function modelFacts(spy) {
   const failedComplianceFacts = modelFacts(failedComplianceSpy);
   ok("C14 a failed Compliance read is named, never shaped as not established",
      failedComplianceFacts.reads_that_failed.join(",") === "compliance" &&
-       !("compliance" in failedComplianceFacts));
+       failedComplianceFacts.compliance.read_state === "READ_FAILED" &&
+       failedComplianceFacts.compliance.standing === null);
 
   // ── B · THE BOUNDARY · scope is enforced, not hoped for ───────────
   //  The defect this section exists for: the first version of this slice
@@ -430,7 +431,9 @@ function modelFacts(spy) {
      Array.isArray(facts2.reads_that_failed) && facts2.reads_that_failed.includes("attention"),
      JSON.stringify(facts2.reads_that_failed));
   ok("F2  …and the failed read does NOT appear as an empty result",
-     !("attention" in facts2) || facts2.attention === undefined,
+     facts2.attention.read_state === "READ_FAILED" &&
+       facts2.attention.standing === null &&
+       !("total_open" in facts2.attention),
      "a failed read was handed to the model as `attention: { total_open: 0 }` — " +
      "the model would truthfully report nothing is open, and be wrong");
 

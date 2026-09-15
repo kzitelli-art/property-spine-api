@@ -1,0 +1,1159 @@
+{
+ "server": "1320c2c5a6e52caa15de967670ed826ea1d10a84",
+ "summary": {
+  "passed": 99,
+  "failed": 4,
+  "observations": 6
+ },
+ "results": [
+  {
+   "section": "staff",
+   "label": "Skyline-shaped fixture property exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "staff",
+   "label": "the fixture's configured company signer with the governed override exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "staff",
+   "label": "KZ is the configured company signer",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "signers": 1
+   }
+  },
+  {
+   "section": "staff",
+   "label": "fixture: the property's operating timezone is set so tour times can be published (an owner input in production)",
+   "ok": true,
+   "kind": "observe",
+   "detail": null
+  },
+  {
+   "section": "staff",
+   "label": "fixture unit 3B with established Bed B exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "staff",
+   "label": "Mike joins through the governed invite and OTP as property_manager",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "invite": 200,
+    "verify": 200
+   }
+  },
+  {
+   "section": "staff",
+   "label": "Mike's assignment: Leasing, Management, Maintenance, no can_manage_roles",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "role_key": "property_manager",
+    "can_manage_roles": false,
+    "allowed_modules": [
+     "management",
+     "leasing",
+     "maintenance"
+    ]
+   }
+  },
+  {
+   "section": "staff",
+   "label": "Mike holds no pricing or concession authority grant",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "n": 0
+   }
+  },
+  {
+   "section": "staff",
+   "label": "Mike resolves as staff at the property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "state": "resolved"
+   }
+  },
+  {
+   "section": "staff",
+   "label": "actors ready",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "inquiry",
+   "label": "the website inquiry (phone present, no consent field) is captured",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "receipt": "New prospect \u2014 opened a new Skyline E2E opportunity. Inquiry saved for staff follow-up. No automated reply was generated or sent.",
+    "first_response_sent": false
+   }
+  },
+  {
+   "section": "inquiry",
+   "label": "capture only: no model call, no text, no first response",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "first_response_sent": false
+   }
+  },
+  {
+   "section": "inquiry",
+   "label": "no phantom outbound message exists on the thread",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "n": 0
+   }
+  },
+  {
+   "section": "inquiry",
+   "label": "no text consent was recorded (absent stays absent)",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "consent_state": "absent"
+   }
+  },
+  {
+   "section": "inquiry",
+   "label": "an exact relay retry replays the capture and sends nothing",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "replayed": true
+   }
+  },
+  {
+   "section": "inquiry",
+   "label": "Mike's queue shows the inquiry as needing a person",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "control_bucket": "needs_you",
+    "reason": "website_inquiry_pending_human"
+   }
+  },
+  {
+   "section": "inquiry",
+   "label": "the conversation carries the original website question",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "conversation exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "recording an email before taking ownership is refused",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "error": "Take ownership of this conversation before recording an external reply."
+   }
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "Mike takes ownership",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "KZ cannot take the owned inquiry away silently",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "a staff member who does not own the conversation cannot record the reply",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "Mike records the email he already sent; delivery stays unverified",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "recorded": true,
+     "replayed": false,
+     "dispatched": false,
+     "provider_delivery": "not_verified"
+    }
+   }
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "recording the email sent nothing and called no model",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "the same recording key replays, never a second event",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "replayed": true
+   }
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "the same key with a different claim is refused",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "the recipient must be the person's recorded email",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "an email not yet sent cannot be recorded as sent",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 400
+   }
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "exactly one recorded-external email event exists",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "n": 1,
+    "status": "recorded_external"
+   }
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "the queue now waits on the prospect without inventing a delivery",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "waiting_on": "prospect",
+    "last_delivered_outbound_at": null
+   }
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "the follow-up lands on the same conversation with no model or text",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "same_conversation": true
+   }
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "the follow-up is unanswered again and still Mike's",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "waiting_on": "manager",
+    "reason": "human_takeover",
+    "owner_is_mike": true
+   }
+  },
+  {
+   "section": "ownership-and-email",
+   "label": "Ask Spine reads both website questions through its scoped inquiry read",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "outcome": "answered"
+   }
+  },
+  {
+   "section": "tour",
+   "label": "conversation exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "tour",
+   "label": "a native slot is published for Mike",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Tour time published.",
+     "slot": {
+      "id": "<uuid>",
+      "property_id": "<uuid>",
+      "unit_id": "<uuid>",
+      "leasing_agent_id": "<uuid>",
+      "starts_at": "2026-09-14T15:34:24.764Z",
+      "ends_at": "2026-09-14T16:34:24.764Z",
+      "capacity": 1,
+      "status": "open",
+      "booked_tour_id": null,
+      "created_by": "<uuid>",
+      "created_at": "2026-09-12T15:34:24.769Z",
+      "updated_at": "2026-09-12T15:34:24.769Z"
+     },
+     "created": true
+    }
+   }
+  },
+  {
+   "section": "tour",
+   "label": "Mike books the prospect onto the slot from the conversation",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Tour booked. No confirmation message was sent.",
+     "tour_id": "<uuid>",
+     "slot_id": "<uuid>",
+     "scheduled_for": "2026-09-14T15:34:24.764Z",
+     "status": "scheduled",
+     "idempotent": false
+    }
+   }
+  },
+  {
+   "section": "tour",
+   "label": "a repeated booking returns the same tour and sends nothing",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "tour",
+   "label": "tour check-in",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "tour",
+   "label": "Mike records the actual outcome as ready to apply",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Outcome recorded \u2014 tour given. Follow-up rail opened \u2014 outcome \u00b7 owner set to the actual host.",
+     "tour_id": "<uuid>",
+     "conversion_id": "<uuid>"
+    }
+   }
+  },
+  {
+   "section": "tour",
+   "label": "the outcome opened the conversion for the same person",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "offer",
+   "label": "conversion exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "offer",
+   "label": "Bed B is offerable as an exact choice",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "marketing_state": "marketable_now"
+   }
+  },
+  {
+   "section": "offer",
+   "label": "Mike cannot author terms: no override, no pricing grant",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403,
+    "error": "NO_APPLICATION_OFFER_AUTHORITY"
+   }
+  },
+  {
+   "section": "offer",
+   "label": "KZ cannot offer a bed another resident holds",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "error": "not_offerable"
+   }
+  },
+  {
+   "section": "offer",
+   "label": "KZ authors the offer for the chosen bed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "offer",
+   "label": "Mike cannot correct the draft either",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403
+   }
+  },
+  {
+   "section": "offer",
+   "label": "KZ corrects the unsent draft before any invitation exists (explicit successor, no message)",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "draft_revision": true,
+     "applicant_review_required": false,
+     "receipt": "Application draft corrected. No invitation was created and no message was sent."
+    }
+   }
+  },
+  {
+   "section": "offer",
+   "label": "the Leasing desk still loads for Mike after the corrected draft offer exists",
+   "ok": false,
+   "kind": "check",
+   "detail": {
+    "status": 503,
+    "error": "LEASING_DESK_UNAVAILABLE"
+   }
+  },
+  {
+   "section": "offer",
+   "label": "the superseded draft cannot be corrected twice",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "error": "APPLICATION_TERMS_REVIEW_REQUIRED"
+   }
+  },
+  {
+   "section": "prepare",
+   "label": "corrected offer exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "prepare",
+   "label": "a text delivery is refused without consent and nothing is texted",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403,
+    "error": "person_has_not_consented"
+   }
+  },
+  {
+   "section": "prepare",
+   "label": "the superseded offer cannot be prepared",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "error": "APPLICATION_TERMS_REVIEW_REQUIRED"
+   }
+  },
+  {
+   "section": "prepare",
+   "label": "a bed another resident holds cannot be prepared",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "error": "not_offerable"
+   }
+  },
+  {
+   "section": "prepare",
+   "label": "a session at another property cannot prepare this conversation's link",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403
+   }
+  },
+  {
+   "section": "prepare",
+   "label": "Mike prepares the application link for email; nothing is sent",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "prepared": true,
+     "sent": false,
+     "invitation": true,
+     "email": "<email>"
+    }
+   }
+  },
+  {
+   "section": "prepare",
+   "label": "preparation sent nothing and called no model",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "prepare",
+   "label": "a lost-response retry names the existing invitation and never re-mints the link",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "error": "APPLICATION_LINK_ALREADY_PREPARED",
+    "link": null
+   }
+  },
+  {
+   "section": "prepare",
+   "label": "a retry with a changed expiry is a conflict, not a silent change",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409,
+    "error": "APPLICATION_PREPARATION_CONFLICT"
+   }
+  },
+  {
+   "section": "prepare",
+   "label": "the Leasing desk still loads for Mike after the link is prepared",
+   "ok": false,
+   "kind": "check",
+   "detail": {
+    "status": 503,
+    "error": "LEASING_DESK_UNAVAILABLE"
+   }
+  },
+  {
+   "section": "prepare",
+   "label": "reload: conversation detail names the prepared invitation and exposes no token",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "listed": true
+   }
+  },
+  {
+   "section": "prepare",
+   "label": "a replacement link is issued for the lost one",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "invitation_id": "<uuid>",
+     "replaced": true
+    }
+   }
+  },
+  {
+   "section": "prepare",
+   "label": "what the replaced link shows the applicant after regeneration (the invitation row is revoked)",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "context_status": 200,
+    "context_state": "revoked",
+    "invitation": {
+     "status": "revoked",
+     "revoked_reason": "superseded_lost_token",
+     "superseded": true
+    }
+   }
+  },
+  {
+   "section": "prepare",
+   "label": "still nothing sent after the replacement",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "attest-and-apply",
+   "label": "prepared link exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "attest-and-apply",
+   "label": "Mike attests that he emailed the link",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "finalized": true,
+     "invitation_id": "<uuid>",
+     "status": "manually_sent",
+     "send_obligation_id": "<uuid>",
+     "parent_obligation_id": "<uuid>",
+     "receipt": "Send attested. The post-tour follow-up is closed and the applicant follow-up is open."
+    }
+   }
+  },
+  {
+   "section": "attest-and-apply",
+   "label": "the invitation reads manually sent by email, never provider dispatched",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": "manually_sent",
+    "dispatch_source": "manual",
+    "channel": "email"
+   }
+  },
+  {
+   "section": "attest-and-apply",
+   "label": "a second attestation is a replay: one sent invitation, the first send fact stands",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "idempotent": true,
+    "receipt": "Already finalized \u2014 the send fact stands; nothing re-run.",
+    "sent_invitations": 1
+   }
+  },
+  {
+   "section": "attest-and-apply",
+   "label": "no text ever reached the prospect",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "attest-and-apply",
+   "label": "the applicant opens the emailed link and sees the corrected terms",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "rent": "1100.00",
+    "unit_label": "3B \u00b7 Bed B"
+   }
+  },
+  {
+   "section": "attest-and-apply",
+   "label": "the replaced (revoked) link cannot submit an application",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 410,
+    "error": "This application link was revoked."
+   }
+  },
+  {
+   "section": "attest-and-apply",
+   "label": "acknowledging the superseded terms cannot submit",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "attest-and-apply",
+   "label": "the applicant submits with a guarantor against the acknowledged terms",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Application submitted for NoConsent Prospect 79dc735e. Now with leasing_manager for approval.",
+     "application": {
+      "id": "<uuid>",
+      "property_id": "<uuid>",
+      "unit_id": "<uuid>",
+      "person_id": "<uuid>",
+      "status": "submitted",
+      "applicant_name": "NoConsent Prospect 79dc735e",
+      "unit_label": null,
+      "rent": "1100.00",
+      "deposit": "1100.00",
+      "guarantor_name": "Journey Guarantor 79dc735e",
+      "captured": {
+       "pets": "None",
+       "email": "<email>",
+       "phone": "<phone>",
+       "address": {
+        "city": "Philadelphia",
+        "line1": "100 Test Street",
+        "line2": "",
+        "state": "PA",
+        "postal_code": "19147"
+       },
+       "employer": "Test Employer",
+       "has_pets": "no",
+       "job_title": "Analyst",
+       "occupants": 1,
+       "income_notes": "",
+       "current_since": "2024-01",
+       "date_of_birth": "1995-04-12",
+       "income_amount": 72000,
+       "income_status": "employed",
+       "housing_status": "rent",
+       "desired_move_in": "2026-10-12",
+       "household_names": "",
+       "additional_notes": "",
+       "guarantor_needed": "yes",
+       "income_frequency": "annual",
+       "move_flexibility": "plus_minus_7",
+       "guarantor_contact": {
+        "name": "Journey Guarantor 79dc735e",
+        "email": "<email>",
+        "phone": "<phone>"
+       },
+       "application_form_version": "tenant_v3",
+       "electronic_delivery_consent": true,
+       "applicant_accuracy_certified": true
+      },
+      "activation_obligation_id": null,
+      "applicant_signed_at": null,
+      "guarantor_signed_at": null,
+      "countersigned_at": null,
+      "activated_at": null,
+      "created_at": "2026-09-12T15:34:25.521Z",
+      "updated_at": "2026-09-12T15:34:25.521Z",
+      "conversion_id": "<uuid>",
+      "source": "applicant",
+      "decision_by_user_id": null,
+      "decision_reason": null,
+      "decided_at": null,
+      "approval_obligation_id": "<uuid>",
+      "lease_start_date": "2026-10-12T00:00:00.000Z",
+      "lease_end_date": "2027-10-11T00:00:00.000Z",
+      "term_source": null,
+      "terms_completed_at": null,
+      "terms_completed_by": null,
+      "concession_status": "none",
+      "terms_review_obligation_id": null,
+      "proposed_terms_confirmation_id": null,
+      "executed_lease_record_id": null,
+      "leasing_lead_id": "<uuid>",
+      "submitted_at": "2026-09-12T15:34:25.521Z",
+      "approved_at": null,
+      "terminal_at": null,
+      "terminal_code": null,
+      "space_id": "<uuid>",
+      "intended_move_in": "2026-10-12T00:00:00.000Z",
+      "application_offer_id": "<uuid>",
+      "application_terms_hash": "<sha256>",
+      "application_terms_acknowledged_at": "2026-09-12T15:34:25.521Z"
+     },
+     "approval_obligation_id": "<uuid>",
+     "rung_closed": null
+    }
+   }
+  },
+  {
+   "section": "attest-and-apply",
+   "label": "a repeated submission returns the same application",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "attest-and-apply",
+   "label": "the Leasing desk still loads for Mike after the application is submitted",
+   "ok": false,
+   "kind": "check",
+   "detail": {
+    "status": 503,
+    "error": "LEASING_DESK_UNAVAILABLE"
+   }
+  },
+  {
+   "section": "attest-and-apply",
+   "label": "the application is the same person, conversion, bed and corrected offer",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "application exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "Mike is not the approval obligation's owner and holds no override",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403,
+    "obligation_role": "leasing_manager"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "KZ's session at another property cannot approve",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403
+   }
+  },
+  {
+   "section": "lease",
+   "label": "KZ approves under the governed override",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "lease",
+   "label": "terms the applicant did not acknowledge cannot be confirmed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the acknowledged terms are confirmed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "by": "kz"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "who confirmed the acknowledged terms",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "by": "kz"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the governing lease packet is generated",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "by": "mike"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "who generated the packet",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "by": "mike"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "a prepared packet blocks a further offer change",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "lease",
+   "label": "resident and guarantor signing links are issued",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "by": "mike"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "who issued the signing links; no text left for the prospect",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "by": "mike",
+    "texts_to_prospect": 0,
+    "quiet": true
+   }
+  },
+  {
+   "section": "lease",
+   "label": "separate resident and guarantor secrets",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "re-issuing is a replay, not a second package",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the guarantor completes only guarantor controls",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the company cannot execute before the resident has signed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the resident completes and the package reads resident executed",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "lease",
+   "label": "Mike is not the company signer",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 403,
+    "error": "company_signer_not_authorized"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "KZ executes and the tenancy is created",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": {
+     "receipt": "Lease executed and tenancy created \u2014 pending lease <uuid>.",
+     "lease_packet_id": "<uuid>",
+     "application_id": "<uuid>",
+     "verification_basis": "spine_instrument",
+     "execution_channel": "spine_esign",
+     "instrument_body_sha256": "<sha256>",
+     "instrument_terms_sha256": "<sha256>",
+     "instrument_package_sha256": "<sha256>",
+     "executed_lease_record_id": "<uuid>",
+     "idempotent": false,
+     "activation_status": "admitted",
+     "blockers": [],
+     "tenancy": {
+      "lease_id": "<uuid>",
+      "lease_status": "pending",
+      "economics_conflict": null
+     },
+     "tenancy_error": null
+    }
+   }
+  },
+  {
+   "section": "lease",
+   "label": "executing again creates no second tenancy",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the tenancy is anchored to the exact bed at the acknowledged corrected rent",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "rent": "1100.00",
+    "lease_status": "pending"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "execution leaves a pending lease without economic activation or possession",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "lease_status": "pending",
+    "activated": null,
+    "move_in_events": 0
+   }
+  },
+  {
+   "section": "lease",
+   "label": "exactly one lease exists on the bed",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "the leased bed leaves the selector",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "Application Review reads the same application, bed and tenancy",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the Person Card reads the same pending tenancy",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "lease",
+   "label": "the Leasing desk still loads for Mike after execution",
+   "ok": false,
+   "kind": "check",
+   "detail": {
+    "status": 503,
+    "error": "LEASING_DESK_UNAVAILABLE"
+   }
+  },
+  {
+   "section": "lease",
+   "label": "no text was ever sent to the prospect or the guarantor in the whole journey",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "removed-authority",
+   "label": "Mike exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "removed-authority",
+   "label": "KZ removes Mike's access through the governed door",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "removed-authority",
+   "label": "Mike's live session loses access immediately",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 401
+   }
+  },
+  {
+   "section": "removed-authority",
+   "label": "a removed assignment cannot prepare a link",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 401
+   }
+  },
+  {
+   "section": "removed-authority",
+   "label": "access restored through the same door",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "completion",
+   "label": "the no-consent, two-person chain completes with an executed pending lease",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "lease_created": true
+   }
+  }
+ ]
+}

@@ -337,7 +337,17 @@ async function retirementProvenance(pool, { property_id }) {
   };
 }
 
+/*  A writer that meets the retired-inventory wall — 180's any-lease
+ *  trigger or 197's operative-attachment triggers — receives a
+ *  check_violation whose text is already a sentence naming the unit and
+ *  the next step. Doors map it to 409 so the refusal is sayable instead
+ *  of a 500 wearing the same words.  */
+function isRetiredInventoryRefusal(e) {
+  return !!(e && e.code === "23514" && /retired from current inventory/.test(e.message || ""));
+}
+
 module.exports = {
+  isRetiredInventoryRefusal,
   retireInventoryUnits,
   reinstateInventoryUnit,
   retirementProvenance,

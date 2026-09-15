@@ -67,9 +67,15 @@ async function main() {
     },
     async read(_db, id) {
       if (id === "artifact-a") return { id, scope_type: "property", scope_id: "property-a",
+        artifact_kind: "contracted_service_agreement",
         original_filename: "agreement.pdf", mime_type: "application/pdf", content: Buffer.from("PDF") };
       if (id === "artifact-b") return { id, scope_type: "property", scope_id: "property-b",
+        artifact_kind: "contracted_service_agreement",
         original_filename: "other.pdf", mime_type: "application/pdf", content: Buffer.from("PDF") };
+      if (id === "artifact-c") return { id, scope_type: "property", scope_id: "property-a",
+        artifact_kind: "rent_roll",
+        original_filename: "rent-roll.xlsx", mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        content: Buffer.from("rent roll") };
       return null;
     },
   };
@@ -190,6 +196,8 @@ async function main() {
 
     ok("foreign evidence is indistinguishable from missing",
       (await request(`${path}/evidence/artifact-b`, { token: "entitled" })).status === 404);
+    ok("same-property non-Contracted Services evidence is indistinguishable from missing",
+      (await request(`${path}/evidence/artifact-c`, { token: "entitled" })).status === 404);
     const evidence = await request(`${path}/evidence/artifact-a`, { token: "entitled" });
     ok("same-property evidence opens privately", evidence.status === 200
       && evidence.headers.get("cache-control") === "private, no-store");

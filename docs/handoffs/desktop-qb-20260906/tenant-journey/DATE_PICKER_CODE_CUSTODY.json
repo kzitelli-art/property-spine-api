@@ -1,0 +1,19 @@
+{
+  "api_head": "9f2acff97af311e6ebdcd5e2219f8cf873894748",
+  "app_head": "c05ae68f6f8bc49ca4b5bd752adc928e1f4e0d88",
+  "state": "local_uncommitted_date_first_conversation_picker",
+  "api_sha256": {
+    "src/applications/application_target_authority.js": "BB734ABD2B23B3B0A2AE9FE0A8B9D2E28A71D37DB66FF9C9C4DB250B93986559",
+    "src/applications/application_target_read.js": "03C8166AF4D654C2E8C44EE1031C84E0B078CBE41DAC872CDCFC9BA2516898F7",
+    "src/identity/operator.js": "4B5062476D421EB5CA0CECA741B343A034D93DED963C37FC50F26574489C5D7C",
+    "tests/unit/application_target_dates.test.js": "9EE85D6BD20B1CB87D59B8E4FADDF110FE68D2CCC7DE96E403F602914F5C13B6",
+    "tests/proofs/application_turn_window.db.js": "713C3DD9FBB8AAF8B368E39B3E048812384985E96B49FF92C9DA55189C053365",
+    "tests/e2e/application_target_dates_browser.js": "C0EBEE5346298CB2DEC5BF4E298CD6E6A4B50D219BEDA2664FCD30D84DB48E05"
+  },
+  "app_sha256": {
+    "index.html": "F599DAD23297B45CBC67FE11327F3E9536EE6B701801D8E8F79855AEDDF0B96E",
+    "application_target_dates_dom.test.js": "C8189B2EB904DEB6C8352602754459ADD655A8EB77D80AD7D16318F95B040EE2"
+  },
+  "proof": "owned DB/HTTP and actual picker-function Chromium; later stale-request DOM red/green; source gates50",
+  "deployment": "none"
+}

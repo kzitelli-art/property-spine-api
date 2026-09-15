@@ -30,6 +30,7 @@ const {
   COMMITMENT_SOURCES,
 } = require("./work_proof");
 const { computeTurnFlow, STAGE } = require("./turn_sequence");
+const { workScopeLabel } = require('./unit_triage_service');
 
 const OBLIGATION_TYPE = "work_commitment";
 
@@ -476,8 +477,9 @@ function makeWorkAcceptanceService(deps) {
   // ── READS ─────────────────────────────────────────────────────────
   async function readWorkState(db, { work_id }) {
     const w = (await db.query(
-      "select * from unit_triage_required_work where id=$1", [work_id])).rows[0];
+      "select w.*, s.space_label from unit_triage_required_work w left join spaces s on s.id=w.space_id where w.id=$1", [work_id])).rows[0];
     if (!w) return null;
+    w.scope_label = workScopeLabel(w);
 
     const accRows = (await db.query(
       "select * from work_acceptances where work_id=$1 order by created_at asc", [work_id])).rows;
@@ -514,8 +516,9 @@ function makeWorkAcceptanceService(deps) {
         and not exists (select 1 from unit_turn_scopes s2 where s2.supersedes_id = s.id)
         order by s.created_at desc limit 1`, [unit_id])).rows[0] || null;
     const work = (await db.query(
-      `select w.*, a.owner_user_id, a.due_at, usr.name as owner_name
+      `select w.*, s.space_label, a.owner_user_id, a.due_at, usr.name as owner_name
          from unit_triage_required_work w
+         left join spaces s on s.id=w.space_id
          left join lateral (
            select * from work_acceptances wa where wa.work_id = w.id
              and not exists (select 1 from work_acceptances w2 where w2.supersedes_id = wa.id)
@@ -523,6 +526,7 @@ function makeWorkAcceptanceService(deps) {
          ) a on true
          left join users usr on usr.id = a.owner_user_id
         where w.unit_id = $1 order by w.created_at asc`, [unit_id])).rows;
+    work.forEach(w => { w.scope_label = workScopeLabel(w); });
     return { scope, work, flow: computeTurnFlow({ scope, work }) };
   }
 
@@ -595,4 +599,22 @@ function makeWorkAcceptanceService(deps) {
   };
 }
 
-module.exports = { makeWorkAcceptanceService, proposeCommitment, OBLIGATION_TYPE };
+// Compact retrieval over the SAME required-work identities used by Unit Turn.
+// A task and its target do not establish possession or readiness.
+async function readRequiredWorkStanding(db, { property_id, limit = 50 }) {
+  const rows = (await db.query(`select w.id, w.unit_id, w.work_text, w.scope_kind,
+      w.space_id, s.space_label, u.unit_number, count(*) over()::int as total_count
+    from unit_triage_required_work w
+    join units u on u.id=w.unit_id and u.property_id=w.property_id
+    left join spaces s on s.id=w.space_id
+    where w.property_id=$1 and w.status='required'
+    order by w.created_at,w.id limit $2`, [property_id,limit])).rows;
+  return { read_state:'OK', truth_state:'established', as_of:new Date().toISOString(),
+    attention_state:rows.length ? 'ATTENTION_REQUIRED' : 'QUIET',
+    required_work_count:rows[0]?.total_count || 0,
+    truncated:(rows[0]?.total_count || 0)>rows.length,
+    items:rows.map(w=>({...w,scope_label:workScopeLabel(w)})),
+    readiness:'not_asserted', capability_class:'retrieval' };
+}
+
+module.exports = { makeWorkAcceptanceService, proposeCommitment, readRequiredWorkStanding, OBLIGATION_TYPE };

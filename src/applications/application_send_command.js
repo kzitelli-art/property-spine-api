@@ -63,10 +63,45 @@ async function stageApplicationSend(client, deps, input) {
   const conversionId = requiredString(input && input.conversionId, "conversionId");
   const actorUserId = requiredString(input && input.actorUserId, "actorUserId");
   const unitId = requiredString(input && input.unitId, "unit_id");
+  const spaceId = input && input.spaceId != null
+    ? requiredString(input.spaceId, "space_id")
+    : null;
+  const intendedMoveIn = input && input.intendedMoveIn != null
+    ? requiredString(input.intendedMoveIn, "intended_move_in")
+    : null;
   const idempotencyKey = requiredString(
     input && input.idempotencyKey,
     "idempotency_key"
   );
+
+  if (input.deliveryMethod === "manual_email") {
+    // Digest-only tokens cannot be replayed. Preserve the existing invitation
+    // and expose its governed correction door, never mint a replacement here.
+    const prior = (await client.query(`select ai.*, o.id as send_obligation_id, o.assigned_user_id, p.email
+      from application_invitations ai join persons p on p.id=ai.person_id
+      left join obligations o on o.related_type='application_invitation' and o.related_id=ai.id
+        and o.type='send_application_link'
+      where ai.conversion_id=$1 order by ai.created_at desc limit 1`, [conversionId])).rows[0];
+    if (prior) {
+      const basis = await requireFunction(conversionService, "resolveSendActionBasis")(client, {
+        actor_user_id: actorUserId, property_id: prior.property_id, stored_owner_user_id: prior.assigned_user_id,
+      });
+      if (!basis.allowed) throw commandError(403, "You do not own this work or hold its covering role.", "APPLICATION_SEND_FORBIDDEN");
+      const conflict = String(prior.unit_id) !== unitId || (spaceId && String(prior.space_id) !== spaceId)
+        || (input.applicationOfferId && String(prior.application_offer_id) !== String(input.applicationOfferId))
+        || (input.expiresAt != null && new Date(prior.expires_at).getTime() !== new Date(input.expiresAt).getTime())
+        || (intendedMoveIn && String(prior.intended_move_in instanceof Date ? prior.intended_move_in.toISOString().slice(0,10) : prior.intended_move_in).slice(0,10) !== intendedMoveIn.slice(0,10));
+      const error = commandError(409, conflict
+        ? "An invitation already exists with different home or terms. Review its existing correction action."
+        : "The application link was already prepared and is returned only once. Use its existing recovery action if the link was lost.",
+        conflict ? "APPLICATION_PREPARATION_CONFLICT" : "APPLICATION_LINK_ALREADY_PREPARED");
+      error.recovery = { invitation_id: prior.id, send_obligation_id: prior.send_obligation_id,
+        conversion_id: conversionId, delivery_method: "manual_email", link: null,
+        prepared: prior.status === "prepared", sent: false, dispatched: false, recipient_snapshot: prior.email, email: prior.email,
+        invitation_status: prior.status, recovery_action: prior.status === "prepared" ? "regenerate" : "review_existing_invitation" };
+      throw error;
+    }
+  }
 
   const intent = await recordIntent(client, {
     conversion_id: conversionId,
@@ -93,9 +128,12 @@ async function stageApplicationSend(client, deps, input) {
   const prepared = await prepareLink(client, {
     prepare_obligation_id: prepareObligationId,
     unit_id: unitId,
+    space_id: spaceId,
+    intended_move_in: intendedMoveIn,
     expires_at: (input && input.expiresAt) || null,
     actor_user_id: actorUserId,
     unitOfferable: input && input.unitOfferable,
+    application_offer_id: input && input.applicationOfferId,
   });
 
   if (!prepared || !prepared.invitation_id || !prepared.token) {
@@ -109,6 +147,8 @@ async function stageApplicationSend(client, deps, input) {
   return {
     conversion_id: conversionId,
     unit_id: unitId,
+    space_id: prepared.space_id || spaceId || null,
+    intended_move_in: prepared.intended_move_in || intendedMoveIn || null,
     intent_id: intent && intent.intent ? intent.intent.id || null : null,
     recorded_intent: !!(intent && intent.recorded),
     prepare_obligation_id: prepareObligationId,
@@ -156,6 +196,9 @@ async function dispatchApplicationSend(deps, staged, input) {
     sent: dispatched,
     dispatched,
     conversion_id: staged.conversion_id,
+    unit_id: staged.unit_id,
+    space_id: staged.space_id || null,
+    intended_move_in: staged.intended_move_in || null,
     intent_id: staged.intent_id,
     recorded_intent: staged.recorded_intent,
     prepare_obligation_id: staged.prepare_obligation_id,

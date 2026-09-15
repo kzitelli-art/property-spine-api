@@ -88,14 +88,32 @@ const REASON = Object.freeze({
  * assessLeasePacketEligibility(application, facts)
  *
  * @param application  the lease_applications row (already locked by the caller)
- * @param facts        { existingPacket, expectedPropertyId, createNewVersion }
+ * @param facts        { existingPacket, expectedPropertyId, createNewVersion,
+ *                       authoredOffer }
+ *                     authoredOffer — the applicant's acknowledged, CURRENT
+ *                     (unsuperseded) application offer as read by
+ *                     readBoundApplicationOffer, or null. Supplied by the
+ *                     caller; this predicate never reads it.
  * @returns {
- *   eligible, reason_code, message,
+ *   eligible, reason_code, message, preparation_basis,
  *   current_status, existing_packet_id, required_fact_missing
  * }
+ *
+ *  ── TWO-STEP LEASING (195) ───────────────────────────────────────────
+ *  A `submitted` application bound to an acknowledged, current authored
+ *  offer is packet-eligible WITHOUT approval. The commercial decision was
+ *  already taken by the offer's author (prepareApplicationOffer, authority
+ *  lineage on the offer row) and acknowledged by the applicant (hash on the
+ *  application). Preparing the resident's signing package is staff work
+ *  against that decision — it approves nothing: the application stays
+ *  `submitted` and the approval obligation stays open until Execute.
+ *  preparation_basis names which rule admitted the packet:
+ *    'operator_confirmation' — the released rule (approval + confirmation)
+ *    'authored_offer'        — the two-step rule above
  */
 function assessLeasePacketEligibility(application, facts = {}) {
-  const { existingPacket = null, expectedPropertyId = null, createNewVersion = false } = facts;
+  const { existingPacket = null, expectedPropertyId = null, createNewVersion = false,
+          authoredOffer = null } = facts;
   const status = application ? application.status : null;
 
   const out = (reason_code, message, extra = {}) => ({
@@ -105,6 +123,7 @@ function assessLeasePacketEligibility(application, facts = {}) {
     current_status: status,
     existing_packet_id: existingPacket ? existingPacket.id : null,
     required_fact_missing: null,
+    preparation_basis: null,
     ...extra,
   });
 
@@ -121,7 +140,22 @@ function assessLeasePacketEligibility(application, facts = {}) {
       `This application is ${status} — a resident review packet cannot be created for it.`);
   }
 
-  if (!PACKET_ELIGIBLE_STATUSES.includes(status)) {
+  // ── the two-step basis: submitted + acknowledged authored offer ─────
+  //  No approval, no terms gate and no operator confirmation are required
+  //  here; the caller derives the lineage record from the offer itself.
+  //  The existing-packet rules below still apply on this basis.
+  //  A submitted application WITHOUT an acknowledged authored offer takes
+  //  the released refusal below, unchanged.
+  let basis = "operator_confirmation";
+  if (status === "submitted" && authoredOffer && authoredOffer.id && authoredOffer.hash
+      && application.application_offer_id
+      && String(application.application_offer_id) === String(authoredOffer.id)
+      && application.application_terms_acknowledged_at
+      && String(application.application_terms_hash || "") === String(authoredOffer.hash)) {
+    basis = "authored_offer";
+  }
+
+  if (basis === "operator_confirmation" && !PACKET_ELIGIBLE_STATUSES.includes(status)) {
     const why = EXCLUDED_FROM_PACKET[status];
     return out(REASON.STATUS_NOT_ELIGIBLE,
       why
@@ -131,13 +165,14 @@ function assessLeasePacketEligibility(application, facts = {}) {
 
   // The open gate the packet is prepared against. Present tense: the gate must
   // be open NOW, not have existed once.
-  if (!application.terms_review_obligation_id && !application.activation_obligation_id) {
+  if (basis === "operator_confirmation"
+      && !application.terms_review_obligation_id && !application.activation_obligation_id) {
     return out(REASON.NO_GATE,
       "There is no open terms-review or activation commitment on this application to prepare a packet against.",
       { required_fact_missing: "terms_review_obligation_id|activation_obligation_id" });
   }
 
-  if (!application.proposed_terms_confirmation_id) {
+  if (basis === "operator_confirmation" && !application.proposed_terms_confirmation_id) {
     return out(REASON.NO_TERMS,
       "Confirm the proposed terms before generating the resident review packet.",
       { required_fact_missing: "proposed_terms_confirmation_id" });
@@ -157,7 +192,7 @@ function assessLeasePacketEligibility(application, facts = {}) {
       + "governed new version to issue changed terms; the prior version remains evidence.");
   }
 
-  return out(REASON.ELIGIBLE, "A resident review packet may be prepared.");
+  return out(REASON.ELIGIBLE, "A resident review packet may be prepared.", { preparation_basis: basis });
 }
 
 module.exports = {
