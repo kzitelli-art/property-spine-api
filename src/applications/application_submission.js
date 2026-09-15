@@ -1188,6 +1188,18 @@ module.exports = function applicationSubmissionModule(deps) {
     // decision != 'approved' so this will NOT start signature follow-up.
     await closeApprovalGate(client, { app, by_user_id: decided_by_user_id, decision: reason });
 
+    /*  SAME SAFETY, THE OTHER THREE OBLIGATIONS. The block below releases
+     *  the conversion rail's signature rung for one reason — so the team is
+     *  not told to chase a signature on a dead application — and the
+     *  application-completion chase, the owed signing package and the 60-day
+     *  signing clock are the same sentence about the same dead application.
+     *  Released as `revoked`: nothing was supplied and no window ran out;
+     *  the work was called off. Same transaction as the disposition.     */
+    if (leaseHandoff && typeof leaseHandoff.releaseOnTerminal === "function") {
+      await leaseHandoff.releaseOnTerminal(client, {
+        application_id: app.id, terminal_code: reason });
+    }
+
     // SAFETY: a decline/withdraw/expire must never leave lease-signature work
     // open. In the correct flow signature follow-up only begins on approval, so
     // there should be none — but if one exists (e.g. a prior approval later

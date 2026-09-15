@@ -1061,6 +1061,56 @@ module.exports = function leaseHandoffModule(deps = {}) {
     return { considered: open.length, results };
   }
 
+  /*  ── A DEAD APPLICATION OWES NOTHING ──────────────────────────────
+   *  Found by walking the whole journey rather than the happy path: the
+   *  deny route already releases `lease_signature_followup` for exactly this
+   *  reason — *"so the team is not told to chase a signature on a dead
+   *  application"* — and it knew nothing about the three obligations this
+   *  module adds. A declined applicant would have kept a 60-day signing
+   *  clock, an open completion chase and an owed package, all pointed at a
+   *  decision that had already been made.
+   *
+   *  CLOSED AS `revoked`, NEVER AS `satisfied` OR `expired`. Migration 084's
+   *  vocabulary already has the word: nothing was supplied and no window
+   *  ran out — the work was called off. `completeObligation` is not used,
+   *  because it refuses an obligation with outstanding inputs and
+   *  outstanding inputs are exactly what a revoked obligation still has.
+   *
+   *  Runs in the CALLER'S transaction, so an application cannot go terminal
+   *  without its work being released in the same commit.                  */
+  const RELEASED_ON_TERMINAL = Object.freeze([COMPLETION_TYPE, HANDOFF_TYPE, SIGNING_TYPE]);
+
+  async function releaseOnTerminal(client, { application_id, terminal_code = null } = {}) {
+    if (!application_id) throw new Error("releaseOnTerminal requires application_id");
+    const open = (await client.query(
+      `select id, type from obligations
+        where related_type = 'lease_application' and related_id = $1
+          and type = any($2::text[]) and status <> 'complete'
+        for update`,
+      [application_id, RELEASED_ON_TERMINAL])).rows;
+    if (!open.length) return { released: [] };
+
+    //  A conversion-linked obligation closes through the conversion rail and
+    //  nowhere else. None of these three is ever linked, which is why the
+    //  assertion is cheap and worth keeping.
+    for (const o of open) {
+      const linked = (await client.query(
+        `select 1 from leasing_conversion_obligations where obligation_id=$1 limit 1`,
+        [o.id])).rows[0];
+      if (linked) throw Object.assign(
+        new Error("Conversion-linked obligations must resolve through the conversion rail."),
+        { code: "CONVERSION_RAIL_REQUIRED", httpStatus: 409 });
+    }
+    await client.query(
+      `update obligations
+          set status='complete', resolution_code='revoked',
+              completed_at=now(), updated_at=now()
+        where id = any($1::uuid[])`,
+      [open.map((o) => o.id)]);
+    return { released: open.map((o) => ({ obligation_id: o.id, type: o.type })),
+      terminal_code: terminal_code || null };
+  }
+
   /*  ── THE FACTS MOVE ON WITHOUT ASKING THIS MODULE ─────────────────
    *  A missing mobile number is supplied by a correction somewhere else in
    *  the product, and that writer has no reason to know a completion
@@ -1205,6 +1255,13 @@ module.exports = function leaseHandoffModule(deps = {}) {
               set status='complete', resolution_code='expired',
                   completed_at=now(), updated_at=now()
             where id=$1`, [row.id]);
+        /*  The clock that ran out closes as `expired`; everything ELSE this
+         *  application owed is called off, not expired — a package nobody
+         *  asked for again did not run out of time, it stopped being wanted.
+         *  Without this a lapsed application kept an owed package and, in
+         *  the completion case, a signing clock pointed at a dead deal.  */
+        if (lapsed) await releaseOnTerminal(client, {
+          application_id: row.application_id, terminal_code: "expired" });
         await client.query(
           `insert into events (property_id, person_id, unit_id, type, note)
            values ($1, (select person_id from lease_applications where id=$2),
@@ -1343,6 +1400,7 @@ module.exports = function leaseHandoffModule(deps = {}) {
     raiseApprovalDecision,
     recordSigningOwed, observeOutstandingSignatures,
     reconcileApplicationSignatures, reconcileOwedSignatures,
+    releaseOnTerminal, RELEASED_ON_TERMINAL,
     recordHandoffOwed, runOwedHandoffs,
     expireStaleCompletions, expireStaleSignings, startHandoffRecovery };
 };
