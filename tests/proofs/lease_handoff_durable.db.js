@@ -532,8 +532,10 @@ const ok = (label, cond, detail = "") => {
       ob5.owner_type === "human" && !!ob5.assigned_role, JSON.stringify(ob5));
     const days5 = Math.round(
       (new Date(ob5.due_at) - new Date(app5.submitted_at)) / (24 * 3600 * 1000));
-    ok(`…and the completion clock is ${handoff.COMPLETION_WINDOW_DAYS} days from submission`,
+    ok("…and the completion clock runs the declared window from submission",
       days5 === handoff.COMPLETION_WINDOW_DAYS, `${days5} days`);
+    ok("…and the declared window is the ruling's 30 days",
+      handoff.COMPLETION_WINDOW_DAYS === 30, String(handoff.COMPLETION_WINDOW_DAYS));
 
     /*  ⚠ THE CENTRAL ASSERTION. Nobody is watching; the sweep runs.       */
     const sweep5 = await handoff.runOwedHandoffs({ application_id: app5.id });
@@ -573,6 +575,37 @@ const ok = (label, cond, detail = "") => {
       noop5.reconciled === false && noop5.reason === "nothing_resolved",
       JSON.stringify(noop5));
 
+    /*  RULING 3's PRECONDITION, AND ITS HONEST ABSENCE FIRST.
+     *  raiseApprovalDecision RAISES an existing gate; it never creates one,
+     *  because a second decision obligation is a second decision. With no
+     *  gate it says so rather than manufacturing one — an imported
+     *  application never had one and must not acquire one here.          */
+    const cNoGate = await pool.connect();
+    let noGate;
+    try { await cNoGate.query("begin");
+      noGate = await handoff.raiseApprovalDecision(cNoGate, { application: app5 });
+      await cNoGate.query("commit"); } finally { cNoGate.release(); }
+    ok("with no decision gate on file, the raise refuses to invent one",
+      noGate.raised === false && noGate.reason === "no_open_approval_gate",
+      JSON.stringify(noGate));
+
+    //  The gate application_submission spawns at SUBMIT. Stood up here
+    //  through the same engine call submission uses; the product-built gate
+    //  is exercised end to end by the public-submission journey proof.
+    const cGate = await pool.connect();
+    try { await cGate.query("begin");
+      await engine.spawnObligationFromEvent(cGate, {
+        property_id: property.id, person_id: applicant, unit_id: unit.id,
+        related_id: app5.id, related_type: "lease_application",
+        module: "applications", type: handoff.APPROVAL_TYPE,
+        label: `Application approval — ${app5.applicant_name}`,
+        owner_type: "human", assigned_role: "leasing_manager",
+        escalates_to_role: "property_manager",
+        status: "open", priority: "normal", severity: "normal",
+        due_at: new Date(new Date(app5.submitted_at).getTime() + 48 * 3600 * 1000).toISOString(),
+      });
+      await cGate.query("commit"); } finally { cGate.release(); }
+
     //  Now the guarantor's contact genuinely arrives, through the application
     //  record the packet writer reads. Nothing tells this module about it.
     await pool.query(
@@ -602,6 +635,128 @@ const ok = (label, cond, detail = "") => {
     ok("the standing read says the package is owed, with nothing outstanding",
       standing5.position === "package_owed" && standing5.outstanding.length === 0,
       JSON.stringify(standing5));
+
+    /*  ── RULING 3 · THE DECISION GOES LIVE AT COMPLETION ───────────
+     *  The approval gate is RAISED, not re-created: one decision
+     *  obligation, whose clock now starts from the moment the application
+     *  actually became decidable rather than from submission.           */
+    const gate5 = await one(`select id, status, priority, due_at, escalation_interval_minutes
+                               from obligations where related_id=$1 and type=$2`,
+      [app5.id, handoff.APPROVAL_TYPE]);
+    ok("completion raises the approver's decision — one gate, re-clocked, not a second one",
+      !!gate5 && gate5.priority === "high" && !!gate5.escalation_interval_minutes
+        && (await pool.query(`select count(*)::int c from obligations
+              where related_id=$1 and type=$2`, [app5.id, handoff.APPROVAL_TYPE])).rows[0].c === 1,
+      JSON.stringify(gate5));
+    ok("…and its clock runs from completion, not from submission",
+      new Date(gate5.due_at).getTime() > new Date(app5.submitted_at).getTime() + 47 * 3600 * 1000,
+      `${app5.submitted_at} → ${gate5.due_at}`);
+    const liveEvt = (await pool.query(
+      `select 1 from events where property_id=$1 and type='application_decision_became_live'`,
+      [property.id])).rows;
+    ok("…and the moment it became live is durable, so \"how long has this waited on me?\" is a read",
+      liveEvt.length > 0);
+    /*  ⚠ AND NOBODY WAS TEXTED, WHICH IS SAID OUT LOUD.
+     *  Migration 132 permits an `operations` line only `disabled` or
+     *  `reply_only` — proactive staff messaging is a row that cannot
+     *  exist. The wall is deliberate and is not worked around; what the
+     *  read must never do is stay silent and read as though somebody had
+     *  been told (§5).                                                  */
+    ok("…and the standing read STATES that no approver was notified, rather than omitting it",
+      standing5.decision.state === "awaiting_decision"
+        && standing5.decision.approver_notified === false
+        && standing5.decision.notification_blocked_by === "proactive_staff_messaging_unexpressable",
+      JSON.stringify(standing5.decision));
+
+    /*  ── RULING 4 · THE 60-DAY SIGNING CLOCK ───────────────────────
+     *  Starts when the package actually goes out — not at completion and
+     *  not at generation — and names WHO has not signed.               */
+    const dispatch5 = await handoff.runOwedHandoffs({ application_id: app5.id });
+    ok("the package goes out once completion is closed",
+      (dispatch5.results[0] || {}).outcome === "accepted", JSON.stringify(dispatch5.results[0]));
+    const signing5 = await one(`select id, due_at, required_inputs, assigned_role
+                                  from obligations where related_id=$1 and type=$2`,
+      [app5.id, handoff.SIGNING_TYPE]);
+    ok("…and a 60-day signing clock starts with the dispatch, naming who must sign",
+      !!signing5 && signing5.required_inputs.includes(handoff.signatureInput("tenant")),
+      JSON.stringify(signing5 && signing5.required_inputs));
+    const signDays = Math.round(
+      (new Date(signing5.due_at) - Date.now()) / (24 * 3600 * 1000));
+    /*  TWO ASSERTIONS, NOT ONE. Reading the constant proves the window is
+     *  APPLIED; it cannot prove the window is SIXTY, because changing the
+     *  constant would move both sides together. The ruling names 60 days,
+     *  so 60 is asserted literally.                                      */
+    ok("…for exactly the declared window, from the moment the link went out",
+      signDays === handoff.SIGNING_WINDOW_DAYS, `${signDays} days`);
+    ok("…and the declared window is the ruling's 60 days",
+      handoff.SIGNING_WINDOW_DAYS === 60, String(handoff.SIGNING_WINDOW_DAYS));
+    /*  ⚠ NOT THE LINK'S EXPIRY. token_expires_at is a 14-day bearer-token
+     *  window; this is the deal window. Collapsing them would give a
+     *  signing link a 60-day life or expire a live deal in a fortnight. */
+    const tokenLife = await one(
+      `select s.token_expires_at from lease_packet_signers s
+         join lease_packets p on p.id=s.lease_packet_id
+        where p.application_id=$1 and p.superseded_at is null and s.signer_role='tenant'`,
+      [app5.id]);
+    ok("…and it is NOT the signing link's expiry — the deal window and the token window differ",
+      Math.round((new Date(tokenLife.token_expires_at) - Date.now()) / (24 * 3600 * 1000))
+        !== handoff.SIGNING_WINDOW_DAYS,
+      `token ${tokenLife.token_expires_at} vs clock ${signing5.due_at}`);
+    const standingAfter = await handoff.readApplicationHandoffStanding(null, app5.id);
+    ok("…and the standing read carries the decision AND the signature beside the package",
+      standingAfter.signature.state === "awaiting_signature"
+        && standingAfter.signature.outstanding_signers.includes(handoff.signatureInput("tenant"))
+        && standingAfter.decision.state === "awaiting_decision",
+      JSON.stringify({ d: standingAfter.decision.state, s: standingAfter.signature }));
+
+    //  The SIGNATURE closes its own input — the signer route knows nothing
+    //  about the clock, exactly as the completion inputs work.
+    await pool.query(
+      `update lease_packet_signers s set submitted_at=now()
+         from lease_packets p
+        where p.id=s.lease_packet_id and p.application_id=$1
+          and p.superseded_at is null`, [app5.id]);
+    const recon5 = await handoff.reconcileOwedSignatures({ application_id: app5.id });
+    ok("a signature that arrived closes its own input and the clock stops",
+      (recon5.results[0] || {}).outcome === "fully_signed", JSON.stringify(recon5.results[0]));
+    const finalStanding = await handoff.readApplicationHandoffStanding(null, app5.id);
+    ok("…and the standing read says fully signed",
+      finalStanding.signature.state === "fully_signed", JSON.stringify(finalStanding.signature));
+
+    /*  THE 60-DAY CLOCK ALSO HAS TEETH, through the SAME rule as the 30-day
+     *  one — one expiry implementation, two thin wrappers, so they cannot
+     *  drift apart.                                                      */
+    const space9 = await one(`insert into spaces (unit_id, space_label, position_kind, use_type)
+      values($1,'Room9','bed','residential') returning id`, [unit.id]);
+    const unsigned = await one(`insert into lease_applications
+      (property_id, person_id, unit_id, space_id, applicant_name, status, submitted_at)
+      values($1,$2,$3,$4,$5,'submitted', now() - interval '70 days') returning *`,
+      [property.id, applicant, unit.id, space9.id, `${tag} unsigned`]);
+    /*  ⚠ SIGNER IDENTITY IS FROZEN ONCE A PACKET LEAVES `draft` (migration
+     *  192's mutation guard). The fixture therefore builds the signer while
+     *  the packet is still a draft and moves it to `sent` afterwards —
+     *  which is also the order the product uses. The freeze is not worked
+     *  around; it is obeyed.                                              */
+    const staleP = await one(`insert into lease_packets (application_id, property_id, status, version)
+      values($1,$2,'draft',1) returning id`, [unsigned.id, property.id]);
+    await pool.query(`insert into lease_packet_signers
+      (lease_packet_id, signer_role, display_name) values($1,'tenant',$2)`,
+      [staleP.id, `${tag} unsigned`]);
+    await pool.query("update lease_packets set status='sent' where id=$1", [staleP.id]);
+    const cU = await pool.connect();
+    try { await cU.query("begin");
+      await handoff.recordSigningOwed(cU, { application: unsigned });
+      await cU.query("commit"); } finally { cU.release(); }
+    await pool.query(`update obligations set due_at = now() - interval '1 day'
+                       where related_id=$1 and type=$2`, [unsigned.id, handoff.SIGNING_TYPE]);
+    const lapsedSign = await handoff.expireStaleSignings({ application_id: unsigned.id });
+    ok("an unsigned lease past 60 days lapses through the same lifecycle authority",
+      (lapsedSign.results[0] || {}).outcome === "expired", JSON.stringify(lapsedSign.results[0]));
+    const unsignedAfter = await one(
+      `select status, decision_reason from lease_applications where id=$1`, [unsigned.id]);
+    ok("…recorded `expired`, with the reason naming the signing window",
+      unsignedAfter.status === "expired" && /Lease not signed/.test(unsignedAfter.decision_reason || ""),
+      JSON.stringify(unsignedAfter));
 
     /*  ── 5b · THE 30-DAY CLOCK HAS TEETH ──────────────────────────
      *  An application nobody completed does not sit open pretending an

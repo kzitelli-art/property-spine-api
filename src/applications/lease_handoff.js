@@ -260,12 +260,18 @@ module.exports = function leaseHandoffModule(deps = {}) {
     //  handoff. completeObligation itself refuses a non-empty array, so this
     //  cannot close over outstanding work even if the check above drifted.
     let handoff = null;
+    let approval = null;
     if (outstanding.length === 0) {
       await completeObligation(client, { obligation_id: ob.id });
       handoff = await recordHandoffOwed(client, { application, source_event_id });
+      //  Completion makes TWO things live at once, not one after the other:
+      //  the package Spine owes, and the decision the approver owes. The
+      //  two-step design (195) is exactly this — packet-eligible without
+      //  approval — so they run in parallel and neither waits on the other.
+      approval = await raiseApprovalDecision(client, { application });
     }
     return { obligation_id: ob.id, created: true, required_inputs: outstanding,
-      complete: outstanding.length === 0, due_at: dueAt, handoff };
+      complete: outstanding.length === 0, due_at: dueAt, handoff, approval };
   }
 
   /*  ── ONE REQUIREMENT SATISFIED — AND THE HANDOFF AT THE LAST ONE ───
@@ -322,9 +328,10 @@ module.exports = function leaseHandoffModule(deps = {}) {
     await completeObligation(client, { obligation_id: ob.id, completed_by });
     const handoff = await recordHandoffOwed(client, {
       application, source_event_id: null });
+    const approval = await raiseApprovalDecision(client, { application });
 
     return { obligation_id: ob.id, satisfied_input: input, remaining: [],
-      complete: true, handoff };
+      complete: true, handoff, approval };
   }
 
   /*  ── OBSERVED INPUTS CLOSE THEMSELVES, FROM THE FACT ───────────────
@@ -397,23 +404,50 @@ module.exports = function leaseHandoffModule(deps = {}) {
         where related_type = 'lease_application' and related_id = $1
           and type = any($2::text[])
         order by created_at asc`,
-      [application_id, [COMPLETION_TYPE, HANDOFF_TYPE]])).rows;
+      [application_id, [COMPLETION_TYPE, HANDOFF_TYPE, APPROVAL_TYPE, SIGNING_TYPE]])).rows;
 
     const completion = rows.filter((r) => r.type === COMPLETION_TYPE).pop() || null;
     const handoff = rows.filter((r) => r.type === HANDOFF_TYPE).pop() || null;
+    const approvalRow = rows.filter((r) => r.type === APPROVAL_TYPE).pop() || null;
+    const signingRow = rows.filter((r) => r.type === SIGNING_TYPE).pop() || null;
+
+    /*  The two things beside the package, carried on every answer rather
+     *  than reachable only by a second question. An approver asking "where
+     *  is this?" needs the decision and the signature in the same sentence
+     *  as the package (§40.6).
+     *
+     *  `approver_notified` is false wherever a decision is live, and it is
+     *  stated rather than omitted: Spine cannot proactively text staff
+     *  (migration 132), and a standing read that simply did not mention it
+     *  would read as though someone had been told.                       */
+    const decision = approvalRow ? {
+      state: approvalRow.status === "complete" ? "decided" : "awaiting_decision",
+      due_at: approvalRow.due_at || null,
+      approver_notified: approvalRow.status === "complete" ? null : false,
+      notification_blocked_by: approvalRow.status === "complete"
+        ? null : "proactive_staff_messaging_unexpressable",
+    } : { state: "NOT_ESTABLISHED", due_at: null,
+          approver_notified: null, notification_blocked_by: null };
+
+    const signature = signingRow ? {
+      state: signingRow.status === "complete" ? "fully_signed" : "awaiting_signature",
+      outstanding_signers: signingRow.status === "complete" ? [] : (signingRow.required_inputs || []),
+      due_at: signingRow.due_at || null,
+    } : { state: "NOT_ESTABLISHED", outstanding_signers: null, due_at: null };
 
     if (!completion) {
       //  NOT_ESTABLISHED, and said so. An application with no completion
       //  obligation predates this boundary; that is a fact about Spine's
       //  record, never an assertion that the application is complete.
       return { position: "NOT_ESTABLISHED", outstanding: null,
-        completion_due_at: null, handoff_owed: null,
+        completion_due_at: null, handoff_owed: null, decision, signature,
         note: "No completion record exists for this application." };
     }
     const outstanding = completion.required_inputs || [];
     if (completion.status !== "complete") {
       return { position: "awaiting_applicant", outstanding,
         completion_due_at: completion.due_at || null, handoff_owed: false,
+        decision, signature,
         next: outstanding.length
           ? `Outstanding: ${outstanding.join(", ")}`
           : "Nothing outstanding — awaiting closure." };
@@ -421,12 +455,14 @@ module.exports = function leaseHandoffModule(deps = {}) {
     if (!handoff) {
       return { position: "complete", outstanding: [],
         completion_due_at: completion.due_at || null, handoff_owed: false,
+        decision, signature,
         next: "Application complete; no signing package is owed." };
     }
     return {
       position: handoff.status === "complete" ? "package_sent" : "package_owed",
       outstanding: [], completion_due_at: completion.due_at || null,
       handoff_owed: handoff.status !== "complete",
+      decision, signature,
       next: handoff.status === "complete"
         ? "Signing package accepted by the transport; awaiting signature."
         : "Signing package owed.",
@@ -756,6 +792,15 @@ module.exports = function leaseHandoffModule(deps = {}) {
           //  nothing else; a parameter it never reads would read as a
           //  record that was never written.
           await completeObligation(c3, { obligation_id: row.id });
+          /*  ── THE 60-DAY SIGNING CLOCK STARTS HERE, AND ONLY HERE ─────
+           *  Not at completion and not at packet generation: the window in
+           *  which a lease must be signed cannot start before the link is
+           *  on its way to the people who must sign it. Same transaction as
+           *  the handoff's closure, so a package can never be dispatched
+           *  without its clock or carry a clock it was never sent under.  */
+          const appRow = (await c3.query(
+            `select * from lease_applications where id=$1`, [row.application_id])).rows[0];
+          if (appRow) await recordSigningOwed(c3, { application: appRow });
           await c3.query("commit");
         } catch (e) {
           await c3.query("rollback").catch(() => {});
@@ -779,6 +824,241 @@ module.exports = function leaseHandoffModule(deps = {}) {
       }
     }
     return { considered: owed.length, results };
+  }
+
+
+  /*  ════════════════════════════════════════════════════════════════
+   *   RULING 3 · THE APPROVER'S DECISION BECOMES LIVE AT COMPLETION
+   *  ════════════════════════════════════════════════════════════════
+   *
+   *  The `application_approval` gate (leasing_manager) is spawned by
+   *  application_submission at SUBMIT, with the rail's 48-hour window. That
+   *  is the right place for it to be BORN and the wrong moment for its
+   *  clock: at submission the application may still be missing things, and a
+   *  decision window that starts running against work the applicant has not
+   *  finished expires on the applicant's delay rather than the approver's.
+   *
+   *  So the gate is RAISED, not re-created — there is exactly one decision
+   *  obligation and this does not make a second. Raising means: the clock
+   *  restarts from the moment the application actually became decidable, the
+   *  priority says it is now live, and the engine's own escalation interval
+   *  is set so it climbs to the escalation role on its own.
+   *
+   *  ⚠ WHAT IS *NOT* HERE, AND WHY — THE OUTBOUND TEXT TO THE APPROVER.
+   *  Migration 132 permits an `operations` line only `disabled` or
+   *  `reply_only` (`ck_cl_outbound_policy_by_type`), and says so in its own
+   *  words: *"assignment pushes, reminder campaigns and staff broadcasts are
+   *  not features that were left unbuilt — they are rows that cannot
+   *  exist."* Spine CANNOT proactively text a staff member today, by
+   *  construction, and the two credential purposes that can reach a phone
+   *  (`staff_otp`, `staff_invite`) are named credential transport — routing
+   *  a decision summary through one would be exactly the informal exception
+   *  that list exists to refuse.
+   *
+   *  That wall is deliberate and it is not worked around here. Proactive
+   *  staff messaging needs its own consent rail and a line policy that can
+   *  express it — a doctrine decision with a migration behind it, not
+   *  something this module may take by widening a purpose.
+   *
+   *  What it leaves: the decision is owed, dated, prioritised, escalating
+   *  and READABLE the moment it is live. An approver who looks sees it at
+   *  the top. An approver who does not look is not yet reachable, and this
+   *  file does not pretend otherwise (§5).                                */
+  const APPROVAL_TYPE = "application_approval";
+  const APPROVAL_WINDOW_HOURS = 48;
+  const APPROVAL_ESCALATION_MINUTES = 240;
+
+  async function raiseApprovalDecision(client, { application, completed_at = null } = {}) {
+    if (!application || !application.id) throw new Error("raiseApprovalDecision requires the application row");
+
+    const gate = (await client.query(
+      `select id, status, due_at, priority from obligations
+        where related_type = 'lease_application' and related_id = $1
+          and type = $2 and status <> 'complete'
+        order by created_at asc limit 1`,
+      [application.id, APPROVAL_TYPE])).rows[0];
+    //  No open gate is not an error. A two-step application may already have
+    //  been decided, and an imported one never had a gate at all.
+    if (!gate) return { raised: false, reason: "no_open_approval_gate" };
+
+    const from = completed_at ? new Date(completed_at) : new Date();
+    const due = new Date(from.getTime() + APPROVAL_WINDOW_HOURS * 3600 * 1000).toISOString();
+    const raised = (await client.query(
+      `update obligations
+          set due_at = $2, priority = 'high',
+              escalation_interval_minutes = coalesce(escalation_interval_minutes, $3),
+              updated_at = now()
+        where id = $1 returning id, due_at, priority, escalates_to_role`,
+      [gate.id, due, APPROVAL_ESCALATION_MINUTES])).rows[0];
+
+    //  The durable statement that the decision became live, and when. An
+    //  approver asking "how long has this been waiting on me?" is answered
+    //  from this, not from the submission timestamp.
+    await client.query(
+      `insert into events (property_id, person_id, unit_id, type, note)
+       values ($1,$2,$3,'application_decision_became_live',$4)`,
+      [application.property_id, application.person_id, application.unit_id,
+       `Application complete — the leasing decision for ${application.applicant_name} is live`
+       + ` and due ${String(due).slice(0, 10)}.`]);
+
+    return { raised: true, obligation_id: raised.id, due_at: raised.due_at,
+      priority: raised.priority, escalates_to_role: raised.escalates_to_role,
+      //  Said out loud in the receipt rather than left to be discovered:
+      //  nothing has been sent to this person.
+      approver_notified: false, notification_blocked_by: "proactive_staff_messaging_unexpressable" };
+  }
+
+  /*  ════════════════════════════════════════════════════════════════
+   *   RULING 4 · THE 60-DAY LEASE-SIGNING CLOCK
+   *  ════════════════════════════════════════════════════════════════
+   *
+   *  The same machinery as the 30-day completion clock, deliberately — a
+   *  second clock implemented a second way is two rules to keep in step.
+   *  An obligation carrying the OUTSTANDING SIGNER ROLES as the engine's own
+   *  required_inputs, due 60 days from the moment the package went out, and
+   *  lapsing the application through the one lifecycle writer if it never
+   *  gets signed.
+   *
+   *  ⚠ THIS IS NOT THE LINK'S EXPIRY. `lease_packet_signers.token_expires_at`
+   *  is 14 days and is a BEARER-TOKEN security window: how long one secret
+   *  URL may be redeemed. This is the DEAL window: how long the agreement
+   *  stands before it lapses. Collapsing them would either give a signing
+   *  link a 60-day life or expire a live deal in a fortnight.
+   *
+   *  TENANT AND GUARANTOR ARE INDEPENDENT INPUTS — `signature:tenant` and
+   *  `signature:guarantor` — so a half-signed package reads as exactly that,
+   *  and the outstanding list names WHO has not signed.                   */
+  const SIGNING_TYPE = "lease_signing";
+  const SIGNING_WINDOW_DAYS = 60;
+  const signatureInput = (role) => `signature:${role}`;
+
+  /*  Read from lease_packet_signers on the CURRENT packet — the same rows
+   *  the public signer route stamps. The fact closes the input, exactly as
+   *  it does for application completion.                                  */
+  async function observeOutstandingSignatures(client, application_id) {
+    const rows = (await client.query(
+      `select s.signer_role, s.submitted_at
+         from lease_packet_signers s
+         join lease_packets p on p.id = s.lease_packet_id
+        where p.application_id = $1 and p.superseded_at is null
+          and coalesce(p.status,'') <> 'void'
+        order by s.signer_role`, [application_id])).rows;
+    return rows.filter((r) => !r.submitted_at).map((r) => signatureInput(r.signer_role));
+  }
+
+  async function recordSigningOwed(client, { application, source_event_id = null } = {}) {
+    if (!application || !application.id) throw new Error("recordSigningOwed requires the application row");
+
+    const existing = (await client.query(
+      `select id, status, required_inputs from obligations
+        where related_type = 'lease_application' and related_id = $1 and type = $2
+        order by created_at desc limit 1`,
+      [application.id, SIGNING_TYPE])).rows[0];
+    if (existing) {
+      return { obligation_id: existing.id, created: false,
+        required_inputs: existing.required_inputs || [],
+        complete: existing.status === "complete" };
+    }
+
+    const outstanding = await observeOutstandingSignatures(client, application.id);
+    //  A package with no signer rows is not a signed package — it is a
+    //  package whose signers were never established, and owing a signing
+    //  clock on it would put a 60-day deadline on work nobody can do.
+    if (!outstanding.length) return { obligation_id: null, created: false,
+      reason: "no_outstanding_signers" };
+
+    const due = new Date(Date.now() + SIGNING_WINDOW_DAYS * 24 * 3600 * 1000).toISOString();
+    const ob = await spawnObligationFromEvent(client, {
+      property_id: application.property_id,
+      person_id: application.person_id,
+      unit_id: application.unit_id,
+      source_event_id,
+      related_id: application.id, related_type: "lease_application",
+      module: "applications", type: SIGNING_TYPE,
+      label: `Lease signature — ${application.applicant_name}`,
+      //  A person chases a signature. Spine sent the link; it cannot sign.
+      owner_type: "human", assigned_role: "leasing_agent",
+      escalates_to_role: "leasing_manager",
+      status: "open", priority: "normal", severity: "normal",
+      due_at: due, required_inputs: outstanding,
+    });
+    return { obligation_id: ob.id, created: true, required_inputs: outstanding,
+      complete: false, due_at: due };
+  }
+
+  /*  The signatures that HAVE arrived close their own inputs. Same shape as
+   *  reconcileApplicationCompletion, same reason: the public signer route
+   *  has no business knowing a clock is waiting on it.                    */
+  async function reconcileApplicationSignatures(client, { application_id, completed_by = null }) {
+    if (!application_id) throw new Error("reconcileApplicationSignatures requires application_id");
+    const ob = (await client.query(
+      `select id, required_inputs from obligations
+        where related_type = 'lease_application' and related_id = $1
+          and type = $2 and status <> 'complete'
+        order by created_at asc limit 1`,
+      [application_id, SIGNING_TYPE])).rows[0];
+    if (!ob) return { reconciled: false, reason: "no_open_signing_obligation" };
+
+    const stillOutstanding = await observeOutstandingSignatures(client, application_id);
+    const nowSigned = (ob.required_inputs || []).filter((i) => !stillOutstanding.includes(i));
+    if (!nowSigned.length) {
+      return { reconciled: false, reason: "nothing_signed_yet",
+        remaining: ob.required_inputs || [] };
+    }
+    let remaining = ob.required_inputs || [];
+    for (const input of nowSigned) {
+      const out = await satisfyObligation(client, { obligation_id: ob.id, input,
+        proof: "signature recorded on the current lease package" });
+      remaining = out.remaining;
+    }
+    if (remaining.length === 0) {
+      await completeObligation(client, { obligation_id: ob.id, completed_by });
+    }
+    return { reconciled: true, obligation_id: ob.id, signed: nowSigned,
+      remaining, complete: remaining.length === 0 };
+  }
+
+  async function reconcileOwedSignatures({ property_ids = null, application_id = null, limit = 50 } = {}) {
+    const scoped = Array.isArray(property_ids) && property_ids.length
+      ? property_ids.map(String) : null;
+    const open = (await pool.query(
+      `select o.id, o.related_id as application_id
+         from obligations o
+         join lease_applications la on la.id = o.related_id
+        where o.type = $1 and o.status <> 'complete'
+          and o.related_type = 'lease_application'
+          and coalesce(cardinality(o.required_inputs), 0) > 0
+          and ($2::uuid[] is null or o.property_id = any($2::uuid[]))
+          and ($3::uuid is null or o.related_id = $3::uuid)
+          and coalesce(la.source,'') <> 'import'
+        order by o.created_at asc limit $4`,
+      [SIGNING_TYPE, scoped, application_id, limit])).rows;
+
+    const results = [];
+    for (const row of open) {
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const claim = (await client.query(
+          `select id from obligations where id=$1 and status <> 'complete'
+            for update skip locked`, [row.id])).rows[0];
+        if (!claim) {
+          await client.query("rollback");
+          results.push({ application_id: row.application_id, outcome: "claimed_elsewhere" });
+          continue;
+        }
+        const out = await reconcileApplicationSignatures(client, { application_id: row.application_id });
+        await client.query("commit");
+        results.push({ application_id: row.application_id,
+          outcome: out.reconciled ? (out.complete ? "fully_signed" : "partially_signed") : "unchanged",
+          signed: out.signed || [], remaining: out.remaining || null });
+      } catch (e) {
+        await client.query("rollback").catch(() => {});
+        results.push({ application_id: row.application_id, outcome: "failed",
+          message: (e && e.message) || null });
+      } finally { client.release(); }
+    }
+    return { considered: open.length, results };
   }
 
   /*  ── THE FACTS MOVE ON WITHOUT ASKING THIS MODULE ─────────────────
@@ -860,7 +1140,8 @@ module.exports = function leaseHandoffModule(deps = {}) {
    *  with outstanding inputs, and outstanding inputs are precisely what
    *  expired here. Closing it as satisfied would say the applicant supplied
    *  what they never supplied.                                            */
-  async function expireStaleCompletions({
+  async function expireStaleClock({
+    type, window_days, event_type, what_lapsed,
     property_ids = null, application_id = null, limit = 50, now = null,
   } = {}) {
     const lifecycle = require("./application_lifecycle");
@@ -881,7 +1162,7 @@ module.exports = function leaseHandoffModule(deps = {}) {
           and coalesce(la.source,'') <> 'import'
         order by o.due_at asc
         limit $5`,
-      [COMPLETION_TYPE, asOf, scoped, application_id, limit])).rows;
+      [type, asOf, scoped, application_id, limit])).rows;
 
     const results = [];
     for (const row of stale) {
@@ -915,8 +1196,7 @@ module.exports = function leaseHandoffModule(deps = {}) {
           lapsed = await lifecycle.markTerminal(client, {
             applicationId: row.application_id,
             terminalCode: "expired",
-            decisionReason:
-              `Application not completed within ${COMPLETION_WINDOW_DAYS} days of submission`
+            decisionReason: `${what_lapsed} within ${window_days} days`
               + `${(row.required_inputs || []).length ? " — outstanding: " + row.required_inputs.join(", ") : ""}.`,
           });
         }
@@ -929,10 +1209,11 @@ module.exports = function leaseHandoffModule(deps = {}) {
           `insert into events (property_id, person_id, unit_id, type, note)
            values ($1, (select person_id from lease_applications where id=$2),
                    (select unit_id from lease_applications where id=$2),
-                   'application_completion_expired', $3)`,
+                   $4, $3)`,
           [row.property_id, row.application_id,
-           `Application completion lapsed after ${COMPLETION_WINDOW_DAYS} days`
-           + `${(row.required_inputs || []).length ? " — never supplied: " + row.required_inputs.join(", ") : ""}.`]);
+           `${what_lapsed} — lapsed after ${window_days} days`
+           + `${(row.required_inputs || []).length ? " — never supplied: " + row.required_inputs.join(", ") : ""}.`,
+           event_type]);
         await client.query("commit");
         results.push({ application_id: row.application_id, obligation_id: row.id,
           outcome: "expired", application_status_changed: !!lapsed,
@@ -946,6 +1227,20 @@ module.exports = function leaseHandoffModule(deps = {}) {
     }
     return { considered: stale.length, results };
   }
+
+  //  TWO CLOCKS, ONE RULE. Both are thin wrappers so the expiry behaviour —
+  //  lapse through the lifecycle authority, close the obligation `expired`
+  //  and never `satisfied`, claim with skip-locked, skip imports — cannot
+  //  drift between them.
+  const expireStaleCompletions = (opts = {}) => expireStaleClock({
+    ...opts, type: COMPLETION_TYPE, window_days: COMPLETION_WINDOW_DAYS,
+    event_type: "application_completion_expired",
+    what_lapsed: "Application not completed" });
+
+  const expireStaleSignings = (opts = {}) => expireStaleClock({
+    ...opts, type: SIGNING_TYPE, window_days: SIGNING_WINDOW_DAYS,
+    event_type: "lease_signing_window_expired",
+    what_lapsed: "Lease not signed" });
 
   /*  ── RECOVERY IS NORMAL EXECUTION, NOT A TEST CALLING THE RUNNER ───
    *  The after-commit call accelerates the FIRST attempt. It cannot be the
@@ -1011,11 +1306,23 @@ module.exports = function leaseHandoffModule(deps = {}) {
           log.log(`[handoff] swept ${out.considered} owed; `
             + out.results.map((r) => `${r.outcome}`).join(","));
         }
-        const lapsed = await expireStaleCompletions({ limit: 50, property_ids: scoped });
-        if (lapsed.considered) {
-          log.log(`[handoff] ${lapsed.considered} application(s) past the `
-            + `${COMPLETION_WINDOW_DAYS}-day completion window; `
-            + lapsed.results.map((r) => `${r.outcome}`).join(","));
+        //  Signatures that arrived since the last tick close their own
+        //  inputs, for the same reason completions do: the public signer
+        //  route has no business knowing a clock is waiting on it.
+        const signed = await reconcileOwedSignatures({ limit: 50, property_ids: scoped });
+        if (signed.considered) {
+          log.log(`[handoff] re-observed ${signed.considered} open signing clock(s); `
+            + signed.results.map((r) => `${r.outcome}`).join(","));
+        }
+        for (const [label, run] of [
+          [`${COMPLETION_WINDOW_DAYS}-day completion`, expireStaleCompletions],
+          [`${SIGNING_WINDOW_DAYS}-day signing`, expireStaleSignings],
+        ]) {
+          const lapsed = await run({ limit: 50, property_ids: scoped });
+          if (lapsed.considered) {
+            log.log(`[handoff] ${lapsed.considered} application(s) past the ${label} window; `
+              + lapsed.results.map((r) => `${r.outcome}`).join(","));
+          }
         }
       } catch (e) {
         log.error("[handoff] sweep failed, work remains owed:", (e && e.message) || "unknown");
@@ -1032,6 +1339,11 @@ module.exports = function leaseHandoffModule(deps = {}) {
     observeOutstanding, recordCompletionOwed, completeApplicationRequirement,
     reconcileApplicationCompletion, reconcileOwedCompletions,
     readApplicationHandoffStanding,
-    recordHandoffOwed, runOwedHandoffs, expireStaleCompletions, startHandoffRecovery };
+    APPROVAL_TYPE, SIGNING_TYPE, SIGNING_WINDOW_DAYS, signatureInput,
+    raiseApprovalDecision,
+    recordSigningOwed, observeOutstandingSignatures,
+    reconcileApplicationSignatures, reconcileOwedSignatures,
+    recordHandoffOwed, runOwedHandoffs,
+    expireStaleCompletions, expireStaleSignings, startHandoffRecovery };
 };
 module.exports.HANDOFF_TYPE = HANDOFF_TYPE;
