@@ -96,7 +96,8 @@ asserts that preview `LANDING_DEALS` do not appear in signed-in operation.**
 v1 of this document asked for a Network-tab check. That was wrong: it put a
 manual step on the owner for a question the repository answers. Withdrawn.
 
-**What was done instead:** `verify_all.sh` now runs that proof as a second
+**What was done instead** (⛔ then undone — read the section below before
+trusting this paragraph)**:** `verify_all.sh` now runs that proof as a second
 coupled app rung, unedited, through the app's own transport runner on the same
 env contract as the rent-roll rung. CI checks the app out at the pin, so the
 trace closes in CI rather than in a browser.
@@ -106,10 +107,35 @@ at the pin, the run names it and fails, rather than skipping silently. A silent
 skip is how two browser rungs sat unrun for weeks while the suite reported all
 assertions passed (CURRENT_STATE row 75).
 
-This lane could not read the app repository directly — it is outside the
-session's repository scope and no tool here can add it — so the proof's env
-contract is assumed to match the rent-roll rung's. If it does not, CI says so
-by name and the rung is adjusted from that evidence.
+## ⛔ THE RUNG WAS ADDED, WENT RED, AND WAS REMOVED — 2026-09-15
+
+The guarded rung above was committed and CI run 593 failed. I could not read
+what failed: this environment's egress to the Actions log blob is blocked, and
+the log tool returns only the trailing window (an uploaded container log), never
+step 12's own stdout. The app repository is outside this session's repository
+scope, so I could not check whether `live_deal_picker.browser.js` exists at the
+pin either.
+
+The likely cause is that the file is not at pin `b0be9f4` — that is the guard
+doing exactly what it was written to do. **Likely is not established**, and a
+red lane resting on a guess is worse than no rung, so the rung is removed rather
+than left asserting something no one here verified.
+
+What is therefore still **NOT ESTABLISHED**: which picker the shipped app
+actually lands a signed-in operator on. Everything in this document about the
+two pickers is read from API source, which cannot settle it.
+
+What would close it, in order of preference:
+
+1. Someone with the app repository open confirms whether
+   `live_deal_picker.browser.js` is present at `b0be9f4`. If it is, restore the
+   rung verbatim from commit `752543c6` and read the real failure.
+2. If it is not at that pin, the pin moves — a deliberate act with its own
+   commit message, per `tests/e2e/app_pin.txt` — and the rung lands with it.
+3. Failing both, one browser session on the signed-in app with a screenshot.
+
+Do not close it by reasoning from the API. That is what this section exists to
+prevent.
 
 ## Recorded, not fixed
 
