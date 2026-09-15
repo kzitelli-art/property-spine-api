@@ -18,6 +18,12 @@ Skyline and Greenery are the first production onboarding priorities. Solo and
 Uno stay reachable with their work preserved; **visibility is not leasing-ready
 and does not enable outbound activity.**
 
+**Which picker the owner sees is now answered** (PICKER_TRACE.md): the
+signed-in one, reading per-person access rows. Owner-reported, corroborated by
+source, not browser-proven. C1 below therefore acts directly on the surface the
+owner actually looks at, and the hardcoded registry is not what is putting
+extra properties in that view.
+
 ---
 
 ## 1 · Retirement is not deletion, and the mechanism already exists
@@ -94,7 +100,7 @@ do not already hold.
 
 | # | Change | Why it is code, and why it waits |
 |---|---|---|
-| K1 | Retire or keep `deal_registry.js` | six consumers read it; it is the second source for leasing basis and claims authority over property naming. A ruling, then a lane. |
+| K1 | Retire or keep `deal_registry.js` | two files read it — `src/leasing/leasing_detail.js` and `src/surfaces/property_surface.js`, three call sites (scope: `src/`, `server.js`, `tests/`; the app repo is outside this session and was not scanned). It is the second source for leasing basis and claims authority over property naming. A ruling, then a lane. |
 | K2 | Single-property deal opens directly into its workspace | app-side behaviour at the pinned commit; app-first by the repo's own rule |
 | K3 | Any `leasing_basis` correction | **only with evidence.** See §5. |
 

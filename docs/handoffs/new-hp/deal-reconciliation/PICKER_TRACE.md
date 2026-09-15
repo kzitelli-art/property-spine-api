@@ -107,35 +107,51 @@ at the pin, the run names it and fails, rather than skipping silently. A silent
 skip is how two browser rungs sat unrun for weeks while the suite reported all
 assertions passed (CURRENT_STATE row 75).
 
-## ⛔ THE RUNG WAS ADDED, WENT RED, AND WAS REMOVED — 2026-09-15
+## ✅ ANSWERED BY THE OWNER — 2026-09-15
 
-The guarded rung above was committed and CI run 593 failed. I could not read
-what failed: this environment's egress to the Actions log blob is blocked, and
-the log tool returns only the trailing window (an uploaded container log), never
-step 12's own stdout. The app repository is outside this session's repository
-scope, so I could not check whether `live_deal_picker.browser.js` exists at the
-pin either.
+**The app lands the signed-in picker** (`GET /operator/properties` →
+`authorized_properties.js`). Owner's words: *"the app lands the second deal
+picker, we made a deal picker early on (with logos) that ended up being buried
+after we started doing demos."*
 
-The likely cause is that the file is not at pin `b0be9f4` — that is the guard
-doing exactly what it was written to do. **Likely is not established**, and a
-red lane resting on a guess is worse than no rung, so the rung is removed rather
-than left asserting something no one here verified.
+Corroborated in this repository, which is why it is recorded rather than merely
+noted: **there is no logo anywhere in the API.** A whole-repo scan of `src/`,
+`migrations/` and `server.js` for `logo` returns one hit, and it is the word
+"analogous" inside a comment in `equity_routes.js`. `deal_registry.js` carries
+`key · name · canonical_key · property_id · model · match` and no branding
+field. So the picker with logos is an app-side surface built from app-side
+assets — not a rendering of `GET /deals` — and it is the one the owner says was
+buried.
 
-What is therefore still **NOT ESTABLISHED**: which picker the shipped app
-actually lands a signed-in operator on. Everything in this document about the
-two pickers is read from API source, which cannot settle it.
+**Epistemic status: OWNER-REPORTED, corroborated by source. Not browser-proven.**
+That distinction is kept deliberately (§38). It is strong enough to act on for
+this cleanup — and it is not the browser rung, which nobody has run.
 
-What would close it, in order of preference:
+### What it settles, and what it therefore costs
 
-1. Someone with the app repository open confirms whether
-   `live_deal_picker.browser.js` is present at `b0be9f4`. If it is, restore the
-   rung verbatim from commit `752543c6` and read the real failure.
-2. If it is not at that pin, the pin moves — a deliberate act with its own
-   commit message, per `tests/e2e/app_pin.txt` — and the rung lands with it.
-3. Failing both, one browser session on the signed-in app with a screenshot.
+The picker the owner actually looks at reads **per-person access rows**. So the
+cleanup's smallest change — C1, deactivating an assignment — acts directly on
+the surface in question. The plan's mechanism is the right lever, and the
+hardcoded six-deal registry is **not** what is putting extra properties in the
+owner's view.
 
-Do not close it by reasoning from the API. That is what this section exists to
-prevent.
+### What it does NOT settle
+
+`deal_registry.js` is still read by live code and still claims authority over
+property naming and leasing basis. Being off the landing path makes it less
+urgent; it does not make it correct. Its two pinned production property ids and
+its six fixed entries stay on the K1 ruling.
+
+### The rung it replaces
+
+The guarded deal-picker rung committed at `752543c6` went red in CI run 593 and
+was removed at `eec7c0f4`. I could not read the failure — egress to the Actions
+log blob is blocked here and the log tool returns only the trailing container
+log — and the app repository is outside this session's scope, so I could not
+check whether `live_deal_picker.browser.js` exists at pin `b0be9f4`. The likely
+cause was the guard firing on an absent file, which is the guard working as
+designed. The rung is restorable verbatim from `752543c6` if the pin question is
+ever settled; the answer above is what the rung was trying to obtain.
 
 ## Recorded, not fixed
 
