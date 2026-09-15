@@ -4,8 +4,8 @@
 **API code:** `6dfc3b31bde56f0c87bbb03d6b2148700e0a168d`  
 **CI:** run `35016506384` — success  
 **Render API:** `dep-dakq7se7bikc73daccv0` — Deploy succeeded | Live  
-**App code:** `ac6f837e8679a500305a083d804549c0f216ce69`  
-**Render app:** `dep-dakq5q61egvs73ar1j8g` — Deploy succeeded | Live
+**App code:** `2feed58b0bd25e481596051c4aa1541ed7fac0a4`  
+**Render app:** `dep-daks45nf3r2c738fka30` — Deploy succeeded | Live
 
 ## Change
 
@@ -26,8 +26,8 @@ tone cannot invent a leasing fact.
 - Signed-in production app, Skyline: `What amenities does Skyline have?` now
   renders **“For this property, I can confirm these amenities and
   inclusions:”** followed by the approved Michael Grivna wording. Grounding
-  renders as **“Based on confirmed leasing knowledge · Topics · ["amenities"] ·
-  No missing topics · Property-wide information”** while the underlying
+  renders as **“Based on confirmed leasing knowledge · About · Amenities · No
+  missing topics · Property-wide information”** while the underlying
   metadata remains `ESTABLISHED`, topic `amenities`, property-wide scope.
 - Mixed live question `What amenities are there, and do you have floor plans?`
   kept the confirmed amenities answer and added **“I don't have an approved
