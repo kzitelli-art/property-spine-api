@@ -547,12 +547,28 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
    *  Overlaid like operating_use and triage: a fact the position classifier
    *  does not own, read once for the property and attached per space.
    *
-   *  FAIL-CLOSED, unlike the triage overlay. A triage read that cannot run
-   *  leaves a position at its honest `unknown`; a hold read that cannot run
+   *  FAIL-CLOSED ON EVERY FAILURE BUT ONE. A hold read that cannot run
    *  would leave a bed reading `marketable_now` when somebody has signed
-   *  for it, and the product would offer it to a second person. There is no
-   *  safe fallback for that, so the error propagates.                     */
-  const holdsBySpace = await applicationHold.heldSpacesForProperty(pool, property_id);
+   *  for it, and the product would offer it to a second person — so a
+   *  timeout, a permission error or a bad query takes this read down
+   *  rather than quietly answering "nobody has signed".
+   *
+   *  ⚠ THE ONE EXCEPTION IS 42P01, AND IT IS NOT A WEAKENING. If
+   *  `lease_applications` or `lease_packets` does not exist, no application
+   *  exists, so no applicant CAN have signed: an empty hold map is the
+   *  truth there, not a guess. Propagating instead would take the whole
+   *  availability read — and with it the application-target authority and
+   *  the prospect matcher — down on any database that has not reached
+   *  migration 033, which is how this first turned CI red: a staff
+   *  post-tour reply that should have asked for terms said "I couldn't
+   *  read the application targets just now" instead. Same tolerance, same
+   *  error code and the same reasoning as the triage overlay above.     */
+  let holdsBySpace = new Map();
+  try {
+    holdsBySpace = await applicationHold.heldSpacesForProperty(pool, property_id);
+  } catch (e) {
+    if (e.code !== "42P01") throw e;   // only a missing relation is tolerated
+  }
 
   const horizonEnd = new Date(new Date(`${asOf}T00:00:00Z`).getTime() + horizon_days * 86400000)
     .toISOString().slice(0, 10);

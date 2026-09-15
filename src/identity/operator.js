@@ -4278,16 +4278,57 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
            *  resolveSignerAccess already refuses any packet with
            *  `superseded_at` set — so the obsolete link stops opening
            *  without anything new being built to revoke it.            */
+          /*  ⚠ STATUS IS NOT THE ONLY THING THAT FREEZES A PACKAGE, AND
+           *  NARROWING TO STATUS ALONE DROPPED A CONTRACT THIS SUITE
+           *  ASSERTS: "a prepared lease packet blocks further
+           *  application-offer revision"
+           *  (tests/e2e/tour_application_lease.e2e.js). A staff-generated
+           *  packet is `draft` the moment it is made, so a status-only
+           *  check let a successor offer through after a human had
+           *  deliberately committed those terms to a package.
+           *
+           *  The two cases are genuinely different and the record already
+           *  tells them apart — `application_proposed_terms_confirmations
+           *  .source` (migration 195):
+           *
+           *    operator_proposed_terms      A PERSON confirmed these terms
+           *                                 and generated a package from
+           *                                 them. That is a commitment;
+           *                                 changing it is a governed
+           *                                 correction, not a new offer.
+           *    authored_offer_acknowledged  SPINE prepared the package from
+           *                                 the applicant's acknowledged
+           *                                 authored offer. Nobody chose
+           *                                 this moment, so it must not
+           *                                 block a correction — blocking
+           *                                 it is what turned every
+           *                                 legitimate successor offer into
+           *                                 "A lease packet already exists."
+           *
+           *  Frozen STATES block either way: once the applicant has
+           *  acknowledged the package, or it has executed, the origin of
+           *  the packet stops mattering. A packet Spine prepared and left
+           *  in preparation is superseded by the next version, whose
+           *  `superseded_at` resolveSignerAccess already refuses.        */
           const FROZEN_PACKET_STATES = ['submitted','resident_executed','executed'];
           const blocking = (await client.query(
-            `select id, status from lease_packets
-              where application_id=$1 and superseded_at is null and status = any($2::text[])
-              limit 1`, [application.id, FROZEN_PACKET_STATES])).rows[0];
+            `select p.id, p.status,
+                    (p.status = any($2::text[]))            as frozen_state,
+                    (c.source = 'operator_proposed_terms')  as operator_committed
+               from lease_packets p
+               left join application_proposed_terms_confirmations c
+                 on c.id = p.proposed_terms_confirmation_id
+              where p.application_id=$1 and p.superseded_at is null
+                and (p.status = any($2::text[]) or c.source = 'operator_proposed_terms')
+              order by p.version desc limit 1`,
+            [application.id, FROZEN_PACKET_STATES])).rows[0];
           if (blocking)
             throw Object.assign(new Error(
               blocking.status === 'submitted'
                 ? "The applicant has already acknowledged this package. Changing agreed terms now is a governed correction, not a new offer."
-                : "This lease has already been executed. Changing agreed terms now is a governed correction, not a new offer."),
+                : blocking.frozen_state
+                  ? "This lease has already been executed. Changing agreed terms now is a governed correction, not a new offer."
+                  : "A signing package has already been prepared from these confirmed terms. Changing them now is a governed correction, not a new offer."),
               {httpStatus:409});
         }
         if (b.application_id && (!application || application.id !== b.application_id))
