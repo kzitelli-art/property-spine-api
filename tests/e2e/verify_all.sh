@@ -167,6 +167,7 @@ step "terms preparation attribution" node tests/unit/terms_confirmation_attribut
 step "current packet execution decision attribution" node tests/unit/execution_decision_read.test.js
 step "terms attribution model boundary" node tests/unit/terms_attribution_model_boundary.test.js
 step "leasing knowledge coverage" node tests/unit/leasing_knowledge_coverage.test.js
+step "prospect first response question grounding" node tests/unit/first_response_conversation.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
 step "institutional rent projection" node tests/unit/rent_roll_institutional_projection.test.js
 step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js
