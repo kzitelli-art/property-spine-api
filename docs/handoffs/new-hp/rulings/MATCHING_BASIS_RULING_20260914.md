@@ -1,5 +1,36 @@
 # Ruling — "automatic matching" is retrieval on a declared basis (2026-09-14, QB: Fable)
 
+> # ⛔ THREE OF THESE RULINGS WERE SUPERSEDED ON 2026-09-15. READ THIS FIRST.
+>
+> The overnight matcher build changed the behaviour MB-5, MB-7 and MB-8
+> describe. The text below is preserved as the decision that was in force
+> when the lane was built; **it is no longer a description of the code**, and
+> a reader who implements it will reinstall defects that were fixed with
+> proof. MB-5 itself says *"Changing the rule is a ruling, not a tweak"* —
+> this banner is that record.
+>
+> | ruling | what it still says | what the code does now, and why |
+> |---|---|---|
+> | **MB-5** | orders by `all_recorded_constraints_satisfied → fewest_not_established → earliest_governed_ready_date → lowest_governed_price` | The lead key requires ZERO unknowns, so with no term chosen it separated nothing and a home known over budget **and** the wrong type outranked a home nothing ruled out. Now `no_recorded_conflict → fewest_not_established → earliest_governed_ready_date → lowest_governed_price → unit_number → space_label`, extracted as the named rule MB-5 requires and falsified against the old key. |
+> | **MB-7** | *"Matching without a term inherits `availableUnits`' refusal."* | **Showing and offering are different decisions.** The composer always calls with no term, so this returned zero homes for every showing question — to an operator who only wanted to know which homes were worth walking to. `term_required` and `pricing_term_required` now CAP the answer at `likely_fit` instead of deleting it. **The offer decision is unchanged:** everything that blocked a contractual offer still blocks one, no home reads `offerable` without a term, and an unrecognised qualification still fails closed. |
+> | **MB-8** | the projection is *"N homes satisfy every recorded constraint; M are unknown on price"* | Counts alone were the exact re-entry this product exists to remove: the backend held an answer to *which home* and the conversation received an answer to *how many*. The projection now carries `options` — the top three homes by label, each with its decision strength and the basis behind it. Labels only, never record ids (§40.8). |
+>
+> **MB-1, MB-2, MB-3, MB-4, MB-6 and MB-9 stand unchanged.** In particular
+> MB-1 still holds: this is retrieval on a declared basis — no score, no
+> "best fit", no learned ranking.
+>
+> **A further correction, 2026-09-15.** `decision_strength` was documented as
+> a ladder (showable → likely_fit → offerable) and the matcher handed
+> `showable` to homes with a RECORDED CONFLICT, while the label is defined as
+> *"nothing known contradicts it"*. A home with a conflict now makes no
+> strength claim at all. **The ladder itself is under review** — a home can
+> fit and be unshowable, or be offerable and a poor fit — so do not treat
+> these three as one axis when extending this domain.
+>
+> Current state: `docs/CURRENT_STATE.md` row 85. Source of truth is the
+> source: `src/leasing/leasing_inventory.js`, `src/leasing/match_decision_strength.js`.
+
+
 Governs the Opus lane that builds prospect-to-home matching. Written before
 the build, per PHILOSOPHY §31 (question 1 first) and §40.10 (retrieval ≠
 comparison ≠ causal explanation). Cite it as MB-1 … MB-9.

@@ -623,6 +623,28 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
   ok("MB-8: the projection reports the violated-on-price count for an entitled reader",
     proj1.read_state === "OK" && proj1.violated_on_price >= 1,
     JSON.stringify({ violated: proj1.violated_on_price, satisfying: proj1.satisfy_every_recorded_constraint }));
+  /*  ── A RECORDED CONFLICT IS NOT A WEAK CLAIM ──────────────────────
+   *  `showable` is defined as "worth walking to; nothing known contradicts
+   *  it", and the matcher was handing that label to homes where something
+   *  known DID contradict it — then counting EVERY matched home under that
+   *  name in this projection. Both reached the conversational reader. The
+   *  fixture already puts at least one home over budget (asserted above),
+   *  so this population exists on this very read; nothing asserted it.    */
+  ok("§5: a home with a recorded conflict makes NO strength claim, rather than claiming 'showable'",
+    (proj1.options || []).every((o) =>
+      !(o.basis || []).some((b) => b.result === "violated") || o.decision_strength == null),
+    JSON.stringify((proj1.options || []).map((o) => ({ s: o.decision_strength,
+      v: (o.basis || []).filter((b) => b.result === "violated").map((b) => b.constraint) }))));
+  ok("the projection counts each strength BY NAME, and the four states account for every home considered",
+    proj1.showable + proj1.likely_fit + proj1.offerable + proj1.with_recorded_conflict
+      === proj1.homes_considered,
+    JSON.stringify({ showable: proj1.showable, likely_fit: proj1.likely_fit,
+      offerable: proj1.offerable, with_recorded_conflict: proj1.with_recorded_conflict,
+      considered: proj1.homes_considered }));
+  ok("…and `showable` is no longer just the total, because at least one home carries a conflict",
+    proj1.with_recorded_conflict >= 1 && proj1.showable < proj1.homes_considered,
+    JSON.stringify({ showable: proj1.showable, conflict: proj1.with_recorded_conflict,
+      considered: proj1.homes_considered }));
   ok("MB-1: the projection declares retrieval and disclaims comparison",
     proj1.capability_class === "retrieval" && proj1.claims_not_made.includes("comparison"),
     JSON.stringify(proj1.capability_class));

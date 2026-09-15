@@ -45,6 +45,89 @@ function compareMatchedHomes(a, b) {
     || String(a.space_label || "").localeCompare(String(b.space_label || ""));
 }
 
+/*  ── TWO PURE READERS OF WHAT A PERSON SAID, AT MODULE SCOPE ───────
+ *  Neither touches `pool` or anything else the factory closes over, and
+ *  both decide whether a prospect is told "nothing fits". Kept out here
+ *  so they can be exercised directly as well as through the matcher —
+ *  a predicate with its own test and a caller nobody drove is exactly
+ *  how a missing import shipped twice in this file.               */
+/*  A recorded budget is free text BY DESIGN. The capture prompt in
+ *  src/comms/prospect_capture.js asks the model for "short verbatim-ish
+ *  text (e.g. '$1,400/mo', 'under $1,600', '$800 per person')" and
+ *  validates only that it is under 60 characters. So this function's job
+ *  is not to be clever about phrasing — it is to say whether those words
+ *  contain exactly ONE amount it can compare, and to refuse when they do
+ *  not. A number we cannot read is NOT a budget of zero and not a missing
+ *  budget: it is a recorded fact we could not compare, which is its own
+ *  not_established reason.
+ *
+ *  ⚠ THE OLD RULE TOOK THE FIRST NUMBER ANYWHERE IN THE STRING.
+ *  That is how "up to $1.4k" became a budget of 1.4 — after which every
+ *  priced home falls outside it, is dropped with `continue`, and the
+ *  prospect is told, confidently, that no priced home matched. A wrong
+ *  NEGATIVE is not an honest blank. "$1,200–$1,400" became 1200, silently
+ *  discarding the top of a range the person actually stated.
+ *
+ *  moveMonthEnd below already holds the right line for this file — "No
+ *  clever parser: a wrong month silently promotes a home the prospect
+ *  cannot take, and honest blank beats confident wrong." This is that same
+ *  line, applied to money, where it was missing.
+ *
+ *  ⚠ WHAT THIS STILL CANNOT DO, and must not pretend to: "$800 per
+ *  person" parses to 800 with no way to know it is per bed rather than per
+ *  unit, and a bare "1.4" is accepted as $1.40 because Spine cannot tell a
+ *  cents-scale figure from a shorthand without guessing. Both are meaning
+ *  questions that belong at CAPTURE, not to a reader downstream of it.  */
+function budgetAmount(fact) {
+  if (!fact) return { amount: null, why: "no_recorded_budget" };
+  const cleaned = String(fact.value).replace(/[,\s]/g, "");
+  //  A magnitude suffix is shorthand for a multiplier nobody applied — the
+  //  entire difference between $1,400 and $1.40.
+  if (/\d(?:k|m)\b/i.test(cleaned)) {
+    return { amount: null, why: "recorded_budget_uses_shorthand" };
+  }
+  const all = cleaned.match(/-?\d+(?:\.\d+)?/g) || [];
+  //  Two amounts are a RANGE, which is two facts. Taking either end
+  //  invents a bound the person did not state.
+  if (all.length > 1) return { amount: null, why: "recorded_budget_is_a_range" };
+  if (all.length === 0) return { amount: null, why: "recorded_budget_not_numeric" };
+  const n = Number(all[0]);
+  if (!Number.isFinite(n) || n < 0) return { amount: null, why: "recorded_budget_not_numeric" };
+  return { amount: n, why: null };
+}
+
+//  A recorded move month is free text. Accept only shapes that are
+//  unambiguously a month — YYYY-MM or YYYY-MM-DD. "spring", "ASAP" and
+//  "Jan" are recorded facts Spine cannot compare, which is its own
+//  not_established reason and NOT a satisfied constraint. No clever
+//  parser: a wrong month silently promotes a home the prospect cannot
+//  take, and honest blank beats confident wrong.
+function moveMonthEnd(fact) {
+  if (!fact) return { end: null, why: "no_recorded_move_month" };
+  const m = String(fact.value).trim().match(/^(\d{4})-(\d{2})(?:-(\d{2}))?$/);
+  if (!m) return { end: null, why: "recorded_move_month_not_a_month" };
+  const y = Number(m[1]), mo = Number(m[2]), day = m[3] ? Number(m[3]) : null;
+  if (!(mo >= 1 && mo <= 12)) return { end: null, why: "recorded_move_month_not_a_month" };
+  const lastOfMonth = new Date(Date.UTC(y, mo, 0));
+  /*  ⚠ A NAMED DAY IS A DEADLINE, NOT A MONTH.
+   *  The day used to be matched and then thrown away, so "2026-10-01" and
+   *  "2026-10-15" both became 2026-10-31 — and a home ready on the 25th
+   *  passed a prospect who said the 1st. That is precisely the failure the
+   *  comment above names: silently promoting a home the prospect cannot
+   *  take. The governed capture path (prospect_capture.js) only ever
+   *  writes 'YYYY-MM' or 'flexible', so this branch is reached from the
+   *  free-text writers — where a stated day means a stated day.  */
+  if (day !== null) {
+    if (!(day >= 1 && day <= lastOfMonth.getUTCDate())) {
+      return { end: null, why: "recorded_move_month_not_a_month" };
+    }
+    return { end: `${m[1]}-${m[2]}-${m[3]}`, why: null };
+  }
+  //  The LAST day of the recorded month: a prospect who said "August" can
+  //  take a home ready on the 31st.
+  return { end: lastOfMonth.toISOString().slice(0, 10), why: null };
+}
+
 module.exports = function leasingInventoryModule({ pool }) {
   /*  Which refusals bound which decision. Required HERE, at module-factory
    *  scope, because matchProspectHomes consults it on every call — an
@@ -463,35 +546,6 @@ module.exports = function leasingInventoryModule({ pool }) {
     return { read_state: "OK", facts, missing: PROSPECT_FACT_KEYS.filter((k) => !facts[k]) };
   }
 
-  //  A recorded budget is free text ("1200", "$1,200/mo"). A number we cannot
-  //  read is NOT a budget of zero and not a missing budget — it is a recorded
-  //  fact we could not compare, which is its own not_established reason.
-  function budgetAmount(fact) {
-    if (!fact) return { amount: null, why: "no_recorded_budget" };
-    const m = String(fact.value).replace(/[,\s]/g, "").match(/-?\d+(\.\d+)?/);
-    if (!m) return { amount: null, why: "recorded_budget_not_numeric" };
-    const n = Number(m[0]);
-    if (!Number.isFinite(n) || n < 0) return { amount: null, why: "recorded_budget_not_numeric" };
-    return { amount: n, why: null };
-  }
-
-  //  A recorded move month is free text. Accept only shapes that are
-  //  unambiguously a month — YYYY-MM or YYYY-MM-DD. "spring", "ASAP" and
-  //  "Jan" are recorded facts Spine cannot compare, which is its own
-  //  not_established reason and NOT a satisfied constraint. No clever
-  //  parser: a wrong month silently promotes a home the prospect cannot
-  //  take, and honest blank beats confident wrong.
-  function moveMonthEnd(fact) {
-    if (!fact) return { end: null, why: "no_recorded_move_month" };
-    const m = String(fact.value).trim().match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
-    if (!m) return { end: null, why: "recorded_move_month_not_a_month" };
-    const y = Number(m[1]), mo = Number(m[2]);
-    if (!(mo >= 1 && mo <= 12)) return { end: null, why: "recorded_move_month_not_a_month" };
-    //  The LAST day of the recorded month: a prospect who said "August" can
-    //  take a home ready on the 31st.
-    const last = new Date(Date.UTC(y, mo, 0)).toISOString().slice(0, 10);
-    return { end: last, why: null };
-  }
 
   async function matchProspectHomes({
     property_id, person_id = null,
@@ -699,7 +753,22 @@ module.exports = function leasingInventoryModule({ pool }) {
            *  evidence of fit, and a label that says otherwise is the
            *  confident-wrong §5 forbids. likely_fit now requires at least
            *  one recorded need actually SATISFIED.                       */
-          const own = (counts.violated > 0 || counts.satisfied === 0)
+          /*  ⚠ A RECORDED CONFLICT IS NOT A WEAKER CLAIM — IT IS NO CLAIM.
+           *  `showable` is defined one file over as "worth walking to;
+           *  nothing known contradicts it", and this line handed that exact
+           *  label to homes where something known DID contradict it. One
+           *  label carrying two opposite facts is the same defect the formal
+           *  rent roll had when a physically DOWN unit printed as "Open" —
+           *  made here, one layer up, in the same week.
+           *
+           *  Spine declines to rank these rather than inventing a fourth
+           *  rung. The ladder itself is under review (showable / likely_fit /
+           *  offerable are not simply stronger versions of one fact: a home
+           *  can fit and be unshowable, or be offerable and a poor fit), and
+           *  a home whose conflict is already visible in `basis` needs no
+           *  strength word to be understood. null is the honest blank.     */
+          if (counts.violated > 0) return null;
+          const own = counts.satisfied === 0
             ? decisionStrength.STRENGTH.SHOWABLE
             : (counts.not_established === 0
                 ? decisionStrength.STRENGTH.OFFERABLE
@@ -841,8 +910,16 @@ module.exports = function leasingInventoryModule({ pool }) {
        *  unmatched branch already uses, so both paths ask for a term the
        *  same way and a caller can answer either one identically.      */
       decision_strength_ceiling: r.decision_strength_ceiling || null,
-      showable: r.homes.filter((h) => h.decision_strength).length,
+      /*  ⚠ COUNTED BY NAME, NOT BY TRUTHINESS. `showable` was
+       *  `filter((h) => h.decision_strength)` — every matched home with any
+       *  strength at all, reported to the conversational reader under the
+       *  name of the weakest specific claim. It is now the count of homes
+       *  that ARE showable, with the other states counted beside it, so the
+       *  four numbers describe the same population the options list does.  */
+      showable: r.homes.filter((h) => h.decision_strength === "showable").length,
+      likely_fit: r.homes.filter((h) => h.decision_strength === "likely_fit").length,
       offerable: r.homes.filter((h) => h.decision_strength === "offerable").length,
+      with_recorded_conflict: r.homes.filter((h) => h.decision_strength == null).length,
       needs_from_caller: r.needs_for_offer || null,
       /*  ── THE ANSWER, NOT THE COUNT OF ANSWERS ──────────────────────
        *  This projection reduced a ranked, reasoned home list to
@@ -896,3 +973,5 @@ module.exports = function leasingInventoryModule({ pool }) {
 };
 
 module.exports.compareMatchedHomes = compareMatchedHomes;
+module.exports.budgetAmount = budgetAmount;
+module.exports.moveMonthEnd = moveMonthEnd;
