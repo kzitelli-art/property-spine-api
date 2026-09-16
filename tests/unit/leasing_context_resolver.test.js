@@ -348,6 +348,47 @@ console.log("\n5 · property scoping — a selection can never reach another pro
         sel("is the unit on the 3rd floor available").needsInventory === true, sel("is the unit on the 3rd floor available"));
     }
 
+    // ══════════════════════════════════════════════════════════════
+    console.log("\n12 · the kill switch, and the log line that must never be fatal");
+    {
+      //  Deploys here are manual, and this changes what a real prospect is
+      //  told. The switch must revert every turn to the pre-resolver
+      //  behaviour with no build and no code change.
+      process.env.LEASING_CONTEXT_RESOLVER = "off";
+      const off = resolveLeasingContext({ message: "Can I bring my dog?", propertyId: THIS_PROPERTY });
+      ok("LEASING_CONTEXT_RESOLVER=off stops narrowing",
+        off.selective === false && off.basis === "disabled_by_env", off);
+      ok("and restores both governed reads",
+        off.needsPricing === true && off.needsInventory === true, off);
+      const offCtx = await realResolveContext()(fakeClient(), { property_id: THIS_PROPERTY, selection: off });
+      ok("a disabled turn returns the full curated set",
+        offCtx.facts.length === CORPUS[THIS_PROPERTY].length, offCtx.facts.map(f => f.fact_key));
+
+      for (const v of ["OFF", " off ", "Off"]) {
+        process.env.LEASING_CONTEXT_RESOLVER = v;
+        ok(`the switch is case and whitespace tolerant: ${JSON.stringify(v)}`,
+          resolveLeasingContext({ message: "Can I bring my dog?", propertyId: THIS_PROPERTY }).selective === false);
+      }
+      for (const v of ["on", "", "true", "1"]) {
+        process.env.LEASING_CONTEXT_RESOLVER = v;
+        ok(`only "off" disables it, not ${JSON.stringify(v)}`,
+          resolveLeasingContext({ message: "Can I bring my dog?", propertyId: THIS_PROPERTY }).selective === true);
+      }
+      delete process.env.LEASING_CONTEXT_RESOLVER;
+      ok("unset means narrowing is on",
+        resolveLeasingContext({ message: "Can I bring my dog?", propertyId: THIS_PROPERTY }).selective === true);
+
+      //  A malformed selection must be logged around, never thrown on. The
+      //  first version of the log line read selection.intents directly and
+      //  took the whole turn down on a selection that lacked it.
+      const malformed = { selective: true, factKeys: ["pet_policy"], categories: [] };
+      let threw = false;
+      try {
+        await realResolveContext()(fakeClient(), { property_id: THIS_PROPERTY, selection: malformed });
+      } catch (e) { threw = true; }
+      ok("a selection missing fields does not take the turn down", threw === false);
+    }
+
     console.log(`\n  ${passed} passed, ${failed} failed\n`);
     process.exit(failed ? 1 : 0);
   })();

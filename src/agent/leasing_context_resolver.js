@@ -202,6 +202,17 @@ function attributeNames(personAttributes) {
  *            needsPricing:boolean, needsInventory:boolean,
  *            selective:boolean, basis:string, property_id:(string|null)}}
  */
+//  ── ONE SWITCH THAT DOES NOT NEED A DEPLOY ──────────────────────────
+//  This changes what a real prospect is told, and deploys here are manual.
+//  If narrowing ever drops a fact a turn needed, the fix must not wait on a
+//  build: set LEASING_CONTEXT_RESOLVER=off in the environment and every turn
+//  reverts to the full-context behaviour that predates this module, with no
+//  code change and nothing else altered. Read per call rather than cached at
+//  module load, so flipping it takes effect on the next turn.
+function narrowingDisabled() {
+  return String(process.env.LEASING_CONTEXT_RESOLVER || "").trim().toLowerCase() === "off";
+}
+
 function resolveLeasingContext({ message, conversation, lead, personAttributes, propertyId } = {}) {
   //  Property scope is carried through verbatim so a caller cannot use a
   //  selection built for one property against another. This module never
@@ -215,6 +226,11 @@ function resolveLeasingContext({ message, conversation, lead, personAttributes, 
     needsPricing: true, needsInventory: true,
     selective: false, basis, property_id,
   });
+
+  //  The kill switch returns the SAME shape as any unclassified turn, so no
+  //  caller needs to know it exists — `selective:false` already means "load
+  //  everything", and `basis` records why.
+  if (narrowingDisabled()) return empty("disabled_by_env");
 
   if (!text.trim()) return empty("no_message");
 
@@ -309,4 +325,4 @@ function selects(selection, fact) {
   return selection.factKeys.includes(key) || selection.categories.includes(category);
 }
 
-module.exports = { resolveLeasingContext, selects, INTENTS, PRICING_RX, INVENTORY_RX };
+module.exports = { resolveLeasingContext, selects, narrowingDisabled, INTENTS, PRICING_RX, INVENTORY_RX };

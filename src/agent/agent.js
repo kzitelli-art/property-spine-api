@@ -208,6 +208,27 @@ module.exports = function agentModule(deps) {
     //  boundary (draft_source_identity), used by both the narrowing here and
     //  the staleness comparison that depends on it.
     const facts = curated.filter(f => isEconomic(f) || leasingContextResolver.selects(selection, f));
+    //  ── ONE LINE PER TURN, SO THE FIRST WEEK IS DEBUGGABLE ───────────
+    //  If narrowing ever drops the fact a turn needed, the symptom is an
+    //  agent that says it does not know something the property has on file
+    //  — which looks exactly like a missing fact, and would otherwise be
+    //  indistinguishable from one in the logs. This records the decision
+    //  and the counts, never the fact TEXT (prospect-facing content does
+    //  not belong in a log line).
+    //  Defensive by construction: a log line must never be able to take a
+    //  conversation down. The first version read selection.intents directly
+    //  and threw on a selection that did not carry the field — caught by a
+    //  test passing a hand-built one, which is exactly the shape a future
+    //  caller might pass.
+    if (selection) {
+      try {
+        const intents = Array.isArray(selection.intents) && selection.intents.length
+          ? selection.intents.join("|") : "-";
+        console.log(`[agent/context] basis=${selection.basis || "?"} intents=${intents} `
+          + `facts=${facts.length}/${curated.length} `
+          + `pricing=${selection.needsPricing !== false} inventory=${selection.needsInventory !== false}`);
+      } catch (_) { /* never fatal */ }
+    }
 
     // ── GOVERNED CHARGES ARE FACTS TOO ────────────────────────────────
     // A published governed charge is read here ALONGSIDE the curated facts,
