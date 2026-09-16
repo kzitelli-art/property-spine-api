@@ -291,6 +291,63 @@ console.log("\n5 · property scoping — a selection can never reach another pro
         wide.facts.length === CORPUS[THIS_PROPERTY].length, wide.facts.map(f => f.fact_key));
     }
 
+    // ══════════════════════════════════════════════════════════════
+    console.log("\n11 · regressions found by running real prospect phrasings");
+    {
+      //  Every line below was a MISS on the first version of the table,
+      //  found by putting two dozen things a prospect actually texts through
+      //  the resolver rather than through the examples in the spec.
+      const sel = m => resolveLeasingContext({ message: m, propertyId: THIS_PROPERTY });
+
+      //  THE ONE THAT WOULD HAVE SHIPPED SILENTLY. `\b` after `\d` needs a
+      //  non-word character next, so "under $2,500" matched on the COMMA and
+      //  "under 2000" did not. Example 3 passed by luck of its punctuation.
+      for (const m of ["under 2000", "under $2500", "max 2000", "no more than 1800", "im looking for something under 2000"]) {
+        ok(`a stated budget requires governed pricing: "${m}"`, sel(m).needsPricing === true, sel(m));
+      }
+      ok("the punctuated form still works", sel("I need a 2BR in August under $2,500.").needsPricing === true);
+
+      ok('"can i see it saturday" reaches the tour shelf',
+        sel("can i see it saturday").factKeys.includes("tour_window"), sel("can i see it saturday").factKeys);
+      ok('"wheres the office" reaches the contact shelf',
+        sel("wheres the office").factKeys.includes("office_contact"), sel("wheres the office").factKeys);
+      ok('"do you allow subletting" is recognised',
+        sel("do you allow subletting").intents.includes("lease_term"), sel("do you allow subletting").intents);
+      ok('"how long is the lease" is recognised',
+        sel("how long is the lease").intents.includes("lease_term"), sel("how long is the lease").intents);
+
+      //  AND THE DEFECT THAT WIDENING INTRODUCED. lease_term names no shelf,
+      //  so matching it produced selective:true with an empty factKeys list —
+      //  a narrow read to NOTHING, which tells the model nothing on file
+      //  answers the question while the property may hold plenty.
+      for (const m of ["how long is the lease", "do you allow subletting"]) {
+        const r = sel(m);
+        ok(`an intent naming no shelf does not narrow to nothing: "${m}"`,
+          r.selective === false && r.basis === "intent_without_shelf", { selective: r.selective, basis: r.basis, factKeys: r.factKeys });
+      }
+      ok("no selective result is ever empty-handed", [
+        "can i see it saturday", "do u take dogs", "is there a gym", "how do I apply",
+        "what utilities do i pay", "wheres the office", "how long is the lease",
+        "do you allow subletting", "hi", "is it furnished",
+      ].every(m => { const r = sel(m); return !r.selective || r.factKeys.length > 0 || r.categories.length > 0; }));
+
+      //  Renters insurance is not what "is wifi included" asked about.
+      ok("a wifi question does not select renters insurance",
+        !sel("is wifi included").factKeys.includes("renters_insurance"), sel("is wifi included").factKeys);
+      ok("an insurance question still does",
+        sel("do i need renters insurance").factKeys.includes("renters_insurance"), sel("do i need renters insurance").factKeys);
+
+      //  `floor` alone is not an availability question.
+      //  Asserted on the pattern, not on the flag: "what floor is it on"
+      //  falls through to `unclassified`, which deliberately sets BOTH flags
+      //  true (load everything). The claim here is narrower and is the real
+      //  one — a bare "floor" no longer reads as an availability search.
+      ok('a bare "floor" is not an availability pattern',
+        resolver.INVENTORY_RX.test("what floor is it on") === false);
+      ok('"unit on the 3rd floor" still is',
+        sel("is the unit on the 3rd floor available").needsInventory === true, sel("is the unit on the 3rd floor available"));
+    }
+
     console.log(`\n  ${passed} passed, ${failed} failed\n`);
     process.exit(failed ? 1 : 0);
   })();

@@ -92,7 +92,10 @@ const INTENTS = Object.freeze([
     intent: "tours",
     factKeys: ["tour_window"],
     categories: ["tours"],
-    rx: /\b(tours?|touring|showings?|open house|walk[- ]?throughs?|come (?:by|see|look)|see (?:the|it|a) (?:place|unit|apartment|home|space)|schedule (?:a|an)|book (?:a|an)|visit)\b/i,
+    //  "can i see it saturday" was unclassified until the object after
+    //  `see` was made optional and bare day names were admitted. A day name
+    //  on its own is nearly always someone proposing a time.
+    rx: /\b(tours?|touring|showings?|open house|walk[- ]?throughs?|come (?:by|see|look)|stop by|see (?:it|this|the place|the unit|the apartment|the home)|available to (?:show|see)|schedule (?:a|an)|book (?:a|an)|visit)\b|\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b/i,
   },
   {
     intent: "fees",
@@ -110,23 +113,32 @@ const INTENTS = Object.freeze([
     intent: "contact_and_office",
     factKeys: ["office_contact", "communication_instructions"],
     categories: ["routing"],
-    rx: /\b(office\s+hours?|phone\s+number|call\s+(?:the\s+)?office|how do i (?:reach|contact)|who (?:do i|should i) (?:talk|speak)|email address)\b/i,
+    rx: /\b(office\s+hours?|where(?:'s|s| is)?\s+(?:the\s+)?office|office\s+(?:location|address)|phone\s+number|call\s+(?:the\s+)?office|how do i (?:reach|contact)|who (?:do i|should i) (?:talk|speak)|email address)\b/i,
   },
   {
     intent: "utilities",
-    //  `utilities` and `renters_insurance` are legacy pricing-category keys —
-    //  economic, therefore never narrowed away by selection. Naming them here
-    //  is still correct: it records that the turn is about them, and it keeps
-    //  the intent list honest if either is ever recategorised.
-    factKeys: ["utilities", "renters_insurance"],
+    //  Legacy pricing-category keys — economic, therefore never narrowed away
+    //  by selection anyway. Naming them is still right: it records what the
+    //  turn is about, and keeps the list honest if either is recategorised.
+    //  Renters insurance is its own intent: bundling it here put it on the
+    //  selected list for "is wifi included", which is simply not what was asked.
+    factKeys: ["utilities"],
     categories: [],
-    rx: /\b(utilit(?:y|ies)|electric(?:ity)?|gas bill|water bill|trash|sewer|internet|wi-?fi|cable|renters?\s+insurance)\b/i,
+    rx: /\b(utilit(?:y|ies)|electric(?:ity)?|gas bill|water bill|trash|sewer|internet|wi-?fi|cable)\b/i,
+  },
+  {
+    intent: "renters_insurance",
+    factKeys: ["renters_insurance"],
+    categories: [],
+    rx: /\brenters?\s+insurance\b|\bproof of insurance\b/i,
   },
   {
     intent: "lease_term",
     factKeys: [],
     categories: [],
-    rx: /\b(lease\s+(?:term|length|end|start)|\d{1,2}[- ]month|month[- ]to[- ]month|short[- ]term|sublease|sublet|renew(?:al|ing)?|break the lease|early termination)\b/i,
+    //  `sublet` inside \b…\b did not match "subletting"; "how long is the
+    //  lease" put the noun last and matched nothing at all.
+    rx: /\b(lease\s+(?:term|length|end|start)|how long\s+(?:is|are)\s+(?:the\s+)?leases?|\d{1,2}[- ]month|month[- ]to[- ]month|short[- ]term|sublease\w*|sublet\w*|renew\w*|break the lease|early termination)\b/i,
   },
   {
     intent: "move_in_timing",
@@ -141,11 +153,26 @@ const INTENTS = Object.freeze([
 //  merely smells economic gets the governed pricing read, because the cost of
 //  reading it and not needing it is a query, and the cost of needing it and
 //  not reading it is the model improvising a number.
-const PRICING_RX =
-  /\b(rent|rents|pricing|prices?|priced|cost|costs?|how much|monthly|per month|rate|rates|budget|afford|cheap(?:er|est)?|expensive|under\s*\$?\s*\d|\$\s*\d|\d{3,4}\s*(?:a|per)\s*month|specials?|concessions?|discounts?)\b/i;
+//  ── A TRAILING \b AFTER \d IS A TRAP, AND IT BIT THIS FILE ──────────
+//  The first version put the money patterns inside one \b(…)\b wrapper.
+//  `\b` after `\d` requires a NON-word character next, so "under $2,500"
+//  matched (comma) and "under 2000" did not (another digit). The Example 3
+//  test passed on the comma and the plain-number case would have shipped
+//  silently: a prospect stating a budget would have had governed pricing
+//  skipped and been told the team would confirm. Amounts are now their own
+//  alternatives with no trailing boundary.
+const PRICING_RX = new RegExp([
+  String.raw`\b(rent|rents|pricing|prices?|priced|cost|costs?|how much|monthly|per month|rate|rates|budget|afford|cheap(?:er|est)?|expensive|specials?|concessions?|discounts?)\b`,
+  String.raw`\$\s*\d`,
+  String.raw`\b(?:under|below|max(?:imum)?|up to|no more than|around|about)\s*\$?\s*\d`,
+  String.raw`\d{3,5}\s*(?:\/|a |per )?\s*(?:mo\b|month)`,
+].join("|"), "i");
 
+//  `floor` alone matched "what floor is it on", which is not an availability
+//  question and collides with the floor_plans shelf. Narrowed to an actual
+//  floor reference.
 const INVENTORY_RX =
-  /\b(availab(?:le|ility)|vacan(?:t|cy|cies)|open\s+(?:units?|apartments?)|what\s+do\s+you\s+have|any(?:thing)?\s+(?:available|open|left)|studios?|\d\s*[- ]?\s*(?:br|bed|beds|bedrooms?)|one[- ]bed(?:room)?|two[- ]bed(?:room)?|three[- ]bed(?:room)?|floor\b|unit\s+\d|apartment\s+\d|move[- ]?in\s+(?:date|by|in))\b/i;
+  /\b(availab(?:le|ility)|vacan(?:t|cy|cies)|open\s+(?:units?|apartments?)|what\s+do\s+you\s+have|any(?:thing)?\s+(?:available|open|left)|studios?|\d\s*[- ]?\s*(?:br|bed|beds|bedrooms?)|one[- ]bed(?:room)?|two[- ]bed(?:room)?|three[- ]bed(?:room)?|\d(?:st|nd|rd|th)\s+floor|floor\s+\d|unit\s+\d|apartment\s+\d|move[- ]?in\s+(?:date|by|in))\b/i;
 
 /** Fact keys recorded on a lead/person that imply live inventory or pricing. */
 const ATTRIBUTE_SIGNALS = Object.freeze({
@@ -220,6 +247,25 @@ function resolveLeasingContext({ message, conversation, lead, personAttributes, 
 
   //  NOTHING MATCHED — not a narrow read, a full one. See the header.
   if (!intents.length && !needsPricing && !needsInventory) return empty("unclassified");
+
+  //  ── AN INTENT THAT NAMES NO SHELF IS NOT A NARROW READ ────────────
+  //  `lease_term` recognises "how long is the lease" but no agent_facts
+  //  shelf holds that answer — it lives in the lease and the operating
+  //  rules. Left as-is this returned selective:true with an EMPTY factKeys
+  //  list, which handed the model zero curated facts and told it nothing on
+  //  file answers the question. That is a confident narrow read to nothing,
+  //  the exact failure the header of this file warns about, and it was
+  //  introduced by widening the lease-term pattern. Selectivity is decided
+  //  by whether any shelf was actually selected, never by whether a pattern
+  //  fired.
+  if (intents.length && !factKeys.size && !categories.size) {
+    return Object.freeze({
+      intents, factKeys: [], categories: [],
+      needsPricing, needsInventory,
+      selective: false, basis: "intent_without_shelf",
+      property_id,
+    });
+  }
 
   //  Matched only on pricing/inventory with no curated topic (Example 3,
   //  "I need a 2BR in August under $2,500"): the answer lives in governed
