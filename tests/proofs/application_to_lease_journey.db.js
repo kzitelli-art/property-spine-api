@@ -343,7 +343,19 @@ function tenantV3Capture({ email, phone, desiredMoveIn }) {
     const denyRes = await fetch(`${API}/applications/${app2}/deny`, {
       method: "POST",
       headers: { "content-type": "application/json",
-                 "x-operator-key": process.env.OPERATOR_KEY || "proof-operator-key" },
+                 /*  ⚠ THE KEY THE OWNED SERVER WAS ACTUALLY BOOTED WITH.
+                  *  This defaulted to an invented string and passed locally
+                  *  only because the shell running it happened to export a
+                  *  matching OPERATOR_KEY. In CI it sent a key the server
+                  *  had never heard of, got 401, and five assertions failed
+                  *  off that one refusal — the application never went
+                  *  terminal, so the home stayed held and its work stayed
+                  *  owed. tests/e2e/boot.sh sets PROOF_OPERATOR_KEY="e2e-key"
+                  *  for the server these proofs talk to, so that is the
+                  *  default here. Second time this session a proof leaned on
+                  *  its operator's environment instead of on the thing it is
+                  *  testing.                                               */
+                 "x-operator-key": process.env.OPERATOR_KEY || "e2e-key" },
       body: JSON.stringify({ reason: "declined", note: "proof: declined on screening",
         decided_by_user_id: operator.id }) });
     ok("the decision is made through the real operator door",
