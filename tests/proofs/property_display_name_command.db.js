@@ -10,6 +10,7 @@ const { Pool } = require("pg");
 const express = require("express");
 const receipt = require("../_run_receipt");
 const superAdminModule = require("../../src/identity/super_admin");
+const registryModule = require("../../src/identity/registry");
 const { issueStaffSession } = require("../../src/identity/staff_session_service");
 const {
   setPropertyDisplayName,
@@ -17,7 +18,7 @@ const {
 } = require("../../src/shared/property_display_name_command");
 
 const HARNESS = "property_display_name_command.db.js";
-const EXPECTED = 29;
+const EXPECTED = 33;
 const CONN = receipt.harnessConnectionString();
 let passed = 0;
 let failed = 0;
@@ -53,6 +54,11 @@ async function refuses(run, code) {
       `insert into properties(name,display_name,organization_id,canonical_key)
        values($1,$2,$3,$4) returning id,name,display_name,canonical_key`,
       [`Internal ${tag}`, "Old Public Label", org.id, `DISPLAY-${tag}`])).rows[0];
+    const legacyProperty = (await pool.query(
+      `insert into properties(name,display_name,address,organization_id,canonical_key_absent_reason)
+       values($1,$2,$3,$4,'predates_canonical_identity_requirement')
+       returning id,name,display_name,canonical_key,canonical_key_absent_reason`,
+      [`Legacy Internal ${tag}`, "Legacy Public Label", `${tag} Test Street`, org.id])).rows[0];
     propertyId = property.id;
     for (const userId of [admin.id, member.id]) {
       await pool.query(
@@ -141,6 +147,7 @@ async function refuses(run, code) {
     const app = express();
     app.use(express.json());
     app.use("/", superAdminModule({ pool }));
+    app.use("/", registryModule({ pool }));
     const server = await new Promise((resolve) => {
       const started = app.listen(0, "127.0.0.1", () => resolve(started));
     });
@@ -174,6 +181,30 @@ async function refuses(run, code) {
         routeHistory.changes.length === 3 && routeHistory.changes[0].before === "Concurrent Public Label"
         && routeHistory.changes[0].after === "Route Public Label"
         && routeHistory.changes[0].actor.user_id === admin.id);
+
+      const canonicalKey = `LEGACY-${tag}`;
+      const pinned = await fetch(`${base}/registry/properties/${legacyProperty.id}/canonical-key`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ canonical_key: canonicalKey }),
+      });
+      const pinnedBody = await pinned.json();
+      ok("the governed canonical-key door accepts a legacy property with an absence reason",
+        pinned.status === 200 && pinnedBody.property?.canonical_key === canonicalKey);
+      ok("pinning identity clears the now-obsolete absence reason",
+        pinnedBody.property?.canonical_key_absent_reason === null);
+      const pinnedStored = (await pool.query(
+        "select name,display_name,canonical_key,canonical_key_absent_reason from properties where id=$1",
+        [legacyProperty.id])).rows[0];
+      ok("pinning identity preserves both internal and display names",
+        pinnedStored.name === legacyProperty.name && pinnedStored.display_name === legacyProperty.display_name
+        && pinnedStored.canonical_key === canonicalKey && pinnedStored.canonical_key_absent_reason === null);
+      const pinnedAgain = await fetch(`${base}/registry/properties/${legacyProperty.id}/canonical-key`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ canonical_key: canonicalKey }),
+      });
+      ok("repeating the same canonical pin remains idempotent", pinnedAgain.status === 200);
     } finally {
       await new Promise((resolve, reject) => server.close((e) => e ? reject(e) : resolve()));
     }
