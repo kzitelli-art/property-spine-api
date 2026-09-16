@@ -226,10 +226,11 @@ git worktree add --detach "$PARENT_WORKTREE" "$ONBOARDING_PARENT" >"$RUN_DIR/onb
 }
 ln -s "$ROOT/node_modules" "$PARENT_WORKTREE/node_modules" || exit 1
 # The parent onboarding witnesses intentionally run against the exact physical
-# 197 claim index. The normal chain is already at 198 here, so reconstruct only
-# that historical index/ledger state for the parent run. Restore 198 through
-# the numbered migration runner immediately afterwards; do not hide successor
-# DDL in this compatibility witness.
+# 197 claim index. The normal chain is already beyond 198 here, so reconstruct
+# that historical index/ledger state for the parent run. Temporarily remove the
+# later ledger entries as well: the canonical runner refuses a ledger whose
+# ceiling is 199 while 198 is missing. Restore the whole numbered suffix through
+# the migration runner immediately afterwards; do not hand-author successor DDL.
 step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
   do \$\$ begin
     if not exists (select 1 from schema_migrations where version='198' and name in ('proposed_source_claim_identity','198_proposed_source_claim_identity.sql')) then
@@ -239,8 +240,11 @@ step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR
                    and indexdef = 'CREATE UNIQUE INDEX uq_proposed_natural ON public.proposed_records USING btree (activation_id, target_type, natural_key) WHERE ((natural_key IS NOT NULL) AND (import_source_row_id IS NULL))') then
       raise exception 'expected exact 198 natural-key index before parent witness';
     end if;
+    if not exists (select 1 from schema_migrations where version='199' and name='property_display_name_command') then
+      raise exception 'expected numbered 199 ledger row before parent witness';
+    end if;
   end \$\$;
-  delete from schema_migrations where version='198';
+  delete from schema_migrations where version in ('198','199');
   drop index uq_proposed_natural;
   create unique index uq_proposed_natural
     on proposed_records (activation_id, target_type, natural_key)
@@ -249,11 +253,14 @@ step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR
 step "parent onboarding source defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_source.db.js
 step "parent onboarding lifecycle defect" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_lifecycle.db.js
 step "parent onboarding snapshot defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_snapshot.db.js
-step "restore numbered 198 claim index" env DATABASE_URL="$E2E_DATABASE_URL" MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=197 node migrations/migrate.js --apply
+step "restore numbered 198 and successor ledger" env DATABASE_URL="$E2E_DATABASE_URL" MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=197 node migrations/migrate.js --apply
 step "verify restored 198 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
   do \$\$ begin
     if not exists (select 1 from schema_migrations where version='198' and name in ('proposed_source_claim_identity','198_proposed_source_claim_identity.sql')) then
       raise exception 'numbered 198 ledger row was not restored';
+    end if;
+    if not exists (select 1 from schema_migrations where version='199' and name='property_display_name_command') then
+      raise exception 'numbered 199 ledger row was not restored';
     end if;
     if (select pg_get_indexdef(i.indexrelid) from pg_index i
        where i.indexrelid=to_regclass('public.uq_proposed_natural')) is distinct from
