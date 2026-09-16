@@ -47,7 +47,8 @@
 //    tenant_submitted_at   the applicant signed (the only signal used)
 //    superseded_at is null a superseded version's signature is history; the
 //                          current version carries the live commitment
-//    status <> 'void'      a voided package holds nothing
+//    not voided            a voided package holds nothing — checked the way
+//                          the product checks it everywhere else
 //    la.status pre-tenancy see RELEASED_STATUSES below
 //
 //  ── A HOLD IS A PRE-TENANCY COMMITMENT, AND IT ENDS WHEN TENANCY BEGINS ──
@@ -66,6 +67,17 @@
 //  That is exactly why the predicate has to be right on its own: a guard
 //  that is only correct because something upstream normally shadows it is
 //  not a guard.
+/*  ⚠ 'voided', NOT 'void'. The first version of this read tested
+ *  `coalesce(lp.status,'') <> 'void'` — a string the packet lifecycle never
+ *  produces. Migration 034 declares `'voided'`, and the packet service checks
+ *  `pk.voided_at || pk.status === 'voided'` in six places. So the guard
+ *  matched nothing: a package that was signed and then VOIDED went on holding
+ *  its bed off the market, and the comment above it said the opposite.
+ *
+ *  A predicate that names a value its own schema cannot hold is not a weaker
+ *  guard, it is an absent one — and it reads as present, which is worse. Both
+ *  conditions are checked here for the same reason the packet service checks
+ *  both.                                                                    */
 const RELEASED_STATUSES = [
   //  Stopped — the applicant is not coming.
   "declined", "withdrawn", "expired",
@@ -81,7 +93,7 @@ const HOLD_SQL = `
     join lease_applications la on la.id = lp.application_id
    where lp.tenant_submitted_at is not null
      and lp.superseded_at is null
-     and coalesce(lp.status,'') <> 'void'
+     and lp.voided_at is null and coalesce(lp.status,'') <> 'voided'
      and la.status <> all($RELEASED$)
      and la.space_id is not null`;
 

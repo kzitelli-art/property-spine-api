@@ -41,6 +41,12 @@ const lifecycle = require(path.join(root, "src/applications/application_lifecycl
 const { materializeRentableSpaces } = require(path.join(root, "src/tenancy/inventory_materialization.js"));
 
 const API = process.env.E2E_API_BASE || "http://127.0.0.1:3100";
+const post = async (p, body) => {
+  const r = await fetch(`${API}${p}`, { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
+  let j = null; try { j = await r.json(); } catch (_) { j = null; }
+  return { status: r.status, body: j };
+};
 
 let pass = 0, fail = 0; const failures = [];
 const ok = (label, cond, detail = "") => {
@@ -353,6 +359,210 @@ const ok = (label, cond, detail = "") => {
     ok("…and the bed can be aimed at again",
       (await applicationTarget.resolveApplicationTarget(pool, {
         property_id: property.id, space_id: roomA.id, intended_move_in: "2026-10-01" })).ok === true);
+
+    /*  ══ 6 · HOSTILE · A VOIDED PACKAGE HOLDS NOTHING ════════════════
+     *  The first version of this read tested `status <> 'void'` — a value
+     *  the packet lifecycle never produces. Migration 034 declares
+     *  `'voided'`, and the packet service checks `voided_at || status =
+     *  'voided'` in six places. So the guard matched nothing and a signed,
+     *  later-voided package went on holding its bed off the market.
+     *  Nothing in the earlier proof looked, because nothing in it ever
+     *  voided a packet.                                                   */
+    const space10 = await one(`insert into spaces (unit_id, space_label, position_kind, use_type)
+      values($1,'RoomV','bed','residential') returning id`, [unit.id]);
+    const srcV = await one(`insert into import_source_rows(import_batch_id,row_index,raw,parse_note,
+      produced_unit_id,produced_space_id) values($1,99,$2,'fixture: confirmed vacancy',$3,$4) returning id`,
+      [batch.id, JSON.stringify({ unit_number: "501", space_label: "RoomV", is_vacant: true }),
+       unit.id, space10.id]);
+    await pool.query(`insert into proposed_records(activation_id,property_id,module,target_type,natural_key,
+      normalized_json,status,status_reason,import_source_row_id,confirmed_at)
+      values($1,$2,'leasing','lease',$3,$4,'promoted','Fixture: confirmed vacant rentable position.',$5,now())`,
+      [act.id, property.id, "501|RoomV",
+       JSON.stringify({ section: "current", unit_number: "501", space_label: "RoomV", is_vacant: true }),
+       srcV.id]);
+    /*  ⚠ THE TALLY IS NOT REWRITTEN. An earlier draft updated
+     *  opening_tenancy_positions.positions_established to match the extra
+     *  fixture beds and the database refused it — "what was established may
+     *  not be rewritten". That guard is right and is obeyed: the per-space
+     *  occupancy basis comes from the promoted proposed_record above, which
+     *  is what the availability read actually consults. The property tally
+     *  stays as first established.                                        */
+
+    const appV = await one(`insert into lease_applications
+      (property_id, person_id, unit_id, space_id, applicant_name, status, submitted_at)
+      values($1,$2,$3,$4,$5,'lease_ready', now()) returning *`,
+      [property.id, applicant, unit.id, space10.id, `${tag} voided-packet`]);
+    const pkV = await one(`insert into lease_packets (application_id, property_id, status, version)
+      values($1,$2,'draft',1) returning id`, [appV.id, property.id]);
+    await pool.query(`insert into lease_packet_signers
+      (lease_packet_id, signer_role, display_name) values($1,'tenant',$2)`, [pkV.id, `${tag} voided-packet`]);
+    await pool.query(`update lease_packets set status='sent', tenant_submitted_at=now() where id=$1`, [pkV.id]);
+
+    ok("a signed package holds its home",
+      !!(await applicationHold.holdForSpace(pool, space10.id)));
+    ok("…and the home is not offerable while it is held",
+      (await applicationTarget.resolveApplicationTarget(pool, {
+        property_id: property.id, space_id: space10.id, intended_move_in: "2026-10-01" }))
+        .refusal_code === "application_target_held_for_signed_applicant");
+
+    //  VOIDED through the columns the product itself writes and reads.
+    await pool.query(
+      `update lease_packets set status='voided', voided_at=now(), void_reason=$2 where id=$1`,
+      [pkV.id, "proof: voided after signature"]);
+
+    ok("voiding the package releases the home immediately",
+      (await applicationHold.holdForSpace(pool, space10.id)) === null);
+    const rowV = (await availabilityRead(pool, { property_id: property.id }))
+      .rows.find((r) => String(r.space_id) === String(space10.id));
+    ok("…and every availability reader agrees it is offerable again",
+      rowV.marketing_state === "marketable_now" && rowV.application_hold === null,
+      JSON.stringify({ state: rowV.marketing_state, hold: rowV.application_hold }));
+    ok("…so a new application may be aimed at it",
+      (await applicationTarget.resolveApplicationTarget(pool, {
+        property_id: property.id, space_id: space10.id, intended_move_in: "2026-10-01" })).ok === true);
+    /*  ⚠ AND THE OLD SPELLING IS GONE FROM THE CODE.
+     *  A predicate naming a value the schema cannot hold reads as a guard
+     *  and is not one, so the literal is asserted absent rather than trusted
+     *  to have been fixed.
+     *
+     *  COMMENTS ARE STRIPPED FIRST. The first version of this assertion went
+     *  red against the fixed file, because the comment ABOVE the fixed
+     *  predicate quotes the old spelling while explaining it. A mention is
+     *  not a guard, and a scan that cannot tell prose from code raises a
+     *  false alarm exactly as easily as it misses a real one.             */
+    const holdSrcCode = require("node:fs")
+      .readFileSync(path.join(root, "src/applications/application_inventory_hold.js"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    ok("no executable line still tests a packet status the schema cannot hold",
+      !/<>\s*'void'/.test(holdSrcCode));
+
+    /*  ══ 7 · HOSTILE · TWO ISSUED PACKAGES, ONE BED, FIRST SIGNATURE WINS ══
+     *
+     *  THE CASE SECTION 4 COULD NOT SEE. It proved "A signs, then B cannot
+     *  NEWLY target the bed" — which was true, and was not the dangerous
+     *  window. Two packages may legitimately be ISSUED before either
+     *  applicant signs; the hold is derived from the signature, so until
+     *  the signature path itself consults it, both applicants could sign.
+     *
+     *  resolveSignerAccess locks `for update of pk, s` — each applicant's
+     *  OWN packet and OWN signer row — so those locks never contend. The
+     *  fix serializes on the `spaces` row, the one object both are actually
+     *  competing for.
+     *
+     *  Both signatures go through the REAL public route, concurrently,
+     *  against the real server. Nothing here stamps tenant_submitted_at.   */
+    const space11 = await one(`insert into spaces (unit_id, space_label, position_kind, use_type)
+      values($1,'RoomR','bed','residential') returning id`, [unit.id]);
+    const rival2 = (await one("insert into persons(name) values($1) returning id",
+      [`${tag}-rival`])).id;
+    /*  A REACHABLE, CONSENTED SECOND APPLICANT. Without a number this racer
+     *  never reaches the start line: recordCompletionOwed correctly observes
+     *  `applicant_contact` outstanding, completion never closes, and no
+     *  package is owed — the completion boundary doing its job. The race
+     *  needs two applicants who both genuinely got a link.                */
+    await pool.query(`update persons set primary_phone_e164=$2 where id=$1`,
+      [rival2, "+12025550299"]);
+    await pool.query(`insert into leasing_leads(property_id,person_id) values($1,$2)`,
+      [property.id, rival2]);
+    await pool.query(`insert into contact_preferences (person_id, channel, consent_state)
+      values ($1,'text','opted_in')`, [rival2]);
+
+    /*  TWO applications on ONE bed, each with its own issued, signable
+     *  package — built through the REAL handoff, not by hand. A hand-built
+     *  packet cannot even be issued: issueLeasePacketLink refuses without a
+     *  current proposed-terms confirmation, which is the product declining
+     *  to mint bearer access to terms nobody authored. So each racer gets a
+     *  governed offer, an acknowledged application and a package the handoff
+     *  prepared and dispatched — and the signing token is read out of the
+     *  message the product actually sent.                                  */
+    const raceApps = [];
+    for (const [who, person] of [["racer-A", applicant], ["racer-B", rival2]]) {
+      const cR = await pool.connect();
+      let offerR;
+      try {
+        await cR.query("begin");
+        offerR = await prepareApplicationOffer(cR, {
+          actor: { id: operator.id, property_id: property.id },
+          person_id: person, space_id: space11.id,
+          lease_start_date: "2027-03-01", lease_end_date: "2028-02-29",
+          rent: 1400, security_deposit: 1400, fees: [], concessions: { status: "none" },
+          idempotency_key: `${tag}-${who}`,
+        });
+        await cR.query("commit");
+      } catch (e) { await cR.query("rollback").catch(() => {}); throw e; }
+      finally { cR.release(); }
+
+      const a = await one(`insert into lease_applications
+        (property_id, person_id, unit_id, space_id, applicant_name, status, submitted_at,
+         application_offer_id, application_terms_acknowledged_at, application_terms_hash)
+        values($1,$2,$3,$4,$5,'submitted', now(), $6, now(), $7) returning *`,
+        [property.id, person, unit.id, space11.id, `${tag} ${who}`, offerR.offer.id,
+         offerR.offer.offered_terms_snapshot.application_terms_hash]);
+      const cC = await pool.connect();
+      try { await cC.query("begin");
+        await handoff.recordCompletionOwed(cC, { application: a });
+        await cC.query("commit"); } finally { cC.release(); }
+      const run = await handoff.runOwedHandoffs({ application_id: a.id });
+      if ((run.results[0] || {}).outcome !== "accepted") {
+        throw new Error(`${who} package not dispatched: ${JSON.stringify(run.results[0])}`);
+      }
+      const body = (sent[sent.length - 1] || {}).body || "";
+      const token = (body.match(/\/t\/lease\/([A-Za-z0-9_-]+)/) || [])[1] || null;
+      const pk = await one(
+        `select id from lease_packets where application_id=$1 and superseded_at is null`, [a.id]);
+      raceApps.push({ who, application: a, packetId: pk.id, token });
+    }
+    ok("two packages are issued for one home before either applicant signs",
+      raceApps.length === 2 && raceApps.every((r) => !!r.token)
+        && raceApps[0].packetId !== raceApps[1].packetId,
+      JSON.stringify(raceApps.map((r) => ({ who: r.who, token: !!r.token }))));
+    ok("…and neither holds the home yet, because neither has signed",
+      (await applicationHold.holdForSpace(pool, space11.id)) === null);
+
+    //  Complete both signers' required fields, so the only thing separating
+    //  them at submit is the race itself.
+    for (const r of raceApps) {
+      for (const f of (await pool.query(
+        `select id from lease_packet_fields where lease_packet_id=$1
+          and signer_role='tenant' and required=true`, [r.packetId])).rows) {
+        const res = await post(`/t/lease/${r.token}/fields/${f.id}/complete`, { value: "true" });
+        if (res.status !== 200) throw new Error(`field complete ${res.status}: ${JSON.stringify(res.body)}`);
+      }
+    }
+
+    //  BOTH SUBMIT AT ONCE, through the real public signer door.
+    const outcomes = await Promise.all(raceApps.map((r) => post(`/t/lease/${r.token}/submit`, {})));
+    const won = outcomes.filter((o) => o.status === 200);
+    const lost = outcomes.filter((o) => o.status !== 200);
+    ok("exactly ONE of two concurrent signatures for the same home succeeds",
+      won.length === 1 && lost.length === 1,
+      JSON.stringify(outcomes.map((o) => o.status)));
+    ok("…and the refusal says a home was taken, not that the link was broken",
+      (lost[0] || {}).status === 409
+        && ((lost[0] || {}).body || {}).error === "home_already_signed_for",
+      JSON.stringify((lost[0] || {}).body));
+    /*  ⚠ NAMES NOBODY. The loser is a different applicant; who signed first
+     *  is not their business.                                             */
+    ok("…and names nobody — the loser is not told who beat them",
+      !String(((lost[0] || {}).body || {}).receipt || "").includes(tag),
+      String(((lost[0] || {}).body || {}).receipt || "").slice(0, 120));
+
+    const signedCount = (await pool.query(
+      `select count(*)::int c from lease_packets p
+         join lease_applications a on a.id = p.application_id
+        where a.space_id=$1 and p.tenant_submitted_at is not null`, [space11.id])).rows[0].c;
+    ok("…leaving exactly ONE signature on the home, not two",
+      signedCount === 1, `signatures: ${signedCount}`);
+
+    const raceHold = await applicationHold.holdForSpace(pool, space11.id);
+    ok("…one hold, uncontested — `contested_by` is empty because the race was PREVENTED",
+      !!raceHold && (raceHold.contested_by || []).length === 0,
+      JSON.stringify(raceHold && { app: raceHold.application_id, contested: raceHold.contested_by }));
+    ok("…and the loser's package carries no signature it can act on",
+      (await pool.query(
+        `select 1 from lease_packets where application_id = any($1::uuid[])
+           and tenant_submitted_at is not null`,
+        [raceApps.filter((r) => true).map((r) => r.application.id)])).rows.length === 1);
 
     console.log(`\n${pass} passed, ${fail} failed`);
     if (fail) console.log("FAILED: " + failures.join(" | "));

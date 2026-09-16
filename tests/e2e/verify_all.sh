@@ -372,6 +372,13 @@ else
   step "source-to-home identity review and Greenery inventory contract" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/source_home_identity_review.db.js
   step "current rent-roll reconciliation into an onboarded property" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/current_rent_roll_reconciliation.db.js
   step "application-to-lease handoff is owed durably and safe to retry" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/lease_handoff_durable.db.js
+  #  The other two proofs of the same slice. Both were written with the
+  #  handoff and both passed locally for days while CI never ran them —
+  #  evidence that exists but is not ENFORCED protects nothing from the next
+  #  change. Both need the owned server: they sign through the real public
+  #  signer routes rather than stamping the signature fact themselves.
+  step "a signed-for home is held, and released when it should be" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" E2E_API_BASE="$E2E_API_BASE" node tests/proofs/application_inventory_hold.db.js
+  step "application to lease, end to end, with rejection and failed delivery" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" E2E_API_BASE="$E2E_API_BASE" node tests/proofs/application_to_lease_journey.db.js
   #  Matching is retrieval on a declared basis (MATCHING_BASIS_RULING_20260914,
   #  MB-1..MB-9). It establishes its OWN governed inventory and its own
   #  published pricing, so it does not depend on the Skyline fixture or on

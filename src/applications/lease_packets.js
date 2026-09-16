@@ -48,6 +48,9 @@ const mammoth = require("mammoth");
 const pdfParse = require("pdf-parse");
 const sourceArtifacts = require("../onboarding/source_artifact_service");
 const { normalizeE164 } = require("../identity/phone_identity");
+//  THE ONE inventory-hold read. Required so the signature path asks the same
+//  question the availability surfaces ask, rather than a second copy of it.
+const applicationHold = require("./application_inventory_hold");
 const { readBoundApplicationOffer, deriveConfirmationFromAuthoredOffer } = require("./proposed_terms_service");
 
 module.exports = function leasePacketsModule(deps) {
@@ -2517,6 +2520,65 @@ module.exports = function leasePacketsModule(deps) {
             await client.query("rollback");
             return res.status(409).json({ receipt: "The terms-review obligation has other outstanding inputs — this should not happen (its only input is terms_acknowledged). Investigate before retrying.", outstanding: e.outstanding_inputs });
           }
+        }
+      }
+
+      /*  ══ FIRST COMPLETED SIGNATURE OWNS THE HOME ═══════════════════
+       *
+       *  ⚠ THE LOCKS ABOVE DO NOT PREVENT THIS. resolveSignerAccess takes
+       *  `for update of pk, s` — each applicant's OWN packet and OWN signer
+       *  row. Two applicants racing for one bed hold different packets and
+       *  different signer rows, so those locks never contend, and both
+       *  submissions could stamp `tenant_submitted_at`. The inventory hold
+       *  is DERIVED from that stamp, so it could only report the collision
+       *  afterwards — `contested_by` was a detector for a condition that
+       *  should never have been reachable.
+       *
+       *  A packet blocks a NEW application from targeting the bed, but two
+       *  packets may legitimately have been ISSUED before either applicant
+       *  signed. That window is the whole of the race.
+       *
+       *  ── SERIALIZE ON THE BED ITSELF ────────────────────────────────
+       *  `spaces` is the canonical row for this exact home, so locking it
+       *  makes the two submissions contend on the one object they are
+       *  actually competing for. Whoever takes the lock re-reads the hold
+       *  INSIDE it and either stamps or is refused; the loser blocks until
+       *  the winner commits and then sees the winner's signature. No
+       *  reservation table, no new workflow state, no second notion of
+       *  "taken" — the existing derived hold, consulted before the write
+       *  that creates it rather than only after.
+       *
+       *  ONE PREDICATE, NOT TWO: this asks `holdForSpace`, the same read
+       *  every availability surface uses, so the guard and the reader
+       *  cannot disagree about what counts as held.
+       *
+       *  TENANT ONLY. `tenant_submitted_at` is stamped for the tenant
+       *  signer alone, so the tenant's signature is what claims the home. A
+       *  guarantor signing their own side claims nothing and is not
+       *  serialized — trapping them here would be a refusal with no fact
+       *  behind it.
+       *
+       *  NO SPACE, NO SERIALIZATION. A legacy unit-grain application
+       *  carries no space_id. There is no bed to contend on, so this does
+       *  not run — and it does not refuse either, because refusing an
+       *  application whose grain predates beds would break historical
+       *  records to guard a race they cannot enter.                      */
+      if (signer.signer_role === "tenant" && app.space_id) {
+        await client.query(`select id from spaces where id=$1 for update`, [app.space_id]);
+        const held = await applicationHold.holdForSpace(client, app.space_id);
+        if (held && String(held.application_id) !== String(app.id)) {
+          await client.query("rollback");
+          //  ⚠ NAMES NOBODY. This sentence is read by the applicant who
+          //  lost the race; who signed first is the other applicant's
+          //  business. It says what is true, that nothing was signed, and
+          //  where to go — a refusal has to be sayable and has to name a
+          //  next step.
+          return res.status(409).json({
+            error: "home_already_signed_for",
+            receipt: "This home has just been signed for by someone else. "
+              + "Nothing was signed on your behalf and no lease has been created. "
+              + "Please contact the leasing office — they can offer you another home.",
+          });
         }
       }
 

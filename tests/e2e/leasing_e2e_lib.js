@@ -114,6 +114,32 @@ async function ctx({ wipe = true } = {}) {
 /*  Drives lead → application@bed → approve → terms → packet → send.
     Returns { appId, packetId, rawTok }.  Stops before the resident signs.  */
 async function toPacket(C, { bed, rent = 1025, name = null } = {}) {
+  /*  ── START A FRESH JOURNEY ON THIS BED ─────────────────────────────
+   *  Callers use this helper seven times in a row on ONE fixture bed —
+   *  leasing_hostile.e2e.js alone runs seven independent hostile cases
+   *  against C.bedB — and every case that signs leaves a live signed
+   *  package behind.
+   *
+   *  That used to be inert. It is not any more: the tenant's signature now
+   *  serializes on the bed and refuses a second live signed claimant, so
+   *  scenario two was refused with `home_already_signed_for` and its packet
+   *  never left `tenant_in_progress`. The product is right — two people must
+   *  not sign for one home — and the fixture has to stop pretending seven
+   *  sequential scenarios are one continuous story.
+   *
+   *  ctx({wipe:true}) does exactly this at the scope of the PROPERTY, at the
+   *  start of a rung. This is the same statement at the scope of the BED, at
+   *  the start of a journey: whatever was current on this bed belongs to a
+   *  finished scenario and is no longer the current package.
+   *
+   *  ⚠ SUPERSEDED, NEVER DELETED — migration 192 freezes signer identity
+   *  once a packet leaves `draft`, and `superseded_at` is the product's own
+   *  way of saying a package is no longer current. Scoped to this one bed.  */
+  await q(`update lease_packets p set superseded_at = now(), updated_at = now()
+            from lease_applications a
+           where a.id = p.application_id and a.space_id = $1
+             and p.superseded_at is null`, [bed]);
+
   const __name = name || HOSTILE_NAME();
   const phone = await unclaimedFixturePhone();
   const intake = await api("POST", "/leasing/intake", { key: "e2e-key", body: {
