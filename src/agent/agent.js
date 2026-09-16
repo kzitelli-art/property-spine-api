@@ -178,15 +178,29 @@ module.exports = function agentModule(deps) {
   //  told us nothing — collapsing those two is exactly the silence this repo
   //  forbids. On failure the turn proceeds without established context and
   //  says so in the prompt, rather than implying the prospect never spoke.
-  async function readEstablishedProspectFacts({ person_id, property_id }) {
-    if (!person_id || !property_id) return { facts: {}, read_failed: false };
-    try {
-      const out = await inventory.readProspectFacts(pool, { person_id, property_id });
-      return { facts: (out && out.facts) || {}, read_failed: false };
-    } catch (e) {
-      console.error("[agent/context] prospect facts read failed:", e && e.message);
-      return { facts: {}, read_failed: true };
+  //  ONE function, because both generation paths ask the identical question
+  //  and an answer assembled twice drifts. It returns the selection ready to
+  //  use — the read state is an INPUT to the resolver, not a field bolted
+  //  onto its frozen result afterwards, so the resolver owns its whole shape
+  //  and no caller mutates it.
+  async function resolveTurnContext({ message, person_id, property_id }) {
+    let facts = {};
+    let readFailed = false;
+    if (person_id && property_id) {
+      try {
+        const out = await inventory.readProspectFacts(pool, { person_id, property_id });
+        facts = (out && out.facts) || {};
+      } catch (e) {
+        //  Fail-soft, never silently. A read that FAILED is not a prospect
+        //  who told us nothing — collapsing those two is the silence §40.7
+        //  forbids, so the state travels and the prompt says which it was.
+        console.error("[agent/context] prospect facts read failed:", e && e.message);
+        readFailed = true;
+      }
     }
+    return leasingContextResolver.resolveLeasingContext({
+      message, propertyId: property_id, personAttributes: facts, attributesReadFailed: readFailed,
+    });
   }
 
   //  ── `selection` NARROWS WHAT THE MODEL SEES, NEVER WHAT TRUTH SAYS ──
@@ -1155,13 +1169,8 @@ Reply with ONLY the message text.`;
         //  the budget and bedroom signals in Example 3's shape. Stated rather
         //  than quietly dropped, so the next person knows it is a gap and not
         //  a decision against it.
-        const established = await readEstablishedProspectFacts({
-          person_id: tx1.person_id, property_id: tx1.property_id });
-        const selection = Object.assign({}, leasingContextResolver.resolveLeasingContext({
-          message: tx1.inboundText,
-          propertyId: tx1.property_id,
-          personAttributes: established.facts,
-        }), { established_read_failed: established.read_failed });
+        const selection = await resolveTurnContext({
+          message: tx1.inboundText, person_id: tx1.person_id, property_id: tx1.property_id });
         try { ctx = await resolveContext(client0, { property_id: tx1.property_id, unit_id: tx1.unit_id, selection }); }
         finally { client0.release(); }
         factSnapshot = ctx.facts;
@@ -2470,13 +2479,8 @@ Reply with ONLY the message text.`;
         const c0 = await pool.connect();
         let ctx;
         //  Same decision on the regenerate path, from the same inbound text.
-        const established2 = await readEstablishedProspectFacts({
-          person_id: prep.person_id, property_id: prep.property_id });
-        const selection = Object.assign({}, leasingContextResolver.resolveLeasingContext({
-          message: prep.inboundText,
-          propertyId: prep.property_id,
-          personAttributes: established2.facts,
-        }), { established_read_failed: established2.read_failed });
+        const selection = await resolveTurnContext({
+          message: prep.inboundText, person_id: prep.person_id, property_id: prep.property_id });
         try { ctx = await resolveContext(c0, { property_id: prep.property_id, unit_id: prep.unit_id, selection }); }
         finally { c0.release(); }
         factSnapshot = ctx.facts; snapshotHash = sha(factSnapshot);

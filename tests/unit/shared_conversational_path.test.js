@@ -233,5 +233,54 @@ console.log("\nE · existing protections still in place");
     !fs.existsSync(path.join(root, "migrations/200_shared_conversational_path.sql")));
 }
 
+// ══════════════════════════════════════════════════════════════════
+console.log("\nF · vocabulary drift guards — so a guessed name cannot ship again");
+{
+  //  The defect this makes unrepeatable: nine attribute names were guessed
+  //  from an example prompt and eight matched nothing. A name that does not
+  //  exist fails SILENTLY — the prospect simply appears to have said nothing.
+  //  These read the schema and the governed write list and compare.
+  const resolverMod = require(path.join(root, "src/agent/leasing_context_resolver"));
+  const migration = fs.readFileSync(path.join(root, "migrations/061_person_attributes.sql"), "utf8");
+  const check = (migration.match(/attr_key\s+text\s+not null\s+check\s*\(attr_key in\s*\(([^)]*)\)/i) || [])[1];
+  const schemaKeys = (check || "").split(",").map(x => x.trim().replace(/^'|'$/g, "")).filter(Boolean).sort();
+
+  ok("the migration's CHECK was actually parsed", schemaKeys.length === 6, schemaKeys);
+  ok("ATTR_KEYS matches the schema exactly, in both directions",
+    JSON.stringify([...resolverMod.ATTR_KEYS].sort()) === JSON.stringify(schemaKeys),
+    { declared: [...resolverMod.ATTR_KEYS].sort(), schema: schemaKeys });
+
+  //  The canonical reader must not ask for a key the column cannot hold.
+  const inventory = require(path.join(root, "src/leasing/leasing_inventory"))({ pool: { query: async () => ({ rows: [] }) } });
+  ok("the canonical prospect read stays inside the schema vocabulary",
+    inventory.PROSPECT_FACT_KEYS.every(k => schemaKeys.includes(k)),
+    inventory.PROSPECT_FACT_KEYS);
+
+  //  Every fact key the intent table names must be one an operator can
+  //  actually write, or be declared legacy on purpose.
+  const operatorSrc = code("src/identity/operator.js");
+  const writable = new Set([
+    ...((operatorSrc.match(/const FACT_KEYS = \[([^\]]+)\]/) || [, ""])[1]
+      .split(",").map(x => x.trim().replace(/^["']|["']$/g, "")).filter(Boolean)),
+    ...Object.keys(leasingKnowledge.TOPICS),
+  ]);
+  ok("the governed write vocabulary was parsed", writable.size >= 17, writable.size);
+
+  const named = new Set();
+  for (const spec of resolverMod.INTENTS) for (const k of spec.factKeys) named.add(k);
+  const orphans = [...named].filter(k => !writable.has(k) && !resolverMod.LEGACY_FACT_KEYS.includes(k));
+  ok("every fact key the resolver names is writable or declared legacy", orphans.length === 0, orphans);
+
+  const staleLegacy = resolverMod.LEGACY_FACT_KEYS.filter(k => !named.has(k));
+  ok("no legacy declaration outlives the key that needed it", staleLegacy.length === 0, staleLegacy);
+
+  //  And the categories it filters on must be ones the writer assigns.
+  const categories = new Set();
+  for (const spec of resolverMod.INTENTS) for (const c of spec.categories) categories.add(c);
+  const knownCategories = new Set(["pets", "parking", "tours", "fees", "documents", "routing", "leasing_knowledge", "pricing"]);
+  ok("every category the resolver filters on is one the writer assigns",
+    [...categories].every(c => knownCategories.has(c)), [...categories]);
+}
+
 console.log(`\n  ${passed} passed, ${failed} failed\n`);
 process.exit(failed ? 1 : 0);

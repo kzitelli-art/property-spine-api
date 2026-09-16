@@ -71,6 +71,19 @@ const leasingKnowledge = require("../leasing/leasing_knowledge");
 //  These regexes answer ONE question — "is this turn about X?" — and are
 //  deliberately broad. A false positive costs one extra fact in context. A
 //  false negative costs the answer.
+//  ── KEYS THIS TABLE NAMES THAT NO OPERATOR CAN WRITE TODAY ──────────
+//  operator.js's FACT_KEYS is the governed write vocabulary. These five
+//  appear in the live corpus but are not in it — they predate that list.
+//  Naming them here is deliberate: a key an operator cannot create is a key
+//  that will never be answered, and leaving that implicit is how a silent
+//  dead entry survives. `gate` below asserts every key this file names is
+//  either writable or declared here, so a TYPO becomes a red test instead of
+//  a question nobody ever answers.
+const LEGACY_FACT_KEYS = Object.freeze([
+  "parking_pricing", "move_in_requirements", "move_in_credits",
+  "utilities", "renters_insurance",
+]);
+
 const INTENTS = Object.freeze([
   {
     intent: "pets",
@@ -213,43 +226,20 @@ const FOLLOW_UP_RX =
  */
 function normaliseAttributes(personAttributes) {
   const out = {};
-  if (!personAttributes) return out;
-  const take = (key, value, source, at) => {
-    const k = String(key || "");
-    if (!ATTR_KEYS.includes(k)) return;          //  never invent a key the schema cannot hold
-    const v = value == null ? "" : String(value);
-    if (!v.trim()) return;                        //  a blank is not a recorded preference
-    out[k] = { value: v, source: source || null, recorded_at: at || null };
-  };
-  if (Array.isArray(personAttributes)) {
-    for (const row of personAttributes) {
-      if (!row) continue;
-      take(row.attr_key || row.key, row.attr_value != null ? row.attr_value : row.value, row.source, row.recorded_at || row.created_at);
-    }
-    return out;
-  }
-  if (typeof personAttributes === "object") {
-    for (const [k, v] of Object.entries(personAttributes)) {
-      if (v && typeof v === "object") take(v.key || k, v.value, v.source, v.recorded_at);
-      else take(k, v, null, null);
-    }
+  if (!personAttributes || typeof personAttributes !== "object") return out;
+  for (const [rawKey, raw] of Object.entries(personAttributes)) {
+    const key = String((raw && typeof raw === "object" && raw.key) || rawKey || "");
+    //  Never carry a key the schema cannot hold. This is the guard that
+    //  would have caught the nine guessed names.
+    if (!ATTR_KEYS.includes(key)) continue;
+    const box = raw && typeof raw === "object" ? raw : { value: raw };
+    const value = box.value == null ? "" : String(box.value);
+    if (!value.trim()) continue;              //  a blank is not a recorded preference
+    out[key] = { value, source: box.source || null, recorded_at: box.recorded_at || null };
   }
   return out;
 }
 
-/**
- * Decide what context this turn needs.
- *
- * @param {object} input
- * @param {string} input.message            the inbound prospect text
- * @param {object} [input.conversation]     the canonical conversation row
- * @param {object} [input.lead]             the lead/prospect record, if any
- * @param {object|Array} [input.personAttributes] recorded person attributes
- * @param {string} [input.propertyId]       server-derived property scope
- * @returns {{intents:string[], factKeys:string[], categories:string[],
- *            needsPricing:boolean, needsInventory:boolean,
- *            selective:boolean, basis:string, property_id:(string|null)}}
- */
 //  ── WHICH RECORDED FACTS BEAR ON THIS TURN ──────────────────────────
 //  Deterministic, and deliberately narrow in both directions.
 //
@@ -287,7 +277,8 @@ function narrowingDisabled() {
   return String(process.env.LEASING_CONTEXT_RESOLVER || "").trim().toLowerCase() === "off";
 }
 
-function resolveLeasingContext({ message, conversation, lead, personAttributes, propertyId } = {}) {
+function resolveLeasingContext({ message, conversation, lead, personAttributes, propertyId,
+                                 attributesReadFailed = false } = {}) {
   //  Property scope is carried through verbatim so a caller cannot use a
   //  selection built for one property against another. This module never
   //  reads it and never defaults it — §21, the server decides.
@@ -301,7 +292,7 @@ function resolveLeasingContext({ message, conversation, lead, personAttributes, 
     //  ...but not the prospect's recorded profile. A greeting is not a
     //  follow-up, and an unclassified turn is the one place we are least
     //  entitled to assume which established fact it leans on.
-    established: {},
+    established: {}, established_read_failed: !!attributesReadFailed,
     selective: false, basis, property_id,
   });
 
@@ -362,6 +353,7 @@ function resolveLeasingContext({ message, conversation, lead, personAttributes, 
       intents, factKeys: [], categories: [],
       needsPricing, needsInventory,
       established: establishedFor(recorded, { text, intents, needsPricing, needsInventory }),
+      established_read_failed: !!attributesReadFailed,
       selective: false, basis: "intent_without_shelf",
       property_id,
     });
@@ -378,6 +370,7 @@ function resolveLeasingContext({ message, conversation, lead, personAttributes, 
       intents: [], factKeys: [], categories: [],
       needsPricing, needsInventory,
       established: establishedFor(recorded, { text, intents: [], needsPricing, needsInventory }),
+      established_read_failed: !!attributesReadFailed,
       selective: false, basis: "economic_only",
       property_id,
     });
@@ -390,6 +383,7 @@ function resolveLeasingContext({ message, conversation, lead, personAttributes, 
     needsPricing,
     needsInventory,
     established: establishedFor(recorded, { text, intents, needsPricing, needsInventory }),
+    established_read_failed: !!attributesReadFailed,
     selective: true,
     basis: "matched",
     property_id,
@@ -412,4 +406,5 @@ function selects(selection, fact) {
 }
 
 module.exports = { resolveLeasingContext, selects, narrowingDisabled, normaliseAttributes,
-                   INTENTS, ATTR_KEYS, ATTR_RELEVANCE, FOLLOW_UP_RX, PRICING_RX, INVENTORY_RX };
+                   INTENTS, LEGACY_FACT_KEYS, ATTR_KEYS, ATTR_RELEVANCE, FOLLOW_UP_RX,
+                   PRICING_RX, INVENTORY_RX };
