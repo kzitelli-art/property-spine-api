@@ -177,6 +177,7 @@ step "availability occupancy basis" node --test tests/unit/availability_occupanc
 node tests/e2e/proof_boundary.js create >"$RUN_DIR/env.sh" || exit 1
 . "$RUN_DIR/env.sh"
 step "schema from the migration chain"  ./tests/e2e/apply_migrations.sh
+step "governed property display name" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/property_display_name_command.db.js
 step "negative contract rent unavailable" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_HTTP_PORT=3353 node tests/proofs/negative_contract_rent_unavailable.db.js
 step "property fixture"     psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/property_fixture.sql
 step "pricing fixture"      psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/fixtures.sql

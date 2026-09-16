@@ -6,10 +6,11 @@
 //   Greenery, Temple Nest, Skyline, 1850 = bed
 //
 // This is the source of truth the property surface reads to know:
-//   - what to call the property
 //   - whether to count by unit or by bed
-//   - which canonical key / id resolves it
+//   - which canonical key / id resolves that stored model
 //   - whether a historical snapshot has been loaded (filled at runtime)
+// Human-facing labels come from properties.display_name, falling back to
+// properties.name. Registry names are metadata, not UI labels.
 // ============================================================
 
 const DEALS = [
