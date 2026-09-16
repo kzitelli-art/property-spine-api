@@ -13,7 +13,7 @@
 const path = require("path");
 const mod = require(path.join(__dirname, "..", "src", "agent", "agent.js"));
 const router = mod({ pool: { query: async () => ({ rows: [] }) }, anthropic: null });
-const { stripMarkdown, stripDashes, humanizeTypos, finishProspectText } = router.__test__;
+const { stripMarkdown, stripDashes, humanizeTypos, finishProspectText, TYPO_RATE } = router.__test__;
 
 let pass = 0, fail = 0;
 const results = [];
@@ -60,10 +60,13 @@ check("typos: never touch a number, price, time, or unit", humanizeTypos(MONEY, 
   s => ["$2,700", "$300", "2 PM", "602"].every(v => s.includes(v)),
   "every figure identical");
 
-check("typos: drops exactly one apostrophe, not all",
-  humanizeTypos("I dont know, that's fine, there's more, what's next?".replace("dont", "don't"), always),
-  s => (s.match(/\b(dont|thats|theres|whats)\b/g) || []).length === 1,
-  "exactly one de-apostrophized word");
+check("typos: deliberately disabled for launch", TYPO_RATE,
+  rate => rate === 0, "zero deliberate misspellings");
+
+check("typos: forced RNG still leaves professional copy intact",
+  humanizeTypos("I don't know, that's fine, there's more, what's next?", always),
+  s => s === "I don't know, that's fine, there's more, what's next?",
+  "unchanged when the feature is disabled");
 
 check("typos: off when rate not hit", humanizeTypos("That's the two-bed.", () => 0.99),
   s => s === "That's the two-bed.", "unchanged");
@@ -159,16 +162,17 @@ check("area: occupancy observation still allowed",
 const leasing = require(path.join(__dirname, "..", "src", "leasing", "leasing_leads.js"))({
   pool: { query: async () => ({ rows: [] }) }, anthropic: null, sms: null,
   leasingLifecycle: null, conversionServices: null, commBoundary: null,
+  tourAvailabilityService: {},
 });
 const REAL_SLOTS = [{ label: "Mon, Jul 27 at 2:00 PM" }, { label: "Mon, Jul 27 at 4:00 PM" }];
 
 (async () => {
-  const withSlots = await leasing.__test__.draftFirstResponse({
+  const withSlots = (await leasing.__test__.draftFirstResponse({
     name: "Cameron", unitLabel: null, propertyName: "Solo on Chestnut", rent: null, slots: REAL_SLOTS,
-  });
-  const known = await leasing.__test__.draftFirstResponse({
+  })).body;
+  const known = (await leasing.__test__.draftFirstResponse({
     name: "Cameron", unitLabel: "Unit 602", propertyName: "Solo on Chestnut", rent: 2700, slots: REAL_SLOTS,
-  });
+  })).body;
 
   check("opener: does not list specific tour times", withSlots,
     s => !/\d{1,2}:\d{2}\s*(AM|PM)/i.test(s), "no clock times in the first message");
@@ -176,14 +180,15 @@ const REAL_SLOTS = [{ label: "Mon, Jul 27 at 2:00 PM" }, { label: "Mon, Jul 27 a
     s => !/which (one )?works|either of those|want to grab one/i.test(s),
     "no forced choice between slots");
   check("opener: offers the low-commitment path", withSlots,
-    s => /anything i can answer|any questions/i.test(s),
+    s => /what can i answer|anything i can answer|any questions/i.test(s),
     "an explicit 'or ask me something first' escape hatch");
   check("opener: at most one exclamation mark", withSlots,
     s => (s.match(/!/g) || []).length <= 1, "<= 1 '!' (the old opener had 3)");
-  check("opener: still honest about unverified pricing", withSlots,
-    s => /confirming/i.test(s), "says it is confirming rather than inventing rent");
-  check("opener: states verified rent when known", known,
-    s => s.includes("$2700") || s.includes("$2,700"), "real rent surfaced when available");
+  check("opener: stays silent on unverified pricing", withSlots,
+    s => !/\$\s*\d|available at|confirming/i.test(s), "does not invent a number, availability, or an unowned follow-up");
+  check("opener: states governed price without claiming availability", known,
+    s => (s.includes("$2700") || s.includes("$2,700")) && /priced at/i.test(s) && !/available/i.test(s),
+    "real price surfaced without turning it into availability");
   check("opener: no markdown or AI dashes", withSlots,
     s => !s.includes("*") && !s.includes("—") && !s.includes("–"), "clean punctuation");
 

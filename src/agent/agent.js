@@ -40,6 +40,7 @@ const aiLeasingStrategy = require("../leasing/ai_leasing_strategy");
 const aiLeasingStrategyRuntime = require("../leasing/ai_leasing_strategy_runtime");
 const aiLeasingOperatingContext = require("../leasing/ai_leasing_operating_context"); // GOVERNED OPERATING CONTEXT LEASING v1
 const { loadThreadState, recordInboundCapture } = require("./inbound_capture");
+const { stripDashes, stripMarkdown, humanizeTypos, finishProspectText, TYPO_RATE, postGenerationPolicy } = require("./prospect_output_policy");
 
 const PROMPT_REVISION = "stage-a-v12"; // v12: exact-space informational matching with published pricing and explicit pricing term. v10: linked-unit rent uses governed pricing.
 // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
@@ -112,118 +113,9 @@ module.exports = function agentModule(deps) {
     return out;
   }
 
-  // ── PROSPECT-TEXT PUNCTUATION GUARANTEE (§2 / PUNCTUATION) ──────────────────
-  // The persona forbids em/en dashes in prospect texts, but a prompt rule is not
-  // a guarantee — models emit them constantly. This is the deterministic strip
-  // that makes the rule real. ONLY targets em (U+2014) and en (U+2013) dashes;
-  // ordinary hyphens (dates, phones, compounds) are untouched. Context-aware:
-  // a dash used as a mid-thought break becomes '...'; a dash joining two clauses
-  // that reads as a pause becomes ', '. Heuristic, but far better than shipping
-  // the AI tell.
-  function stripDashes(text) {
-    if (!text) return text;
-    let s = String(text);
-    // 0) RANGES FIRST (AI_VOICE_TUNING.md Case 4C). An en dash between two
-    //    numbers, times, or weekdays is a RANGE, not an AI tell, and it arrives
-    //    from the VERIFIED FACT DATA, not from the model: 7 of 19 rows in
-    //    demo_solo_agent_facts_v1.json contain one ("A telecom fee of $75-99",
-    //    "within 24-48 hours", "a 15-20% premium"). Rule 2 below turns those
-    //    into "$75, 99" and "9 PM, 8 AM Sunday, Thursday" — which reached live
-    //    prospects and made a real fee unreadable. Ranges become " to " so the
-    //    no-dash guarantee holds WITHOUT corrupting a sourced fact.
-    const DAY = "(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day";
-    s = s.replace(/(\d\s*(?:AM|PM)?)\s*[—–]\s*(\$?\d)/gi, "$1 to $2");
-    s = s.replace(new RegExp(`(${DAY})\\s*[—–]\\s*(${DAY})`, "gi"), "$1 to $2");
-    // Normalize spacing around the dash first: "word — word" / "word—word".
-    // A dash with spaces on BOTH sides, OR preceded by a space, reads as a
-    // parenthetical/trailing break → '...'. A dash tightly BETWEEN words with no
-    // space (word—word) reads as a joining pause → ', '.
-    // 1) " — " (spaced both sides): trailing-thought feel → "... "
-    s = s.replace(/\s+[—–]\s+/g, (m) => {
-      // If what follows looks like a full new clause (starts lowercase 'and/but/
-      // so/let/i' or similar) treat as a pause comma; else an ellipsis break.
-      return "... ";
-    });
-    // 2) "word—word" (no spaces): joining → ", "
-    s = s.replace(/([^\s])[—–]([^\s])/g, "$1, $2");
-    // 3) any stragglers (dash at start/end or odd spacing) → ", "
-    s = s.replace(/[—–]/g, ", ");
-    // Collapse an accidental ", ..." or double punctuation the swaps can create.
-    s = s.replace(/,\s*\.\.\./g, "...").replace(/\.\.\.\s*,/g, "...");
-    s = s.replace(/\s{2,}/g, " ").replace(/\s+([,.])/g, "$1").trim();
-    return s;
-  }
-
-  // ── SMS MARKDOWN GUARANTEE (Case 4A) ───────────────────────────────────────
-  // The persona forbids markdown, but (per the stripDashes reasoning above) a
-  // prompt rule is not a guarantee. A real prospect received literal
-  // "**At application:**" and hyphen bullets in a text message. SMS renders
-  // none of it. This is the deterministic strip that makes the rule real.
-  // Conservative by construction: it removes MARKUP, never content, and never
-  // touches digits, currency, or punctuation inside a sentence.
-  function stripMarkdown(text) {
-    if (!text) return text;
-    let s = String(text);
-    // Bold/italic/code markers. Emphasis is dropped, the words inside are kept.
-    s = s.replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
-         .replace(/\*\*([^*]+)\*\*/g, "$1")
-         .replace(/\*([^*\n]+)\*/g, "$1")
-         .replace(/__([^_]+)__/g, "$1")
-         .replace(/`([^`]+)`/g, "$1");
-    // Leading list markers ("- ", "* ", "1. ") at a line start OR mid-string
-    // after a sentence, which is how the model emitted an inline "list" in SMS.
-    s = s.replace(/(^|\n)\s*[-*•]\s+/g, "$1");
-    s = s.replace(/(^|\n)\s*\d+[.)]\s+/g, "$1");
-    s = s.replace(/\s+[-•]\s+/g, ", ");
-    // Headers and stray markers.
-    s = s.replace(/(^|\n)\s*#{1,6}\s*/g, "$1");
-    s = s.replace(/\*/g, "");
-    // Newlines are legal in SMS but the model uses them to fake layout; a
-    // single space reads as one continuous text. Collapse and tidy.
-    s = s.replace(/\s*\n+\s*/g, " ");
-    s = s.replace(/\s{2,}/g, " ").replace(/\s+([,.;:!?])/g, "$1").replace(/,\s*,/g, ",").trim();
-    return s;
-  }
-
-  // ── HUMANIZATION (Case 5) ──────────────────────────────────────────────────
-  // Kameron: "maybe even put a type of now and then like a human would."
-  // DESIGN CONSTRAINT: a typo must never be able to change a FACT. So this does
-  // not generate errors freely; it drops an apostrophe from ONE word chosen from
-  // an explicit whitelist of contractions. By construction it cannot touch a
-  // price, date, time, unit number, phone number, name, or any word whose
-  // meaning a reader depends on. "dont" for "don't" is the entire mechanism.
-  //
-  // Deliberately NOT transposed letters: those read as a broken bot rather than
-  // a busy person, and they can land inside a number.
-  //
-  // Rate is low and random so it never becomes a tell. Set TYPO_RATE to 0 to
-  // turn this off entirely; it is a single constant on purpose.
-  const TYPO_RATE = 0.18;
-  const TYPO_SWAPS = [
-    [/\bdon't\b/g, "dont"], [/\bcan't\b/g, "cant"], [/\bwon't\b/g, "wont"],
-    [/\bthat's\b/g, "thats"], [/\bthere's\b/g, "theres"], [/\bwhat's\b/g, "whats"],
-    [/\blet's\b/g, "lets"], [/\bdoesn't\b/g, "doesnt"], [/\bisn't\b/g, "isnt"],
-    [/\byou're\b/g, "youre"], [/\bthey're\b/g, "theyre"],
-  ];
-  function humanizeTypos(text, rng = Math.random) {
-    if (!text) return text;
-    if (rng() >= TYPO_RATE) return text;
-    const applicable = TYPO_SWAPS.filter(([re]) => { re.lastIndex = 0; return re.test(text); });
-    if (!applicable.length) return text;
-    const [re, replacement] = applicable[Math.floor(rng() * applicable.length) % applicable.length];
-    // Exactly ONE occurrence, so a reply never looks systematically misspelled.
-    let done = false;
-    re.lastIndex = 0;
-    return String(text).replace(re, (m) => (done ? m : ((done = true), replacement)));
-  }
-
-  // The single exit point for anything that reaches a prospect's phone. Order
-  // matters: strip markup, then dashes (so a stripped bullet cannot leave a
-  // dash behind), then humanize last so a typo is never re-processed.
-  function finishProspectText(text, rng) {
-    if (!text) return text;
-    return humanizeTypos(stripDashes(stripMarkdown(text)), rng);
-  }
+  // Prospect formatting and the unsafe-output floor are shared with the
+  // immediate website opener. A lead must receive the same deterministic
+  // protection before and after a human takes ownership of the conversation.
 
   // ── NO-SILENCE FALLBACKS (§6) ──────────────────────────────────────────────
   // When the output floor blocks a reply, we NEVER go dark — we send one of
@@ -379,7 +271,7 @@ module.exports = function agentModule(deps) {
           console.error("[agent] quotablePricing failed", e && e.message);
           pricing = { quotable: false, reason: "pricing_read_failed",
             detail: "The governed pricing read failed.",
-            say: "I want to give you an exact number rather than guess — let me confirm the current pricing with the leasing office and come straight back to you." };
+            say: "I want to give you an exact number rather than guess. The leasing team can confirm the current pricing." };
         }
         unit = {
           unit_number: u.unit_number, bedrooms: u.bedrooms, bathrooms: u.bathrooms,
@@ -438,42 +330,8 @@ module.exports = function agentModule(deps) {
     return { decision: "safe", code: null, ack: null };
   }
 
-  // Post-generation validation: catch unsafe output before it can be sent.
-  function postGenerationPolicy(draftText) {
-    const t = (draftText || "").toLowerCase();
-    // HARD FLOOR on unsafe OUTPUT (§6). Codes prefixed 'fairhousing:' are
-    // RECOVERABLE — dispatch replaces the reply with a safe practical redirect
-    // and SENDS it (never silence). A unit-grounding block is handled separately
-    // (dispatch sends the inventory fallback + raises an internal QA signal).
-    const blockPatterns = [
-      [/\b(good|bad|safe|dangerous|rough|sketchy|nice|great) (neighborhood|area|part of town|block|side of town)\b/, "fairhousing:neighborhood_character"],
-      [/\b(crime rate|crime is|safe to walk|it'?s safe|is safe|very safe|totally safe|perfectly safe)\b/, "fairhousing:safety_claim"],
-      [/\b(perfect for|ideal for|suited for|great for|good for) (families|singles|young professionals|students|christian|jewish|muslim|couples)/, "fairhousing:demographic_steering"],
-      // ESA / assistance animal quoted a PET CHARGE. Under the FHA an assistance
-      // animal is not a pet, so pet fees, pet deposits, and pet rent generally
-      // may not be charged. The pre-gate routes an explicit ESA request, but the
-      // model can still reach this pairing on its own (a live thread quoted
-      // "$300 one-time fee plus $30/month pet rent" one turn after an ESA
-      // question). This is the floor that makes the rule real.
-      [/\b(service animal|emotional support animal|assistance animal|esa)\b[\s\S]{0,240}(\$\s?\d|pet fee|pet rent|pet deposit)/, "fairhousing:esa_fee"],
-      [/(\$\s?\d|pet fee|pet rent|pet deposit)[\s\S]{0,240}\b(service animal|emotional support animal|assistance animal|esa)\b/, "fairhousing:esa_fee"],
-      // Area DEMOGRAPHIC composition, not just safety adjectives (Case 6C). A
-      // live reply said "University City overall skews younger because of the
-      // schools" — the older patterns above catch "safe/rough/nice", not this.
-      [/\b(skews?|mostly|mainly|largely|predominantly|a lot of|lots of|full of) (young|younger|older|students|families|kids|professionals|couples|singles|immigrants|retirees)\b/, "fairhousing:demographic_composition"],
-      // LOCAL LAW asserted from model memory. Housing law is jurisdictional:
-      // source-of-income protection, deposit caps and return windows, notice
-      // periods, occupancy limits and rent regulation all differ between
-      // Philadelphia, Pittsburgh, and New York. The model has plausible-sounding
-      // general knowledge and no way to know which jurisdiction is correct, so
-      // any appeal to law is blocked unless it came from verified facts.
-      // Deliberately narrow and high-precision: "renters insurance is required"
-      // does NOT match, because it asserts a house rule, not a legal one.
-      [/\b((state|city|local|municipal|federal) law|by law|legally (required|obligated|entitled)|(pennsylvania|philadelphia|pittsburgh|new york|nyc|pa|ny) (law|ordinance|code|statute)|rent control|rent stabiliz|your rights under)\b/, "legal:local_law_claim"],
-    ];
-    for (const [re, code] of blockPatterns) if (re.test(t)) return { decision: "blocked", code };
-    return { decision: "safe", code: null };
-  }
+  // postGenerationPolicy is imported from prospect_output_policy so every
+  // prospect-facing AI surface uses the same deterministic output floor.
 
   function directPricingReply({ inboundText, unit } = {}) {
     const text = String(inboundText || "").toLowerCase();
@@ -710,15 +568,15 @@ ${moveInSpeedRule}
 
 Example:
 
-"We've moved pretty quickly before, sometimes within a few days. I need to check which units are actually ready, but let me shake the tree with the team... want to come take a look today while I work on it?"
+"We've moved pretty quickly before, sometimes within a few days. I don't want to make up a date before a ready home is confirmed. Want to come take a look today?"
 
 If they can apply and pay today:
 
-"Okay, now you're making my life easy. That definitely helps, let's get you through the building and I'll push for the fastest-ready option."
+"Okay, now you're making my life easy. That definitely helps. Let's get you through the building, and the team can confirm the fastest ready option."
 
 If they ask about this weekend:
 
-"Maybe, we're not miles away. I don't want to make up a date before I know which unit is ready, so let me verify it and see what we can pull off."
+"Maybe. I don't want to make up a date before a ready home is confirmed. The team can see this conversation and can confirm whether the timing works."
 
 INVENTORY AND PRICING
 

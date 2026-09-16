@@ -29,9 +29,9 @@ async function run() {
   let result = await ask.answer(db, null, { property_id:"property-a", allowed_modules:["leasing"], question:"send me the Matterport" });
   assert.equal(result.outcome,"answered"); assert.match(result.answer,/Representative/);
   assert.equal(result.references[0].url,"https://my.matterport.com/show/?m=example");
-  assert.match(result.answer,/do not establish which apartment or bedroom/i);
+  assert.doesNotMatch(result.answer,/do not establish which apartment or bedroom/i);
   assert.equal(result.grounded_on.scope,"property_wide");
-  assert.equal(result.grounded_on.exact_home_association,"NOT_ESTABLISHED");
+  assert.equal(result.grounded_on.exact_home_association,undefined);
   result = await ask.answer(db,null,{property_id:"property-a",allowed_modules:["leasing"],question:"send me Matterport for unit 2B"});
   assert.equal(result.outcome,"answered");
   assert.match(result.answer,/do not establish which apartment or bedroom/i);
@@ -41,6 +41,10 @@ async function run() {
     {property_id:"property-a",allowed_modules:["leasing"],question:"show common questions"});
   assert.doesNotMatch(faq.answer,/apartment or bedroom/i);
   assert.equal(faq.grounded_on.exact_home_association,undefined);
+  assert.deepEqual(knowledge.topicsFor("Do the apartments have washers and dryers?"), ["amenities"]);
+  assert.deepEqual(knowledge.topicsFor("What one-bedroom and two-bedroom layouts do you have?"), ["layouts"]);
+  assert.deepEqual(knowledge.topicsFor("What's around the building for coffee and groceries?"), ["neighborhood"]);
+  assert.deepEqual(knowledge.topicsFor("Are utilities and internet included?"), ["leasing_faq"]);
   const before = reads;
   result = await ask.answer(db,null,{property_id:"property-a",allowed_modules:["maintenance"],question:"send me the Matterport"});
   assert.equal(result.outcome,"not_authorized"); assert.equal(reads,before);

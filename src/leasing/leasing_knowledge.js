@@ -53,14 +53,14 @@ function buildCoverage(facts, now = new Date()) {
 }
 const MATCHES = [
   ["leasing_highlights", /\b(highlights?|selling points?|what makes .+ special)\b/i],
-  ["amenities", /\b(amenit(?:y|ies)|laundry|furnish(?:ed|ing|ings)|roof deck|courtyard|packages?|package room|bike storage|vending|gym|fitness(?: room| center)?|kitchens?|cooktops?|microwaves?|refrigerators?|central (?:heat|air)|air conditioning|balcon(?:y|ies))\b/i],
-  ["layouts", /\b(layouts?)\b/i],
+  ["amenities", /\b(amenit(?:y|ies)|laundry|washers?|dryers?|furnish(?:ed|ing|ings)|roof deck|courtyard|packages?|package room|bike storage|parking|garage|vending|gym|fitness(?: room| center)?|cardio|kitchens?|appliances?|cooktops?|microwaves?|refrigerators?|central (?:heat|air)|air conditioning)\b/i],
+  ["layouts", /\b(layouts?|studios?|one[- ]bed(?:room)?|two[- ]bed(?:room)?|three[- ]bed(?:room)?|1br|2br|3br|bedrooms?|bathrooms?|balcon(?:y|ies))\b/i],
   ["dimensions", /\b(dimensions?|measurements?|square feet|square footage|room size)\b/i],
   ["photos", /\b(photos?|pictures?|images?)\b/i],
   ["floor_plans", /\bfloor\s*plans?\b/i],
   ["virtual_tours", /\b(matterports?|materports?|virtual tours?|3d tours?|walkthroughs?)\b/i],
-  ["neighborhood", /\b(neighbou?rhood|local recommendations?|nearby (?:coffee|groceries|restaurants?|transit)|fresh grocer|temple(?:'s)? campus|center city|walking distance)\b/i],
-  ["leasing_faq", /\b(faqs?|common questions|leasing answers)\b/i],
+  ["neighborhood", /\b(neighbou?rhood|what(?:'s| is) (?:around|nearby)|local recommendations?|nearby (?:coffee|food|grocer(?:y|ies)|restaurants?|transit)|coffee|restaurants?|grocer(?:y|ies)|fresh grocer|temple(?:'s)? campus|center city|walking distance)\b/i],
+  ["leasing_faq", /\b(faqs?|common questions|leasing answers|utilities?|internet|wi-?fi|closets?|what(?:'s| is) included|pets?|smoking|subleas(?:e|ing)|roommates?|screening|guarantors?)\b/i],
   ["move_in_guidance", /\b(move[- ]in(?: instructions?| guidance| directions)?|key pickup|unload(?:ing)?)\b/i],
 ];
 function topicsFor(question) {
@@ -159,7 +159,9 @@ async function answer(db, { property_id, allowed_modules, question }) {
   // The stored wording is property-wide even when the question names a home.
   // Keep useful representative links without inventing a space association or
   // routing a media question into a different operating domain.
-  const needsHomeScope = selected.some(r => ["layouts", "dimensions", "photos", "floor_plans", "virtual_tours"].includes(r.fact_key));
+  const exactHomeAsked = /\b(?:unit|apartment|home|bedroom|room)\s*[#-]?[a-z0-9]+\b|\b(?:this|that)\s+(?:unit|apartment|home|bedroom|room)\b/i.test(String(question || ""));
+  const needsHomeScope = exactHomeAsked
+    && selected.some(r => ["layouts", "dimensions", "photos", "floor_plans", "virtual_tours"].includes(r.fact_key));
   return { outcome: selected.length ? "answered" : "not_established",
     answer: composeConversationalAnswer(selected, missing, needsHomeScope),
     grounded_on: { leasing_knowledge: selected.length ? "ESTABLISHED" : "NOT_ESTABLISHED",
