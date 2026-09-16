@@ -3,8 +3,9 @@
 /*
   Migration 198 turns the reviewed retained-source claim-index policy into the
   numbered chain. This owned witness reconstructs the exact 197 index state,
-  runs the real migrations/migrate.js runner, and proves its failure and
-  success branches rather than treating a hidden psql step as a release.
+  runs the real migrations/migrate.js runner across the current successor
+  suffix, and proves its failure and success branches rather than treating a
+  hidden psql step as a release.
 */
 const crypto = require("node:crypto");
 const path = require("node:path");
@@ -18,7 +19,7 @@ require("../e2e/proof_fence_preload.js");
 const ROOT = path.join(__dirname, "..", "..");
 const MIGRATE = path.join(ROOT, "migrations", "migrate.js");
 const DB_URL = boundary.manifest().url;
-const EXPECTED = 15;
+const EXPECTED = 16;
 let passed = 0, failed = 0, pool;
 
 const OLD_INDEX = "CREATE UNIQUE INDEX uq_proposed_natural ON public.proposed_records USING btree (activation_id, target_type, natural_key) WHERE (natural_key IS NOT NULL)";
@@ -65,9 +66,15 @@ async function count(table, where, values) {
     beforeLedger && normalizeName(beforeLedger.name) === "proposed_source_claim_identity", JSON.stringify(beforeLedger));
   ok("numbered 198 has the reviewed source-row index predicate",
     normalized(await indexDefinition()) === normalized(NEW_INDEX), await indexDefinition());
+  const successorLedger = await one("select name from schema_migrations where version='199'");
+  ok("the current successor migration is present before the witness",
+    successorLedger && normalizeName(successorLedger.name) === "property_display_name_command",
+    JSON.stringify(successorLedger));
 
-  // Actual pre-198 state: exact prior index and an exact 197 ledger.
-  await pool.query("delete from schema_migrations where version='198'");
+  // Actual pre-198 state: exact prior index and an exact 197 ledger. A numbered
+  // ledger cannot keep 199 while 198 is absent, so the successor receipt is
+  // removed temporarily and the canonical runner restores the whole suffix.
+  await pool.query("delete from schema_migrations where version in ('198','199')");
   await pool.query("drop index uq_proposed_natural");
   await pool.query(`create unique index uq_proposed_natural
     on proposed_records (activation_id, target_type, natural_key)
@@ -122,20 +129,24 @@ async function count(table, where, values) {
     `exit=${locked.code}\n${locked.output.slice(-900)}`);
   ok("lock failure leaves ledger 197 and the old physical index intact",
     !(await one("select 1 from schema_migrations where version='198'")) &&
+    !(await one("select 1 from schema_migrations where version='199'")) &&
     normalized(await indexDefinition()) === normalized(OLD_INDEX), await indexDefinition());
 
   const released = runMigration("197", "2s");
-  ok("real runner applies only 198 from exact 197",
-    released.code === 0 && /198_proposed_source_claim_identity\.sql/.test(released.output),
+  ok("real runner restores 198 and the current successor from exact 197",
+    released.code === 0 && /198_proposed_source_claim_identity\.sql/.test(released.output)
+      && /199_property_display_name_command\.sql/.test(released.output),
     `exit=${released.code}\n${released.output.slice(-900)}`);
   const applied = await one("select name,applied_at from schema_migrations where version='198'");
+  const successorApplied = await one("select name from schema_migrations where version='199'");
   const afterDefinition = await indexDefinition();
   ok("198 records its ledger row and exact reviewed physical predicate",
     applied && applied.name === "proposed_source_claim_identity" &&
+    successorApplied && normalizeName(successorApplied.name) === "property_display_name_command" &&
     normalized(afterDefinition) === normalized(NEW_INDEX),
-    JSON.stringify({ applied, afterDefinition }));
+    JSON.stringify({ applied, successorApplied, afterDefinition }));
 
-  const repeat = runMigration("198", "2s");
+  const repeat = runMigration("199", "2s");
   const afterRepeat = await one("select name,applied_at from schema_migrations where version='198'");
   ok("repeat release is a no-op with unchanged ledger receipt and index",
     repeat.code === 0 && /Everything was already up to date/.test(repeat.output) &&
