@@ -57,12 +57,14 @@ A short-lived KZ staff session opened the served app and was revoked after the r
 - Skyline opened Management under `Skyline Apartments`; the canonical read remained 160 rentable bed positions and 31 presently established occupied positions.
 - Greenery opened Leasing under `Greenery Apartments`; the UI honestly reported the unavailable live reads and did not invent leasing facts.
 - `/operator/me` confirmed the selected property label after both switches.
+- Read-only loopback HTTP over the production database confirmed the three contract readers return `Skyline Apartments`, canonical key `1417`, and model `bed`: property surface, leasing detail, and monthly reporting dashboard. This used the deployed product source; the checkout delta was documentation/evidence only.
 - `document.elementFromPoint` at each asserted label/row center resolved inside the asserted element; no asserted control was covered.
 - The browser emitted no page errors.
 
 Evidence:
 
 - [browser acceptance JSON](production-browser-acceptance-20260916.json)
+- [three presentation-reader results](production-presentation-reads-20260916.json)
 - [authorized property chooser](production-property-chooser-20260916.png)
 - [Skyline Management](production-skyline-management-20260916.png)
 - [Greenery Leasing](production-greenery-leasing-20260916.png)
