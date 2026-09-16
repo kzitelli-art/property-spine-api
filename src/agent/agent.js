@@ -34,8 +34,9 @@ const { quotablePricing } = require("./pricing_adapter");
 const { effectivePropertyPricing } = require("../money/effective_pricing");
 const { renderChargeTerms } = require("../money/governed_charge_language");
 const { termsDigest } = require("../money/governed_charge_cutover");
-const { compareEconomicSources, staleReasonForOperator } =
+const { compareEconomicSources, staleReasonForOperator, isEconomic } =
   require("./draft_source_identity");
+const leasingContextResolver = require("./leasing_context_resolver");
 const aiLeasingStrategy = require("../leasing/ai_leasing_strategy");
 const aiLeasingStrategyRuntime = require("../leasing/ai_leasing_strategy_runtime");
 const aiLeasingOperatingContext = require("../leasing/ai_leasing_operating_context"); // GOVERNED OPERATING CONTEXT LEASING v1
@@ -167,7 +168,29 @@ module.exports = function agentModule(deps) {
   // ── the curated fact resolver + the LIVE unit read ─────────────────────────
   // Returns { facts:[{fact_key,category,rendered_text,source}], unit:{...}|null }.
   // Curated facts come from agent_facts (active). Unit truth is read LIVE from units.
-  async function resolveContext(client, { property_id, unit_id }) {
+  //  ── `selection` NARROWS WHAT THE MODEL SEES, NEVER WHAT TRUTH SAYS ──
+  //  An optional decision from leasing_context_resolver saying which curated
+  //  facts this turn actually needs. Omit it and this function behaves
+  //  exactly as it did before the resolver existed: everything active, for
+  //  this property, plus the live unit read.
+  //
+  //  Two boundaries are load-bearing and neither is negotiable here:
+  //
+  //    1. ECONOMIC SOURCES ARE NEVER NARROWED. Governed charges and any fact
+  //       in the `pricing` category stay in the returned set whatever the
+  //       selection says, because agent_runs.resolved_fact_snapshot_json is
+  //       what compareEconomicSources judges a ready draft against — over
+  //       the WHOLE economic set, including sources that appeared after the
+  //       human reviewed it. Narrow that set and the stale-draft guarantee
+  //       either fires on every send or stops seeing a new fee. The prompt
+  //       being shorter is not worth either.
+  //
+  //    2. PROPERTY SCOPE IS UNCHANGED. Selection filters within the rows
+  //       readActive already scoped to this property. It cannot reach
+  //       another property's facts, and there is no fallback that could:
+  //       a selection matching nothing yields an empty curated set and the
+  //       existing honest-unknown behaviour, never a borrowed fact.
+  async function resolveContext(client, { property_id, unit_id, selection } = {}) {
     // EXPIRY IS PART OF ACTIVE (owner decision, 2026-07-27). status='active'
     // alone was not enough: agent_facts has carried effective_until since 053
     // and nothing honored it, so a fact with a past expiry would be quoted to
@@ -176,10 +199,15 @@ module.exports = function agentModule(deps) {
     // exactly the dated things. A fact is quotable only while it is still true.
     // No live fact sets effective_until today, so this changes nothing now and
     // guards everything later.
-    const facts = (await require("../leasing/leasing_knowledge").readActive(client, property_id)).map(r => ({
+    const curated = (await require("../leasing/leasing_knowledge").readActive(client, property_id)).map(r => ({
       fact_key: r.fact_key, category: r.category, rendered_text: r.rendered_text,
       source: r.source_type, confirmed_at: r.confirmed_at,
     }));
+    //  isEconomic FIRST, then the selection — so an economic fact is kept
+    //  whether or not this turn asked about money. One owner for that
+    //  boundary (draft_source_identity), used by both the narrowing here and
+    //  the staleness comparison that depends on it.
+    const facts = curated.filter(f => isEconomic(f) || leasingContextResolver.selects(selection, f));
 
     // ── GOVERNED CHARGES ARE FACTS TOO ────────────────────────────────
     // A published governed charge is read here ALONGSIDE the curated facts,
@@ -253,6 +281,26 @@ module.exports = function agentModule(deps) {
     //  market_rent is NOT selected here any more. The governed adapter is the
     //  only route to a quotable number, and when it cannot answer it hands
     //  off in its own words rather than letting the model improvise one.
+    //  ── THE GOVERNED PRICE IS THE READ WORTH SKIPPING. IDENTITY IS NOT ──
+    //  The unit row is read whenever one is linked, selection or not. It is
+    //  a cheap identity read, and skipping it would make the prompt say
+    //  "(no specific unit is linked to this inquiry yet)" about a
+    //  conversation that HAS one — a confident wrong statement to save a
+    //  query, which is the trade §5 exists to refuse.
+    //
+    //  `quotablePricing` is the governed invocation, and that is what
+    //  `needsPricing` gates. The failure direction is deliberate: when it is
+    //  skipped, `unit.pricing` carries an explicit not-read marker,
+    //  directPricingReply declines, and the prompt tells the model in so
+    //  many words that no rent figure is in context and it must not supply
+    //  one. A missing quote becomes a handoff, never an improvised figure.
+    //
+    //  `needsInventory` is deliberately NOT used to withhold the
+    //  find_available_units tool. Taking a tool away from the model changes
+    //  what the agent can DO, not what it retrieves, and a prospect who
+    //  pivots to availability in a sentence the table does not match would
+    //  hit an agent that cannot look. Retrieval narrows; capability does not.
+    const wantsPricing = !selection || selection.needsPricing !== false;
     let unit = null;
     if (unit_id) {
       const u = (await client.query(
@@ -262,8 +310,15 @@ module.exports = function agentModule(deps) {
       if (u) {
         let pricing = null;
         try {
-          pricing = await quotablePricing(client, {
-            property_id, unit_type_id: u.unit_type_id, intent: "new_lease" });
+          //  NOT A BARE NULL. A skipped read is a different fact from an
+          //  unquotable one, and both are different from a number. The
+          //  marker carries which, so the prompt can say the accurate thing
+          //  instead of silently omitting the rent line and leaving the
+          //  model free to supply one.
+          pricing = !wantsPricing
+            ? { quotable: false, not_read_this_turn: true, reason: "pricing_not_required_this_turn" }
+            : await quotablePricing(client, {
+                property_id, unit_type_id: u.unit_type_id, intent: "new_lease" });
         } catch (e) {
           //  A pricing fault must never take the conversation down, and it
           //  must never silently become "no rent on file" either — that
@@ -371,10 +426,23 @@ module.exports = function agentModule(deps) {
   // ── build the model context in STRICT AUTHORITY ORDER ──────────────────────
   // (1) safety/fair-housing rules (2) curated facts (3) live unit truth
   // (4) thread history (5) persona. Lead messages are UNTRUSTED content.
-  function buildMessages({ facts, unit, history, propertyName }) {
+  function buildMessages({ facts, unit, history, propertyName, selection }) {
+    //  ── "NONE SELECTED" IS NOT "NONE ON FILE" ────────────────────────
+    //  Before the context resolver, an empty fact list could only mean the
+    //  property had nothing recorded, and the line said so. Under selection
+    //  it can also mean the property has facts and none of them answers THIS
+    //  question — and telling the model "no curated facts are on file for
+    //  this property" would be a confident wrong statement about the
+    //  property, which is the failure §5 exists to prevent. The two are now
+    //  distinct sentences, and neither invites the model to fill the gap.
+    const narrowed = !!(selection && selection.selective);
     const factLines = facts.length
       ? facts.map(f => `- ${f.fact_key} (${f.category}; source: ${f.source}): ${f.rendered_text}`).join("\n")
-      : "(no curated facts are on file for this property)";
+      : narrowed
+        ? "(nothing on file for this property answers this particular question. " +
+          "Other topics may be recorded; this is not a statement that the property has no information. " +
+          "Do not answer from general knowledge — say you don't have that confirmed and offer to get it from the team.)"
+        : "(no curated facts are on file for this property)";
     //  A NUMBER OR AN INSTRUCTION NOT TO INVENT ONE — never a bare blank.
     //  "rent not on the unit record" read as an inventory fact and left the
     //  model free to fill the gap. When pricing is not quotable the model is
@@ -383,8 +451,16 @@ module.exports = function agentModule(deps) {
     const rentPart = !p ? ""
       : p.quotable
         ? `, rent $${p.rent}/mo on a ${p.lease_term_months}-month term (governed published pricing)`
-        : `. PRICING IS NOT QUOTABLE (${p.reason}). Do NOT state, estimate or imply any rent figure. ` +
-          `If the prospect asks about price, reply with exactly: "${p.say}"`;
+        //  Read, and the answer was "not quotable" — the property's own state.
+        : !p.not_read_this_turn
+          ? `. PRICING IS NOT QUOTABLE (${p.reason}). Do NOT state, estimate or imply any rent figure. ` +
+            `If the prospect asks about price, reply with exactly: "${p.say}"`
+        //  NOT read, because this turn is not about price. Saying "not
+        //  quotable" here would assert something about the property that was
+        //  never checked. The prohibition is identical; the claim is not.
+          : `. Governed pricing was NOT read for this turn, so no rent figure is in context. ` +
+            `Do NOT state, estimate or imply any rent figure. If the prospect raises price, ` +
+            `say the leasing team can confirm current pricing.`;
     const unitLine = unit
       ? `Unit ${unit.unit_number || "(unnamed)"}: ${unit.bedrooms ?? "?"}bd/${unit.bathrooms ?? "?"}ba` + rentPart
       : "(no specific unit is linked to this inquiry yet)";
@@ -1001,7 +1077,20 @@ Reply with ONLY the message text.`;
         // resolve context fresh (read-only; not in a write txn)
         const client0 = await pool.connect();
         let ctx;
-        try { ctx = await resolveContext(client0, { property_id: tx1.property_id, unit_id: tx1.unit_id }); }
+        //  WHAT THIS TURN NEEDS, decided before the reads, from the inbound
+        //  text and what is already recorded about the person. Deterministic
+        //  and model-free — see leasing_context_resolver.
+        //  personAttributes is part of the resolver's contract and is not fed
+        //  from here yet: tx1 does not load them and adding a read per turn
+        //  buys nothing this slice needs — the inbound text already carries
+        //  the budget and bedroom signals in Example 3's shape. Stated rather
+        //  than quietly dropped, so the next person knows it is a gap and not
+        //  a decision against it.
+        const selection = leasingContextResolver.resolveLeasingContext({
+          message: tx1.inboundText,
+          propertyId: tx1.property_id,
+        });
+        try { ctx = await resolveContext(client0, { property_id: tx1.property_id, unit_id: tx1.unit_id, selection }); }
         finally { client0.release(); }
         factSnapshot = ctx.facts;
         snapshotHash = sha(factSnapshot);
@@ -1042,7 +1131,7 @@ Reply with ONLY the message text.`;
             try { return (await c.query("select coalesce(display_name, name) as name from properties where id=$1", [tx1.property_id])).rows[0]?.name || null; }
             finally { c.release(); }
           })());
-          const built = buildMessages({ facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
+          const built = buildMessages({ facts: ctx.facts, unit: ctx.unit, history, propertyName: propName, selection });
           runtimeStrategyEnvelope = aiLeasingStrategyRuntime.validatedEnvelopeForRuntime(tx1.strategy_envelope, {
             surface: "ongoing_reply", model: MODEL, promptRevision: PROMPT_REVISION,
           });
@@ -2308,7 +2397,12 @@ Reply with ONLY the message text.`;
       try {
         const c0 = await pool.connect();
         let ctx;
-        try { ctx = await resolveContext(c0, { property_id: prep.property_id, unit_id: prep.unit_id }); }
+        //  Same decision on the regenerate path, from the same inbound text.
+        const selection = leasingContextResolver.resolveLeasingContext({
+          message: prep.inboundText,
+          propertyId: prep.property_id,
+        });
+        try { ctx = await resolveContext(c0, { property_id: prep.property_id, unit_id: prep.unit_id, selection }); }
         finally { c0.release(); }
         factSnapshot = ctx.facts; snapshotHash = sha(factSnapshot);
         operatingContextSnapshot = aiLeasingOperatingContext.canonicalRuleSnapshot(
@@ -2338,7 +2432,7 @@ Reply with ONLY the message text.`;
           let propName;
           try { propName = (await c2.query("select coalesce(display_name, name) as name from properties where id=$1", [prep.property_id])).rows[0]?.name || null; }
           finally { c2.release(); }
-          const built = buildMessages({ facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
+          const built = buildMessages({ facts: ctx.facts, unit: ctx.unit, history, propertyName: propName, selection });
           runtimeStrategyEnvelope = aiLeasingStrategyRuntime.validatedEnvelopeForRuntime(prep.strategy_envelope, {
             surface: "regenerated_reply", model: MODEL, promptRevision: PROMPT_REVISION,
           });

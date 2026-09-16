@@ -163,6 +163,7 @@ step "compliance ask spine projection" node tests/unit/compliance_ask_spine.test
 step "ask spine entitlement matrix" node tests/proofs/ask_spine_entitlement_matrix.test.js
 step "migration 194-198 reviewed hashes are the git blobs" node tests/unit/migration_194_198_reviewed_hashes.test.js
 step "inventory correction door contract" node tests/unit/inventory_correction_contract.test.js
+step "leasing agent context resolution" node tests/unit/leasing_context_resolver.test.js
 step "terms preparation attribution" node tests/unit/terms_confirmation_attribution.test.js
 step "current packet execution decision attribution" node tests/unit/execution_decision_read.test.js
 step "terms attribution model boundary" node tests/unit/terms_attribution_model_boundary.test.js
