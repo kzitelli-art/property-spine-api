@@ -48,7 +48,20 @@ function routeStaffSmsTurn({ text, attachments = [] } = {}) {
     return Object.freeze({ destination: "technician", technician, leasing, subject: null });
   }
 
-  if (askSpineAnswer.questionSubject(text) === "leasing_knowledge") {
+  //  ── ASK THE KNOWLEDGE REGISTRY THIS FILE ALREADY IMPORTS ─────────
+  //  `questionSubject` returned "work" for plainly-leasing questions the
+  //  shared registry recognises ("whats our pet policy"), so the same
+  //  operator asking the same thing was answered on the web and dropped on
+  //  the technician rail over SMS. That is a channel producing different
+  //  property knowledge, which is exactly what must not happen.
+  //
+  //  `leasingKnowledge` was already required at the top of this file and
+  //  never consulted. It is the conservative test to add here: isKnowledgeRead
+  //  demands a recognised shelf AND question shape, and excludes action verbs,
+  //  send-to-others, money, availability and work-order words — so it cannot
+  //  intercept a technician's report or a request to change something.
+  if (askSpineAnswer.questionSubject(text) === "leasing_knowledge"
+      || leasingKnowledge.isKnowledgeRead(text)) {
     return Object.freeze({ destination: "ask_spine", technician, leasing, subject: "leasing_knowledge" });
   }
 

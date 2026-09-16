@@ -709,6 +709,14 @@ module.exports = function leasingInventoryModule({ pool }) {
     };
   }
 
+  //  readProspectFacts is exposed so the leasing agent can carry what the
+  //  prospect ALREADY told Spine into the next turn, instead of asking them
+  //  to repeat it. Exported rather than reimplemented: this is the one read
+  //  that resolves person-level and property-level rows against each other,
+  //  keeps the most specific and most recent, and carries source and
+  //  recorded_at with every value. A second reader would drift from it, and
+  //  the drift would look like a prospect being forgotten.
   return { availableUnits, attachSelectedUnit, matchConfirmationToOffer,
-           matchProspectHomes, readProspectMatchStanding };
+           matchProspectHomes, readProspectMatchStanding, readProspectFacts,
+           PROSPECT_FACT_KEYS };
 };

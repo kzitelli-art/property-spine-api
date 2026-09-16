@@ -168,6 +168,27 @@ module.exports = function agentModule(deps) {
   // ── the curated fact resolver + the LIVE unit read ─────────────────────────
   // Returns { facts:[{fact_key,category,rendered_text,source}], unit:{...}|null }.
   // Curated facts come from agent_facts (active). Unit truth is read LIVE from units.
+  //  ── WHAT THE PROSPECT ALREADY TOLD SPINE ─────────────────────────
+  //  One canonical read: leasing_inventory.readProspectFacts, which resolves
+  //  person-level against property-level rows, keeps the most specific and
+  //  most recent, and carries source and recorded_at on every value. Scoped
+  //  to THIS person and THIS property, like every other read here.
+  //
+  //  Fail-soft, but never silently. A read that FAILED is not a prospect who
+  //  told us nothing — collapsing those two is exactly the silence this repo
+  //  forbids. On failure the turn proceeds without established context and
+  //  says so in the prompt, rather than implying the prospect never spoke.
+  async function readEstablishedProspectFacts({ person_id, property_id }) {
+    if (!person_id || !property_id) return { facts: {}, read_failed: false };
+    try {
+      const out = await inventory.readProspectFacts(pool, { person_id, property_id });
+      return { facts: (out && out.facts) || {}, read_failed: false };
+    } catch (e) {
+      console.error("[agent/context] prospect facts read failed:", e && e.message);
+      return { facts: {}, read_failed: true };
+    }
+  }
+
   //  ── `selection` NARROWS WHAT THE MODEL SEES, NEVER WHAT TRUTH SAYS ──
   //  An optional decision from leasing_context_resolver saying which curated
   //  facts this turn actually needs. Omit it and this function behaves
@@ -464,6 +485,33 @@ module.exports = function agentModule(deps) {
           "Other topics may be recorded; this is not a statement that the property has no information. " +
           "Do not answer from general knowledge — say you don't have that confirmed and offer to get it from the team.)"
         : "(no curated facts are on file for this property)";
+    //  ── WHAT THIS PROSPECT ALREADY TOLD US ───────────────────────────
+    //  Only the recorded facts the resolver judged relevant to THIS turn, so
+    //  a budget mentioned once does not follow someone into every later
+    //  question. Values are free text as the prospect said them ("August",
+    //  "$2,500", "2BR") and are presented that way: a month is not a date, a
+    //  ceiling is not a quote, and a bedroom count is not a specific home.
+    //  The model may rely on these so the prospect is not made to repeat
+    //  themselves; it may not sharpen them into detail nobody recorded.
+    const established = (selection && selection.established) || {};
+    const establishedKeys = Object.keys(established);
+    const establishedBlock = (selection && selection.established_read_failed)
+      ? "\n\nWHAT THIS PERSON ALREADY TOLD US: could NOT be read this turn. "
+        + "Do not treat that as them having told us nothing. If the answer depends on "
+        + "something they said earlier, ask them to confirm it rather than guessing."
+      : establishedKeys.length
+        ? "\n\nWHAT THIS PERSON ALREADY TOLD US (recorded, do not make them repeat it):\n"
+          + establishedKeys.map(k => {
+              const v = established[k];
+              const src = v && v.source ? ` (recorded from ${v.source})` : "";
+              return `- ${k}: ${v && v.value}${src}`;
+            }).join("\n")
+          + "\nUse these to understand what they are asking now. They are the prospect's own "
+          + "words, not governed truth: a stated month is not a lease date, a stated budget is "
+          + "not a quote, and a stated bedroom count is not a particular home. Never invent a "
+          + "year, lease term, rent basis or unit identity that is not recorded."
+        : "";
+
     //  A NUMBER OR AN INSTRUCTION NOT TO INVENT ONE — never a bare blank.
     //  "rent not on the unit record" read as an inventory fact and left the
     //  model free to fill the gap. When pricing is not quotable the model is
@@ -802,7 +850,7 @@ VERIFIED PROPERTY FACTS:
 ${factLines}
 
 LIVE UNIT DATA:
-${unitLine}
+${unitLine}${establishedBlock}
 
 Reply with ONLY the message text.`;
 
@@ -1107,10 +1155,13 @@ Reply with ONLY the message text.`;
         //  the budget and bedroom signals in Example 3's shape. Stated rather
         //  than quietly dropped, so the next person knows it is a gap and not
         //  a decision against it.
-        const selection = leasingContextResolver.resolveLeasingContext({
+        const established = await readEstablishedProspectFacts({
+          person_id: tx1.person_id, property_id: tx1.property_id });
+        const selection = Object.assign({}, leasingContextResolver.resolveLeasingContext({
           message: tx1.inboundText,
           propertyId: tx1.property_id,
-        });
+          personAttributes: established.facts,
+        }), { established_read_failed: established.read_failed });
         try { ctx = await resolveContext(client0, { property_id: tx1.property_id, unit_id: tx1.unit_id, selection }); }
         finally { client0.release(); }
         factSnapshot = ctx.facts;
@@ -2419,10 +2470,13 @@ Reply with ONLY the message text.`;
         const c0 = await pool.connect();
         let ctx;
         //  Same decision on the regenerate path, from the same inbound text.
-        const selection = leasingContextResolver.resolveLeasingContext({
+        const established2 = await readEstablishedProspectFacts({
+          person_id: prep.person_id, property_id: prep.property_id });
+        const selection = Object.assign({}, leasingContextResolver.resolveLeasingContext({
           message: prep.inboundText,
           propertyId: prep.property_id,
-        });
+          personAttributes: established2.facts,
+        }), { established_read_failed: established2.read_failed });
         try { ctx = await resolveContext(c0, { property_id: prep.property_id, unit_id: prep.unit_id, selection }); }
         finally { c0.release(); }
         factSnapshot = ctx.facts; snapshotHash = sha(factSnapshot);

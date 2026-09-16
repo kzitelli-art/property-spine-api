@@ -174,19 +174,67 @@ const PRICING_RX = new RegExp([
 const INVENTORY_RX =
   /\b(availab(?:le|ility)|vacan(?:t|cy|cies)|open\s+(?:units?|apartments?)|what\s+do\s+you\s+have|any(?:thing)?\s+(?:available|open|left)|studios?|\d\s*[- ]?\s*(?:br|bed|beds|bedrooms?)|one[- ]bed(?:room)?|two[- ]bed(?:room)?|three[- ]bed(?:room)?|\d(?:st|nd|rd|th)\s+floor|floor\s+\d|unit\s+\d|apartment\s+\d|move[- ]?in\s+(?:date|by|in))\b/i;
 
-/** Fact keys recorded on a lead/person that imply live inventory or pricing. */
-const ATTRIBUTE_SIGNALS = Object.freeze({
-  pricing: ["budget", "max_rent", "price_ceiling", "target_rent"],
-  inventory: ["bedrooms", "bedroom_preference", "unit_preference", "desired_move_in", "move_in_date"],
+//  ── THE REAL VOCABULARY, READ OUT OF THE SCHEMA ─────────────────────
+//  An earlier version of this file guessed these names from an example
+//  prompt — budget, max_rent, price_ceiling, target_rent, bedrooms,
+//  bedroom_preference, unit_preference, desired_move_in, move_in_date. The
+//  `person_attributes` table constrains attr_key with a CHECK to exactly
+//  six values, and only ONE of those nine guesses was among them. Eight
+//  names matched nothing and would have silently recorded a prospect as
+//  having told Spine nothing at all.
+//
+//    move_month · budget · unit_type · occupants · pets · reason
+//
+//  The column is `attr_key`, not `attribute_key`. The canonical read is
+//  leasing_inventory.readProspectFacts, which resolves person-level against
+//  property-level rows and carries source and recorded_at on every value.
+const ATTR_KEYS = Object.freeze(["move_month", "budget", "unit_type", "occupants", "pets", "reason"]);
+
+//  Which recorded facts bear on which kind of turn. A turn that is ABOUT
+//  pets should carry the recorded pet fact; a turn refining a search should
+//  carry the search terms the prospect already gave.
+const ATTR_RELEVANCE = Object.freeze({
+  search: ["unit_type", "move_month", "budget", "occupants"],
+  pets:   ["pets"],
 });
 
-function attributeNames(personAttributes) {
-  if (!personAttributes) return [];
+//  ── AN ELLIPTICAL FOLLOW-UP ─────────────────────────────────────────
+//  "What about furnished?" carries no subject of its own; it only makes
+//  sense against what was already established. That is the one shape where
+//  the whole recorded set must travel forward, because the prospect is
+//  explicitly relying on not having to repeat themselves.
+const FOLLOW_UP_RX =
+  /^\s*(?:and\b|also\b|what about\b|how about\b|what if\b|any\b.{0,20}\?|ok(?:ay)?[, ]|is it\b|are they\b|does it\b|do they\b)/i;
+
+/**
+ * Normalise whatever the caller has into { key: {value, source, recorded_at} }.
+ * Accepts readProspectFacts' `facts` map, a plain key/value object, or a row
+ * array — so a future caller with a different shape is not silently ignored.
+ */
+function normaliseAttributes(personAttributes) {
+  const out = {};
+  if (!personAttributes) return out;
+  const take = (key, value, source, at) => {
+    const k = String(key || "");
+    if (!ATTR_KEYS.includes(k)) return;          //  never invent a key the schema cannot hold
+    const v = value == null ? "" : String(value);
+    if (!v.trim()) return;                        //  a blank is not a recorded preference
+    out[k] = { value: v, source: source || null, recorded_at: at || null };
+  };
   if (Array.isArray(personAttributes)) {
-    return personAttributes.map(a => String((a && (a.attribute_key || a.key || a.name)) || "")).filter(Boolean);
+    for (const row of personAttributes) {
+      if (!row) continue;
+      take(row.attr_key || row.key, row.attr_value != null ? row.attr_value : row.value, row.source, row.recorded_at || row.created_at);
+    }
+    return out;
   }
-  if (typeof personAttributes === "object") return Object.keys(personAttributes);
-  return [];
+  if (typeof personAttributes === "object") {
+    for (const [k, v] of Object.entries(personAttributes)) {
+      if (v && typeof v === "object") take(v.key || k, v.value, v.source, v.recorded_at);
+      else take(k, v, null, null);
+    }
+  }
+  return out;
 }
 
 /**
@@ -202,6 +250,32 @@ function attributeNames(personAttributes) {
  *            needsPricing:boolean, needsInventory:boolean,
  *            selective:boolean, basis:string, property_id:(string|null)}}
  */
+//  ── WHICH RECORDED FACTS BEAR ON THIS TURN ──────────────────────────
+//  Deterministic, and deliberately narrow in both directions.
+//
+//  Carry everything when the turn is elliptical — "what about furnished?"
+//  has no subject of its own and is only answerable against what was already
+//  established, which is the whole point of having recorded it.
+//
+//  Carry the search terms when THIS turn is a search, because a budget and a
+//  bedroom count refine it. Carry the recorded pet fact when the turn is
+//  about pets.
+//
+//  Carry NOTHING otherwise. A prospect who mentioned a budget once has not
+//  asked about money forever; dragging their whole profile into an unrelated
+//  question is how a recorded preference turns into a wrong answer.
+function establishedFor(recorded, { text, intents, needsPricing, needsInventory }) {
+  const keys = Object.keys(recorded);
+  if (!keys.length) return {};
+  const wanted = new Set();
+  if (FOLLOW_UP_RX.test(text)) for (const k of keys) wanted.add(k);
+  if (needsPricing || needsInventory) for (const k of ATTR_RELEVANCE.search) wanted.add(k);
+  if (intents.includes("pets")) for (const k of ATTR_RELEVANCE.pets) wanted.add(k);
+  const out = {};
+  for (const k of keys) if (wanted.has(k)) out[k] = recorded[k];
+  return out;
+}
+
 //  ── ONE SWITCH THAT DOES NOT NEED A DEPLOY ──────────────────────────
 //  This changes what a real prospect is told, and deploys here are manual.
 //  If narrowing ever drops a fact a turn needed, the fix must not wait on a
@@ -224,6 +298,10 @@ function resolveLeasingContext({ message, conversation, lead, personAttributes, 
     intents: [], factKeys: [], categories: [],
     //  An unreadable turn gets everything, not nothing.
     needsPricing: true, needsInventory: true,
+    //  ...but not the prospect's recorded profile. A greeting is not a
+    //  follow-up, and an unclassified turn is the one place we are least
+    //  entitled to assume which established fact it leans on.
+    established: {},
     selective: false, basis, property_id,
   });
 
@@ -254,12 +332,17 @@ function resolveLeasingContext({ message, conversation, lead, personAttributes, 
     if (!intents.includes(`knowledge:${key}`)) intents.push(`knowledge:${key}`);
   }
 
-  const attrs = attributeNames(personAttributes);
-  const attrPricing = attrs.some(a => ATTRIBUTE_SIGNALS.pricing.includes(a));
-  const attrInventory = attrs.some(a => ATTRIBUTE_SIGNALS.inventory.includes(a));
-
-  const needsPricing = PRICING_RX.test(text) || intents.includes("fees") || attrPricing;
-  const needsInventory = INVENTORY_RX.test(text) || attrInventory;
+  //  ── WHAT IS RECORDED NEVER DECIDES WHAT IS ASKED ─────────────────
+  //  An earlier version let a stored budget set needsPricing outright, so a
+  //  prospect who once mentioned $2,500 would turn a question about package
+  //  handling into a governed pricing search forever after. A recorded
+  //  preference is CONTEXT for a question that depends on it — never a
+  //  standing instruction that every later turn is about money.
+  //
+  //  So the two capability flags are decided by THIS turn's words alone.
+  const recorded = normaliseAttributes(personAttributes);
+  const needsPricing = PRICING_RX.test(text) || intents.includes("fees");
+  const needsInventory = INVENTORY_RX.test(text);
 
   //  NOTHING MATCHED — not a narrow read, a full one. See the header.
   if (!intents.length && !needsPricing && !needsInventory) return empty("unclassified");
@@ -278,6 +361,7 @@ function resolveLeasingContext({ message, conversation, lead, personAttributes, 
     return Object.freeze({
       intents, factKeys: [], categories: [],
       needsPricing, needsInventory,
+      established: establishedFor(recorded, { text, intents, needsPricing, needsInventory }),
       selective: false, basis: "intent_without_shelf",
       property_id,
     });
@@ -293,6 +377,7 @@ function resolveLeasingContext({ message, conversation, lead, personAttributes, 
     return Object.freeze({
       intents: [], factKeys: [], categories: [],
       needsPricing, needsInventory,
+      established: establishedFor(recorded, { text, intents: [], needsPricing, needsInventory }),
       selective: false, basis: "economic_only",
       property_id,
     });
@@ -304,6 +389,7 @@ function resolveLeasingContext({ message, conversation, lead, personAttributes, 
     categories: [...categories].sort(),
     needsPricing,
     needsInventory,
+    established: establishedFor(recorded, { text, intents, needsPricing, needsInventory }),
     selective: true,
     basis: "matched",
     property_id,
@@ -325,4 +411,5 @@ function selects(selection, fact) {
   return selection.factKeys.includes(key) || selection.categories.includes(category);
 }
 
-module.exports = { resolveLeasingContext, selects, narrowingDisabled, INTENTS, PRICING_RX, INVENTORY_RX };
+module.exports = { resolveLeasingContext, selects, narrowingDisabled, normaliseAttributes,
+                   INTENTS, ATTR_KEYS, ATTR_RELEVANCE, FOLLOW_UP_RX, PRICING_RX, INVENTORY_RX };

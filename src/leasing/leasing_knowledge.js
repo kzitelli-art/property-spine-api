@@ -76,7 +76,14 @@ function isSelfRead(question) {
     return /^(?:please\s+)?(?:(?:can|could|would|will) you\s+)?(?:please\s+)?(?:send|text|show) me\b/i.test(q)
       && !/\bto\s+|\bfor\s+(?:him|her|them|the prospect|the resident)|@|\b(?:and|then)\b/i.test(q);
   }
-  return /^(?:please\s+)?(?:show|find|pull up|what|which|where|how|does|do|is|are|can|tell me)\b/i.test(q)
+  //  ── CONTRACTIONS WERE INVISIBLE HERE ─────────────────────────────
+  //  `what` followed by \b requires a non-word character next, so "whats
+  //  our pet policy" matched nothing while "what is our pet policy" matched
+  //  fine. People type the contraction. The consequence was not cosmetic:
+  //  this predicate is what the staff SMS router uses to recognise a
+  //  property-knowledge question, so the contracted form fell through to the
+  //  technician rail while the same question answered normally on the web.
+  return /^(?:please\s+)?(?:show|find|pull up|what(?:'s|s)?|which|where(?:'s|s)?|how(?:'s|s)?|who(?:'s|s)?|does|do|is|are|can|tell me)\b/i.test(q)
     || /^(?:matterports?|materports?|floor\s*plans?|amenities|layouts|photos|dimensions)\s*[?.!]*$/i.test(q);
 }
 function isKnowledgeRead(q) {
