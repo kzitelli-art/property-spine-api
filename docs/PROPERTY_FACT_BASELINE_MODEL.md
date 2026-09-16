@@ -241,8 +241,23 @@ PROCESS
 PROPERTY
   amenities                  what exists, by location
   furnished_options
+  unit_features              appliances, laundry, HVAC — what is IN the apartment
+  layouts                    marketing layout names, bed/bath, mapped to canonical type
+  dimensions                 per layout, each marked exact | approximate | marketing_range
+  package_handling           who receives, where, notification, after-hours, loss
   virtual_tours              LAYOUT media only — see §4.3
+  media                      photos, plans, diagrams — classified, see §4.4
+
+POSITIONING
+  positioning                the pitch, the three strongest reasons, the honest tradeoffs
+  neighborhood               walkable/transit facts only — never area character, see §8
 ```
+
+**Seven of these came from the September 2026 two-property review packet, not from
+Solo** (§11). Solo's corpora are thin on descriptive and experiential facts because
+they were assembled from a policy handbook; the packet was assembled from an operator
+interview, which surfaces what prospects actually ask. `unit_features` is where
+Solo's laundry belongs — it is currently asserted in the prompt (D7).
 
 **Migrating Solo is a mapping, not a rewrite.** `fee_policy`'s single paragraph
 decomposes into the `fee_*` keys; the `pricing_*` keys from Corpus B map onto them
@@ -251,10 +266,10 @@ directly; the synonym pairs in §1 collapse to one side each.
 ### 3.2 `category` — closed, one level, no synonyms
 
 ```text
-identity · money · policy · process · property · media
+identity · money · policy · process · property · media · positioning
 ```
 
-Six values. `053`'s comment lists six different ones and the seed uses twelve; both
+Seven values. `053`'s comment lists six different ones and the seed uses twelve; both
 are superseded by this list. Add the CHECK in the same migration.
 
 ### 3.3 `source_class` — replaces free-text `source_type`
@@ -272,6 +287,51 @@ regulatory             jurisdictional requirement
 
 D3 is then a load-time error rather than a silent overwrite. Keep `source_record_id`
 pointing at the document.
+
+**Two additions the review packet forces.**
+
+*Source identity is a digest, not a filename.* The packet pins the governing Skyline
+lease by SHA256 and rules that *"a newer Repaired file with different fee fields must
+not supersede the governing source by filename or date alone."* It also caught a file
+named as one property's lease template that is actually another property's lease, for
+a different address and term. So a source record carries its **`sha256`** — the
+primitive already exists at `work_order_proof_attachments.sha256`
+(`134_technician_lifecycle.sql`) — and a fact cites the digest it was drawn from.
+
+*A rejected source must be recorded as rejected.* `source_class` is an allowlist, and
+an allowlist cannot say "we looked at this and it must not be used." The packet's
+`do-not-use` list is real operating knowledge: a 2023 investor update's occupancy and
+demographic statements, an offline May 2026 app snapshot with stale resident data, a
+mislabeled lease template, website dollar amounts, stale specials, COVID-era rules,
+camera counts, safety claims, blanket balcony claims. **A rejected source that is not
+recorded gets re-ingested by the next person.** Add `source_rejections`: the
+document, its digest, why it is not usable, who ruled, when.
+
+### 3.4 `fact_usability` — what a present fact actually establishes
+
+A fact existing is not a fact being usable. The Ask Spine charter froze this axis for
+maintenance reads (`docs/archive/ASK_SPINE_BUILD_CONTRACT.md` §8); it applies here
+unchanged, and reusing it is the cross-domain reuse that charter asked for.
+
+```text
+present_and_valid         usable as stated
+present_but_unverified    recorded, but nothing establishes it
+present_but_incomplete    partially established — some layouts, not all
+present_but_conflicting   two sourced claims disagree and no ruling exists
+missing                   absent → the agent defers (053's own doctrine)
+```
+
+**`present_but_unverified` and `present_but_conflicting` are the two that earn their
+keep**, and the two-property review packet produced clean examples of each:
+
+- *unverified* — a Matterport **labelled** 590 square feet, where the packet notes
+  "that label is not a verified measurement of a specific apartment";
+- *conflicting* — a junior 1BR tour labelled 700 SF against a website saying more
+  than 715, and a 2BR/2BA labelled 1,032 against more than 1,050.
+
+Both are silent to the prospect. Only the second records **what the two claims were**,
+which is the difference between a conflict somebody already investigated and one the
+next reviewer rediscovers.
 
 ---
 
@@ -299,13 +359,37 @@ governed amount'`, and no formatter can turn it into `"$75, 99"`.
 `effective_until` becomes **not null for `concession_current`**, enforced by a partial
 CHECK. D4 becomes unrepresentable. Every other key may leave it null.
 
-### 4.3 Media is layout media
+### 4.3 Media carries its class and its reach
 
-`virtual_tours` already carries the discipline in prose
-(`seed_solo_facts.js:214-232`) — *"Always describe it as the LAYOUT, never their
-specific apartment"*, and *"THERE IS NO TWO-BEDROOM TOUR: do not send another layout
-as a substitute."* Keep that text. The structural half is that a media fact is keyed
-to a **layout**, not a unit, so no code path can resolve one to an apartment.
+The review packet's media table is the shape to build, not prose to paraphrase. Every
+asset row:
+
+```text
+asset_class        photograph | rendering | measured_plan | diagram | virtual_tour
+reach              exact_home | representative
+layout_ref         the marketing layout it shows
+canonical_type_id  the Property Spine unit type it maps to — NULL until mapped
+example_units      exact units of that type, when known
+last_verified      a date, because links rot
+approved_disclosure  the sentence that must accompany it
+approved_by / at
+```
+
+**`reach = representative` is the default and `exact_home` must be earned.** The
+packet states the reason plainly: galleries and diagrams *"do not by themselves prove
+the condition, view, furniture package, or plan of an exact available home."* Solo
+reached the same rule from the other direction and wrote it into prose
+(`seed_solo_facts.js:214-232`). One field replaces both.
+
+An unmapped asset — `canonical_type_id` null — is **not sendable**. The packet lists
+"an exact-home photo, plan, dimension, or tour association that has not been mapped to
+canonical inventory" among the things that must not be used as leasing truth.
+
+The prose discipline Solo already wrote stays — *"Always describe it as the LAYOUT,
+never their specific apartment"*, and *"THERE IS NO TWO-BEDROOM TOUR: do not send
+another layout as a substitute and do not imply a tour exists"*
+(`seed_solo_facts.js:214-232`). `reach` makes it structural; the sentence makes it
+sayable. Neither replaces the other.
 
 ---
 
@@ -369,6 +453,28 @@ The three behaviours are distinct and each already exists in the prompt
 act, conversation continues), **handoff** (a person owns the thread). `absent
 behaviour` selects among them per key — it does not invent a fourth.
 
+### 6.1b Every fact has a steward and a next-review date
+
+The review packet demands this per shelf — *"future update owner"* — and again per
+property: knowledge steward, final accountable approver, approval date, **next review
+date**, review cadence. My model had `approved_by_user_id` and nothing else, which
+answers who approved it and not who keeps it true.
+
+```text
+steward_user_id     who keeps this fact current — never null on a live fact
+next_review_at      when it must be looked at again
+approved_by_user_id who approved it (exists)
+confirmed_at        when (exists)
+```
+
+This is the Exposure contract in `CLAUDE.md` applied to a fact: *"who owns resolving
+it — or `UNASSIGNED`."* A fact with no steward is an unowned claim being made to
+prospects, which is the same defect class as an unowned obligation.
+
+`next_review_at` is distinct from `effective_until`. Expiry says *this stops being
+true*; review says *somebody must look at this again*. A concession has both. An
+amenity list has only the second.
+
 ### 6.2 The gate is computed, never a checkbox
 
 One read per property returning, from the manifest against `agent_facts`:
@@ -379,6 +485,9 @@ unconfirmed    live row with confirmed_at null
 expired        effective_until in the past
 unresolved     money key with amount_cents null and amount_unresolved set
 conflicting    two live keys that the manifest marks mutually exclusive
+unstewarded    live fact with no steward_user_id
+overdue        live fact past next_review_at
+unmapped_media asset with canonical_type_id null
 verdict        agent_ready | agent_blocked
 ```
 
@@ -611,9 +720,11 @@ rows #14 and #27. `src/money/effective_pricing.js:397-402` already returns
 presenting the choice needs no schema change. #27 is the sub-case where a property
 publishes no 12-month term. What it must not do is fall back to `terms[0]`.
 
-**9.3 Does the vocabulary in §3 stand?** It is a reconciliation of two real corpora,
-not a greenfield list. Adding keys later is cheap; renaming them after a second
-property loads is not.
+**9.3 Does the vocabulary in §3 stand?** It is a reconciliation of two real corpora
+plus the two-property review packet, not a greenfield list. Adding keys later is
+cheap; renaming them after a property loads is not. **See §11.5 step 2 — do not
+freeze it until the packet comes back**, because a vocabulary derived from one
+property is a guess and one derived from three is a standard.
 
 **9.4 When does the real Solo property join the demo facts?** The seed says *"that
 join happens later."* The baseline should say whether property #2 loads against a
@@ -643,3 +754,115 @@ That last line is the test of whether this worked. Facts are per-property; regis
 not — `docs/archive/AI_VOICE.md` is Class 1 doctrine with three Solo references in 274
 lines, and a new property inherits it. If onboarding property #2 requires another
 interview, the standardization failed.
+
+---
+
+## 11. Reconciliation with the two-property review packet
+
+A parallel framework exists: the **Skyline and Greenery Leasing Knowledge Review**,
+dated 16 September 2026 — an operator-facing review packet built from a 15 September
+operator interview, the current property websites and a retained source library.
+Skyline stands at five of ten descriptive shelves; Greenery at zero of ten.
+
+**The two are not competing standards.** The packet is the *intake instrument*, this
+document is the *system model*, and each fixes a real gap in the other. The packet's
+own scope line already draws the same boundary as `053`:
+
+```text
+packet: "what belongs here"        →  agent_facts   descriptive, curated, stewarded
+packet: "what stays governed        →  units (availability, rent)
+         elsewhere"                    property_governed_charges (fees)
+                                       lease documents (terms)
+                                       policy documents (screening, legal)
+```
+
+### 11.1 Ten shelves mapped to the vocabulary
+
+| Packet shelf | `fact_key` |
+|---|---|
+| 1 Leasing highlights | `positioning` |
+| 2 Layouts and light | `layouts` |
+| 3 Furniture and appliances | `furnished_options`, `unit_features` |
+| 4 Amenities and access | `amenities`, `policy_guests`, `fee_access_replacement` |
+| 5 Dimensions | `dimensions` |
+| 6 Photos and floor plans | `media` |
+| 7 Virtual tours | `virtual_tours` |
+| 8 Packages and common questions | `package_handling` |
+| 9 Neighborhood recommendations | `neighborhood` |
+| 10 Move-in guidance | `process_move_in`, `policy_utilities`, `fee_telecom` |
+
+Seven of those keys did not exist in §3.1 before this reconciliation. They are absent
+from both Solo corpora because Solo's facts came from a policy handbook, and a
+handbook does not contain the questions a prospect asks.
+
+### 11.2 What this model adopts from the packet
+
+1. **Stewardship** (§6.1b) — every shelf carries a future update owner, and every
+   property a steward, an accountable approver, a next review date and a cadence.
+2. **Source identity by digest** (§3.3) — the packet pins the governing lease by
+   SHA256 and refuses a newer file that differs in its fee fields, on the grounds
+   that a filename and a date are not identity.
+3. **A recorded rejected-source list** (§3.3) — an allowlist cannot express "we
+   examined this and it must not be used."
+4. **Media class and reach** (§4.3) — asset class, exact-home versus
+   representative, and the mapping to canonical inventory without which an asset is
+   not sendable.
+
+### 11.3 What the packet should adopt from this model
+
+1. **Shelf 10 already drifted.** It is *"Move in guidance"* for Skyline and *"Move in
+   utilities and internet"* for Greenery. Two properties, ten shelves each, and the
+   tenth means different things. That is precisely how Solo's two corpora diverged
+   (§1). Ten shelves is the right shape; they need one frozen list of names.
+
+2. **"Leave unknown" discards the conflict.** The packet handles conflict exactly
+   right at the moment of review — *"Do not approve either until reconciled"*, *"do
+   not resolve them from memory or publish a blended number"* — but the recorded
+   outcome is *unknown*, which loses **what the two claims were**. Greenery's
+   dimensions are the case: a junior 1BR Matterport labelled 700 SF against a website
+   saying more than 715, and a 2BR/2BA labelled 1,032 against more than 1,050. Stored
+   as unknown, the next reviewer rediscovers the conflict from scratch.
+
+   `present_but_conflicting` (§3.4) keeps both claims and
+   their sources while refusing to answer. Same silence to the prospect, no lost work.
+
+3. **A signed packet is not an activation.** The certification says approval *"applies
+   only to items marked correct or corrected."* Nothing between the signature and a
+   live quote enforces that — which is the exact gap migration `106` was written to
+   close for governed charges. The certification block **is**
+   `activated_at` + `activated_by`; it needs to land in a column (§5).
+
+4. **Ten shelves at 10/10 still cannot quote.** The shelves deliberately exclude
+   money, screening and lease terms, and correctly so. But that means shelf coverage
+   alone cannot gate the agent: a property could reach 10/10 and still have no
+   application fee, no deposit and no lease terms. The readiness gate (§6.2) has to
+   span both halves, which is why §7.1's Tier 1 mixes descriptive and governed keys.
+
+### 11.4 Two live defects the packet found
+
+Worth carrying into `CURRENT_STATE` as property-onboarding defects rather than living
+only in a review document:
+
+- **A mislabeled lease source.** A file named as one property's lease template is
+  actually a different property's lease, for another address and term. Filename-based
+  source resolution would have used it.
+- **A layout page video pointing at an unrelated title**, which "must not be used as
+  a unit tour." A media asset whose `reach` and `layout_ref` were never established.
+
+### 11.5 Sequencing
+
+The packet is ahead and should not wait for the schema. It is fillable now, and its
+answers are the input the model needs.
+
+```text
+1.  Packet returns filled, per property.
+2.  Freeze the vocabularies (§3) against what actually came back — the packet is
+    the second real corpus, and the vocabulary should be reconciled against two
+    properties rather than one.
+3.  Build the manifest and gate (§6) so the filled packet has somewhere to land.
+4.  Migrate Solo onto it, as a mapping and not a retype.
+5.  Load Skyline and Greenery through the gate. Neither goes live below agent_ready.
+```
+
+Step 2 is the reason not to freeze §3.1 this week. A vocabulary derived from one
+property is a guess; derived from three, it is a standard.
