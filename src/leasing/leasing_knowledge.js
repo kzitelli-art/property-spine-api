@@ -76,6 +76,18 @@ function isSelfRead(question) {
     return /^(?:please\s+)?(?:(?:can|could|would|will) you\s+)?(?:please\s+)?(?:send|text|show) me\b/i.test(q)
       && !/\bto\s+|\bfor\s+(?:him|her|them|the prospect|the resident)|@|\b(?:and|then)\b/i.test(q);
   }
+  //  ── ONE SWITCH, BECAUSE THIS LINE REACHES FURTHER THAN IT LOOKS ──
+  //  isSelfRead feeds isKnowledgeRead, which feeds ask_spine_answer's
+  //  questionSubject — the subject router for EVERY governed read on both
+  //  the web and SMS rails. A one-line predicate with that reach deserves a
+  //  way back that does not need a build, exactly like the resolver's.
+  //  LEASING_KNOWLEDGE_CONTRACTIONS=off restores the pre-fix behaviour on
+  //  the next message. Read per call, not cached at load.
+  if (String(process.env.LEASING_KNOWLEDGE_CONTRACTIONS || "").trim().toLowerCase() === "off") {
+    return /^(?:please\s+)?(?:show|find|pull up|what|which|where|how|does|do|is|are|can|tell me)\b/i.test(q)
+      || /^(?:matterports?|materports?|floor\s*plans?|amenities|layouts|photos|dimensions)\s*[?.!]*$/i.test(q);
+  }
+
   //  ── CONTRACTIONS WERE INVISIBLE HERE ─────────────────────────────
   //  `what` followed by \b requires a non-word character next, so "whats
   //  our pet policy" matched nothing while "what is our pet policy" matched

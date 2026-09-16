@@ -289,5 +289,29 @@ console.log("\nF · vocabulary drift guards — so a guessed name cannot ship ag
     [...categories].every(c => knownCategories.has(c)), [...categories]);
 }
 
+// ══════════════════════════════════════════════════════════════════
+console.log("\nG · the contraction fix has a way back that needs no build");
+{
+  //  isSelfRead reaches further than it looks: it feeds isKnowledgeRead,
+  //  which feeds questionSubject, which routes EVERY governed read on both
+  //  rails. A predicate with that reach needs a switch, like the resolver's.
+  const reload = (value) => {
+    delete require.cache[require.resolve(path.join(root, "src/leasing/leasing_knowledge"))];
+    if (value === null) delete process.env.LEASING_KNOWLEDGE_CONTRACTIONS;
+    else process.env.LEASING_KNOWLEDGE_CONTRACTIONS = value;
+    return require(path.join(root, "src/leasing/leasing_knowledge"));
+  };
+  ok("unset, contractions are recognised", reload(null).isKnowledgeRead("whats our pet policy") === true);
+  ok("off, the pre-fix behaviour returns", reload("off").isKnowledgeRead("whats our pet policy") === false);
+  ok("off does not break the uncontracted form", reload("off").isKnowledgeRead("what is our pet policy") === true);
+  for (const v of ["OFF", " off "]) {
+    ok(`the switch is tolerant of ${JSON.stringify(v)}`, reload(v).isKnowledgeRead("hows the gym") === false);
+  }
+  for (const v of ["on", "", "true"]) {
+    ok(`only "off" disables it, not ${JSON.stringify(v)}`, reload(v).isKnowledgeRead("hows the gym") === true);
+  }
+  reload(null);
+}
+
 console.log(`\n  ${passed} passed, ${failed} failed\n`);
 process.exit(failed ? 1 : 0);
