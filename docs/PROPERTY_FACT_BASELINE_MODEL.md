@@ -9,7 +9,7 @@ is a checklist rather than a rediscovery.
 current source at `main` — file and line given so the developer can verify rather
 than trust.
 
-**Audience.** The developer implementing it. The owner rulings are collected in §7.
+**Audience.** The developer implementing it. The owner rulings are collected in §9.
 
 ---
 
@@ -156,16 +156,37 @@ A dash-stripper now special-cases ranges. The deeper problem stands: a fee expre
 as a range is not a quotable amount, and storing it in `rendered_text` hides that from
 every validator.
 
-**D7 — the universal prompt names Solo.** `agent.js:671` and `:811`:
+**D7 — the universal prompt carries a property-specific fact block.** Not two stray
+mentions: a titled, structured block at `agent.js:804-812`, referenced by name from
+the rules at `:551` — *"Use the APPROVED SOLO PROFILE only for stable building
+facts."*
 
 ```text
-671  Solo has sometimes moved people in within a few days when the unit is ready...
+804  APPROVED SOLO PROFILE (stable building facts you may use directly):
+805  - SOLO on Chestnut is at 4233 Chestnut Street in University City.
+806  - Layouts: studio, one-bedroom, one-bedroom-with-den, two-bedroom, three-bedroom.
+807  - Furnished and unfurnished options exist.
+808  - Apartments include in-unit laundry and kitchen appliances.
+809  - Amenities: coworking and study spaces, fitness facilities, rooftop space, ...
+810  - The fitness center is open 24/7. The GOLF SIMULATOR IS NOT: it keeps separate hours.
 811  - Solo is pet friendly, but current restrictions and charges must come from
      VERIFIED PROPERTY FACTS below.
+812  - Assistance animals (service animals and ESAs) are NOT pets and are NOT charged...
 ```
 
-Property #2 inherits "Solo is pet friendly." Both should be facts, not prompt text —
-`:811` is one line above the rule that says charges must come from facts.
+Property #2 inherits Solo's address, layouts, laundry and amenity list as approved
+facts. Line `:811` sits one line above *"FEES HAVE EXACTLY ONE APPROVED SOURCE:
+VERIFIED PROPERTY FACTS below"* — the block is an exception to the rule printed
+directly beneath it.
+
+Only `:812` belongs there: assistance animals are not a property fact, they are
+federal law. Everything from `:805` to `:811` is a `fact_key` that already exists —
+and `amenities` is now asserted in **three** places: the prompt (`:809`),
+`amenities_list` in Corpus A, and `amenities` in Corpus B.
+
+Also `agent.js:671` — *"Solo has sometimes moved people in within a few days when the
+unit is ready..."* — a claim about one property's past operating behaviour, in the
+shared prompt.
 
 ---
 
@@ -197,7 +218,7 @@ MONEY — one key per quotable amount, never a blob
   fee_access_replacement
   concession_current         MUST carry effective_until
   pricing_premiums
-  pricing_authority          which source outranks live units (see §7.1)
+  pricing_authority          which source outranks live units (see §9.1)
 
 POLICY
   policy_pets
@@ -396,32 +417,211 @@ becomes the first output of the conflict reader instead.
 
 ---
 
-## 7. Owner rulings this needs
+## 7. Staff intake — the questions prospects actually ask
 
-**7.1 Is the pricing sheet authoritative over live `units`?** Solo's open conflict:
+This is the form. It exists so a property manager can sit down once and produce the
+fact layer, instead of the agent discovering gaps on a live prospect.
+
+**Three rules for whoever fills it in.**
+
+1. **Write plain facts, not sentences for the bot.** "Pet fee $300 one-time, $30/mo,
+   no breed restrictions, 50 lb limit" is a good answer. The register comes from
+   `docs/archive/AI_VOICE.md`, which is Class 1 doctrine and already written — staff
+   supply the meat, the agent supplies the voice.
+2. **"We don't know yet" is a valid answer and is better than a guess.** An absent
+   fact makes the agent defer. A wrong fact reaches a prospect. `agent_facts`'
+   own doctrine: *absence of a fact = unknown → honest handoff*
+   (`053_agent_supervised_drafts.sql:106-110`).
+3. **A range is not an answer.** "$75–99" is what made a real Solo fee unreadable to
+   live prospects (`agent.js:126-131`). If the number genuinely varies, say what it
+   varies *by* — floor, layout, term — and that becomes structure, not prose (§4.1).
+
+Sources for this list: both Solo corpora, the seven benchmark cases in
+`AI_VOICE.md` §5, and the questions any prospect asks that neither corpus covers.
+Solo's own facts establish it is student-adjacent housing — 4233 Chestnut St,
+Philadelphia 19104, with an I-20 path for international students and a financial-aid
+note in the rent policy — so the student-market block in §7.4 is not speculative.
+
+### 7.1 Tier 1 — required before the agent speaks to anyone
+
+Twelve. Without these the readiness gate (§6.2) returns `agent_blocked`.
+
+| Prospect asks | Staff supply | `fact_key` |
+|---|---|---|
+| "What building is this? Where is it?" | Legal/marketing name, full street address, ZIP | `building_identity` |
+| "Who do I talk to? What are your hours?" | Leasing email, phone, office hours + timezone | `office_contact` |
+| "Is this the right number to text?" | The number prospects reach, and whether it is monitored after hours | `communication_line` |
+| "How much is it?" | **Which source wins when the pricing sheet and the system disagree** — see §9.1 | `pricing_authority` |
+| "Can I see it? When?" | Where tours start, what they cover, how one is booked, tour hours | `process_tour` |
+| "Will I get approved?" | Credit / income / background criteria, income multiple or minimum, decision window | `process_screening` |
+| "What do I need to apply?" | Exact document list, and the alternates you accept | `process_required_documents` |
+| "What lease lengths do you offer?" | Every term actually offered, whether 12 months exists (§9.2), and any short-term premium **as a single number, not a range** | `process_lease_terms` |
+| "What's due up front?" | Application fee, admin fee, amenity fee, security deposit — **each as its own number** | `fee_application`, `fee_admin`, `fee_amenity`, `fee_security_deposit` |
+| "Do you allow pets?" | Fee, monthly rent, **weight and breed limits**, where they can go | `policy_pets` |
+| "What utilities do I pay?" | Which are included, which are billed, who bills them | `policy_utilities` |
+| "Do I need renter's insurance?" | Required or not, minimum liability, who must be named | `policy_renters_insurance` |
+
+Solo has all twelve except `pricing_authority`, and its `process_lease_terms` exists
+only as a range in Corpus B. Its `policy_pets` is missing **weight and breed
+limits** — the seeded text says
+pet-friendly with a rooftop run and gives the fees, but nothing bounds the animal.
+That is the most-asked pet follow-up and today the agent has to defer on it.
+
+### 7.2 Tier 2 — asked constantly; the agent defers without them
+
+| Prospect asks | Staff supply | `fact_key` |
+|---|---|---|
+| "Is there parking? Is it guaranteed?" | Monthly cost, assigned or not, waitlist, guest parking, street reality | `policy_parking`, `fee_parking_monthly` |
+| "Any specials right now?" | The concession, the terms it applies to, **and the date it ends** | `concession_current` |
+| "When is rent due? What if I'm late?" | Due date, grace period, late fee and how it is calculated, how to pay | `policy_rent_payment` |
+| "What's the move-in process?" | Hours, where to check in, what must be paid and when, what is needed for keys | `process_move_in` |
+| "What amenities are there?" | What exists and where — by floor, if that is how it reads | `amenities` |
+| "Is there laundry?" | In-unit, on-floor, or a room — and whether it costs anything | `amenities` |
+| "Is it quiet? What are quiet hours?" | The posted hours. Nothing about who lives there — see §8 | `policy_noise` |
+| "Can I have guests? Overnight?" | Guest limits in units and amenity spaces, escort rules, guest parking | `policy_guests` |
+| "Can I smoke? Vape? Grill on the balcony?" | Smoke-free or not, prohibited items, any fire-safety list | `policy_smoking_and_restrictions` |
+| "Is it furnished? What comes with it?" | Furnished options, exactly what is included, price difference | `furnished_options` |
+| "Can I see it if I'm out of town?" | Which layouts have 3D tours, whether live video is offered and when | `virtual_tours` |
+| "Do you charge for a replacement key or fob?" | Fob, key and lockout charges, and office-hours help | `fee_access_replacement` |
+| "Is there a fee for internet/cable?" | Provider, speed, monthly charge, whether it is optional | `fee_telecom` |
+
+Solo covers most of this, but two answers live in the wrong place. **Laundry** is in
+neither corpus — it is asserted in the prompt itself (`agent.js:808`, *"Apartments
+include in-unit laundry and kitchen appliances"*), which means property #2 inherits
+it. And `lease_terms` exists only in Corpus B, phrased as *"short-term or
+month-to-month is available at a **15-20% premium**"* — a range, so it is one of the
+seven rows behind defect D6 and is not a quotable number.
+
+### 7.3 Tier 3 — asked often enough to be worth pre-answering
+
+| Prospect asks | Staff supply |
+|---|---|
+| "What's available and when?" | Nothing — availability is read **live** from `units` and must never be curated here (`053:106-108`). Corpus B breaks this: `availability_as_of` says availability *"reflects the property's May 31, 2026 operating report"* — a curated availability snapshot, now months stale, with no `effective_until` |
+| "Can I transfer units later?" | Whether transfers are allowed, any fee, timing |
+| "Can I sublet for the summer?" | Allowed or not, approval path, any fee |
+| "What happens if I need to break the lease?" | Early-termination terms, notice period, fee |
+| "How much will it go up at renewal?" | Whether you state a policy at all, or defer every time |
+| "Is there storage? A package room? An elevator?" | What exists |
+| "Is there A/C? How is it heated?" | System type, who controls it, who pays |
+| "How do I get my packages?" | Lockers, mail room, front desk hours |
+| "Trash and recycling?" | Where, when, any rules |
+| "Is the building accessible?" | Unit and common-area accessibility. **Answer factually — do not deflect** (`agent.js:729`) |
+
+### 7.4 Student-market block
+
+Solo's own facts establish this market, so these are not optional there. Any property
+near a campus needs the same set.
+
+| Prospect asks | Staff supply |
+|---|---|
+| "Do I lease a bedroom or the whole apartment?" | Per-bed or per-unit. `agent_facts.space_id` already models bed-level scope (`053:114`), and Solo's fee text says charges are "split among roommates" |
+| "Are roommates on one lease or separate?" | Joint or several liability, and whether you screen each roommate |
+| "Do you match roommates?" | Yes/no and how |
+| "Do you have academic-year leases?" | Terms that align to a school year, if any |
+| "I have no credit / I'm international — can I still apply?" | Guarantor policy, international path, what you accept in place of credit |
+| "My parents will cosign — how?" | Cosigner or guarantor process, what they must supply |
+| "I'm paying with financial aid — is that OK?" | Whether aid timing is accommodated, and who rent is actually paid to |
+| "How far is campus? Is there a shuttle?" | Distance and transit facts you can stand behind |
+
+Solo answers the international path (I-20 plus three months of bank statements) and
+the financial-aid question (paid to the building on the portal, not affiliated with
+any school). It does **not** answer per-bed vs per-unit, roommate liability,
+guarantors, or academic-year terms — and those are the four a student asks first.
+
+### 7.5 Legal-weight questions — required, and never inferred
+
+These carry statutory exposure and the prompt already forbids answering them from
+general knowledge. `agent.js:717`:
+
+> "Source-of-income and voucher protection, security deposit caps and return
+> deadlines, notice periods, guest and occupancy limits, late fee limits, lease break
+> terms, rent regulation: all of these vary by city and state. **NEVER** state one
+> from general knowledge, **NEVER** infer one from another property, and **NEVER**
+> quote a statute or a deadline. If it is not in VERIFIED PROPERTY FACTS for THIS
+> property, you do not have it."
+
+So each of these must be supplied per property, by someone who knows the
+jurisdiction, with `source_class = regulatory` or `lease_document`:
+
+| Prospect asks | Why it must be a fact |
+|---|---|
+| "Do you accept housing vouchers / Section 8?" | Source-of-income protection is local law and varies. Asked constantly and cannot be guessed. |
+| "How many people can live in a unit?" | Occupancy limits are jurisdictional, and the answer brushes familial status. |
+| "When do I get my deposit back?" | Caps and return deadlines are statutory. |
+| "How much notice do I have to give?" | Notice periods are statutory. |
+| "What's the late fee, exactly?" | Late-fee ceilings are regulated in some jurisdictions. |
+
+Solo states a 10% late fee after a grace period through the 5th. Whether that is
+lawful in Philadelphia is a jurisdiction question, not a policy question — and it is
+stamped `management_policy` today rather than `regulatory` (defect D3).
+
+---
+
+## 8. Questions that must NOT become facts
+
+Some of the most-asked questions must never be answered from the fact layer, however
+politely a prospect asks. This list is as load-bearing as the one above, and it comes
+straight out of the Solo benchmark cases.
+
+**Resident characterization.** `AI_VOICE.md` Case A draws the line precisely: your
+own words about the gym — *"a nice, comfortable crowd usually"* — were ruled
+**unsendable**, while *"it rarely feels packed"* is fine.
+
+> "*How full a room is* is an occupancy observation and is fine; *what the people in
+> it are like* is a resident characterization and is not."
+
+So: "What kind of people live here?", "Is it mostly students?", "Are there a lot of
+families?", "What's the crowd like?" → describe the building, never the residents.
+
+**Protected-class questions.** Case C is the template: a prospect asked whether
+children were okay and a live thread answered with a counter-question and never said
+yes.
+
+> "**The word 'okay' gets answered before anything else.** That reads as hedging, and
+> hedging on a protected class is the failure."
+
+Affirm first, then help. Never route to a fact, never deflect, never qualify.
+
+**Safety and neighborhood character.** "Is the neighborhood safe?", "Is there
+crime?", "Is it safe for a woman living alone?" — there is no fact that answers these
+honestly, and a reassurance is a liability. State what the building has (fob access,
+staffed hours, cameras if they exist) and nothing about the area's character.
+
+**Anything the property has not recorded.** Per `agent.js:816`, fees have exactly one
+approved source, and an unrecorded fee is a defer — *"do not estimate it, do not
+infer it from a similar fee, do not carry over a number from another building or an
+earlier conversation, and do not pick whichever figure you saw first."*
+
+**Utility cost estimates.** "Roughly how much is electric?" is asked constantly and
+cannot be answered. Who bills it is a fact; what it will cost is not.
+
+---
+## 9. Owner rulings this needs
+
+**9.1 Is the pricing sheet authoritative over live `units`?** Solo's open conflict:
 the sheet says a studio is $1,450–1,600; unit 530 was quoted **$1,687**, which matches
 nothing on the sheet; the 2-bed was quoted **$2,700** against a sheet saying $2,600
 gross / $2,384 net, with the free month never mentioned — **$316/month worse than
 reality** for the number the prospect cared about. This is a per-property question, so
 the model gives it a key (`pricing_authority`) rather than a one-time answer.
 
-**7.2 Which term is quoted when the prospect names none?** Open as `CURRENT_STATE`
+**9.2 Which term is quoted when the prospect names none?** Open as `CURRENT_STATE`
 rows #14 and #27. `src/money/effective_pricing.js:397-402` already returns
 `published_terms` — *"With no term supplied the answer is the published menu"* — so
 presenting the choice needs no schema change. #27 is the sub-case where a property
 publishes no 12-month term. What it must not do is fall back to `terms[0]`.
 
-**7.3 Does the vocabulary in §3 stand?** It is a reconciliation of two real corpora,
+**9.3 Does the vocabulary in §3 stand?** It is a reconciliation of two real corpora,
 not a greenfield list. Adding keys later is cheap; renaming them after a second
 property loads is not.
 
-**7.4 When does the real Solo property join the demo facts?** The seed says *"that
+**9.4 When does the real Solo property join the demo facts?** The seed says *"that
 join happens later."* The baseline should say whether property #2 loads against a
 real property from the start.
 
 ---
 
-## 8. Definition of done
+## 10. Definition of done
 
 - one closed `fact_key` vocabulary, one closed `category` vocabulary, one closed
   `source_class` vocabulary, each enforced by CHECK;
@@ -433,8 +633,10 @@ real property from the start.
 - `resolveContext` reads `quote_state = 'live'`;
 - the manifest exists as data, and the readiness gate is computed from it;
 - the gate is registered with Ask Spine and proven in the browser;
-- `Solo` appears nowhere in `src/agent/agent.js`;
+- the `APPROVED SOLO PROFILE` block is gone, and `Solo` appears nowhere in
+  `src/agent/agent.js` except where federal law is being stated;
 - `tools/seed_solo_facts.js --confirm` succeeds against a scratch database (D1 closed);
+- the §7 intake form has been completed once, by staff, for a property that is not Solo;
 - a second property reaches `agent_ready` **without** a voice interview.
 
 That last line is the test of whether this worked. Facts are per-property; register is
