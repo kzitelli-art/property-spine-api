@@ -165,6 +165,7 @@ step "migration 194-198 reviewed hashes are the git blobs" node tests/unit/migra
 step "inventory correction door contract" node tests/unit/inventory_correction_contract.test.js
 step "leasing agent context resolution" node tests/unit/leasing_context_resolver.test.js
 step "shared web/SMS conversational path" node tests/unit/shared_conversational_path.test.js
+step "property line identity and inbound doors" node tests/unit/property_line_identity.test.js
 step "terms preparation attribution" node tests/unit/terms_confirmation_attribution.test.js
 step "current packet execution decision attribution" node tests/unit/execution_decision_read.test.js
 step "terms attribution model boundary" node tests/unit/terms_attribution_model_boundary.test.js

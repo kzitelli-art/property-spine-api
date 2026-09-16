@@ -231,10 +231,41 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     let person = null;
 
     // 1) canonical key
+    //
+    //  ── A SHARED OR REASSIGNED NUMBER IS A CONFLICT, NOT A CONTEST ────
+    //  This used to take `limit 1` and silently adopt the OLDEST person
+    //  carrying the number. person_ingress.js refuses exactly this case and
+    //  says why: "picking the oldest would be exactly the confident-wrong
+    //  value this repo refuses — and shared or reassigned numbers make this
+    //  a real case, not a theoretical one." It was right, and this is the
+    //  path a real prospect texting the property line actually reaches, so
+    //  the live door was the one guessing.
+    //
+    //  The consequence of guessing is not a bad row: it is a new prospect's
+    //  messages, budget and tour attached to the PREVIOUS holder's person
+    //  card, where staff read them as that person's. Refusing costs one
+    //  intake; guessing corrupts a record nobody knows to distrust.
+    //
+    //  Throws rather than returning a null person: the single caller
+    //  dereferences `person.id` on the next line, and the enclosing
+    //  transaction already rolls back on throw. Nothing partial is written.
     if (canon) {
-      person = (await client.query(
-        `select * from persons where primary_phone_e164=$1 order by created_at limit 1`,
-        [canon])).rows[0] || null;
+      const byCanon = (await client.query(
+        `select * from persons where primary_phone_e164=$1 order by created_at`,
+        [canon])).rows;
+      if (byCanon.length > 1) {
+        throw Object.assign(
+          new Error(`Strong identity evidence points at ${byCanon.length} different people for ${canon}.`),
+          {
+            httpStatus: 409,
+            code: "person_identity_conflicted",
+            candidates: byCanon.map(r => ({ person_id: r.id, name: r.name })),
+            publicMessage: "This phone number is on more than one person record, "
+              + "so this inquiry was not attached to either. A person with access "
+              + "needs to resolve which record it belongs to.",
+          });
+      }
+      person = byCanon[0] || null;
     }
     // 2) legacy phone rows: match where the STORED phone, once normalized to
     //    E.164, equals our canonical — so a row stored in ANY raw format
