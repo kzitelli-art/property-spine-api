@@ -2,11 +2,73 @@
 
 **Source:** recorded conversation with Michael Grivna, supplied to QB on 2026-09-15.
 
-**Status:** candidate wording only. This file is not a production fact write. It
-preserves what Mike said, routes each item to the existing owner, and marks
-anything that needs confirmation. Exact amounts and policy decisions must be
-checked against governed pricing, lease configuration, and the approved policy
-source before the AI can quote them.
+**Status:** durable transcript sort. Five Skyline descriptive shelves were
+subsequently published through the authenticated writer and read back on
+September 15: leasing highlights, amenities, layouts, neighborhood and leasing
+FAQ. The other five Skyline shelves and all ten Greenery shelves remain prepared,
+not loaded. The canonical Greenery property is adopted into OneFive, but KZ/Mike
+person-level governed access and current Greenery content approval remain
+pending. The Temple packet records the live scope and the safer, unpublished
+successor wording for Skyline leasing highlights and amenities in
+`docs/content/temple/leasing-content.json`. This file preserves what Mike said,
+routes each item to the existing owner, and marks anything that needs
+confirmation. Exact amounts and policy decisions must be checked against
+governed pricing, lease configuration, and the approved policy source before the
+AI can quote them.
+
+## How the recording maps into the ten existing shelves
+
+| Shelf | Skyline contribution from Mike | Greenery contribution from Mike | Current handling |
+| --- | --- | --- | --- |
+| Leasing highlights | Fully furnished near Temple; utilities/internet, on-site management, packages, roof deck and parking as selling points | No one-sentence positioning supplied | Skyline key is live; safer successor wording is prepared but not republished; Greenery retains website-source draft |
+| Amenities | Furniture, appliances, cardio room, roof deck, bike/package storage, laundry, vending and parking | Amazon Hub package lockers | Skyline key is live; safer successor wording is prepared but not republished; Greenery candidate combines interview and official site |
+| Layouts | 2BR/1BA, 3BR/1BA and reported 3BR/1.5BA; general exterior-light description | No layout detail supplied | Skyline published with exact counts/labels unresolved; Greenery remains website-source draft |
+| Dimensions | None | None | Explicit unknowns remain; Matterport area labels are representative, not exact-home measurements |
+| Photos | None | None | Official galleries remain representative; exact-home photos still need mapping |
+| Floor plans | None | None | Existing official diagrams remain candidates; exact apartment association must be confirmed |
+| Virtual tours | None | None | Existing public Matterports remain representative; no substitute layout is implied |
+| Neighborhood | Fresh Grocer, campus restaurants and approximate Center City travel | Same general neighborhood statements | Skyline published; Greenery candidate; exact route/time uses current maps |
+| Leasing FAQ | Furnishings, appliances, utility/internet inclusion and package questions | Package lockers, internet setup and utility questions | Descriptive answers only; amounts and procedures route to their governed owners |
+| Move-in guidance | Do not promise immediate move-in or next-day tour without governed readiness/schedule | Internet/utility setup distinction | Prepared guidance; exact readiness, pickup and account instructions remain live operational reads |
+
+Mike's pricing, availability, readiness, screening, roommate, pet, noise,
+sublease, maintenance, escalation, package-procedure and tracker-status statements
+are intentionally not treated as extra descriptive shelves. They are routed to
+published pricing/offer terms, inventory and readiness, approved policy and lease
+configuration, operating context/triage, and leasing workflow semantics. That is
+the same separation used to turn Katie's deeper Solo source library into durable
+knowledge instead of one undifferentiated prompt.
+
+## Temple source gaps compared with Katie's Solo library
+
+Katie's Solo materials answer recurring questions across a field guide, move-in
+guide, community policies, leasing SOPs, pricing sheet and verified media. The
+Temple interview improved the first pass, but these source-backed details still
+need an accountable current document or operator confirmation:
+
+- pet and assistance-animal policy, restrictions, deposits and recurring rent;
+- parking type, assignment, access, availability, waitlist and current charge;
+- verified room dimensions, furniture-fit guidance and TV-mounting rules;
+- package access outside office hours, retrieval rules and approved loss wording;
+- furniture package by layout and whether a resident may substitute their own;
+- kitchen inventory, laundry details and current internet service/speed;
+- utility enrollment and billing instructions by property and lease package;
+- amenity hours, reservations, guest rules and access instructions;
+- move-in prerequisites, key pickup and after-hours arrival process; and
+- exact-home photos, floor-plan associations and tour links for every layout.
+
+Those are onboarding-source gaps, not permission to copy Solo's answers into
+Skyline or Greenery. Each answer must be attached to its Temple property, source,
+confirmer and effective date, then changed through the same governed owner.
+
+For the next property, repeat the same order: establish canonical property and
+staff custody; reconcile durable inventory; fill the ten descriptive shelves;
+connect published pricing, readiness/availability, approved policies, current
+lease configuration and maintenance/triage owners; then publish through the
+property-scoped writer and read every value back. The reusable structured recipe
+is stored in `docs/content/temple/leasing-content.json` under
+`onboarding_recipe`; it preserves unknowns and prevents another property's
+answers from becoming a shortcut.
 
 ## Facts that appear to apply to both properties
 
@@ -36,8 +98,11 @@ source before the AI can quote them.
 
 ### Positioning
 
-- Fully furnished housing option for undergraduate students, especially
-  freshmen and sophomores.
+- Fully furnished apartments near Temple University.
+- Mike described the expected audience as undergraduate students, especially
+  freshmen and sophomores. That audience-targeting statement is preserved as
+  interview context but excluded from the prospect shelf pending appropriate
+  marketing and fair-housing review.
 - The strongest selling points named were furnished apartments, bundled
   utilities/internet, on-site management, and parking.
 - On-site management, package storage, a green roof deck, and emergency
@@ -56,9 +121,10 @@ source before the AI can quote them.
 - Furnishings named: full-size beds, desks/chairs, dressers, and armoires.
   Mike clarified that there are no built-in closets; the armoire wording should
   be confirmed.
-- Amenities named: cardio room, green roof deck, free bike storage, free
-  package storage, vending machines, laundry centers, and paid on-site
-  parking.
+- Amenities named: cardio room, green roof deck, bike storage, package storage,
+  vending machines, laundry centers, and on-site parking. Mike also used
+  free/paid terms; those are economic candidates and are excluded from the
+  descriptive amenity shelf unless current governed records establish them.
 - The roof deck locks at 9:30 p.m. and reopens at 7:00 a.m. Gym hours were not
   supplied.
 - Skyline package handling: office receipt during business hours, stated as
