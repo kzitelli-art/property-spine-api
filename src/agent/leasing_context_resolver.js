@@ -63,6 +63,22 @@
 
 const leasingKnowledge = require("../leasing/leasing_knowledge");
 
+//  ── KEYS BELOW THAT NO OPERATOR CAN WRITE TODAY ─────────────────────
+//  operator.js's FACT_KEYS is the governed write vocabulary. These five
+//  appear in the live corpus and are not in it — they predate that list.
+//  Naming them is deliberate: a key an operator cannot create is a key that
+//  will never be answered, and leaving that implicit is how a dead entry
+//  survives unnoticed.
+//
+//  Enforced in tests/unit/shared_conversational_path.test.js section F,
+//  which parses operator.js and asserts every key INTENTS names is either
+//  writable or listed here — so a TYPO becomes a red test naming the orphan,
+//  rather than a fact key that silently matches nothing forever.
+const LEGACY_FACT_KEYS = Object.freeze([
+  "parking_pricing", "move_in_requirements", "move_in_credits",
+  "utilities", "renters_insurance",
+]);
+
 //  The seven governed fact keys that `leasing_knowledge.topicsFor` does not
 //  reach, each with the category operator.js writes for it. `factKeys` are
 //  matched exactly against agent_facts.fact_key; `categories` catch the
@@ -71,19 +87,6 @@ const leasingKnowledge = require("../leasing/leasing_knowledge");
 //  These regexes answer ONE question — "is this turn about X?" — and are
 //  deliberately broad. A false positive costs one extra fact in context. A
 //  false negative costs the answer.
-//  ── KEYS THIS TABLE NAMES THAT NO OPERATOR CAN WRITE TODAY ──────────
-//  operator.js's FACT_KEYS is the governed write vocabulary. These five
-//  appear in the live corpus but are not in it — they predate that list.
-//  Naming them here is deliberate: a key an operator cannot create is a key
-//  that will never be answered, and leaving that implicit is how a silent
-//  dead entry survives. `gate` below asserts every key this file names is
-//  either writable or declared here, so a TYPO becomes a red test instead of
-//  a question nobody ever answers.
-const LEGACY_FACT_KEYS = Object.freeze([
-  "parking_pricing", "move_in_requirements", "move_in_credits",
-  "utilities", "renters_insurance",
-]);
-
 const INTENTS = Object.freeze([
   {
     intent: "pets",
