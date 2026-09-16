@@ -240,7 +240,8 @@ step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR
                    and indexdef = 'CREATE UNIQUE INDEX uq_proposed_natural ON public.proposed_records USING btree (activation_id, target_type, natural_key) WHERE ((natural_key IS NOT NULL) AND (import_source_row_id IS NULL))') then
       raise exception 'expected exact 198 natural-key index before parent witness';
     end if;
-    if not exists (select 1 from schema_migrations where version='199' and name='property_display_name_command') then
+    if not exists (select 1 from schema_migrations where version='199'
+                   and name in ('property_display_name_command','199_property_display_name_command.sql')) then
       raise exception 'expected numbered 199 ledger row before parent witness';
     end if;
   end \$\$;
@@ -259,7 +260,8 @@ step "verify restored 198 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_S
     if not exists (select 1 from schema_migrations where version='198' and name in ('proposed_source_claim_identity','198_proposed_source_claim_identity.sql')) then
       raise exception 'numbered 198 ledger row was not restored';
     end if;
-    if not exists (select 1 from schema_migrations where version='199' and name='property_display_name_command') then
+    if not exists (select 1 from schema_migrations where version='199'
+                   and name in ('property_display_name_command','199_property_display_name_command.sql')) then
       raise exception 'numbered 199 ledger row was not restored';
     end if;
     if (select pg_get_indexdef(i.indexrelid) from pg_index i
