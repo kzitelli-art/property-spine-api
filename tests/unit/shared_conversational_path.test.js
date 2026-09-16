@@ -78,8 +78,15 @@ console.log("A · channel consistency — the same question reaches the same rea
   //  on the web and fell to the technician rail over SMS, because the router
   //  asked only askSpineAnswer.questionSubject (which answers "work") and
   //  never asked the leasing knowledge registry it already imported.
-  ok("the SMS router consults the shared knowledge registry",
-    /leasingKnowledge\.isKnowledgeRead\(/.test(code("src/conversation/staff_sms_router.js")));
+  //  ⚠ THIS ASSERTION USED TO SCAN SOURCE FOR A STRING, and passed while the
+  //  code it named did nothing. The registry is reached through
+  //  questionSubject, which calls isKnowledgeRead on its first line — so the
+  //  claim worth testing is BEHAVIOURAL: the router must send a contracted
+  //  knowledge question to the read path, however it gets there.
+  ok("the SMS router sends a contracted knowledge question to the read path",
+    routeStaffSmsTurn({ text: "whats our pet policy", attachments: [] }).destination === "ask_spine");
+  ok("and the shared subject classifier agrees, so both rails see one answer",
+    require(path.join(root, "src/agent/ask_spine_answer")).questionSubject("whats our pet policy") === "leasing_knowledge");
   ok("a contracted question is recognised as a knowledge read",
     leasingKnowledge.isKnowledgeRead("whats our pet policy") === true);
   ok("the uncontracted form still is",
