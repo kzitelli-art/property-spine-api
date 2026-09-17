@@ -166,6 +166,18 @@ step "inventory correction door contract" node tests/unit/inventory_correction_c
 step "leasing agent context resolution" node tests/unit/leasing_context_resolver.test.js
 step "shared web/SMS conversational path" node tests/unit/shared_conversational_path.test.js
 step "property line identity and inbound doors" node tests/unit/property_line_identity.test.js
+#  The operator must be able to RECOVER a lost lead from the app, not from
+#  developer tools. Component proof: a real browser drives the real functions
+#  lifted out of the app's index.html. No API and no database, so it runs here
+#  with the unit steps rather than in the coupled browser rung.
+if [ -f "$APP_ROOT/index.html" ]; then
+  step "browser: retained inquiry is recoverable in the app" \
+    env CHROMIUM="${CHROMIUM:-}" node "$APP_ROOT/retained_inquiry_dom.test.js"
+else
+  echo "── browser: retained inquiry          SKIPPED (no app checkout at $APP_ROOT)"
+  SKIPPED="retained inquiry app proof"
+  FAILED=1
+fi
 step "terms preparation attribution" node tests/unit/terms_confirmation_attribution.test.js
 step "current packet execution decision attribution" node tests/unit/execution_decision_read.test.js
 step "terms attribution model boundary" node tests/unit/terms_attribution_model_boundary.test.js
@@ -183,6 +195,7 @@ step "schema from the migration chain"  ./tests/e2e/apply_migrations.sh
 step "governed property display name" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/property_display_name_command.db.js
 step "negative contract rent unavailable" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_HTTP_PORT=3353 node tests/proofs/negative_contract_rent_unavailable.db.js
 step "leasing identity conflict retains the inquiry" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/leasing_identity_conflict_http.db.js
+step "conversational consistency across web and SMS" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/conversational_consistency.db.js
 step "property fixture"     psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/property_fixture.sql
 step "pricing fixture"      psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/fixtures.sql
 step "instrument fixture"   node tests/e2e/instrument_fixture.js

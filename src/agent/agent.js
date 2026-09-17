@@ -2618,6 +2618,14 @@ Reply with ONLY the message text.`;
   // TEST-ONLY (Class 3, inert at runtime): exposes the pure tool-loop message-
   // assembly helpers so the proof harness exercises the REAL functions, not a
   // copy. No route, no side effect — safe to ship, used only by prove_*.js.
-  router.__test__ = { pairAllToolResults, hasToolUse, stripDashes, stripMarkdown, humanizeTypos, finishProspectText, TYPO_RATE, preGenerationPolicy, postGenerationPolicy };
+  //  resolveTurnContext is exposed for the SAME reason and on the same terms as
+  //  the rest of this list: the claim "a follow-up uses what the prospect
+  //  already told Spine" must be proven by RUNNING the real resolution against
+  //  a real database, not by handing fixtures to the resolver and calling that
+  //  a conversation. It is the exact function both live turn paths call
+  //  (lines ~1172 and ~2482). Class 3, inert at runtime — no route, no side
+  //  effect. Removal condition: delete when a full conversation proof drives a
+  //  real agent turn end to end.
+  router.__test__ = { pairAllToolResults, hasToolUse, stripDashes, stripMarkdown, humanizeTypos, finishProspectText, TYPO_RATE, preGenerationPolicy, postGenerationPolicy, resolveTurnContext };
   return router;
 };
