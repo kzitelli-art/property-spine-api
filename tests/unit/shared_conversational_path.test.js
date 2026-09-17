@@ -10,6 +10,22 @@
 //  does not have. Work reports and change requests staying on that rail is
 //  the adapter doing its job. What must never differ is where a LEASING
 //  question or a LEASING action ends up.
+//
+//  ⚠ WHAT RUNG THIS IS, SO NOBODY READS IT AS MORE. These are ROUTING and
+//  RESOLVER unit tests. They are NOT an end-to-end web/SMS conversation
+//  proof, and a receipt must not describe them as one.
+//
+//    · the SMS side calls the REAL router (routeStaffSmsTurn)
+//    · the WEB side calls a LOCAL MODEL of the web door's dispatch rule
+//      (webDestinationModel below) — the real HTTP endpoint is never invoked
+//    · the follow-up cases hand preference fixtures STRAIGHT to the resolver;
+//      no conversation loads them, and no answer is generated or read back
+//
+//  So what is proven is that the two dispatch rules agree on where a leasing
+//  question goes, and that the resolver carries recorded preferences when it
+//  is given them. Proving that an authorized operator gets consistent answers
+//  through the actual website endpoint and the actual SMS handler is a rung
+//  above this file, and it is not claimed here.
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
@@ -43,8 +59,20 @@ const WEB_ACTION_INTENTS = new Set(
     .split(",").map(s => s.trim().replace(/^["']|["']$/g, "")).filter(Boolean)
 );
 
-/** Where the WEB message door sends this prose. */
-function webDestination(text) {
+/**  A MODEL of where the web message door sends this prose — not the door.
+ *
+ *  It calls the real intent reader and compares against the real action set
+ *  lifted from ask_spine.js, so it tracks both of those. What it CANNOT see
+ *  is the endpoint itself: if ask_spine.js grows a branch before or after
+ *  this decision — an entitlement check, an early return, a different
+ *  dispatch for attachments — this model keeps answering the old way and
+ *  every assertion below stays green while the real door diverges.
+ *
+ *  Named for what it is. The previous name, webDestinationModel(), read like the
+ *  web door's own answer, and a receipt was written claiming this test
+ *  exercised "the real web path". It does not.
+ */
+function webDestinationModel(text) {
   const intent = staffLeasingIntent.readStaffLeasingIntent(text);
   return WEB_ACTION_INTENTS.has(intent.intent) ? "leasing" : "ask_spine";
 }
@@ -52,7 +80,7 @@ function webDestination(text) {
 console.log("\nSHARED CONVERSATIONAL PATH\n");
 
 // ══════════════════════════════════════════════════════════════════
-console.log("A · channel consistency — the same question reaches the same reader");
+console.log("A · routing consistency — real SMS router vs a model of the web door");
 {
   ok("the web action set was read from source, not restated",
     WEB_ACTION_INTENTS.size === 4 && WEB_ACTION_INTENTS.has("send_application"),
@@ -70,8 +98,8 @@ console.log("A · channel consistency — the same question reaches the same rea
   ];
   for (const q of knowledgeQuestions) {
     const sms = routeStaffSmsTurn({ text: q, attachments: [] }).destination;
-    const web = webDestination(q);
-    ok(`both channels read: "${q}"`, sms === "ask_spine" && web === "ask_spine", { sms, web });
+    const web = webDestinationModel(q);
+    ok(`both dispatch rules send to the read path: "${q}"`, sms === "ask_spine" && web === "ask_spine", { sms, web });
   }
 
   //  THE DEFECT THIS CLOSES. "whats our pet policy" reached the governed read
@@ -147,7 +175,7 @@ console.log("\nB · shared action behaviour — one writer, reached from both ch
 }
 
 // ══════════════════════════════════════════════════════════════════
-console.log("\nC · follow-up understanding — established context, used only when it bears");
+console.log("\nC · resolver-level follow-up — fixtures handed straight to the resolver");
 {
   //  The canonical vocabulary, CHECK-constrained in the schema.
   const recorded = {

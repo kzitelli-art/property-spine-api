@@ -28,6 +28,21 @@ const { recordPersonFact } = require("../identity/person_facts.js"); // 092: the
 const crypto = require("crypto");
 const { recordInboundCapture } = require("../agent/inbound_capture");
 const obligations = require("../shared/obligation_engine.js"); // §11: the ONE obligation writer
+
+//  ── TWO RECEIPTS, AND WHICH ONE IS TRUE DEPENDS ON A COMMIT ──────────
+//  Review found the refusal told the caller "It has been saved" BEFORE the
+//  save was attempted, and kept saying it after the save failed. The
+//  pessimistic one is the DEFAULT: it is set when the refusal is thrown and
+//  is only upgraded once the retained inquiry and its review task have
+//  committed. A receipt written before the write it describes is a claim
+//  about an intention, not about what happened.
+const CONFLICT_RECEIPT_SAVED =
+  "We could not tell which existing record this inquiry belongs to, so it was not "
+  + "attached to anyone. It has been saved for the leasing team to sort out.";
+const CONFLICT_RECEIPT_NOT_SAVED =
+  "We could not tell which existing record this inquiry belongs to, so it was not "
+  + "attached to anyone \u2014 and we were not able to save it. Please send it again, or "
+  + "call the leasing office so it is not lost.";
 const { resolveDemoProperty, resolveDemoPropertyRow } = require("../shared/demo_property_identity.js");
 const aiLeasingStrategy = require("./ai_leasing_strategy");
 const leasingKnowledge = require("./leasing_knowledge");
@@ -239,17 +254,16 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     //
     //  publicReceipt, NOT publicMessage. /leasing/intake renders
     //  `e.publicReceipt || e.message` in BOTH of its error handlers, so the
-    //  first version's
-    //  carefully written sentence never reached the caller — and what DID
-    //  reach them was e.message, which named the phone number and the count.
-    //  The Error's own message is now non-identifying for the same reason: a
-    //  refusal must not become the disclosure.
+    //  first version's carefully written sentence never reached the caller —
+    //  and what DID reach them was e.message, which named the phone number
+    //  and the match count. The Error's own message is now non-identifying
+    //  for the same reason: a refusal must not become the disclosure.
     const refuseAmbiguous = (rows, evidence) => {
       const e = new Error("Prospect identity is ambiguous; the inquiry was not attached.");
       e.httpStatus = 409;
       e.code = "person_identity_conflicted";
-      e.publicReceipt = "We could not tell which existing record this inquiry belongs to, "
-        + "so it was not attached to anyone. It has been saved for the leasing team to sort out.";
+      //  Pessimistic until the retention commits. See the two constants above.
+      e.publicReceipt = CONFLICT_RECEIPT_NOT_SAVED;
       //  Candidate ids/names are for the OPERATOR surface, never the caller.
       //  They ride on the error for the capture below and are not rendered.
       e.conflictEvidence = evidence;
@@ -989,52 +1003,114 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       };
     } catch (e) {
       try { await client.query("rollback"); } catch {}
-      //  ── REFUSE THE ATTACHMENT, NOT THE CAPTURE ───────────────────────
-      //  The identity refusal above throws INSIDE the transaction, so the
-      //  rollback that protects the person card also discards the inquiry.
-      //  A prospect who wrote to us would simply vanish — a refusal that
-      //  loses the customer is not a safer outcome, it is a different
-      //  failure.
+      //  ── RETAIN THE INQUIRY, NOT JUST AN ALERT ────────────────────────
+      //  The identity refusal throws INSIDE the intake transaction, so the
+      //  rollback that protects the person card also discarded the inquiry.
+      //  A prospect who wrote to us simply vanished.
       //
-      //  Captured as an OBLIGATION through the canonical writer, on a fresh
-      //  connection so the rollback cannot take it: property-scoped, owned
-      //  by a leasing role, person_id deliberately NULL. That is exactly
-      //  "attached to neither person, recoverable by an authorized
-      //  operator", and it is the escalation mechanism this system already
-      //  has (§11) rather than a second intake store.
+      //  The first version of this block spawned an obligation carrying a
+      //  property, a generic label and a role — and nothing else. An
+      //  operator opening it learned that A conflict happened, with no
+      //  message, no contact details and no way to tell WHICH inquiry they
+      //  were being asked to resolve. An alert that something was lost is
+      //  not preservation of what was lost.
       //
-      //  NOT intake_events, which was the obvious candidate and is wrong:
-      //  it is read only through /intake/queue behind a shared password, in
-      //  the onboarding domain, unscoped by property. Putting a real
-      //  prospect's phone and message there would be a worse disclosure than
-      //  the one being prevented.
+      //  What is retained is the INQUIRY, on the same record the comms
+      //  boundary already uses for an ambiguous SMS sender: a comm_event,
+      //  person-less, property-scoped, needs_human. "An ambiguous SENDER
+      //  still has a known property, so the claim is preserved on that
+      //  property's ledger for a human." The web door was the one losing
+      //  it. The review task then LINKS to that evidence through the
+      //  existing obligations.related_type/related_id linkage.
       //
-      //  Fail-soft: if the capture itself fails the original refusal still
-      //  stands. A failed capture is logged loudly and never converts a
-      //  refusal into a success.
+      //  NOT intake_events: read through /intake/queue behind a shared
+      //  password, in the onboarding domain, unscoped by property. Putting
+      //  a real prospect's phone and message there would be a worse
+      //  disclosure than the one being prevented.
+      //
+      //  NO PLACEHOLDER PERSON. Retaining through a resolved-person path by
+      //  minting an empty person would manufacture the very record the
+      //  refusal exists to avoid, and migration 200's CHECK makes it
+      //  structurally impossible to hang this evidence on one anyway.
+      //
+      //  The person's contact details live on the retained record, never in
+      //  the obligation's label — the label is read on boards and queues by
+      //  anyone entitled to the property, and a phone number does not
+      //  belong there.
       if (e && e.code === "person_identity_conflicted") {
         const c2 = await pool.connect();
         try {
           await c2.query("begin");
-          await obligations.spawnObligationFromEvent(c2, {
-            property_id: propertyId,
-            person_id: null,
-            module: "leasing",
-            type: "prospect_identity_conflict",
-            label: "A prospect inquiry could not be matched to one person record. "
-              + "Decide which record it belongs to, or create a new one.",
-            owner_type: "human",
-            assigned_role: "leasing_manager",
-            priority: "high",
-          });
+          //  Idempotency rides on the SAME delivery key the happy path uses.
+          //  A retry of a refused inquiry must not stack duplicate evidence
+          //  or a second review task; comm_events.correlation_key is unique
+          //  where not null, so the database decides, not a read-then-write.
+          //
+          //  WITHOUT an Idempotency-Key there is no key and no protection:
+          //  a caller that retries a refused inquiry will retain it again and
+          //  open a second task. That is the SAME contract the happy path has
+          //  (replay protection is opt-in, via the authenticated header), and
+          //  it is stated here rather than left to be discovered. Two retained
+          //  copies of a real inquiry is the safe direction to fail.
+          const correlationKey = delivery ? `leasing-intake-conflict:${delivery.key_digest}` : null;
+          const retained = (await c2.query(
+            `insert into comm_events
+               (property_id, person_id, unit_id, conversation_id, channel, direction,
+                body, classification, sender_role, needs_human, provider, correlation_key,
+                unresolved_inquiry)
+             values ($1, null, null, null, 'website', 'inbound',
+                     $2, 'unknown', 'prospect', true, 'leasing_intake', $3, $4)
+             on conflict (correlation_key) where correlation_key is not null do nothing
+             returning id`,
+            [propertyId, b.message || null, correlationKey, JSON.stringify({
+              //  The contact details AS SUBMITTED — not as some person record
+              //  holds them. Which of these conflicted is what an operator
+              //  needs to investigate.
+              submitted: { phone: phone || null, email: email || null, name: b.name || null },
+              source: sourceName || null,
+              conflict: {
+                evidence: e.conflictEvidence,
+                //  Ids only. Names are NOT written here: this record is
+                //  retained precisely because we do not know the person, and
+                //  the candidates' names are theirs, not this caller's.
+                candidate_person_ids: (e.conflictCandidates || []).map(c => c.person_id),
+              },
+              received_at: new Date().toISOString(),
+            })])).rows[0];
+
+          if (retained) {
+            //  First retention of this inquiry: it gets the review task.
+            await obligations.spawnObligationFromEvent(c2, {
+              property_id: propertyId,
+              person_id: null,
+              module: "leasing",
+              type: "prospect_identity_conflict",
+              //  Generic by design. The evidence is on the linked record.
+              label: "A prospect inquiry could not be matched to one person record. "
+                + "Open the retained inquiry, decide which record it belongs to, "
+                + "or create a new one.",
+              owner_type: "human",
+              assigned_role: "leasing_manager",
+              priority: "high",
+              related_type: "comm_event",
+              related_id: retained.id,
+            });
+          }
           await c2.query("commit");
-          console.error(`[leasing/intake] identity conflict CAPTURED as an obligation `
+          //  ONLY NOW is "saved" true. The receipt was pessimistic until the
+          //  evidence and its review task committed.
+          e.publicReceipt = CONFLICT_RECEIPT_SAVED;
+          console.error(`[leasing/intake] identity conflict RETAINED `
             + `property=${propertyId} evidence=${e.conflictEvidence} `
+            + `comm_event=${retained ? retained.id : "already-retained(replay)"} `
             + `candidates=${(e.conflictCandidates || []).length}`);
         } catch (capErr) {
           await c2.query("rollback").catch(() => {});
-          console.error("[leasing/intake] identity conflict could NOT be captured — "
-            + "the inquiry is lost and a person must be told:", capErr && capErr.message);
+          //  The receipt stays pessimistic. The caller is told the inquiry
+          //  was NOT saved, because it was not.
+          e.captureFailed = true;
+          console.error("[leasing/intake] identity conflict could NOT be retained — "
+            + "the inquiry is lost and the caller is being told so:", capErr && capErr.message);
         } finally { c2.release(); }
       }
       throw e;

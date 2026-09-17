@@ -286,17 +286,31 @@ async function behavioural() {
       !r.threw, r.threw ? r.e.message : "no throw");
   }
 
-  //  ── the inquiry is captured rather than lost
+  //  ── the inquiry is retained rather than lost
+  //
+  //  Three assertions that used to live here — that retention runs on a fresh
+  //  connection after the rollback, that it attaches to no person, and that a
+  //  failed retention never becomes a success — were SOURCE SCANS of the
+  //  then-current implementation, and one of them went red the moment the
+  //  wording changed while the behaviour was fine. All three are now proven
+  //  against a real database and a real HTTP request in
+  //  tests/proofs/leasing_identity_conflict_http.db.js (§2 and §6), where
+  //  a temporary CHECK makes the retention genuinely fail and the receipt is
+  //  read back off the wire. Behaviour proves behaviour.
+  //
+  //  What stays is the one claim that proof structurally cannot make: it can
+  //  see that an obligation exists, not HOW it was written. A direct
+  //  `insert into obligations` would satisfy every assertion over there while
+  //  bypassing the §11 writer and its vocabularies.
   {
     const src = code("src/leasing/leasing_leads.js");
-    ok("capture runs on a fresh connection, after the rollback",
-      /rollback[\s\S]{0,1400}person_identity_conflicted[\s\S]{0,400}pool\.connect\(\)/.test(src));
-    ok("it uses the canonical obligation writer, not a direct insert",
+    ok("the review task goes through the canonical obligation writer, not a direct insert",
       /obligations\.spawnObligationFromEvent\(c2,/.test(src) && !/insert into obligations/i.test(src));
-    ok("attached to NO person, scoped to the property",
-      /property_id: propertyId,[\s\S]{0,120}person_id: null/.test(src));
-    ok("a failed capture never converts the refusal into a success",
-      /could NOT be captured/.test(src));
+    //  Same reasoning, the other direction: the retained evidence must be a
+    //  comm_event written person-less. A behavioural proof sees a null
+    //  person_id; only source shows nothing later fills it in.
+    ok("the retained inquiry is written with no person, by construction",
+      /insert into comm_events[\s\S]{0,400}values \(\$1, null, null, null/.test(src));
   }
 
   console.log(`\n  ${passed} passed, ${failed} failed\n`);

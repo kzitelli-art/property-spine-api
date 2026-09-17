@@ -223,5 +223,104 @@ module.exports = function operatorObligations(deps) {
     }
   });
 
+  // ── THE RETAINED INQUIRY BEHIND AN IDENTITY-CONFLICT TASK ─────────
+  //  WHY THIS DOOR EXISTS. When /leasing/intake cannot tell which person an
+  //  inquiry belongs to it refuses to attach it and retains the inquiry
+  //  itself — a person-less, property-scoped comm_event — then spawns this
+  //  review task linked to it. Without a read, an operator sees only that a
+  //  conflict happened and has no way to reach the message they are being
+  //  asked to resolve. That is the defect this closes: an alert that
+  //  something was lost is not preservation of what was lost.
+  //
+  //  The header comment above says to add a door when a real workflow needs
+  //  one. This is that workflow.
+  //
+  //  ENTITLEMENT. Same posture as every read in this family: the property
+  //  and module come from the resolved staff session, never the client, and
+  //  anything outside that scope is 404 rather than 403 — a FORBIDDEN would
+  //  confirm the task exists. The retained record's own property_id is
+  //  re-checked against the session before a single field is returned, so a
+  //  mislinked obligation cannot pull another property's inquiry through.
+  //
+  //  DISCLOSURE. The prospect's submitted contact details and the candidate
+  //  person records are returned ONLY here, to an operator already entitled
+  //  to this property and the leasing module. They are deliberately absent
+  //  from the obligation's label, which is read on boards and queues.
+  const CONFLICT_TYPE = "prospect_identity_conflict";
+
+  router.get("/operator/obligations/:id/retained-inquiry", ...gate, async (req, res) => {
+    try {
+      const ob = (await pool.query(
+        `select o.id, o.status, o.label, o.created_at, o.related_id, o.related_type,
+                o.assigned_role, o.priority
+           from obligations o
+          where o.id = $1 and o.property_id = $2 and o.module = any($3::text[])
+            and o.type = $4`,
+        [req.params.id, req.operator.property_id,
+         req.operator.allowed_modules || [], CONFLICT_TYPE])).rows[0];
+      if (!ob) return res.status(404).json({ error: "No such retained inquiry on this property." });
+
+      if (ob.related_type !== "comm_event" || !ob.related_id) {
+        //  §5. An honest blank, not an invented one. A task whose evidence
+        //  link is missing is a real state and the operator must see it as
+        //  one rather than a task that simply looks empty.
+        return res.status(200).json({
+          obligation_id: ob.id, status: ob.status, label: ob.label,
+          retained_inquiry: null,
+          blocked_reason: "This task is not linked to a retained inquiry. The inquiry was not preserved; it cannot be recovered from here.",
+        });
+      }
+
+      const ce = (await pool.query(
+        `select id, body, occurred_at, channel, property_id, person_id,
+                needs_human, unresolved_inquiry
+           from comm_events where id = $1`, [ob.related_id])).rows[0];
+      //  Re-derive authority from the RECORD, never from the link.
+      if (!ce || String(ce.property_id) !== String(req.operator.property_id)) {
+        return res.status(200).json({
+          obligation_id: ob.id, status: ob.status, label: ob.label,
+          retained_inquiry: null,
+          blocked_reason: "The retained inquiry could not be verified against this property. The task stays open; do not resolve it blind.",
+        });
+      }
+
+      const ev = ce.unresolved_inquiry || {};
+      const ids = (ev.conflict && ev.conflict.candidate_person_ids) || [];
+      //  Names are resolved HERE, for this entitled operator, from the ids on
+      //  the record. They are not written into the retained evidence: the
+      //  inquiry is retained precisely because we do not know whose it is,
+      //  and those names belong to the candidates, not to the caller.
+      const candidates = ids.length
+        ? (await pool.query(`select id, name from persons where id = any($1::uuid[])`, [ids])).rows
+        : [];
+
+      return res.json({
+        obligation_id: ob.id,
+        status: ob.status,
+        label: ob.label,
+        opened_at: ob.created_at,
+        retained_inquiry: {
+          comm_event_id: ce.id,
+          message: ce.body,
+          received_at: (ev.received_at || ce.occurred_at),
+          channel: ce.channel,
+          source: ev.source || null,
+          submitted: ev.submitted || null,
+          attached_to_person: ce.person_id,          // always null, by construction
+          conflict_evidence: (ev.conflict && ev.conflict.evidence) || null,
+          candidates: candidates.map(c => ({ person_id: c.id, name: c.name })),
+        },
+        //  What resolving it means, stated rather than implied. There is no
+        //  resolve action here yet: attaching an inquiry to a person is a
+        //  canonical identity write and does not get a second door on the
+        //  way in (§40.9). Naming the gap is the honest state.
+        next_step: "Decide which person record this inquiry belongs to, or create a new one, through the person path. This read does not attach it.",
+      });
+    } catch (e) {
+      console.error("retained-inquiry read error", e);
+      return res.status(500).json({ error: "Could not read this retained inquiry." });
+    }
+  });
+
   return router;
 };
