@@ -170,11 +170,17 @@ step "property line identity and inbound doors" node tests/unit/property_line_id
 #  developer tools. Component proof: a real browser drives the real functions
 #  lifted out of the app's index.html. No API and no database, so it runs here
 #  with the unit steps rather than in the coupled browser rung.
-if [ -f "$APP_ROOT/index.html" ]; then
-  step "browser: retained inquiry is recoverable in the app" \
+#  app_rung_ready is THE question every app rung asks — it checks Chromium
+#  AND the declared pin together, "so the three call sites cannot drift apart
+#  from each other either". This step first asked only whether index.html
+#  existed, which would have run it against an app nobody pinned and with no
+#  browser: a rung that reports green about an undeclared surface is worse
+#  than one that skips by name.
+if app_rung_ready; then
+  step "browser: retained inquiry is recoverable in the app (app $APP_PIN_SHORT)" \
     env CHROMIUM="${CHROMIUM:-}" node "$APP_ROOT/retained_inquiry_dom.test.js"
 else
-  echo "── browser: retained inquiry          SKIPPED (no app checkout at $APP_ROOT)"
+  echo "── browser: retained inquiry          SKIPPED ($(app_rung_skip_reason))"
   SKIPPED="retained inquiry app proof"
   FAILED=1
 fi
