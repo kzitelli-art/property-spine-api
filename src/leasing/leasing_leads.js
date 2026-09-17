@@ -36,6 +36,10 @@ const obligations = require("../shared/obligation_engine.js"); // §11: the ONE 
 //  is only upgraded once the retained inquiry and its review task have
 //  committed. A receipt written before the write it describes is a claim
 //  about an intention, not about what happened.
+//  How many candidate records a single refusal may carry. A conflict with
+//  more than a handful is not a record to disambiguate, it is a shared line,
+//  and the operator needs to be told that rather than handed a list.
+const MAX_CONFLICT_CANDIDATES = 10;
 const CONFLICT_RECEIPT_SAVED =
   "We could not tell which existing record this inquiry belongs to, so it was not "
   + "attached to anyone. It has been saved for the leasing team to sort out.";
@@ -267,7 +271,13 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       //  Candidate ids/names are for the OPERATOR surface, never the caller.
       //  They ride on the error for the capture below and are not rendered.
       e.conflictEvidence = evidence;
-      e.conflictCandidates = rows.map(r => ({ person_id: r.id, name: r.name }));
+      //  BOUNDED. An unbounded map meant a widely-shared number wrote every
+      //  matching person's id into the retained record and returned every name
+      //  to the operator. The true count travels so the operator is told the
+      //  list is partial rather than quietly shown a truncated one.
+      e.conflictCandidateCount = rows.length;
+      e.conflictCandidates = rows.slice(0, MAX_CONFLICT_CANDIDATES)
+        .map(r => ({ person_id: r.id, name: r.name }));
       throw e;
     };
 
@@ -1038,8 +1048,16 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       //  anyone entitled to the property, and a phone number does not
       //  belong there.
       if (e && e.code === "person_identity_conflicted") {
-        const c2 = await pool.connect();
+        //  pool.connect() is INSIDE the try. It used to sit outside it, and a
+        //  pool that is exhausted or a database that is unreachable — exactly
+        //  when a retention fails — threw from here, replaced the
+        //  person_identity_conflicted error on its way out, and handed the
+        //  caller a generic 500 instead of the 409 and the honest "we could
+        //  not save it" receipt. The refusal must survive its own recovery
+        //  failing, or the pessimistic receipt is decorative.
+        let c2 = null;
         try {
+          c2 = await pool.connect();
           await c2.query("begin");
           //  Idempotency rides on the SAME delivery key the happy path uses.
           //  A retry of a refused inquiry must not stack duplicate evidence
@@ -1074,6 +1092,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
                 //  retained precisely because we do not know the person, and
                 //  the candidates' names are theirs, not this caller's.
                 candidate_person_ids: (e.conflictCandidates || []).map(c => c.person_id),
+                candidate_total: e.conflictCandidateCount,
               },
               received_at: new Date().toISOString(),
             })])).rows[0];
@@ -1105,13 +1124,12 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
             + `comm_event=${retained ? retained.id : "already-retained(replay)"} `
             + `candidates=${(e.conflictCandidates || []).length}`);
         } catch (capErr) {
-          await c2.query("rollback").catch(() => {});
+          if (c2) await c2.query("rollback").catch(() => {});
           //  The receipt stays pessimistic. The caller is told the inquiry
           //  was NOT saved, because it was not.
-          e.captureFailed = true;
           console.error("[leasing/intake] identity conflict could NOT be retained — "
             + "the inquiry is lost and the caller is being told so:", capErr && capErr.message);
-        } finally { c2.release(); }
+        } finally { if (c2) c2.release(); }
       }
       throw e;
     } finally { client.release(); }

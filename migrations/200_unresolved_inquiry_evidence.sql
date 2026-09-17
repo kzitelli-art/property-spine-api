@@ -42,10 +42,21 @@ comment on column comm_events.unresolved_inquiry is
   'the contact details as SUBMITTED, the source, and which identity key '
   'conflicted. Only ever set when person_id is null and needs_human is true.';
 
+-- NOT VALID, then VALIDATE. `ADD CONSTRAINT ... CHECK` normally scans the
+-- whole table under ACCESS EXCLUSIVE to prove existing rows comply, and
+-- comm_events is the busiest table in the system — every message ever sent or
+-- received. NOT VALID takes the lock only long enough to record the
+-- constraint; VALIDATE then does the scan under SHARE UPDATE EXCLUSIVE, which
+-- does not block reads or writes. Every existing row has a NULL
+-- unresolved_inquiry, so the scan finds nothing, but the lock it would have
+-- taken is real. The constraint is fully enforced for new and updated rows
+-- from the moment it is added, NOT VALID or not.
 alter table comm_events drop constraint if exists ck_comm_unresolved_inquiry_scope;
 alter table comm_events add constraint ck_comm_unresolved_inquiry_scope
   check (unresolved_inquiry is null
-         or (person_id is null and needs_human = true and direction = 'inbound'));
+         or (person_id is null and needs_human = true and direction = 'inbound'))
+  not valid;
+alter table comm_events validate constraint ck_comm_unresolved_inquiry_scope;
 
 -- The operator read: find the retained inquiries for a property. Partial, so
 -- it costs nothing on the ordinary attributed-message path.

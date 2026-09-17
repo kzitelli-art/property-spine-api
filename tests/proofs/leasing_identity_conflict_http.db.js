@@ -95,9 +95,14 @@ async function teardown() {
   await q(`delete from users where id = any($1::uuid[])`, [[ID.user, ID.otherUser]]);
   await q(`delete from persons where id = any($1::uuid[])`, [[ID.personA, ID.personB, ID.personSolo]]);
   await q(`delete from properties where id = any($1::uuid[])`, [[ID.property, ID.otherProperty]]);
+  //  §6 adds a temporary CHECK to make the retention fail for real. If that
+  //  section aborts between adding and dropping it, the constraint would
+  //  poison every later run against this database.
+  await q(`alter table comm_events drop constraint if exists tmp_proof_retention_fails`);
 }
 
-function buildApp() {
+function buildApp(withPool) {
+  const usePool = withPool || pool;
   const app = express();
   app.use(express.json());
   //  No model, no transport. A refusal must never reach a real prospect, and
@@ -114,10 +119,10 @@ function buildApp() {
   const commBoundary = { reclassify: async () => {} };
   const leasingLifecycle = { maybeReopenOnQualifyingInbound: async () => {} };
   app.use("/", require("../../src/leasing/leasing_leads")({
-    pool, anthropic: null, INGEST_MODEL: "proof", sms,
+    pool: usePool, anthropic: null, INGEST_MODEL: "proof", sms,
     leasingLifecycle, conversionServices: null, commBoundary,
   }));
-  app.use("/", require("../../src/obligations/operator_obligations")({ pool }));
+  app.use("/", require("../../src/obligations/operator_obligations")({ pool: usePool }));
   return app;
 }
 
@@ -285,6 +290,91 @@ async function main() {
     `select count(*)::int n from obligations where property_id=$1 and type='prospect_identity_conflict'`,
     [ID.property])).rows[0].n;
   ok("and no orphan review task was opened for it", obsStill === 1, obsStill);
+
+  // ══════════════════════════════════════════════════════════════════
+  console.log("\n6b · the refusal survives its own recovery failing to connect");
+  //  pool.connect() for the recovery used to sit OUTSIDE the try. A pool that
+  //  is exhausted or a database that is unreachable — precisely when a
+  //  retention fails — threw from there, replaced the identity-conflict error
+  //  on its way out, and handed the caller a generic 500. The pessimistic
+  //  receipt is worthless if the path that returns it can be skipped.
+  //
+  //  Injected at the seam the code actually uses: the FIRST connect is the
+  //  intake transaction and must succeed; the SECOND is the recovery.
+  {
+    let connects = 0;
+    const faultyPool = {
+      query: (...a) => pool.query(...a),
+      connect: async () => {
+        connects += 1;
+        if (connects === 2) throw new Error("proof: pool exhausted");
+        return pool.connect();
+      },
+    };
+    const s2 = http.createServer(buildApp(faultyPool));
+    await new Promise(r => s2.listen(0, "127.0.0.1", r));
+    const b2 = `http://127.0.0.1:${s2.address().port}`;
+    const r = await fetch(b2 + "/leasing/intake", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-intake-secret": INTAKE_SECRET },
+      body: JSON.stringify({ property_id: ID.property, name: "Third Prospect", phone: SHARED_PHONE,
+        message: "the recovery connection will fail for this one", attempt_sms: false }),
+    }).then(async x => ({ status: x.status, json: await x.json().catch(() => null) }));
+    await new Promise(r2 => s2.close(r2));
+
+    ok("a failed recovery CONNECT still answers 409, not 500", r.status === 409, r);
+    ok("and still returns the honest not-saved receipt",
+      !/has been saved/i.test(r.json?.receipt || "") && /not able to save/i.test(r.json?.receipt || ""),
+      r.json?.receipt);
+    ok("the recovery connection really was the one that failed", connects >= 2, connects);
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  console.log("\n6c · a widely-shared number does not disclose everyone on it");
+  //  An unbounded candidate map wrote EVERY matching person's id into the
+  //  retained record and returned every name to the operator. A corporate or
+  //  family line is a shared line, not a pair of duplicate records, and the
+  //  operator needs to be told that rather than handed a roster.
+  {
+    const many = [];
+    for (let i = 0; i < 12; i++) many.push(uuid());
+    await pool.query(
+      `insert into persons (id, name, primary_phone_e164, phone)
+       select u.id, 'Shared Line Person ' || u.ord, $2, $2
+         from unnest($1::uuid[]) with ordinality as u(id, ord)`, [many, "+12155550222"]);
+    try {
+      const r = await intake({ property_id: ID.property, name: "Shared Line Caller",
+        phone: "+12155550222", message: "twelve people share this number",
+        source: "website-form", attempt_sms: false }, { "Idempotency-Key": "proof-key-shared" });
+      ok("still refused", r.status === 409, r.status);
+      const row = (await pool.query(
+        `select unresolved_inquiry from comm_events
+          where property_id=$1 and correlation_key like '%proof-key-shared%'
+             or (unresolved_inquiry->'submitted'->>'phone') = $2`,
+        [ID.property, "+12155550222"])).rows[0];
+      const ev = (row && row.unresolved_inquiry) || {};
+      const kept = (ev.conflict && ev.conflict.candidate_person_ids) || [];
+      ok("the retained record keeps a BOUNDED candidate list", kept.length === 10, kept.length);
+      ok("but records the true total, so nothing is silently truncated",
+        ev.conflict && ev.conflict.candidate_total === 12, ev.conflict && ev.conflict.candidate_total);
+
+      const ob = (await pool.query(
+        `select id from obligations where property_id=$1 and type='prospect_identity_conflict'
+          and related_id=(select id from comm_events where property_id=$1
+                          and (unresolved_inquiry->'submitted'->>'phone')=$2)`,
+        [ID.property, "+12155550222"])).rows[0];
+      const view = await get(`/operator/obligations/${ob.id}/retained-inquiry`,
+        { "x-staff-session": STAFF_TOKEN });
+      ok("the operator is TOLD the list is partial",
+        view.json?.retained_inquiry?.candidates_truncated === true,
+        view.json?.retained_inquiry);
+      ok("and told how many there really are",
+        view.json?.retained_inquiry?.candidate_total === 12,
+        view.json?.retained_inquiry?.candidate_total);
+    } finally {
+      await pool.query(`delete from persons where id = any($1::uuid[])`, [many]).catch(() => {});
+    }
+  }
 
   // ══════════════════════════════════════════════════════════════════
   console.log("\n7 · ordinary intake still works — the controls");

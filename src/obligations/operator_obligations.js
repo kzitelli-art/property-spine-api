@@ -309,6 +309,14 @@ module.exports = function operatorObligations(deps) {
           attached_to_person: ce.person_id,          // always null, by construction
           conflict_evidence: (ev.conflict && ev.conflict.evidence) || null,
           candidates: candidates.map(c => ({ person_id: c.id, name: c.name })),
+          //  §5. A truncated list shown as if it were the whole list is a
+          //  confident wrong answer. The retained record carries the true
+          //  count, so the operator is told when there are more than the
+          //  refusal kept — that is the signal for a shared line, which is a
+          //  different problem from two duplicate records.
+          candidate_total: (ev.conflict && ev.conflict.candidate_total) || ids.length,
+          candidates_truncated:
+            ((ev.conflict && ev.conflict.candidate_total) || ids.length) > ids.length,
         },
         //  What resolving it means, stated rather than implied. There is no
         //  resolve action here yet: attaching an inquiry to a person is a
