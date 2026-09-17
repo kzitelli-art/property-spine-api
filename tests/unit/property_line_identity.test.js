@@ -97,19 +97,44 @@ console.log("\n2 · every outbound message resolves its line through policy");
 console.log("\n3 · the live prospect path refuses a conflicted number");
 {
   const leads = code("src/leasing/leasing_leads.js");
-  //  THE DEFECT: `order by created_at limit 1` on the canonical phone key
-  //  silently adopted the OLDEST person sharing a number, so a reassigned
-  //  number attached a new prospect's messages to the previous holder.
-  ok("the canonical phone lookup no longer takes the first row",
-    !/primary_phone_e164=\$1[\s\S]{0,40}limit 1/.test(leads));
-  ok("more than one match is refused, not ranked",
-    /byCanon\.length > 1/.test(leads) && /person_identity_conflicted/.test(leads));
-  ok("the refusal carries both candidates for a human to resolve",
-    /candidates: byCanon\.map/.test(leads));
-  ok("it throws, so the enclosing transaction writes nothing partial",
-    /throw Object\.assign\([\s\S]{0,200}person_identity_conflicted/.test(leads));
-  ok("the refusal is sayable to a person, not a schema word",
-    /This phone number is on more than one person record/.test(leads));
+  //  THE DEFECT: `order by created_at limit 1` silently adopted the OLDEST
+  //  person sharing a number, so a reassigned number attached a new
+  //  prospect's messages to the previous holder.
+  //
+  //  Review found the first pass fixed only the canonical branch and left its
+  //  legacy-phone and email siblings selecting the first match — the same
+  //  ambiguity reaching the same person card through a different door. All
+  //  three lookups are therefore pinned BY NAME.
+  //
+  //  This is the ONE thing §5 structurally cannot check. Its fake client
+  //  answers by matching a regex against the SQL text and hands back two rows
+  //  regardless of what the query actually asked for, so a returning `limit 1`
+  //  would leave every behavioural assertion green. Source covers the query;
+  //  behaviour covers the refusal. Neither substitutes for the other.
+  //
+  //  Each of these three was mutation-checked: reintroducing `limit 1` in that
+  //  branch turns that assertion red and only that one.
+  const lookups = [
+    ["canonical phone", /primary_phone_e164=\$1[\s\S]{0,120}?\)\)\.rows/],
+    ["legacy phone",    /regexp_replace\(phone[\s\S]{0,260}?\)\)\.rows/],
+    ["email",           /lower\(email\)=lower\(\$1\)[\s\S]{0,120}?\)\)\.rows/],
+  ];
+  for (const [which, rx] of lookups) {
+    const m = leads.match(rx);
+    ok(`the ${which} lookup does not take the first row`,
+      !!m && !/limit\s+1/i.test(m[0]),
+      m ? m[0].replace(/\s+/g, " ") : "lookup statement not found — regex is stale");
+  }
+
+  //  Everything else this section used to assert about the refusal — that it
+  //  carries its candidates, that it throws, that it is sayable — was asserted
+  //  by GREPPING FOR THE SHAPE of the then-current implementation, which is
+  //  what let `publicMessage` pass while /leasing/intake rendered
+  //  `publicReceipt || message`. Those assertions now live in §5, where the
+  //  real resolver is run and the rendered receipt is read. They are not
+  //  duplicated here: a source twin of a behavioural assertion only re-pins
+  //  the shape, and re-breaks on the next honest refactor without catching
+  //  anything the behavioural one missed.
 
   //  And it now agrees with the canonical resolver, which always refused.
   const ingress = code("src/identity/person_ingress.js");
@@ -159,5 +184,122 @@ console.log("\n4 · the second inbound door, and a documented setting that did n
     !(docsIt && !readsIt), { documented: docsIt, read_by_code: readsIt });
 }
 
-console.log(`\n  ${passed} passed, ${failed} failed\n`);
-process.exit(failed ? 1 : 0);
+// ══════════════════════════════════════════════════════════════════
+//  5 · BEHAVIOURAL — the refusal is RUN, not grepped
+//
+//  Review's sharpest finding: section 3 asserts source text, so the intended
+//  refusal could pass its test while never reaching a caller. It did exactly
+//  that — the error set `publicMessage` while /leasing/intake renders
+//  `publicReceipt || message`.
+//
+//  These drive the REAL resolveOrCreatePerson. Driving the whole HTTP intake
+//  would need a real database; a fake pool broad enough to satisfy its
+//  preamble is a database reimplemented badly, and the first attempt here
+//  proved it — every case "failed" on a missing lead_sources row, and the
+//  control case PASSED for the wrong reason. Stated rather than faked: the
+//  end-to-end HTTP assertion is an owed rung, not a claimed one.
+// ══════════════════════════════════════════════════════════════════
+async function behavioural() {
+  console.log("\n5 · the refusal, exercised through the real resolver");
+
+  const TWO = [
+    { id: "aaaaaaaa-0000-0000-0000-000000000001", name: "Older Record", phone: "+12155550100", primary_phone_e164: "+12155550100", email: "dup@example.com" },
+    { id: "bbbbbbbb-0000-0000-0000-000000000002", name: "Newer Record", phone: "215-555-0100", primary_phone_e164: "+12155550100", email: "dup@example.com" },
+  ];
+
+  const mod = require(path.join(root, "src/leasing/leasing_leads"))({
+    pool: { connect: async () => ({ query: async () => ({ rows: [] }), release() {} }), query: async () => ({ rows: [] }) },
+    anthropic: null, INGEST_MODEL: "test",
+    spawnObligationFromEvent: async () => ({ id: "ob" }),
+    completeObligation: async () => {}, leasingLifecycle: {},
+  });
+  const resolve = mod.__test__ && mod.__test__.resolveOrCreatePerson;
+  ok("the resolver is reachable for a behavioural test", typeof resolve === "function");
+  if (typeof resolve !== "function") { console.log(`\n  ${passed} passed, ${failed} failed\n`); process.exit(1); }
+
+  /** A client answering only the three lookups the resolver performs. */
+  const clientFor = ({ canonical = [], legacy = [], email = [] }) => ({
+    async query(sql) {
+      const q = String(sql);
+      if (/primary_phone_e164=\$1/.test(q)) return { rows: canonical };
+      if (/regexp_replace\(phone/.test(q)) return { rows: legacy };
+      if (/lower\(email\)=lower\(\$1\)/.test(q)) return { rows: email };
+      return { rows: [] };
+    },
+  });
+
+  const attempt = async (rows, input) => {
+    try { const r = await resolve(clientFor(rows), input); return { threw: false, r }; }
+    catch (e) { return { threw: true, e }; }
+  };
+
+  //  ── the branch the first pass left choosing the first row
+  {
+    const r = await attempt({ legacy: TWO }, { name: "New Prospect", phone: "+1 215 555 0100" });
+    ok("legacy-phone ambiguity refuses instead of choosing",
+      r.threw && r.e.code === "person_identity_conflicted", r.threw ? r.e.code : "did not throw");
+    if (r.threw) {
+      ok("it answers 409", r.e.httpStatus === 409, r.e.httpStatus);
+      //  THE CONTRACT THE ENDPOINT ACTUALLY RENDERS: publicReceipt || message.
+      ok("publicReceipt is set — the field /leasing/intake reads",
+        typeof r.e.publicReceipt === "string" && r.e.publicReceipt.length > 0, r.e.publicReceipt);
+      const rendered = r.e.publicReceipt || r.e.message;
+      ok("the rendered receipt names no phone number",
+        !/\d{3}[^a-zA-Z]{0,3}\d{4}/.test(rendered), rendered);
+      ok("the rendered receipt names no candidate",
+        !/Older Record|Newer Record/.test(rendered), rendered);
+      ok("the raw message is safe too, in case a caller renders it",
+        !/215/.test(r.e.message), r.e.message);
+      ok("candidates ride on the error for the operator surface only",
+        Array.isArray(r.e.conflictCandidates) && r.e.conflictCandidates.length === 2,
+        r.e.conflictCandidates);
+      ok("the evidence type is named", r.e.conflictEvidence === "legacy_phone", r.e.conflictEvidence);
+    }
+  }
+
+  //  ── the third branch, which the first pass also left choosing
+  {
+    const r = await attempt({ email: TWO }, { name: "New Prospect", email: "dup@example.com" });
+    ok("email ambiguity refuses instead of choosing",
+      r.threw && r.e.conflictEvidence === "email", r.threw ? r.e.conflictEvidence : "did not throw");
+  }
+
+  //  ── the branch the first pass DID fix, still fixed
+  {
+    const r = await attempt({ canonical: TWO }, { name: "New Prospect", phone: "+1 215 555 0100" });
+    ok("canonical-phone ambiguity still refuses",
+      r.threw && r.e.conflictEvidence === "canonical_phone", r.threw ? r.e.conflictEvidence : "did not throw");
+  }
+
+  //  ── THE CONTROL. One match is not ambiguity, and this must pass for the
+  //  right reason — an earlier version of this case passed because EVERY case
+  //  threw, which proves nothing about the refusal being targeted.
+  {
+    const r = await attempt({ canonical: [TWO[0]] }, { name: "New Prospect", phone: "+1 215 555 0100" });
+    ok("a single match resolves normally and does NOT refuse",
+      !r.threw && r.r && r.r.person && r.r.person.id === TWO[0].id && r.r.createdPerson === false,
+      r.threw ? r.e.message : (r.r && { id: r.r.person && r.r.person.id, created: r.r.createdPerson }));
+  }
+  {
+    const r = await attempt({}, { name: "Nobody Yet", phone: "+1 215 555 0199" });
+    ok("no match at all still creates, rather than refusing",
+      !r.threw, r.threw ? r.e.message : "no throw");
+  }
+
+  //  ── the inquiry is captured rather than lost
+  {
+    const src = code("src/leasing/leasing_leads.js");
+    ok("capture runs on a fresh connection, after the rollback",
+      /rollback[\s\S]{0,1400}person_identity_conflicted[\s\S]{0,400}pool\.connect\(\)/.test(src));
+    ok("it uses the canonical obligation writer, not a direct insert",
+      /obligations\.spawnObligationFromEvent\(c2,/.test(src) && !/insert into obligations/i.test(src));
+    ok("attached to NO person, scoped to the property",
+      /property_id: propertyId,[\s\S]{0,120}person_id: null/.test(src));
+    ok("a failed capture never converts the refusal into a success",
+      /could NOT be captured/.test(src));
+  }
+
+  console.log(`\n  ${passed} passed, ${failed} failed\n`);
+  process.exit(failed ? 1 : 0);
+}
+behavioural();
