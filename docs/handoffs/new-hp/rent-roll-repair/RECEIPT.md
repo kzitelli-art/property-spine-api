@@ -8,9 +8,9 @@ the rows — it records the order things were done in, what each step
 **disproved**, and the decisions that are owed rather than taken.
 
 ```
-API  ecd6ab28  claude/rentroll-grain-refusal-20260918
-CI   698 · 699 · 700 · 701 · 702 · 703 · 704  all success
-     705 · 706  pending at the time of writing
+API  774af803  claude/rentroll-grain-refusal-20260918
+CI   698 through 707  all success
+     (774af803 is the row-147 correction; docs and a comment only)
 ```
 
 ---
@@ -124,7 +124,7 @@ correct. Scope not covered, stated: consumers outside the file — the app.
 | Same split on Ask Spine's standing projection | owned DB at two dates; **CI-defended via rows 144–145** |
 | The collapse itself (occupied rises, contractual → 0) | registered DB proof, 5 red reverted → 32/0 |
 | Vacancy is a classification, not a remainder | registered, 21/21, 10 red on the parent |
-| Canonical occupancy published beside this surface's own | registered, failure path asserted on both branches |
+| Canonical occupancy published beside this surface's own | registered for the `null` branch only; populated branch observed over real HTTP — `true` on Greenery, **`false` on the claim fixture** (2 vs 4) |
 | `upcoming` and `coverage` arithmetic | registered, 39/39, reds on both unmodified ratios |
 
 **No browser rung in this thread.** The signed-in desk reads occupancy from
