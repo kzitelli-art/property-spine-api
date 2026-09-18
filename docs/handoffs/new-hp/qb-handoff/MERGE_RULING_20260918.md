@@ -171,3 +171,43 @@ pin to make the suite green.
 `app_pin.txt` governs which app CI checks out for the browser rungs. It is not a
 release claim and has nothing to do with the deployed app (`6f92b50`). Do not
 conflate them.
+
+---
+
+## The app repo is in much better shape than the API repo
+
+Surveyed 2026-09-18. Unlike the API side, the app line is **strictly linear** —
+no divergence to reconcile.
+
+| fact | measurement |
+|---|---|
+| Deployed app `6f92b50` is an **ancestor** of the CI pin `2e8199a4` | 3 commits between them, **0** the other way |
+| App `origin/main` is contained in `2e8199a4` | app main is at `c6769ba`, 2026-08-18 — a month stale, same as API main |
+| So app integration is **one fast-forward**, not a merge | `main` → `2e8199a4` |
+
+The three commits production does not yet have:
+
+```
+312a999  2026-09-15  Formal rent roll: one totals definition, and the rows that qualify the ratio
+835ef2b  2026-09-17  operator can recover an unmatched inquiry from the queue
+2e8199a  2026-09-17  prove the panel is reachable in the real page, not just in the test
+```
+
+Every other app branch that reports "ahead" is an abandoned lane from August
+(`build-2-*`, `build-3-*`, `operator-ui-system-alignment`, and so on). They are
+noise, not integration candidates. Two recent ones are not:
+
+- `codex/property-navigation-polish-20260916` — 4 ahead of the pin.
+- `codex/fix-institutional-rent-roll-back` — 3 ahead of the pin, head `3607b3d`.
+
+### ⚠ The app authority change is in NEITHER production NOR the CI pin
+
+`3607b3d` *"Preserve platform role when adding property access"* sits on
+`codex/fix-institutional-rent-roll-back`, ahead of the pin and ahead of the
+deployed app. It is unmerged and unreviewed.
+
+It reads as a fix. It could equally be a widening — "preserve" and "grant" are
+one edit apart in an access path. It touches who may do what, so it does **not**
+get merged on the strength of its commit subject. The owner reads that diff
+before it lands anywhere, per the standing note that the QB may not decide an
+authority change alone.
