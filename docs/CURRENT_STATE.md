@@ -1,35 +1,32 @@
 # CURRENT STATE — what exists, and at what proof level
 
-## ⛔ CANONICAL INVENTORY — OWNER-DECLARED. DO NOT DERIVE, DO NOT ARGUE WITH IT.
+## ⛔ THE TWO BUILDINGS — START HERE, BEFORE ANY CODE
 
 ```text
-SKYLINE   (1417,      bed model)    160 beds   ·  72 units
-GREENERY  (1325-N-15, bed model)    105 beds   ·  64 units
+SKYLINE    1417 N 15th      160 beds   72 units
+GREENERY   1325 N 15th      105 beds   64 units
 ```
 
-**Declared by the owner, 2026-09-18.** These are the physical facts of the two
-live buildings. They are not a count Spine computed and they are not up for
-rederivation by a thread that found a different number in a comment, a fixture,
-an archive trace or a stale import.
+Student housing, leased **by the bed**, not by the unit. A unit is a physical
+apartment holding two or three bedrooms. The thing a resident signs for, pays
+for and lives in is one bed. Leases run an annual cycle starting 1 August.
 
-**Why this block exists.** Before it, Skyline's 160/72 appeared exactly ONCE in
-this file, inside a dated snapshot paragraph, and Greenery's counts appeared
-NOWHERE. So every thread re-derived them from whatever it happened to read
-first, got a different answer, and asked the owner again. That is the failure
-this file exists to end, and it had been happening on the single most important
-number in the product.
+**So the rent roll is 160 rows for Skyline and 105 rows for Greenery. Every
+month. That row count does not move unless the building is physically changed.**
 
-**If a number you find disagrees with this block, the number is wrong.** Say so
-and fix it at the source; do not quietly adopt it and do not re-ask.
+That single sentence is the check. A rent roll read that returns any other row
+count for these properties is wrong, and you know it without opening any code.
+Units matter for maintenance and turns. The money is per bed.
 
-⚠ ONE KNOWN DISAGREEMENT, UNFIXED: `src/surfaces/rent_roll_institutional.js`
-line 13 states *"ONE ROW PER CANONICAL RENTABLE POSITION — 283 positions, never
-the 386 imported source rows."* The 386 is real and traceable to Skyline's
-2026-08-16 import (`docs/archive/LEASING_CYCLE_AND_PACE_TRACE.md`: 385 live
-leases, all created that day, 384 of 386 typed `historical_snapshot`). **283 is
-not Skyline's position count and never was** — Skyline is 160. That comment
-names no property and should either name one or be marked illustrative. It is a
-comment, not runtime behaviour, so nothing computes from it.
+**Owner-declared, 2026-09-18. Do not re-derive these and do not ask again.** If
+a comment, fixture, archive trace or import disagrees, the other number is
+wrong — fix it at its source. These have been the most re-asked numbers in the
+project, which is the failure this file exists to prevent: before now Skyline's
+counts appeared once, inside a dated paragraph, and Greenery's appeared nowhere.
+
+⚠ One known stale number, recorded so nobody adopts it: a comment in
+`src/surfaces/rent_roll_institutional.js` says "283 positions". That is not
+Skyline and not Greenery. It is a comment; nothing computes from it.
 
 
 **September 16, 21:26 UTC — production property navigation and address presentation:** unchanged API `cd7279ebb23865f4e3e7f9c827dd4b5cc52d475f` remains live at schema 187/199; app `610439db2c7df6a1aad3a2e9dcf1fb26752b843d` is live at Render deployment `dep-dalgimbl550s73b6up1g`. The current property name and an explicit `All properties` action now open the existing server-authorized picker from Home and every desk; Home also exposes `Switch property`. Chooser addresses use one display formatter, so retained Skyline shorthand `1417 n 15 phily` presents as `1417 N 15th St, Philadelphia` and Greenery presents as `1325 N 15th St, Philadelphia`; the underlying property records are unchanged. The sanctioned app suite passed 72 harnesses / 2,427 assertions / 0 failures, the focused real-Chromium navigation proof passed 31/31, Render checked out the exact commit, and every served first-party asset byte-matched it. No property identity, access, inventory, pricing, lease, knowledge, provider, API or schema write occurred. See [release receipt](handoffs/new-hp/property-navigation-polish/RECEIPT.md).

@@ -18,13 +18,13 @@
 > decision-changing rows are promoted into its index. Search the source, then add
 > what you find.
 
-> ## SKYLINE IS 160 BEDS / 72 UNITS. GREENERY IS 105 BEDS / 64 UNITS.
+> ## THE TWO BUILDINGS: SKYLINE 160 BEDS / 72 UNITS · GREENERY 105 BEDS / 64 UNITS
 >
-> Owner-declared, 2026-09-18. See the **CANONICAL INVENTORY** block at the top of
-> [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md). Do not derive these from a
-> comment, a fixture, an archive trace or an import. If something you read
-> disagrees, it is wrong — fix it at the source and do not ask the owner again.
-> These are the most re-asked numbers in the project.
+> Student housing, leased BY THE BED. A unit holds two or three bedrooms; the
+> resident signs for one bed. **So the rent roll is 160 rows for Skyline and 105
+> for Greenery, every month.** Any other row count is wrong, and you know it
+> without reading code. Owner-declared 2026-09-18; see the top of
+> [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md). Do not re-derive, do not ask again.
 
 **Read [`docs/THREAD_HANDOFF.md`](docs/THREAD_HANDOFF.md) for HISTORY** — what happened, why, and the traps that cost time. It is 3,992 lines across 50 dated banners with 34 supersession notices, so **its present-tense claims may be stale and it is not current-state authority**. Do not reconstruct history from git.
 
