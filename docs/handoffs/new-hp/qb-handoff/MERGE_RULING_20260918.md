@@ -100,3 +100,74 @@ sets of numbers is impossible and rewriting is mandatory rather than optional.
 - The BUILD_CONTRACT in (5) specifies production writes to property display
   names, the deal registry and access assignments. None may be executed without
   the owner saying so, per the standing constraints.
+
+---
+
+## Dry run of merge (3), performed and aborted before this was written
+
+The deployed line was merged with `--no-commit`, inspected, and `--abort`ed.
+Result: **exactly two conflicted files**, one hunk each.
+
+| file | resolution |
+|---|---|
+| `docs/CURRENT_STATE.md` | the row hazard above. Follow the four-part rule. |
+| `tests/e2e/app_pin.txt` | decided below. |
+
+### ⚠ THE FILE THAT DID *NOT* CONFLICT IS THE ONE TO CHECK
+
+`src/surfaces/rent_roll_institutional.js` **auto-merged with no conflict**, even
+though both sides rewrote `statusLabel`. A clean auto-merge of a function two
+branches both edited is exactly the case where a blend can appear with nothing
+to warn you: reintroducing `if (r.bucket_label) return r.bucket_label;` as an
+early return *alongside* the qualifier logic would restore the regression
+silently, and no conflict marker would exist to notice.
+
+**Verified by reading the merged result, not by the absence of a conflict:**
+
+```
+if (r.bucket == null) return "Occupancy Unconfirmed";
+const base = r.bucket_label;
+const qualifiers = [];
+... bucket === "occupied" && contractual_terms_state === "not_established" -> "terms not established"
+... bucket === "occupied" && economics_state === "unavailable"             -> "rent unavailable"
+... bucket === "needs_review" && tenancy_state === "contested"             -> "overlapping leases"
+... is_down                                                               -> "unit down"
+return qualifiers.length ? `${base} — ${qualifiers.join(" · ")}` : base;
+```
+
+Early `bucket_label` return: **0 occurrences**. Qualifier pushes: **4**. Dirac's
+version survives whole.
+
+**Re-run this check on the real merge.** It is cheap and it is the only thing
+standing between a clean-looking merge and a lender surface that calls an
+unverified bed "Occupied".
+
+A fifth thing dirac fixed, catalogued here because it was not in row 106: a
+physically down bed buckets as `open` and printed a bare **"Open"** — i.e.
+offered — so `is_down` now appends "unit down" as a qualifier rather than being
+swallowed by the bucket.
+
+### `tests/e2e/app_pin.txt` — RESOLVE FORWARD
+
+Both pins are on the **same app branch**, `claude/determined-dirac-qcvj5v`:
+
+| side | app sha | note |
+|---|---|---|
+| integration (from dirac) | `312a9992` | the pin dirac froze CI green against |
+| deployed line | `2e8199a4` | 2026-09-17, *"prove the panel is reachable in the real page, not just in the test"* |
+
+**Take `2e8199a4`.** It is not a rival pin, it is a forward move on the same
+branch, and the merged API is a superset of the deployed line that app was
+exercised against. Pinning the older app against newer API code is the riskier
+direction.
+
+This is a pin move, so it is the QB's to make and it is stated here rather than
+made silently. If a browser rung fails on it, that failure is a real signal
+about app/API coupling and must be diagnosed, **not** resolved by reverting the
+pin to make the suite green.
+
+### Not production pins
+
+`app_pin.txt` governs which app CI checks out for the browser rungs. It is not a
+release claim and has nothing to do with the deployed app (`6f92b50`). Do not
+conflate them.
