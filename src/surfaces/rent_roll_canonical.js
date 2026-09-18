@@ -66,8 +66,14 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
   //  The SAME clock the positions were read on. This compared dp.as_of to the
   //  UTC day, so after ~8pm Philadelphia time a read genuinely of today was
   //  judged historical and silently dropped every resident balance.
-  const today = (await propertyOperatingToday(pool, property_id)).date;
-  const isToday = dp.as_of === today;
+  //
+  //  When no as_of was given, dp.as_of WAS just computed as the property's
+  //  operating day, so it is today by construction and asking again would be
+  //  a second round trip for an answer already in hand. Only an explicitly
+  //  dated read has to ask.
+  const isToday = dp.as_of_basis === "explicit"
+    ? dp.as_of === (await propertyOperatingToday(pool, property_id)).date
+    : true;
 
   // BALANCE — visible read-only context, owned by Money. Every correction,
   // collection, charge and payment goes through Money or the Person Card;

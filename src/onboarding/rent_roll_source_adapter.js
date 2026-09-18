@@ -347,6 +347,10 @@ function findDeclaredTotals(grid, from, candidate) {
 
 function rowsFromCandidate(grid, firstRow, candidate) {
   const rows = [];
+  //  Where the table ended, so the tail can be scanned for the stated
+  //  totals. Returned beside the rows rather than hung off the array —
+  //  an array carrying a stray property is a trap for the next reader.
+  let stoppedAt;
   let section = "current";
   let sawData = false;
   let sawCurrentHeading = false;
@@ -376,7 +380,7 @@ function rowsFromCandidate(grid, firstRow, candidate) {
 
     if (text(source[0]).toLowerCase() === "summary groups" ||
         isTotalFooter(source, candidate.headers, candidate.plan)) {
-      rows.stoppedAt = index;
+      stoppedAt = index;
       break;
     }
 
@@ -398,8 +402,7 @@ function rowsFromCandidate(grid, firstRow, candidate) {
     rows.push(row);
     sawData = true;
   }
-  if (rows.stoppedAt === undefined) rows.stoppedAt = grid.length;
-  return rows;
+  return { rows, stoppedAt: stoppedAt === undefined ? grid.length : stoppedAt };
 }
 
 function parseRentRollSource({ buffer, filename, mime_type: _mimeType = null } = {}) {
@@ -426,10 +429,10 @@ function parseRentRollSource({ buffer, filename, mime_type: _mimeType = null } =
   }
 
   const chosen = sheets[0];
-  const rows = rowsFromCandidate(chosen.grid, chosen.firstRow, chosen.candidate);
-  const declared = findDeclaredTotals(chosen.grid, rows.stoppedAt, chosen.candidate);
+  const { rows, stoppedAt } = rowsFromCandidate(chosen.grid, chosen.firstRow, chosen.candidate);
+  const declared = findDeclaredTotals(chosen.grid, stoppedAt, chosen.candidate);
   return {
-    rows: Array.from(rows),
+    rows,
     //  A SOURCE ASSERTION, never a canonical total. Null when the layout
     //  states none — absence is not a failed check, it is no check.
     source_declared_totals: declared ? declared.totals : null,
