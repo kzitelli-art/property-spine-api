@@ -37,7 +37,7 @@ const { effectivePropertyPricing } = require("../money/effective_pricing");
 
 const HANDOFF = (reason, detail) => ({
   quotable: false, reason, detail,
-  say: "I want to give you an exact number rather than guess — let me confirm the current pricing with the leasing office and come straight back to you.",
+  say: "I want to give you an exact number rather than guess. The leasing team can confirm the current pricing.",
 });
 
 /**

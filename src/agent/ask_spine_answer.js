@@ -348,6 +348,10 @@ const DEBT_TERMS =
 const ECONOMICS_SPECIFIC_TERMS =
   /\b(published pric(?:e|es|ing)|asking rents?|new[- ]lease rents?|renewal rents?|lease (?:price|pricing|rate)|application fees?|administration fees?|admin fees?|amenity fees?|telecom fees?|utility fees?|security deposits?|deposit requirements?|concessions?|move[- ]in (?:cost|costs|total)|monthly total|what (?:do|are) we charg(?:e|ing)|how much (?:do|are) we charg(?:e|ing))\b/i;
 const BARE_PRICING_TERM = /\bpricing\b/i;
+// People often ask for a price in plain language: "what is the rent for a
+// furnished apartment?" Keep that phrase on the governed Economics rail,
+// while excluding "rent roll", which belongs to the tenancy standing reader.
+const BARE_RENT_TERM = /\b(?:what(?:'s| is)\s+(?:the\s+)?rent(?!\s*roll\b)|how much(?:\s+is)?\s+(?:the\s+)?rent(?!\s*roll\b)|(?:monthly|asking|current)\s+rent(?!\s*roll\b)|rent\s+(?:for|on|by|of)\b)/i;
 const UTILITY_DETAIL_TERMS =
   /\b(electric(?:ity)?|gas|water|sewer|meters?|submeters?|provider|utility account|account ending|peco|bills? residents|utility setup)\b/i;
 const TENANCY_STANDING_TERMS =
@@ -445,7 +449,7 @@ function questionSubject(question) {
   const equity = EQUITY_TERMS.test(text);
   const debt = DEBT_TERMS.test(text);
   const economics = ECONOMICS_SPECIFIC_TERMS.test(text)
-    || (BARE_PRICING_TERM.test(text) && !contractedService && !equity && !debt);
+    || ((BARE_PRICING_TERM.test(text) || BARE_RENT_TERM.test(text)) && !contractedService && !equity && !debt);
   //  A clock word with no tenancy noun beside it is Compliance's, exactly
   //  as it has always been. With one, the lease owns it. Stated here so a
   //  reader can see the tie-break instead of inferring it from two regexes.

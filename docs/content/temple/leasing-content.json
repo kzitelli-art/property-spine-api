@@ -1,11 +1,48 @@
 {
   "schema": "temple-leasing-content/v1",
   "prepared_at": "2026-09-10",
-  "purpose": "Reviewed-source content prepared for the existing agent-facts writer; not a runtime knowledge store.",
+  "purpose": "Reviewed-source content for the existing ten-shelf agent-facts writer. This packet records source lineage and publication state; it is not a parallel runtime knowledge store.",
   "publication": {
-    "loaded": false,
-    "reason": "Ten-topic writer/workspace deployed September11 at API24f4482/appb00cf49. Canonical target identity/custody and operator confirmation remain unresolved; content remains prepared, not loaded. September10 source checks are dated evidence.",
-    "source_verification_is_not_operator_confirmation": true
+    "loaded": true,
+    "scope": "partial_live",
+    "fully_loaded": false,
+    "reason": "Five Skyline shelves are live. On September 16, 2026, leasing_highlights, amenities, and leasing_faq were republished through the authenticated property-scoped editor and read back successfully after operator and public-source conflict review. Skyline's other five shelves and all ten Greenery shelves remain prepared, not loaded. The canonical Greenery property is adopted into OneFive and appears in KZ's authorized picker. Mike and John have organization-level property assignments for both Temple properties; person-level Team invite/OTP acceptance remains a separate governed onboarding step.",
+    "live_scope": {
+      "Skyline": [
+        "leasing_highlights",
+        "amenities",
+        "layouts",
+        "neighborhood",
+        "leasing_faq"
+      ],
+      "The Greenery": []
+    },
+    "pending_successor_fact_keys": [],
+    "published_snapshot": {
+      "recorded_at": "2026-09-16",
+      "Skyline": [
+        "leasing_highlights",
+        "amenities",
+        "layouts",
+        "neighborhood",
+        "leasing_faq"
+      ],
+      "The Greenery": []
+    },
+    "source_verification_is_not_operator_confirmation": true,
+    "live_updates": [
+      {
+        "recorded_at": "2026-09-16",
+        "property": "Skyline",
+        "fact_keys": [
+          "leasing_highlights",
+          "amenities",
+          "leasing_faq"
+        ],
+        "method": "authenticated_property_scoped_editor_with_exact_readback",
+        "note": "Removed unsupported free/paid amenity language and conflicted exact Saturday package hours. Pricing, availability, move-in timing, parking charges, and current operating hours remain with their governed owners or staff confirmation."
+      }
+    ]
   },
   "sources": {
     "s_amenities": {
@@ -130,6 +167,13 @@
       ],
       "note": "Historical source confirmation, not a new approval or current physical inspection."
     },
+    "mike_operator_interview_20260915": {
+      "repository_path": "docs/handoffs/new-hp/walkthrough-20260915/MIKE_PROPERTY_KNOWLEDGE_DRAFT.md",
+      "confirmed_on": "2026-09-15",
+      "kind": "recorded_operator_interview",
+      "authority": "Michael Grivna",
+      "note": "The supplied recording was sorted by destination. Descriptive statements may support the ten shelves. Money, availability, readiness, screening, lease policy and operating procedures remain candidates for their existing governed owners; transcript conflicts are not silently resolved."
+    },
     "g_contact": {
       "url": "https://www.templegreenery.com/contact-us",
       "checked_at": "2026-09-12",
@@ -170,32 +214,43 @@
       "property_name": "Skyline",
       "physical_address": "1417 North 15th Street, Philadelphia, PA",
       "canonical_property_id": "14e41b7c-e91c-49e8-9651-10c4908a8f6a",
-      "publication_status": "prepared_not_loaded",
+      "publication_status": "partially_published_current_2026_09_16",
+      "published_fact_keys": [
+        "leasing_highlights",
+        "amenities",
+        "layouts",
+        "neighborhood",
+        "leasing_faq"
+      ],
       "facts": [
         {
           "fact_key": "leasing_highlights",
-          "status": "source_attributed_draft",
-          "rendered_text": "Skyline's published features include furnished apartments, shared lounges and on-site laundry. These are useful starting points if you want less furniture to bring or shared spaces outside your apartment. Ask about your particular home before deciding which layout fits your needs.\n\nSources: https://www.templeskyline.com/amenities",
-          "source_type": "other_documented_source",
+          "status": "published_2026_09_16",
+          "rendered_text": "Skyline offers fully furnished apartments near Temple University. Apartments include bundled utilities and internet, on-site management, package storage, a green roof deck, and optional on-site garage parking. Confirmed by Michael Grivna in a recorded operator interview on 2026-09-15. Exact rent, availability, move-in timing, and parking charges come from current governed records.",
+          "source_type": "verified_operator_confirmation",
           "source_refs": [
+            "mike_operator_interview_20260915",
             "s_amenities"
           ],
           "review_notes": [
-            "Roof-deck access is omitted because the website and lease-template review conflict."
-          ]
+            "Exact rent, availability, move-in timing and parking charges remain outside descriptive leasing knowledge.",
+            "Published through the authenticated property-scoped editor and read back on September 16, 2026."
+          ],
+          "published_at": "2026-09-16"
         },
         {
           "fact_key": "amenities",
-          "status": "documented_owner_source_prepared_not_published",
-          "rendered_text": "Skyline has a roof deck, cardio room, laundry, assigned parking, an on-site management office, package storage and 24-hour emergency maintenance. Apartments are furnished with a bed, desk, wardrobe, armchair, coffee table, kitchen table and stools. These features were confirmed by ownership on August 20, 2026. This describes building features, not current access hours, parking availability, charges or permission to use a particular amenity; confirm arrangements and the furniture package for your specific home with the team.",
-          "source_type": "other_documented_source",
+          "status": "published_2026_09_16",
+          "rendered_text": "Skyline apartments are furnished with full-size beds, desks and chairs, dressers, and armoires. Kitchens include electric cooktops, microwaves, refrigerators, garbage disposals, and sinks; the building has central heat and air. Named amenities are a cardio room, green roof deck, bike storage, package storage, vending machines, laundry centers, and on-site parking. The roof deck locks at 9:30 p.m. and reopens at 7:00 a.m. Gym hours were not confirmed. Confirmed by Michael Grivna in a recorded operator interview on 2026-09-15. Exact fees and parking terms come from governed records.",
+          "source_type": "verified_operator_confirmation",
           "source_refs": [
-            "s_owner_operating_facts"
+            "mike_operator_interview_20260915",
+            "s_owner_operating_facts",
+            "s_amenities"
           ],
           "review_notes": [
-            "Prepared from the dated owner-confirmed document; publication by a currently authorized staff actor remains a separate action.",
-            "No prices, charges, availability, screening/accommodation rules or tour schedule are established here.",
-            "Roof deck existence is supported by ownership. Access entitlement remains governed separately; this does not override lease restrictions."
+            "No parking charge, spot availability, screening/accommodation rule or tour schedule is established here.",
+            "Published through the authenticated property-scoped editor and read back on September 16, 2026."
           ],
           "previous_draft": {
             "rendered_text": "The property website lists shared laundry on floors 2–4, lounges, a fitness room, bike storage, garage parking and package handling. Furnished apartments are described with bedroom furniture and a furnished living room. Confirm current access arrangements and any charges with the team; this description does not establish hours, pricing or availability.\n\nSources: https://www.templeskyline.com/amenities",
@@ -204,19 +259,22 @@
               "s_amenities"
             ],
             "review_notes": []
-          }
+          },
+          "published_at": "2026-09-16"
         },
         {
           "fact_key": "layouts",
-          "status": "source_attributed_draft",
-          "rendered_text": "Skyline's two-bedroom page distinguishes model 02's kitchen bar, models 05/09/10/14's windowed dining area, and models 03/17's larger living room. These are website model labels, not confirmed assignments to an available apartment. Tell us whether dining space or living-room space matters more so the team can compare the actual options.\n\nSources: https://www.templeskyline.com/two-bedroom",
-          "source_type": "other_documented_source",
+          "status": "published_2026_09_15",
+          "rendered_text": "Skyline includes two-bedroom/one-bath and three-bedroom/one-bath apartments. Mike also described three-bedroom/one-and-a-half-bath apartments; the exact count and inventory labels still need reconciliation. Exterior homes facing 15th Street and Carlisle Street are described as receiving the strongest natural light; this is a general property description and does not assign a feature to an exact home. Exact layout, bed, and unit identity come from the current rent roll. Confirmed by Michael Grivna in a recorded operator interview on 2026-09-15.",
+          "source_type": "verified_operator_confirmation",
           "source_refs": [
+            "mike_operator_interview_20260915",
             "s_layouts"
           ],
           "review_notes": [
             "Do not promise accessibility from marketing copy; confirm specific requirements and actual home.",
-            "Three-bedroom bathroom counts remain unresolved."
+            "Three-bedroom bathroom counts and stack labels remain unresolved.",
+            "This text matches the September 15 production read-back."
           ]
         },
         {
@@ -270,28 +328,35 @@
         },
         {
           "fact_key": "neighborhood",
-          "status": "source_attributed_draft",
-          "rendered_text": "Skyline is at 1417 North 15th Street. For a campus coffee option, Saxbys lists a location at 1902 Liacouras Walk. Use Temple's visitor page for campus orientation and SEPTA's planner for your exact destination and departure time. These are practical starting points, not a staff endorsement or a promised journey time. Which campus building or everyday destination matters to you?\n\nSources: https://www.templeskyline.com/apartments-near-temple-university\nhttps://www.saxbyscoffee.com/location/saxbys-temple-university/\nhttps://admissions.temple.edu/visit\nhttps://plan.septa.org/",
-          "source_type": "other_documented_source",
+          "status": "published_2026_09_15",
+          "rendered_text": "Fresh Grocer is described as within an approximate five-minute walk. Numerous restaurants are within walking distance on Temple's campus. Center City is often about a 10–15 minute Uber ride, depending on traffic. These are staff recommendations and approximate; use current maps for exact route and time. Confirmed by Michael Grivna in a recorded operator interview on 2026-09-15.",
+          "source_type": "verified_operator_confirmation",
           "source_refs": [
+            "mike_operator_interview_20260915",
             "s_neighborhood",
             "coffee",
             "campus",
             "transit"
           ],
-          "review_notes": []
+          "review_notes": [
+            "Approximate walk and drive times are not guarantees.",
+            "This text matches the September 15 production read-back."
+          ]
         },
         {
           "fact_key": "leasing_faq",
-          "status": "documented_owner_source_prepared_not_published",
-          "rendered_text": "Are the apartments furnished? Yes. Ownership confirmed the furniture package on August 20, 2026: bed, desk, wardrobe, armchair, coffee table, kitchen table and stools. Confirm the package for your specific home before planning what to bring. Is there laundry at the property? Yes, ownership confirmed laundry on site. Laundry hours and access instructions are not established by this answer.",
-          "source_type": "other_documented_source",
+          "status": "published_2026_09_16",
+          "rendered_text": "Prospects commonly ask whether utilities, internet, appliances, and furniture are included. At Skyline, utilities and internet are bundled in the property offering, and apartments include the listed appliances and furnishings. The utility amount and billing arrangement, current rent, availability, lease terms, qualification rules, and move-in dates must be read from current governed records or confirmed by staff. Staff receive and hold packages for pickup during current office hours. Major couriers have building access, while some smaller third-party couriers may not; deliveries outside current access and office arrangements are not guaranteed to be received inside. Confirm current package access and pickup hours with staff. Confirmed by Michael Grivna in a recorded operator interview on 2026-09-15.",
+          "source_type": "verified_operator_confirmation",
           "source_refs": [
-            "s_owner_operating_facts"
+            "mike_operator_interview_20260915",
+            "s_owner_operating_facts",
+            "s_amenities"
           ],
           "review_notes": [
-            "Prepared from the dated owner-confirmed document; publication by a currently authorized staff actor remains a separate action.",
-            "No prices, charges, availability, screening/accommodation rules or tour schedule are established here."
+            "Exact Saturday package hours were removed because the operator interview and current public pages conflict.",
+            "No utility amount, current rent, availability, lease term, qualification rule or move-in date is established here.",
+            "Published through the authenticated property-scoped editor and read back on September 16, 2026."
           ],
           "previous_draft": {
             "rendered_text": "Do I need furniture? The website describes furnished apartments; confirm the package for your selected home.\nIs laundry inside the apartment? The published arrangement is shared laundry on floors 2–4.\nCan I see a layout before visiting? Public layout diagrams and representative virtual tours are available.\nWhat is available and what will I pay? That needs the current inventory and published terms for your exact selection.\n\nSources: https://www.templeskyline.com/amenities\nhttps://www.templeskyline.com/two-bedroom",
@@ -303,7 +368,16 @@
             "review_notes": [
               "Do not repeat website utility-fee wording, deposit/guarantor conditions or insurance requirements as settled policy."
             ]
-          }
+          },
+          "publication_history": [
+            {
+              "recorded_at": "2026-09-15",
+              "status": "superseded_2026_09_16",
+              "rendered_text": "Prospects commonly ask whether utilities, internet, appliances, and furniture are included. At Skyline, utilities and internet are bundled in the property offering, and apartments include the listed appliances and furnishings. The utility amount and billing arrangement, current rent, availability, lease terms, qualification rules, and move-in dates must be read from current governed records or confirmed by staff. Skyline package hours were stated as 9:00 a.m.–5:00 p.m. during business hours and Saturdays 10:00 a.m.–4:00 p.m.; packages are held for pickup. Major couriers have building access, while some small third-party couriers may not. Deliveries outside office hours are not guaranteed to be received inside. Confirmed by Michael Grivna in a recorded operator interview on 2026-09-15.",
+              "reason": "Exact Saturday package hours conflicted across current public and operator sources."
+            }
+          ],
+          "published_at": "2026-09-16"
         },
         {
           "fact_key": "move_in_guidance",
@@ -339,16 +413,18 @@
         },
         {
           "fact_key": "amenities",
-          "status": "source_attributed_draft",
-          "rendered_text": "The website lists in-unit washer/dryers, dishwashers, Amazon Hub lockers, fob-controlled entrances and garage parking. Balcony availability depends on the layout. Confirm current parking terms and package procedures with the team. Cameras and access controls are building features, not a guarantee of safety or package security.\n\nSources: https://www.templegreenery.com/ameneties-near-temple\nhttps://www.templegreenery.com/studio-apartment-near-temple\n\nSources checked September 12, 2026.",
+          "status": "operator_enriched_draft",
+          "rendered_text": "The Greenery's published features include in-unit washer/dryers, dishwashers, Amazon Hub package lockers, fob-controlled entrances and garage parking. Balcony availability depends on the layout. The Amazon Hub is a building feature; current package handling and pickup instructions come from the property team. Confirm current parking terms before relying on a spot. Cameras and access controls do not guarantee safety or package security.\n\nSources: https://www.templegreenery.com/ameneties-near-temple\nhttps://www.templegreenery.com/studio-apartment-near-temple",
           "source_type": "other_documented_source",
           "source_refs": [
+            "mike_operator_interview_20260915",
             "g_amenities",
             "g_studio"
           ],
           "review_notes": [
             "Parking price, exact camera count and blanket balcony claim are excluded.",
-            "Source links rechecked September 12, 2026; no new operator approval or production publication."
+            "Mike's package-handling procedure is routed to current operating instructions rather than frozen into this descriptive shelf.",
+            "Prepared from public sources and the recorded operator interview; no Greenery production publication occurred."
           ],
           "previous_draft": {
             "fact_key": "amenities",
@@ -502,30 +578,34 @@
         },
         {
           "fact_key": "neighborhood",
-          "status": "source_attributed_draft",
-          "rendered_text": "The Greenery is at 1325 North 15th Street. Saxbys lists a campus coffee location at 1902 Liacouras Walk. Temple's visitor page helps with campus orientation; SEPTA's planner can check your actual destination and travel time. This is a starting suggestion, not a recorded staff favorite. Which destination should we help you plan around?\n\nSources: https://www.templegreenery.com/temple-university-neighborhood\nhttps://www.saxbyscoffee.com/location/saxbys-temple-university/\nhttps://admissions.temple.edu/visit\nhttps://plan.septa.org/",
+          "status": "operator_enriched_draft",
+          "rendered_text": "The Greenery is at 1325 North 15th Street. Mike described Fresh Grocer as about a five-minute walk and noted numerous restaurants within walking distance on Temple's campus. Saxbys lists a campus location at 1902 Liacouras Walk. Use Temple's visitor page and SEPTA's planner for your exact destination and travel time; walking and drive times are approximate. Which campus building or everyday destination matters to you?\n\nSources: https://www.templegreenery.com/temple-university-neighborhood\nhttps://www.saxbyscoffee.com/location/saxbys-temple-university/\nhttps://admissions.temple.edu/visit\nhttps://plan.septa.org/",
           "source_type": "other_documented_source",
           "source_refs": [
+            "mike_operator_interview_20260915",
             "g_neighborhood",
             "coffee",
             "campus",
             "transit"
           ],
-          "review_notes": []
+          "review_notes": [
+            "Approximate walk and drive times are not guarantees; use current maps for exact routing."
+          ]
         },
         {
           "fact_key": "leasing_faq",
-          "status": "source_attributed_draft",
-          "rendered_text": "Where is The Greenery? 1325 North 15th Street, Philadelphia, PA 19121.\nIs laundry in the apartment? The property website lists in-unit washer/dryers.\nWhich studio has a balcony? The studio page identifies the 05 model as its balcony layout; do not infer that every studio has one.\nIs furniture included? The website describes furnishing as an option. Confirm the exact home package and current terms with the leasing team.\n\nSources:\nhttps://www.templegreenery.com/contact-us\nhttps://www.templegreenery.com/ameneties-near-temple\nhttps://www.templegreenery.com/studio-apartment-near-temple\n\nSources checked September 12, 2026.",
+          "status": "operator_enriched_draft",
+          "rendered_text": "Where is The Greenery? 1325 North 15th Street, Philadelphia, PA 19121.\nIs laundry in the apartment? The property website lists in-unit washer/dryers.\nHow are packages handled? The building has Amazon Hub lockers; use the current property instructions for delivery and pickup.\nWhich studio has a balcony? The studio page identifies 05 as its balcony layout; do not infer that every studio has one.\nIs furniture included? The website describes furnishing as an option. Confirm the package for the exact home and the current terms with the leasing team.\nWhat will I pay and what is available? Current rent, utility packages, parking, deposits, fees and availability come from governed pricing and inventory, not this descriptive shelf.\n\nSources:\nhttps://www.templegreenery.com/contact-us\nhttps://www.templegreenery.com/ameneties-near-temple\nhttps://www.templegreenery.com/studio-apartment-near-temple",
           "source_type": "other_documented_source",
           "source_refs": [
+            "mike_operator_interview_20260915",
             "g_contact",
             "g_amenities",
             "g_studio"
           ],
           "review_notes": [
-            "Do not import furnishing/parking dollar amounts or historical late-fee/trash rules.",
-            "Source links rechecked September 12, 2026; no new operator approval or production publication.",
+            "Mike's dollar amounts for utility packages, parking, deposits and fees remain candidates for governed economics or approved policy; they are not imported here.",
+            "Prepared from public sources and the recorded operator interview; no Greenery production publication occurred.",
             "Do not import the contact page manager name or phone as current: it names John Franco and an old leasing season. Current routing/manager identity must be confirmed separately."
           ],
           "previous_draft": {
@@ -546,21 +626,55 @@
         },
         {
           "fact_key": "move_in_guidance",
-          "status": "source_attributed_draft",
-          "rendered_text": "Coordinate your arrival time, key pickup and any setup questions with the team before moving. The Greenery's arrival material describes help getting settled; the older welcome packets are not current instructions. Wait for confirmation of your actual pickup and utility/internet arrangements before relying on them.\n\nSources: https://www.templegreenery.com/temple-university-international-students",
+          "status": "operator_enriched_draft",
+          "rendered_text": "Coordinate arrival time, key pickup and utility setup with the team before moving. Mike said internet is already set up at The Greenery, while utility enrollment depends on the resident's current package and instructions. The older welcome packets are not current directions. Wait for the property team's current instructions before opening accounts, booking travel or shipping belongings.\n\nSources: https://www.templegreenery.com/temple-university-international-students",
           "source_type": "other_documented_source",
           "source_refs": [
+            "mike_operator_interview_20260915",
             "g_arrival"
           ],
           "review_notes": [
-            "2020/2021 packets retained as historical sources only; old staff names, portal instructions and fees are excluded."
+            "2020/2021 packets retained as historical sources only; old staff names, portal instructions and fees are excluded.",
+            "The transcript conflicts on the utility back-bill administrative fee ($35 versus $25), so no amount is included. Utility-package pricing remains with governed economics."
           ]
         }
       ],
-      "canonical_identity_basis": "Addressed existing Greenery UUID from retained September11 read-only Temple identity receipt; durable ID preserved. This source/content lane performed no new production identity read."
+      "canonical_identity_basis": "Canonical Greenery UUID retained and adopted into OneFive on September 15, 2026. Durable property identity and organization custody are established. KZ has authorized picker access; Mike and John have organization-level property assignments for Skyline and Greenery. Person-level Team invite/OTP acceptance and current content approval remain separate. No Greenery knowledge card was published from this packet."
     }
   ],
-  "updated_at": "2026-09-12",
+  "onboarding_recipe": {
+    "version": "future-property/v1",
+    "descriptive_shelves": [
+      "leasing_highlights",
+      "amenities",
+      "layouts",
+      "dimensions",
+      "photos",
+      "floor_plans",
+      "virtual_tours",
+      "neighborhood",
+      "leasing_faq",
+      "move_in_guidance"
+    ],
+    "canonical_owners": {
+      "property_and_staff": "Canonical property identity, organization custody, scoped team assignments and a named knowledge steward.",
+      "inventory": "Durable unit/space identity, leasing basis and source reconciliation; no label-only matching.",
+      "pricing": "Published property/unit-type/term economics and governed offer authority; descriptive prose never sets a price.",
+      "readiness_and_availability": "Current exact-home availability, possession rights, readiness and tour schedule; unknown never becomes ready.",
+      "policies": "Approved application, screening, pets/accommodations, roommate, sublease, guest, smoking and conduct sources.",
+      "lease": "Current approved lease/addenda, deposit and payment obligations, signer configuration and execution rules.",
+      "maintenance": "Property operating context, emergency classification, triage, service standards and escalation routing."
+    },
+    "sequence": [
+      "Establish canonical property identity, organization custody and scoped staff access before content publication.",
+      "Reconcile inventory and exact physical positions before attaching layouts, media, availability or pricing.",
+      "Fill all ten descriptive shelves with source, confirmer, effective date and explicit unknowns.",
+      "Load economics, readiness, policies, lease terms and maintenance rules through their canonical owners rather than duplicating them in prose.",
+      "Publish through the authenticated property-scoped writer, read back the exact values and record gaps for the designated steward.",
+      "Re-run the same acceptance checklist after every source refresh; retire or replace old claims instead of silently editing history."
+    ]
+  },
+  "updated_at": "2026-09-16",
   "staging_sets": {
     "skyline_essentials": {
       "property_name": "Skyline",
@@ -568,8 +682,32 @@
         "amenities",
         "leasing_faq"
       ],
+      "publication_status": "published_current_2026_09_16",
+      "note": "Historical two-card review set. Amenities and leasing_faq are live with the September 16 successors after exact read-back; use the full five-card live set for current publication scope."
+    },
+    "skyline_live_20260915": {
+      "property_name": "Skyline",
+      "fact_keys": [
+        "leasing_highlights",
+        "amenities",
+        "layouts",
+        "neighborhood",
+        "leasing_faq"
+      ],
+      "publication_status": "partially_published_current_2026_09_16",
+      "note": "These five keys remain live. Leasing_highlights, amenities, and leasing_faq were republished and read back on September 16; layouts and neighborhood retain the September 15 publication. Stage against a fresh scoped snapshot before any later write."
+    },
+    "skyline_remaining_descriptive": {
+      "property_name": "Skyline",
+      "fact_keys": [
+        "dimensions",
+        "photos",
+        "floor_plans",
+        "virtual_tours",
+        "move_in_guidance"
+      ],
       "publication_status": "prepared_not_loaded",
-      "note": "Only these two existing cards are selected. Other 18 cards remain deferred drafts; source certainty does not confer publication authority."
+      "note": "The five still-missing Skyline shelves. Exact-home media mapping and measured dimensions remain unresolved; publication requires a fresh scoped review."
     },
     "greenery_essentials": {
       "property_name": "The Greenery",
@@ -582,7 +720,30 @@
         "leasing_faq"
       ],
       "publication_status": "prepared_not_loaded",
-      "note": "Six source-attributed existing cards. Publication remains an explicit authorized staff action. Measurements, current contact routing, availability, economic terms and policies are not established by this set."
+      "note": "Six source-attributed existing cards remain prepared, not loaded. Organization custody and KZ picker access are established, and Mike/John have organization-level property assignments. Current operator approval, exact-home media mapping, and the governed Team invite/OTP step remain prerequisites to operational use. Measurements, contact routing, availability, economic terms, and policies are not established by this set."
+    },
+    "greenery_all_descriptive": {
+      "property_name": "The Greenery",
+      "fact_keys": [
+        "leasing_highlights",
+        "amenities",
+        "layouts",
+        "dimensions",
+        "photos",
+        "floor_plans",
+        "virtual_tours",
+        "neighborhood",
+        "leasing_faq",
+        "move_in_guidance"
+      ],
+      "publication_status": "prepared_not_loaded",
+      "note": "All ten Greenery shelves remain prepared, not loaded, with explicit unknowns. Organization custody and KZ picker access are established, and Mike/John have organization-level property assignments. Current operator approval, exact-home media mapping, and the governed Team invite/OTP step remain prerequisites to publication and operational use."
     }
+  },
+  "review_packet": {
+    "generated_at": "2026-09-16",
+    "repository_path": "docs/content/temple/SKYLINE_GREENERY_KNOWLEDGE_REVIEW_20260916.docx",
+    "sha256": "81121061e3948715aace55de87a30893499d8add284f166a5396f5ee815f0972",
+    "purpose": "Combined Skyline and Greenery operator review packet based on the same ten descriptive shelves and supporting-source depth used for Solo. Mike Grivna and John Franco can confirm, correct, source, and assign ongoing ownership without treating unknowns as facts."
   }
 }

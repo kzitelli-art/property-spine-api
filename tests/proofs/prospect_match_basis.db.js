@@ -51,6 +51,9 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
 
 (async () => {
   receipt.begin(HARNESS, { url: URL_, expected: EXPECTED });
+  const initialLedger = (await pool.query(
+    "select max(version::int) v, count(*)::int n from schema_migrations"
+  )).rows[0];
 
   // ══ FIXTURE SETUP — labelled, and BEFORE any business action ══════
   //  THE PROOF OWNS ITS INVENTORY. An earlier version borrowed the shared
@@ -665,7 +668,8 @@ const tag = "MB_" + crypto.randomBytes(3).toString("hex");
   console.log("\nMB-9 [DB] no schema was added");
   const ledger = (await pool.query("select max(version::int) v, count(*)::int n from schema_migrations")).rows[0];
   ok("MB-9: the ledger is unchanged by this slice — computed at read time",
-    Number(ledger.v) === 198 && Number(ledger.n) === 186, JSON.stringify(ledger));
+    Number(ledger.v) === Number(initialLedger.v) && Number(ledger.n) === Number(initialLedger.n),
+    JSON.stringify({ before: initialLedger, after: ledger }));
   const newTables = (await pool.query(
     `select count(*)::int n from information_schema.tables
       where table_schema='public' and table_name like '%match%'`)).rows[0].n;

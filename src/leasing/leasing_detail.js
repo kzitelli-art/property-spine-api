@@ -35,10 +35,11 @@ module.exports = function leasingDetail(deps) {
     const propertyId = req.params.id;
     const client = await pool.connect();
     try {
-      const propRow = (await client.query("select id, name, canonical_key from properties where id=$1", [propertyId])).rows[0];
+      const propRow = (await client.query("select id, name, display_name, canonical_key from properties where id=$1", [propertyId])).rows[0];
       const deal = byPropertyId(propertyId) || (propRow && byCanonical(propRow.canonical_key)) || null;
       const model = deal?.model || null;       // stored, never inferred
-      const name = deal?.name || propRow?.name || "Property";
+      const name = propRow?.display_name || propRow?.name || "Property";
+      const canonicalKey = propRow?.canonical_key || null;
 
       const batch = (await client.query(
         `select id, source_file, source_as_of_date, leasing_model
@@ -48,7 +49,7 @@ module.exports = function leasingDetail(deps) {
 
       if (!batch) {
         return res.json({
-          property_id: propertyId, name, model, loaded: false,
+          property_id: propertyId, name, canonical_key: canonicalKey, model, loaded: false,
           truth_state: "Historical snapshot not loaded yet",
           scope: { property_id: propertyId, import_batch_id: null, leasing_model: model, source_as_of_date: null, data_mode: "historical_snapshot" },
         });
@@ -136,7 +137,7 @@ module.exports = function leasingDetail(deps) {
 
       res.json({
         property_id: propertyId,
-        name, model, loaded: true,
+        name, canonical_key: canonicalKey, model, loaded: true,
         truth_state: "Historical Snapshot",
         scope: {
           property_id: propertyId,

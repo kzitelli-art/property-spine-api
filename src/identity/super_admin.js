@@ -15,6 +15,7 @@
 //   PATCH /admin/users/:id                 update platform_role or organization_id
 //
 //   GET  /admin/platform                   high-level platform stats
+//   PUT  /admin/properties/:propertyId/display-name  governed human-facing label
 //
 // AUTH: The requireSuperAdmin middleware resolves the x-staff-session header,
 // then checks users.platform_role = 'super_admin'. Any other session → 403.
@@ -646,6 +647,42 @@ module.exports = function superAdminModule({ pool }) {
       return res.json(await operatingTimezoneHistory(pool, { property_id: req.params.propertyId }));
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  });
+
+  // Human-facing label only. `properties.name` remains internal identity.
+  // The actor comes from the staff session and the command re-checks current
+  // super-admin authority inside its transaction before it writes.
+  router.put("/admin/properties/:propertyId/display-name", requireSuperAdmin, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { setPropertyDisplayName } = require("../shared/property_display_name_command");
+      const b = req.body || {};
+      const out = await setPropertyDisplayName(pool, {
+        property_id: req.params.propertyId,
+        display_name: b.display_name,
+        actor_user_id: req.operator.id,
+        reason: b.reason || null,
+        idempotency_key: b.idempotency_key || null,
+      });
+      return res.json({
+        receipt: out.changed
+          ? `The property is now shown as ${out.after}. Its internal identity was not changed.`
+          : `The property is already shown as ${out.after}. Nothing new was written.`,
+        ...out,
+      });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.code || "display_name_failed", receipt: e.publicMessage || e.message });
+    }
+  });
+
+  router.get("/admin/properties/:propertyId/display-name/history", requireSuperAdmin, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { propertyDisplayNameHistory } = require("../shared/property_display_name_command");
+      return res.json(await propertyDisplayNameHistory(pool, { property_id: req.params.propertyId }));
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.code || "display_name_history_failed", receipt: e.publicMessage || e.message });
     }
   });
 

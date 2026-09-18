@@ -34,12 +34,14 @@ const { quotablePricing } = require("./pricing_adapter");
 const { effectivePropertyPricing } = require("../money/effective_pricing");
 const { renderChargeTerms } = require("../money/governed_charge_language");
 const { termsDigest } = require("../money/governed_charge_cutover");
-const { compareEconomicSources, staleReasonForOperator } =
+const { compareEconomicSources, staleReasonForOperator, isEconomic } =
   require("./draft_source_identity");
+const leasingContextResolver = require("./leasing_context_resolver");
 const aiLeasingStrategy = require("../leasing/ai_leasing_strategy");
 const aiLeasingStrategyRuntime = require("../leasing/ai_leasing_strategy_runtime");
 const aiLeasingOperatingContext = require("../leasing/ai_leasing_operating_context"); // GOVERNED OPERATING CONTEXT LEASING v1
 const { loadThreadState, recordInboundCapture } = require("./inbound_capture");
+const { stripDashes, stripMarkdown, humanizeTypos, finishProspectText, TYPO_RATE, postGenerationPolicy } = require("./prospect_output_policy");
 
 const PROMPT_REVISION = "stage-a-v12"; // v12: exact-space informational matching with published pricing and explicit pricing term. v10: linked-unit rent uses governed pricing.
 // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
@@ -112,118 +114,9 @@ module.exports = function agentModule(deps) {
     return out;
   }
 
-  // ── PROSPECT-TEXT PUNCTUATION GUARANTEE (§2 / PUNCTUATION) ──────────────────
-  // The persona forbids em/en dashes in prospect texts, but a prompt rule is not
-  // a guarantee — models emit them constantly. This is the deterministic strip
-  // that makes the rule real. ONLY targets em (U+2014) and en (U+2013) dashes;
-  // ordinary hyphens (dates, phones, compounds) are untouched. Context-aware:
-  // a dash used as a mid-thought break becomes '...'; a dash joining two clauses
-  // that reads as a pause becomes ', '. Heuristic, but far better than shipping
-  // the AI tell.
-  function stripDashes(text) {
-    if (!text) return text;
-    let s = String(text);
-    // 0) RANGES FIRST (AI_VOICE_TUNING.md Case 4C). An en dash between two
-    //    numbers, times, or weekdays is a RANGE, not an AI tell, and it arrives
-    //    from the VERIFIED FACT DATA, not from the model: 7 of 19 rows in
-    //    demo_solo_agent_facts_v1.json contain one ("A telecom fee of $75-99",
-    //    "within 24-48 hours", "a 15-20% premium"). Rule 2 below turns those
-    //    into "$75, 99" and "9 PM, 8 AM Sunday, Thursday" — which reached live
-    //    prospects and made a real fee unreadable. Ranges become " to " so the
-    //    no-dash guarantee holds WITHOUT corrupting a sourced fact.
-    const DAY = "(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day";
-    s = s.replace(/(\d\s*(?:AM|PM)?)\s*[—–]\s*(\$?\d)/gi, "$1 to $2");
-    s = s.replace(new RegExp(`(${DAY})\\s*[—–]\\s*(${DAY})`, "gi"), "$1 to $2");
-    // Normalize spacing around the dash first: "word — word" / "word—word".
-    // A dash with spaces on BOTH sides, OR preceded by a space, reads as a
-    // parenthetical/trailing break → '...'. A dash tightly BETWEEN words with no
-    // space (word—word) reads as a joining pause → ', '.
-    // 1) " — " (spaced both sides): trailing-thought feel → "... "
-    s = s.replace(/\s+[—–]\s+/g, (m) => {
-      // If what follows looks like a full new clause (starts lowercase 'and/but/
-      // so/let/i' or similar) treat as a pause comma; else an ellipsis break.
-      return "... ";
-    });
-    // 2) "word—word" (no spaces): joining → ", "
-    s = s.replace(/([^\s])[—–]([^\s])/g, "$1, $2");
-    // 3) any stragglers (dash at start/end or odd spacing) → ", "
-    s = s.replace(/[—–]/g, ", ");
-    // Collapse an accidental ", ..." or double punctuation the swaps can create.
-    s = s.replace(/,\s*\.\.\./g, "...").replace(/\.\.\.\s*,/g, "...");
-    s = s.replace(/\s{2,}/g, " ").replace(/\s+([,.])/g, "$1").trim();
-    return s;
-  }
-
-  // ── SMS MARKDOWN GUARANTEE (Case 4A) ───────────────────────────────────────
-  // The persona forbids markdown, but (per the stripDashes reasoning above) a
-  // prompt rule is not a guarantee. A real prospect received literal
-  // "**At application:**" and hyphen bullets in a text message. SMS renders
-  // none of it. This is the deterministic strip that makes the rule real.
-  // Conservative by construction: it removes MARKUP, never content, and never
-  // touches digits, currency, or punctuation inside a sentence.
-  function stripMarkdown(text) {
-    if (!text) return text;
-    let s = String(text);
-    // Bold/italic/code markers. Emphasis is dropped, the words inside are kept.
-    s = s.replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
-         .replace(/\*\*([^*]+)\*\*/g, "$1")
-         .replace(/\*([^*\n]+)\*/g, "$1")
-         .replace(/__([^_]+)__/g, "$1")
-         .replace(/`([^`]+)`/g, "$1");
-    // Leading list markers ("- ", "* ", "1. ") at a line start OR mid-string
-    // after a sentence, which is how the model emitted an inline "list" in SMS.
-    s = s.replace(/(^|\n)\s*[-*•]\s+/g, "$1");
-    s = s.replace(/(^|\n)\s*\d+[.)]\s+/g, "$1");
-    s = s.replace(/\s+[-•]\s+/g, ", ");
-    // Headers and stray markers.
-    s = s.replace(/(^|\n)\s*#{1,6}\s*/g, "$1");
-    s = s.replace(/\*/g, "");
-    // Newlines are legal in SMS but the model uses them to fake layout; a
-    // single space reads as one continuous text. Collapse and tidy.
-    s = s.replace(/\s*\n+\s*/g, " ");
-    s = s.replace(/\s{2,}/g, " ").replace(/\s+([,.;:!?])/g, "$1").replace(/,\s*,/g, ",").trim();
-    return s;
-  }
-
-  // ── HUMANIZATION (Case 5) ──────────────────────────────────────────────────
-  // Kameron: "maybe even put a type of now and then like a human would."
-  // DESIGN CONSTRAINT: a typo must never be able to change a FACT. So this does
-  // not generate errors freely; it drops an apostrophe from ONE word chosen from
-  // an explicit whitelist of contractions. By construction it cannot touch a
-  // price, date, time, unit number, phone number, name, or any word whose
-  // meaning a reader depends on. "dont" for "don't" is the entire mechanism.
-  //
-  // Deliberately NOT transposed letters: those read as a broken bot rather than
-  // a busy person, and they can land inside a number.
-  //
-  // Rate is low and random so it never becomes a tell. Set TYPO_RATE to 0 to
-  // turn this off entirely; it is a single constant on purpose.
-  const TYPO_RATE = 0.18;
-  const TYPO_SWAPS = [
-    [/\bdon't\b/g, "dont"], [/\bcan't\b/g, "cant"], [/\bwon't\b/g, "wont"],
-    [/\bthat's\b/g, "thats"], [/\bthere's\b/g, "theres"], [/\bwhat's\b/g, "whats"],
-    [/\blet's\b/g, "lets"], [/\bdoesn't\b/g, "doesnt"], [/\bisn't\b/g, "isnt"],
-    [/\byou're\b/g, "youre"], [/\bthey're\b/g, "theyre"],
-  ];
-  function humanizeTypos(text, rng = Math.random) {
-    if (!text) return text;
-    if (rng() >= TYPO_RATE) return text;
-    const applicable = TYPO_SWAPS.filter(([re]) => { re.lastIndex = 0; return re.test(text); });
-    if (!applicable.length) return text;
-    const [re, replacement] = applicable[Math.floor(rng() * applicable.length) % applicable.length];
-    // Exactly ONE occurrence, so a reply never looks systematically misspelled.
-    let done = false;
-    re.lastIndex = 0;
-    return String(text).replace(re, (m) => (done ? m : ((done = true), replacement)));
-  }
-
-  // The single exit point for anything that reaches a prospect's phone. Order
-  // matters: strip markup, then dashes (so a stripped bullet cannot leave a
-  // dash behind), then humanize last so a typo is never re-processed.
-  function finishProspectText(text, rng) {
-    if (!text) return text;
-    return humanizeTypos(stripDashes(stripMarkdown(text)), rng);
-  }
+  // Prospect formatting and the unsafe-output floor are shared with the
+  // immediate website opener. A lead must receive the same deterministic
+  // protection before and after a human takes ownership of the conversation.
 
   // ── NO-SILENCE FALLBACKS (§6) ──────────────────────────────────────────────
   // When the output floor blocks a reply, we NEVER go dark — we send one of
@@ -275,7 +168,64 @@ module.exports = function agentModule(deps) {
   // ── the curated fact resolver + the LIVE unit read ─────────────────────────
   // Returns { facts:[{fact_key,category,rendered_text,source}], unit:{...}|null }.
   // Curated facts come from agent_facts (active). Unit truth is read LIVE from units.
-  async function resolveContext(client, { property_id, unit_id }) {
+  //  ── WHAT THE PROSPECT ALREADY TOLD SPINE ─────────────────────────
+  //  One canonical read: leasing_inventory.readProspectFacts, which resolves
+  //  person-level against property-level rows, keeps the most specific and
+  //  most recent, and carries source and recorded_at on every value. Scoped
+  //  to THIS person and THIS property, like every other read here.
+  //
+  //  Fail-soft, but never silently. A read that FAILED is not a prospect who
+  //  told us nothing — collapsing those two is exactly the silence this repo
+  //  forbids. On failure the turn proceeds without established context and
+  //  says so in the prompt, rather than implying the prospect never spoke.
+  //  ONE function, because both generation paths ask the identical question
+  //  and an answer assembled twice drifts. It returns the selection ready to
+  //  use — the read state is an INPUT to the resolver, not a field bolted
+  //  onto its frozen result afterwards, so the resolver owns its whole shape
+  //  and no caller mutates it.
+  async function resolveTurnContext({ message, person_id, property_id }) {
+    let facts = {};
+    let readFailed = false;
+    if (person_id && property_id) {
+      try {
+        const out = await inventory.readProspectFacts(pool, { person_id, property_id });
+        facts = (out && out.facts) || {};
+      } catch (e) {
+        //  Fail-soft, never silently. A read that FAILED is not a prospect
+        //  who told us nothing — collapsing those two is the silence §40.7
+        //  forbids, so the state travels and the prompt says which it was.
+        console.error("[agent/context] prospect facts read failed:", e && e.message);
+        readFailed = true;
+      }
+    }
+    return leasingContextResolver.resolveLeasingContext({
+      message, propertyId: property_id, personAttributes: facts, attributesReadFailed: readFailed,
+    });
+  }
+
+  //  ── `selection` NARROWS WHAT THE MODEL SEES, NEVER WHAT TRUTH SAYS ──
+  //  An optional decision from leasing_context_resolver saying which curated
+  //  facts this turn actually needs. Omit it and this function behaves
+  //  exactly as it did before the resolver existed: everything active, for
+  //  this property, plus the live unit read.
+  //
+  //  Two boundaries are load-bearing and neither is negotiable here:
+  //
+  //    1. ECONOMIC SOURCES ARE NEVER NARROWED. Governed charges and any fact
+  //       in the `pricing` category stay in the returned set whatever the
+  //       selection says, because agent_runs.resolved_fact_snapshot_json is
+  //       what compareEconomicSources judges a ready draft against — over
+  //       the WHOLE economic set, including sources that appeared after the
+  //       human reviewed it. Narrow that set and the stale-draft guarantee
+  //       either fires on every send or stops seeing a new fee. The prompt
+  //       being shorter is not worth either.
+  //
+  //    2. PROPERTY SCOPE IS UNCHANGED. Selection filters within the rows
+  //       readActive already scoped to this property. It cannot reach
+  //       another property's facts, and there is no fallback that could:
+  //       a selection matching nothing yields an empty curated set and the
+  //       existing honest-unknown behaviour, never a borrowed fact.
+  async function resolveContext(client, { property_id, unit_id, selection } = {}) {
     // EXPIRY IS PART OF ACTIVE (owner decision, 2026-07-27). status='active'
     // alone was not enough: agent_facts has carried effective_until since 053
     // and nothing honored it, so a fact with a past expiry would be quoted to
@@ -284,10 +234,36 @@ module.exports = function agentModule(deps) {
     // exactly the dated things. A fact is quotable only while it is still true.
     // No live fact sets effective_until today, so this changes nothing now and
     // guards everything later.
-    const facts = (await require("../leasing/leasing_knowledge").readActive(client, property_id)).map(r => ({
+    const curated = (await require("../leasing/leasing_knowledge").readActive(client, property_id)).map(r => ({
       fact_key: r.fact_key, category: r.category, rendered_text: r.rendered_text,
       source: r.source_type, confirmed_at: r.confirmed_at,
     }));
+    //  isEconomic FIRST, then the selection — so an economic fact is kept
+    //  whether or not this turn asked about money. One owner for that
+    //  boundary (draft_source_identity), used by both the narrowing here and
+    //  the staleness comparison that depends on it.
+    const facts = curated.filter(f => isEconomic(f) || leasingContextResolver.selects(selection, f));
+    //  ── ONE LINE PER TURN, SO THE FIRST WEEK IS DEBUGGABLE ───────────
+    //  If narrowing ever drops the fact a turn needed, the symptom is an
+    //  agent that says it does not know something the property has on file
+    //  — which looks exactly like a missing fact, and would otherwise be
+    //  indistinguishable from one in the logs. This records the decision
+    //  and the counts, never the fact TEXT (prospect-facing content does
+    //  not belong in a log line).
+    //  Defensive by construction: a log line must never be able to take a
+    //  conversation down. The first version read selection.intents directly
+    //  and threw on a selection that did not carry the field — caught by a
+    //  test passing a hand-built one, which is exactly the shape a future
+    //  caller might pass.
+    if (selection) {
+      try {
+        const intents = Array.isArray(selection.intents) && selection.intents.length
+          ? selection.intents.join("|") : "-";
+        console.log(`[agent/context] basis=${selection.basis || "?"} intents=${intents} `
+          + `facts=${facts.length}/${curated.length} `
+          + `pricing=${selection.needsPricing !== false} inventory=${selection.needsInventory !== false}`);
+      } catch (_) { /* never fatal */ }
+    }
 
     // ── GOVERNED CHARGES ARE FACTS TOO ────────────────────────────────
     // A published governed charge is read here ALONGSIDE the curated facts,
@@ -361,6 +337,26 @@ module.exports = function agentModule(deps) {
     //  market_rent is NOT selected here any more. The governed adapter is the
     //  only route to a quotable number, and when it cannot answer it hands
     //  off in its own words rather than letting the model improvise one.
+    //  ── THE GOVERNED PRICE IS THE READ WORTH SKIPPING. IDENTITY IS NOT ──
+    //  The unit row is read whenever one is linked, selection or not. It is
+    //  a cheap identity read, and skipping it would make the prompt say
+    //  "(no specific unit is linked to this inquiry yet)" about a
+    //  conversation that HAS one — a confident wrong statement to save a
+    //  query, which is the trade §5 exists to refuse.
+    //
+    //  `quotablePricing` is the governed invocation, and that is what
+    //  `needsPricing` gates. The failure direction is deliberate: when it is
+    //  skipped, `unit.pricing` carries an explicit not-read marker,
+    //  directPricingReply declines, and the prompt tells the model in so
+    //  many words that no rent figure is in context and it must not supply
+    //  one. A missing quote becomes a handoff, never an improvised figure.
+    //
+    //  `needsInventory` is deliberately NOT used to withhold the
+    //  find_available_units tool. Taking a tool away from the model changes
+    //  what the agent can DO, not what it retrieves, and a prospect who
+    //  pivots to availability in a sentence the table does not match would
+    //  hit an agent that cannot look. Retrieval narrows; capability does not.
+    const wantsPricing = !selection || selection.needsPricing !== false;
     let unit = null;
     if (unit_id) {
       const u = (await client.query(
@@ -370,8 +366,15 @@ module.exports = function agentModule(deps) {
       if (u) {
         let pricing = null;
         try {
-          pricing = await quotablePricing(client, {
-            property_id, unit_type_id: u.unit_type_id, intent: "new_lease" });
+          //  NOT A BARE NULL. A skipped read is a different fact from an
+          //  unquotable one, and both are different from a number. The
+          //  marker carries which, so the prompt can say the accurate thing
+          //  instead of silently omitting the rent line and leaving the
+          //  model free to supply one.
+          pricing = !wantsPricing
+            ? { quotable: false, not_read_this_turn: true, reason: "pricing_not_required_this_turn" }
+            : await quotablePricing(client, {
+                property_id, unit_type_id: u.unit_type_id, intent: "new_lease" });
         } catch (e) {
           //  A pricing fault must never take the conversation down, and it
           //  must never silently become "no rent on file" either — that
@@ -379,7 +382,7 @@ module.exports = function agentModule(deps) {
           console.error("[agent] quotablePricing failed", e && e.message);
           pricing = { quotable: false, reason: "pricing_read_failed",
             detail: "The governed pricing read failed.",
-            say: "I want to give you an exact number rather than guess — let me confirm the current pricing with the leasing office and come straight back to you." };
+            say: "I want to give you an exact number rather than guess. The leasing team can confirm the current pricing." };
         }
         unit = {
           unit_number: u.unit_number, bedrooms: u.bedrooms, bathrooms: u.bathrooms,
@@ -438,42 +441,8 @@ module.exports = function agentModule(deps) {
     return { decision: "safe", code: null, ack: null };
   }
 
-  // Post-generation validation: catch unsafe output before it can be sent.
-  function postGenerationPolicy(draftText) {
-    const t = (draftText || "").toLowerCase();
-    // HARD FLOOR on unsafe OUTPUT (§6). Codes prefixed 'fairhousing:' are
-    // RECOVERABLE — dispatch replaces the reply with a safe practical redirect
-    // and SENDS it (never silence). A unit-grounding block is handled separately
-    // (dispatch sends the inventory fallback + raises an internal QA signal).
-    const blockPatterns = [
-      [/\b(good|bad|safe|dangerous|rough|sketchy|nice|great) (neighborhood|area|part of town|block|side of town)\b/, "fairhousing:neighborhood_character"],
-      [/\b(crime rate|crime is|safe to walk|it'?s safe|is safe|very safe|totally safe|perfectly safe)\b/, "fairhousing:safety_claim"],
-      [/\b(perfect for|ideal for|suited for|great for|good for) (families|singles|young professionals|students|christian|jewish|muslim|couples)/, "fairhousing:demographic_steering"],
-      // ESA / assistance animal quoted a PET CHARGE. Under the FHA an assistance
-      // animal is not a pet, so pet fees, pet deposits, and pet rent generally
-      // may not be charged. The pre-gate routes an explicit ESA request, but the
-      // model can still reach this pairing on its own (a live thread quoted
-      // "$300 one-time fee plus $30/month pet rent" one turn after an ESA
-      // question). This is the floor that makes the rule real.
-      [/\b(service animal|emotional support animal|assistance animal|esa)\b[\s\S]{0,240}(\$\s?\d|pet fee|pet rent|pet deposit)/, "fairhousing:esa_fee"],
-      [/(\$\s?\d|pet fee|pet rent|pet deposit)[\s\S]{0,240}\b(service animal|emotional support animal|assistance animal|esa)\b/, "fairhousing:esa_fee"],
-      // Area DEMOGRAPHIC composition, not just safety adjectives (Case 6C). A
-      // live reply said "University City overall skews younger because of the
-      // schools" — the older patterns above catch "safe/rough/nice", not this.
-      [/\b(skews?|mostly|mainly|largely|predominantly|a lot of|lots of|full of) (young|younger|older|students|families|kids|professionals|couples|singles|immigrants|retirees)\b/, "fairhousing:demographic_composition"],
-      // LOCAL LAW asserted from model memory. Housing law is jurisdictional:
-      // source-of-income protection, deposit caps and return windows, notice
-      // periods, occupancy limits and rent regulation all differ between
-      // Philadelphia, Pittsburgh, and New York. The model has plausible-sounding
-      // general knowledge and no way to know which jurisdiction is correct, so
-      // any appeal to law is blocked unless it came from verified facts.
-      // Deliberately narrow and high-precision: "renters insurance is required"
-      // does NOT match, because it asserts a house rule, not a legal one.
-      [/\b((state|city|local|municipal|federal) law|by law|legally (required|obligated|entitled)|(pennsylvania|philadelphia|pittsburgh|new york|nyc|pa|ny) (law|ordinance|code|statute)|rent control|rent stabiliz|your rights under)\b/, "legal:local_law_claim"],
-    ];
-    for (const [re, code] of blockPatterns) if (re.test(t)) return { decision: "blocked", code };
-    return { decision: "safe", code: null };
-  }
+  // postGenerationPolicy is imported from prospect_output_policy so every
+  // prospect-facing AI surface uses the same deterministic output floor.
 
   function directPricingReply({ inboundText, unit } = {}) {
     const text = String(inboundText || "").toLowerCase();
@@ -513,10 +482,50 @@ module.exports = function agentModule(deps) {
   // ── build the model context in STRICT AUTHORITY ORDER ──────────────────────
   // (1) safety/fair-housing rules (2) curated facts (3) live unit truth
   // (4) thread history (5) persona. Lead messages are UNTRUSTED content.
-  function buildMessages({ facts, unit, history, propertyName }) {
+  function buildMessages({ facts, unit, history, propertyName, selection }) {
+    //  ── "NONE SELECTED" IS NOT "NONE ON FILE" ────────────────────────
+    //  Before the context resolver, an empty fact list could only mean the
+    //  property had nothing recorded, and the line said so. Under selection
+    //  it can also mean the property has facts and none of them answers THIS
+    //  question — and telling the model "no curated facts are on file for
+    //  this property" would be a confident wrong statement about the
+    //  property, which is the failure §5 exists to prevent. The two are now
+    //  distinct sentences, and neither invites the model to fill the gap.
+    const narrowed = !!(selection && selection.selective);
     const factLines = facts.length
       ? facts.map(f => `- ${f.fact_key} (${f.category}; source: ${f.source}): ${f.rendered_text}`).join("\n")
-      : "(no curated facts are on file for this property)";
+      : narrowed
+        ? "(nothing on file for this property answers this particular question. " +
+          "Other topics may be recorded; this is not a statement that the property has no information. " +
+          "Do not answer from general knowledge — say you don't have that confirmed and offer to get it from the team.)"
+        : "(no curated facts are on file for this property)";
+    //  ── WHAT THIS PROSPECT ALREADY TOLD US ───────────────────────────
+    //  Only the recorded facts the resolver judged relevant to THIS turn, so
+    //  a budget mentioned once does not follow someone into every later
+    //  question. Values are free text as the prospect said them ("August",
+    //  "$2,500", "2BR") and are presented that way: a month is not a date, a
+    //  ceiling is not a quote, and a bedroom count is not a specific home.
+    //  The model may rely on these so the prospect is not made to repeat
+    //  themselves; it may not sharpen them into detail nobody recorded.
+    const established = (selection && selection.established) || {};
+    const establishedKeys = Object.keys(established);
+    const establishedBlock = (selection && selection.established_read_failed)
+      ? "\n\nWHAT THIS PERSON ALREADY TOLD US: could NOT be read this turn. "
+        + "Do not treat that as them having told us nothing. If the answer depends on "
+        + "something they said earlier, ask them to confirm it rather than guessing."
+      : establishedKeys.length
+        ? "\n\nWHAT THIS PERSON ALREADY TOLD US (recorded, do not make them repeat it):\n"
+          + establishedKeys.map(k => {
+              const v = established[k];
+              const src = v && v.source ? ` (recorded from ${v.source})` : "";
+              return `- ${k}: ${v && v.value}${src}`;
+            }).join("\n")
+          + "\nUse these to understand what they are asking now. They are the prospect's own "
+          + "words, not governed truth: a stated month is not a lease date, a stated budget is "
+          + "not a quote, and a stated bedroom count is not a particular home. Never invent a "
+          + "year, lease term, rent basis or unit identity that is not recorded."
+        : "";
+
     //  A NUMBER OR AN INSTRUCTION NOT TO INVENT ONE — never a bare blank.
     //  "rent not on the unit record" read as an inventory fact and left the
     //  model free to fill the gap. When pricing is not quotable the model is
@@ -525,8 +534,16 @@ module.exports = function agentModule(deps) {
     const rentPart = !p ? ""
       : p.quotable
         ? `, rent $${p.rent}/mo on a ${p.lease_term_months}-month term (governed published pricing)`
-        : `. PRICING IS NOT QUOTABLE (${p.reason}). Do NOT state, estimate or imply any rent figure. ` +
-          `If the prospect asks about price, reply with exactly: "${p.say}"`;
+        //  Read, and the answer was "not quotable" — the property's own state.
+        : !p.not_read_this_turn
+          ? `. PRICING IS NOT QUOTABLE (${p.reason}). Do NOT state, estimate or imply any rent figure. ` +
+            `If the prospect asks about price, reply with exactly: "${p.say}"`
+        //  NOT read, because this turn is not about price. Saying "not
+        //  quotable" here would assert something about the property that was
+        //  never checked. The prohibition is identical; the claim is not.
+          : `. Governed pricing was NOT read for this turn, so no rent figure is in context. ` +
+            `Do NOT state, estimate or imply any rent figure. If the prospect raises price, ` +
+            `say the leasing team can confirm current pricing.`;
     const unitLine = unit
       ? `Unit ${unit.unit_number || "(unnamed)"}: ${unit.bedrooms ?? "?"}bd/${unit.bathrooms ?? "?"}ba` + rentPart
       : "(no specific unit is linked to this inquiry yet)";
@@ -710,15 +727,15 @@ ${moveInSpeedRule}
 
 Example:
 
-"We've moved pretty quickly before, sometimes within a few days. I need to check which units are actually ready, but let me shake the tree with the team... want to come take a look today while I work on it?"
+"We've moved pretty quickly before, sometimes within a few days. I don't want to make up a date before a ready home is confirmed. Want to come take a look today?"
 
 If they can apply and pay today:
 
-"Okay, now you're making my life easy. That definitely helps, let's get you through the building and I'll push for the fastest-ready option."
+"Okay, now you're making my life easy. That definitely helps. Let's get you through the building, and the team can confirm the fastest ready option."
 
 If they ask about this weekend:
 
-"Maybe, we're not miles away. I don't want to make up a date before I know which unit is ready, so let me verify it and see what we can pull off."
+"Maybe. I don't want to make up a date before a ready home is confirmed. The team can see this conversation and can confirm whether the timing works."
 
 INVENTORY AND PRICING
 
@@ -847,7 +864,7 @@ VERIFIED PROPERTY FACTS:
 ${factLines}
 
 LIVE UNIT DATA:
-${unitLine}
+${unitLine}${establishedBlock}
 
 Reply with ONLY the message text.`;
 
@@ -1143,7 +1160,18 @@ Reply with ONLY the message text.`;
         // resolve context fresh (read-only; not in a write txn)
         const client0 = await pool.connect();
         let ctx;
-        try { ctx = await resolveContext(client0, { property_id: tx1.property_id, unit_id: tx1.unit_id }); }
+        //  WHAT THIS TURN NEEDS, decided before the reads, from the inbound
+        //  text and what is already recorded about the person. Deterministic
+        //  and model-free — see leasing_context_resolver.
+        //  personAttributes is part of the resolver's contract and is not fed
+        //  from here yet: tx1 does not load them and adding a read per turn
+        //  buys nothing this slice needs — the inbound text already carries
+        //  the budget and bedroom signals in Example 3's shape. Stated rather
+        //  than quietly dropped, so the next person knows it is a gap and not
+        //  a decision against it.
+        const selection = await resolveTurnContext({
+          message: tx1.inboundText, person_id: tx1.person_id, property_id: tx1.property_id });
+        try { ctx = await resolveContext(client0, { property_id: tx1.property_id, unit_id: tx1.unit_id, selection }); }
         finally { client0.release(); }
         factSnapshot = ctx.facts;
         snapshotHash = sha(factSnapshot);
@@ -1184,7 +1212,7 @@ Reply with ONLY the message text.`;
             try { return (await c.query("select coalesce(display_name, name) as name from properties where id=$1", [tx1.property_id])).rows[0]?.name || null; }
             finally { c.release(); }
           })());
-          const built = buildMessages({ facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
+          const built = buildMessages({ facts: ctx.facts, unit: ctx.unit, history, propertyName: propName, selection });
           runtimeStrategyEnvelope = aiLeasingStrategyRuntime.validatedEnvelopeForRuntime(tx1.strategy_envelope, {
             surface: "ongoing_reply", model: MODEL, promptRevision: PROMPT_REVISION,
           });
@@ -2450,7 +2478,10 @@ Reply with ONLY the message text.`;
       try {
         const c0 = await pool.connect();
         let ctx;
-        try { ctx = await resolveContext(c0, { property_id: prep.property_id, unit_id: prep.unit_id }); }
+        //  Same decision on the regenerate path, from the same inbound text.
+        const selection = await resolveTurnContext({
+          message: prep.inboundText, person_id: prep.person_id, property_id: prep.property_id });
+        try { ctx = await resolveContext(c0, { property_id: prep.property_id, unit_id: prep.unit_id, selection }); }
         finally { c0.release(); }
         factSnapshot = ctx.facts; snapshotHash = sha(factSnapshot);
         operatingContextSnapshot = aiLeasingOperatingContext.canonicalRuleSnapshot(
@@ -2480,7 +2511,7 @@ Reply with ONLY the message text.`;
           let propName;
           try { propName = (await c2.query("select coalesce(display_name, name) as name from properties where id=$1", [prep.property_id])).rows[0]?.name || null; }
           finally { c2.release(); }
-          const built = buildMessages({ facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
+          const built = buildMessages({ facts: ctx.facts, unit: ctx.unit, history, propertyName: propName, selection });
           runtimeStrategyEnvelope = aiLeasingStrategyRuntime.validatedEnvelopeForRuntime(prep.strategy_envelope, {
             surface: "regenerated_reply", model: MODEL, promptRevision: PROMPT_REVISION,
           });
@@ -2587,6 +2618,14 @@ Reply with ONLY the message text.`;
   // TEST-ONLY (Class 3, inert at runtime): exposes the pure tool-loop message-
   // assembly helpers so the proof harness exercises the REAL functions, not a
   // copy. No route, no side effect — safe to ship, used only by prove_*.js.
-  router.__test__ = { pairAllToolResults, hasToolUse, stripDashes, stripMarkdown, humanizeTypos, finishProspectText, TYPO_RATE, preGenerationPolicy, postGenerationPolicy };
+  //  resolveTurnContext is exposed for the SAME reason and on the same terms as
+  //  the rest of this list: the claim "a follow-up uses what the prospect
+  //  already told Spine" must be proven by RUNNING the real resolution against
+  //  a real database, not by handing fixtures to the resolver and calling that
+  //  a conversation. It is the exact function both live turn paths call
+  //  (lines ~1172 and ~2482). Class 3, inert at runtime — no route, no side
+  //  effect. Removal condition: delete when a full conversation proof drives a
+  //  real agent turn end to end.
+  router.__test__ = { pairAllToolResults, hasToolUse, stripDashes, stripMarkdown, humanizeTypos, finishProspectText, TYPO_RATE, preGenerationPolicy, postGenerationPolicy, resolveTurnContext };
   return router;
 };

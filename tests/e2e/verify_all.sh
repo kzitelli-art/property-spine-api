@@ -163,10 +163,32 @@ step "compliance ask spine projection" node tests/unit/compliance_ask_spine.test
 step "ask spine entitlement matrix" node tests/proofs/ask_spine_entitlement_matrix.test.js
 step "migration 194-198 reviewed hashes are the git blobs" node tests/unit/migration_194_198_reviewed_hashes.test.js
 step "inventory correction door contract" node tests/unit/inventory_correction_contract.test.js
+step "leasing agent context resolution" node tests/unit/leasing_context_resolver.test.js
+step "shared web/SMS conversational path" node tests/unit/shared_conversational_path.test.js
+step "property line identity and inbound doors" node tests/unit/property_line_identity.test.js
+#  The operator must be able to RECOVER a lost lead from the app, not from
+#  developer tools. Component proof: a real browser drives the real functions
+#  lifted out of the app's index.html. No API and no database, so it runs here
+#  with the unit steps rather than in the coupled browser rung.
+#  app_rung_ready is THE question every app rung asks — it checks Chromium
+#  AND the declared pin together, "so the three call sites cannot drift apart
+#  from each other either". This step first asked only whether index.html
+#  existed, which would have run it against an app nobody pinned and with no
+#  browser: a rung that reports green about an undeclared surface is worse
+#  than one that skips by name.
+if app_rung_ready; then
+  step "browser: retained inquiry is recoverable in the app (app $APP_PIN_SHORT)" \
+    env CHROMIUM="${CHROMIUM:-}" node "$APP_ROOT/retained_inquiry_dom.test.js"
+else
+  echo "── browser: retained inquiry          SKIPPED ($(app_rung_skip_reason))"
+  SKIPPED="retained inquiry app proof"
+  FAILED=1
+fi
 step "terms preparation attribution" node tests/unit/terms_confirmation_attribution.test.js
 step "current packet execution decision attribution" node tests/unit/execution_decision_read.test.js
 step "terms attribution model boundary" node tests/unit/terms_attribution_model_boundary.test.js
 step "leasing knowledge coverage" node tests/unit/leasing_knowledge_coverage.test.js
+step "prospect first response question grounding" node tests/unit/first_response_conversation.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
 step "institutional rent projection" node tests/unit/rent_roll_institutional_projection.test.js
 step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js
@@ -179,7 +201,10 @@ step "match ordering rule" node tests/unit/match_ordering.test.js
 node tests/e2e/proof_boundary.js create >"$RUN_DIR/env.sh" || exit 1
 . "$RUN_DIR/env.sh"
 step "schema from the migration chain"  ./tests/e2e/apply_migrations.sh
+step "governed property display name" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/property_display_name_command.db.js
 step "negative contract rent unavailable" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_HTTP_PORT=3353 node tests/proofs/negative_contract_rent_unavailable.db.js
+step "leasing identity conflict retains the inquiry" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/leasing_identity_conflict_http.db.js
+step "conversational consistency across web and SMS" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/conversational_consistency.db.js
 step "property fixture"     psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/property_fixture.sql
 step "pricing fixture"      psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/fixtures.sql
 step "instrument fixture"   node tests/e2e/instrument_fixture.js
@@ -227,10 +252,11 @@ git worktree add --detach "$PARENT_WORKTREE" "$ONBOARDING_PARENT" >"$RUN_DIR/onb
 }
 ln -s "$ROOT/node_modules" "$PARENT_WORKTREE/node_modules" || exit 1
 # The parent onboarding witnesses intentionally run against the exact physical
-# 197 claim index. The normal chain is already at 198 here, so reconstruct only
-# that historical index/ledger state for the parent run. Restore 198 through
-# the numbered migration runner immediately afterwards; do not hide successor
-# DDL in this compatibility witness.
+# 197 claim index. The normal chain is already beyond 198 here, so reconstruct
+# that historical index/ledger state for the parent run. Temporarily remove the
+# later ledger entries as well: the canonical runner refuses a ledger whose
+# ceiling is 199 while 198 is missing. Restore the whole numbered suffix through
+# the migration runner immediately afterwards; do not hand-author successor DDL.
 step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
   do \$\$ begin
     if not exists (select 1 from schema_migrations where version='198' and name in ('proposed_source_claim_identity','198_proposed_source_claim_identity.sql')) then
@@ -240,8 +266,12 @@ step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR
                    and indexdef = 'CREATE UNIQUE INDEX uq_proposed_natural ON public.proposed_records USING btree (activation_id, target_type, natural_key) WHERE ((natural_key IS NOT NULL) AND (import_source_row_id IS NULL))') then
       raise exception 'expected exact 198 natural-key index before parent witness';
     end if;
+    if not exists (select 1 from schema_migrations where version='199'
+                   and name in ('property_display_name_command','199_property_display_name_command.sql')) then
+      raise exception 'expected numbered 199 ledger row before parent witness';
+    end if;
   end \$\$;
-  delete from schema_migrations where version='198';
+  delete from schema_migrations where version in ('198','199');
   drop index uq_proposed_natural;
   create unique index uq_proposed_natural
     on proposed_records (activation_id, target_type, natural_key)
@@ -250,11 +280,15 @@ step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR
 step "parent onboarding source defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_source.db.js
 step "parent onboarding lifecycle defect" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_lifecycle.db.js
 step "parent onboarding snapshot defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_snapshot.db.js
-step "restore numbered 198 claim index" env DATABASE_URL="$E2E_DATABASE_URL" MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=197 node migrations/migrate.js --apply
+step "restore numbered 198 and successor ledger" env DATABASE_URL="$E2E_DATABASE_URL" MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=197 node migrations/migrate.js --apply
 step "verify restored 198 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
   do \$\$ begin
     if not exists (select 1 from schema_migrations where version='198' and name in ('proposed_source_claim_identity','198_proposed_source_claim_identity.sql')) then
       raise exception 'numbered 198 ledger row was not restored';
+    end if;
+    if not exists (select 1 from schema_migrations where version='199'
+                   and name in ('property_display_name_command','199_property_display_name_command.sql')) then
+      raise exception 'numbered 199 ledger row was not restored';
     end if;
     if (select pg_get_indexdef(i.indexrelid) from pg_index i
        where i.indexrelid=to_regclass('public.uq_proposed_natural')) is distinct from
