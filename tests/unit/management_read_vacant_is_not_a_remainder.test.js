@@ -66,6 +66,7 @@ const row = (o) => ({
   cur_balance: o.cur_balance == null ? null : o.cur_balance,
   cur_status: o.cur_status || null, cur_tenant: o.cur_tenant || null,
   fut_lease_id: o.fut_lease_id || null,
+  cur_end_date: o.cur_end_date || null,
 });
 
 const LEASED    = (n) => row({ space_id: "leased" + n,    unit_number: n, cur_lease_id: "L" + n, cur_rent: "900.00", cur_tenant: "Resident " + n });
@@ -283,6 +284,61 @@ console.log("\n== a renewal is ONE bed, so upcoming may not exceed the building 
   ok(co.occupied === 1 && co.committed === 1 && co.vacant === 2, "1 in, 1 signed, 2 open", cd);
   ok(cu.upcoming_pct === 50,
     "upcoming counts the renewed bed once and the committed bed once: 2 of 4 = 50% (got " + cu.upcoming_pct + ")", cd);
+}
+
+console.log("\n== leasing-risk coverage must compare beds to the beds it covers ==");
+{
+  /*  `coverage = futureCount / (vacant + expiringSoon)` drives `riskLevel`,
+   *  which drives a focus card's SEVERITY and the line "turn is outrunning
+   *  leasing". So this is a published judgement, not only prose.
+   *
+   *  ⚠ AND MY OWN ROW 146 CHANGE MADE IT INCONSISTENT. Before that change a
+   *  committed bed sat in `vacant`, so it was in BOTH the numerator (its
+   *  future lease, via futureCount) and the denominator — self-cancelling.
+   *  Making `committed` its own bucket took it out of the denominator and
+   *  left its lease in the numerator, so a future lease can now "cover" a
+   *  bed that is not in the gap being measured.
+   *
+   *  The visible consequence: one committed bed beside one genuinely open
+   *  bed. The open bed has NO coverage, but the committed bed's lease is
+   *  counted against it, so coverage reads 1/1 and the card says leasing is
+   *  fine while a bed sits unlet with nothing signed for it.
+   *
+   *  The fix is a units correction, not a semantic one — the same argument
+   *  as row 148: count future leases ON THE BEDS IN THE DENOMINATOR.       */
+  const soon = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
+  const EXPIRING = (n) => row({ space_id: "exp" + n, unit_number: n,
+    cur_lease_id: "L" + n, cur_rent: "900.00", cur_tenant: "Resident " + n, cur_end_date: soon });
+  const RENEWING = (n) => row({ space_id: "ren" + n, unit_number: n,
+    cur_lease_id: "L" + n, cur_rent: "900.00", cur_tenant: "Resident " + n,
+    cur_end_date: soon, fut_lease_id: "F" + n });
+
+  //  THE DEFECT: a committed bed's lease must not cover a different open bed.
+  const b = await read([COMMITTED("101"), OPEN("102")]);
+  const r = (b.upcoming || {}).risk || {};
+  const d = JSON.stringify({ upcoming: b.upcoming, occupancy: b.occupancy });
+  ok(r.level === "high",
+    "one open bed with nothing signed for it is HIGH risk, not low (got " + r.level + ")", d);
+  ok(/only 0 future leases signed/.test(r.reason || ""),
+    "and the reason says ZERO future leases cover it — the committed bed's lease is not credited here",
+    JSON.stringify(r.reason));
+
+  //  THE CONTROL: a genuine renewal DOES cover its own expiring bed, so the
+  //  fix must not simply stop counting future leases.
+  const c = await read([RENEWING("201"), EXPIRING("202")]);
+  const cr = (c.upcoming || {}).risk || {};
+  const cd = JSON.stringify({ upcoming: c.upcoming, occupancy: c.occupancy });
+  ok(cr.level === "watch" || cr.level === "high",
+    "two beds expiring with one renewal signed is not 'low' — half the gap is uncovered (got " + cr.level + ")", cd);
+  ok(/1 future/.test(cr.reason || "") || /only 1 future/.test(cr.reason || ""),
+    "and exactly one future lease is credited, because it covers an expiring bed", JSON.stringify(cr.reason));
+
+  //  And fully renewed is genuinely covered: every expiring bed has a future.
+  const e = await read([RENEWING("301"), RENEWING("302")]);
+  const er = (e.upcoming || {}).risk || {};
+  ok(er.level === "low",
+    "every expiring bed renewed is low risk (got " + er.level + ")",
+    JSON.stringify({ upcoming: e.upcoming, occupancy: e.occupancy }));
 }
 
 console.log("\n== " + pass + " passed, " + fail + " failed ==\n");

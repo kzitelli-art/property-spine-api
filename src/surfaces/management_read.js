@@ -239,20 +239,55 @@ module.exports = function managementRead(deps) {
 
       // ── leasing risk: vacant + thin future leasing = exposure ──
       // risk rises when there are many vacant/expiring spaces and few future signed.
-      const expiringSoon = rows.filter(r => {
+      /*  ONE predicate for "this bed's current lease ends within 90 days",
+       *  used by both the count and the coverage numerator below, so the two
+       *  cannot drift into disagreeing about which beds are expiring.  */
+      const expiresWithin90 = (r) => {
         if (!r.cur_end_date) return false;
-        const d = new Date(r.cur_end_date); const now = new Date();
-        const days = (d - now) / (1000*60*60*24);
-        return days >= 0 && days <= 90;       // current leases ending within 90 days
-      }).length;
+        const days = (new Date(r.cur_end_date) - new Date()) / (1000*60*60*24);
+        return days >= 0 && days <= 90;
+      };
+      const expiringSoon = rows.filter(expiresWithin90).length;
       const openOrExpiring = vacant + expiringSoon;
+
+      /*  COVERAGE MUST COUNT FUTURE LEASES ON THE BEDS IN THE DENOMINATOR.
+       *
+       *  This read `futureCount / (vacant + expiringSoon)`, and `futureCount`
+       *  counts EVERY row with a fut_lease_id. That was self-cancelling while
+       *  a committed bed sat inside `vacant` — it was in both halves. Giving
+       *  `committed` its own bucket (the vacancy fix, CURRENT_STATE 146) took
+       *  it out of the denominator and left its lease in the numerator, so a
+       *  future lease could "cover" a bed that is not in the gap being
+       *  measured. THAT INCONSISTENCY WAS INTRODUCED BY THAT FIX.
+       *
+       *  Measured consequence: one committed bed beside one genuinely open
+       *  bed reported `risk: low` — "1 future signed covers most of the 1
+       *  beds open or expiring soon" — while the open bed had nothing signed
+       *  for it at all. `riskLevel` drives a focus card's SEVERITY and the
+       *  line "turn is outrunning leasing", so this is a published judgement,
+       *  not only prose.
+       *
+       *  The denominator is beds still needing somebody: genuinely open, or
+       *  expiring within 90 days. A future lease on a bed with no current
+       *  lease makes that bed `committed` and removes it from the gap
+       *  entirely, so it may not also be credited against a different bed.
+       *  What CAN cover a bed in the gap is a renewal — a future lease on a
+       *  bed whose current lease is expiring. That is the whole numerator,
+       *  and the control asserts a genuine renewal still counts.           */
+      const coveringFutures = rows.filter((r) => {
+        if (!r.fut_lease_id) return false;
+        if (NON_REV_LABEL.test(r.space_label || "") || NON_REV_LABEL.test(r.cur_tenant || "")) return false;
+        if (!r.cur_lease_id) return false;      // committed, not in the gap
+        return expiresWithin90(r);              // a renewal covering its own expiring bed
+      }).length;
+
       let riskLevel = "low", riskReason = "";
       if (revenueSpaces) {
-        const coverage = openOrExpiring ? futureCount / openOrExpiring : 1;   // future signed vs the gap to fill
+        const coverage = openOrExpiring ? coveringFutures / openOrExpiring : 1;
         if (vacant === 0 && expiringSoon === 0) { riskLevel = "low"; riskReason = `Fully leased, nothing expiring in 90 days.`; }
-        else if (coverage >= 0.75) { riskLevel = "low"; riskReason = `${futureCount} future signed covers most of the ${openOrExpiring} ${unitLabel} open or expiring soon.`; }
-        else if (coverage >= 0.35) { riskLevel = "watch"; riskReason = `${openOrExpiring} ${unitLabel} open or expiring within 90 days; only ${futureCount} future leases signed.`; }
-        else { riskLevel = "high"; riskReason = `${openOrExpiring} ${unitLabel} open or expiring within 90 days but only ${futureCount} future leases signed — turn is outrunning leasing.`; }
+        else if (coverage >= 0.75) { riskLevel = "low"; riskReason = `${coveringFutures} future signed covers most of the ${openOrExpiring} ${unitLabel} open or expiring soon.`; }
+        else if (coverage >= 0.35) { riskLevel = "watch"; riskReason = `${openOrExpiring} ${unitLabel} open or expiring within 90 days; only ${coveringFutures} future leases signed.`; }
+        else { riskLevel = "high"; riskReason = `${openOrExpiring} ${unitLabel} open or expiring within 90 days but only ${coveringFutures} future leases signed — turn is outrunning leasing.`; }
       }
 
       // ── collection-loss exposure: gross positive balances owed ──
