@@ -258,16 +258,44 @@ And the browser reproduces it instead of inferring:
 | `unitRentRoll` | KEPT (server) — feeds `/units` |
 | `management_read.js` | **LEGACY BUT STILL REACHABLE — FOLLOW-UP REQUIRED** — consumed only by the app's profitability panel; its occupancy is a second definition. Its grain inference was corrected earlier today (CURRENT_STATE 131); its occupancy is not yet converged |
 
-## §50 · Registered proofs
+## §50 · Proofs — and where they are, and are not, registered
 
 ```
-person_identity_ingress.test.js              40/40   registered in verify_all.sh
-forward_semantics_are_the_servers.test.js    34/34   registered
-forward_occupancy_unresolved.test.js         24/24   registered
-person_identity_signed_in.browser.js         14/14   coupled, skips by name without a runtime
-forward_convergence_signed_in.browser.js     14/14   coupled, skips by name without a runtime
+person_identity_ingress.test.js              40/40
+forward_semantics_are_the_servers.test.js    34/34
+forward_occupancy_unresolved.test.js         24/24
+person_identity_signed_in.browser.js         14/14   coupled to an owned runtime
+forward_convergence_signed_in.browser.js     14/14   coupled to an owned runtime
 full app suite                               39 harnesses · 1607 passed · 0 failed
 ```
+
+All green — in the **app repo's** own suite (`run_harnesses.sh`). **They are
+NOT registered in the API's `verify_all.sh`, and that is a blocker, not an
+omission.** I registered them; CI went red twice (runs 693 and 694,
+`MODULE_NOT_FOUND`). A rung the API registers must exist at the app version
+`tests/e2e/app_pin.txt` declares, and it does not.
+
+With the app history fully fetched — a shallow clone makes `merge-base`
+return nothing and invites a far worse conclusion — both app branches fork
+from app main `c6769ba`. The declared pin `2e8199a` is **116 commits** past
+main; this build's app `2bbdb63` is **10 commits** past main; neither
+contains the other. The pinned `index.html` contains none of
+`psCanonicalForward`, `pcPersonRefusal`,
+`openCanonicalPersonFromRelationship`, `_rrLeasingCycle` or `Not
+projectable`, so these rungs cannot pass at the pin by construction.
+
+Moving the pin was tried and rejected with the measurement: the pin's
+lineage carries ~45 proof files this one does not, starting with the
+registered `retained_inquiry_dom` rung — that trade is 45 rungs for 3. The
+pin is restored, the three registrations are commented out in place with the
+reason and the re-registration condition beside them, and CI is back to the
+green it had at run 692.
+
+A trial merge conflicts in **6 hunks of `index.html` and no other file**, so
+convergence is tractable — but it needs its own browser re-proof, because
+the evidence above was gathered pre-merge and a clean merge is not proof the
+merged app behaves the same. **The consequence to hold onto: this work is
+proven, and CI does not yet defend it.** CURRENT_STATE row 139.
 
 ## §51 · Falsification — every guard, against a copied tree
 
