@@ -2576,3 +2576,90 @@ answers from the same truth (§40).
 
 The tracker disappears, and nobody rebuilds the property from a spreadsheet
 every month.
+
+### 42.17 The grain is the question before all of these
+
+This subsection is numbered last and belongs first. It is here because it was
+learned last — by finding, on 18 September 2026, that six separate places in the
+governed ingest answered it silently and wrongly.
+
+Everything above asks what is true about a **rentable position**: its basis, its
+tenancy state, its evidence, its economics, what it will be on a future date.
+None of those questions can be asked until the system knows **what a position
+is** for this building.
+
+```text
+        Does this property lease by the UNIT or by the BED?
+                              │
+                    ┌─────────┴─────────┐
+                    ▼                   ▼
+             one position          one position
+             per door              per bedroom
+                    │                   │
+                    └─────────┬─────────┘
+                              ▼
+              EVERYTHING IN §42 IS DOWNSTREAM OF THIS
+```
+
+**It is a property fact, and it is not derivable from any document.** The same
+building emits a rent roll arranged by unit, by room or by bed depending on one
+dropdown in Yardi. A by-the-bed building's by-unit export is not evidence that
+it leases by the unit; it is the same truth, printed differently. Inferring the
+grain from the shape of a file is the purest form of letting the source redefine
+the building (§42.2).
+
+Migration 026 got this right and said so in its own text: the column holds
+`unit`, `bed` or `unknown`, and *"'unknown' is the honest default."* **Then six
+readers treated a three-value column as two.** `leasing_basis === "bed" ? "bed"
+: "unit"`. An unanswered question resolved, confidently and invisibly, to *by
+the unit*.
+
+**The damage is not a smaller number. It is a deleted fact.**
+
+```text
+   A three-bed unit: two residents, one empty bed.
+
+   read at BED grain     Room1 occupied · Room2 occupied · Room3 VACANT
+                         → 2 of 3, and the empty bed is leasable today
+
+   read at UNIT grain    1417-101 occupied
+                         → 1 of 1. The vacant bed does not become
+                           miscounted. It stops existing.
+```
+
+Skyline is 160 beds in 72 units. Greenery is 105 in 64. At the wrong grain the
+numerator and the denominator collapse **together**, so occupancy can read
+plausibly — even perfectly — while vacancy, vacancy loss, availability, prelease
+coverage and forward rent are all gone. Nothing is flagged, because the guard
+that catches an unidentifiable position never fires: under unit grain every row
+has a perfectly good label.
+
+**And it propagates forward.** §42.1 earns its power from one function answering
+today, +90 days and next August. Every one of those reads divides by the
+positions that exist. A grain error is therefore not a bad number on one screen;
+it is the same bad number at every date the product can be asked about, which is
+the whole of the claim Spine makes against Yardi and Entrata.
+
+The rulings:
+
+- **An unestablished grain stops work.** It is not defaulted, not inferred, not
+  guessed. A source that can establish tenancy may not run against a property
+  whose grain is unknown, and the refusal names the next step rather than the
+  machinery: *"This property has not been established as leasing by bed or by
+  unit. Choose the property grain before establishing this rent roll."*
+- **A report parameter is not an answer.** `Summarize By = Unit` says how Yardi
+  arranged one export. It may be used to recognise the *wrong export* and say so
+  by name; it may never be read as the property's basis.
+- **The interface may not answer it either.** A dropdown whose default option is
+  blank but labelled "— unit —" is the same silent guess wearing a label, and it
+  is worse than the code version because the operator then believes it. Ask, or
+  refuse. Never pre-answer.
+- **One reading of the column, in one place.** Six implementations diverged six
+  ways and diverged silently, which is the same failure §40.3 records for
+  entitlement.
+
+The general form, which is the part worth carrying to the next domain:
+
+> **When a column can say "I do not know", code that branches two ways over it
+> has converted a question into an answer. Find the third branch before the
+> third branch finds you.**
