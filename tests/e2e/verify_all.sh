@@ -192,6 +192,7 @@ step "prospect first response question grounding" node tests/unit/first_response
 step "leasing grain not established refuses" node tests/unit/leasing_grain_not_established.test.js
 step "property operating day is the building's" node tests/unit/property_operating_today.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
+step "rent roll source totals reconcile" node tests/unit/rent_roll_source_totals.test.js
 step "institutional rent projection" node tests/unit/rent_roll_institutional_projection.test.js
 step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js
 step "availability occupancy basis" node --test tests/unit/availability_occupancy_basis.test.js

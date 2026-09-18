@@ -5,6 +5,8 @@ const { createHash } = require("node:crypto");
 const artifacts = require("./source_artifact_service.js");
 const { parseRentRollSource } = require("./rent_roll_source_adapter.js");
 const { mapRows, describePlan } = require("./rent_roll_field_map.js");
+const { reconcileToSourceTotals, describeTotalsMismatch, TOTALS_MISMATCH } =
+  require("./rent_roll_source_reconciliation.js");
 const { leasingGrain, GRAIN_NOT_ESTABLISHED, GRAIN_REFUSAL_MESSAGE } =
   require("../tenancy/leasing_grain.js");
 const { referencesTo } = require("../tenancy/inventory_materialization.js");
@@ -97,12 +99,32 @@ async function prepareSource(db, {
   if (!plan.mapped.unit_number) throw refusal(422, "no_unit_column",
     `Spine could not find a unit column in that file. It read these columns: ${plan.headers.slice(0, 12).join(", ")}${plan.headers.length > 12 ? "…" : ""}.`,
     { columns: plan.headers });
+  //  ── DID WE READ THE FILE CORRECTLY? ──────────────────────────────
+  //  Before anything can be established, reconcile what was extracted
+  //  against the totals the report states about ITSELF. This proves
+  //  extraction fidelity only — the footer comes out of the same Yardi
+  //  report as the rows, so agreement is never evidence about the
+  //  building. But a layout read wrongly does not land on the source's
+  //  own totals by accident, and a mismatch means Spine has not
+  //  represented the file, whatever each individual row looked like.
+  //  A layout stating no totals is simply unchecked, not failed.
+  const totals = reconcileToSourceTotals({
+    mapped, declared: parsed.source_declared_totals });
+  if (totals.mismatches.length) {
+    throw refusal(409, TOTALS_MISMATCH, describeTotalsMismatch(totals),
+      { source_totals: totals });
+  }
+
   //  BACKSTOP. Callers resolve the grain before they get here; this refuses
   //  rather than silently reading an unestablished property as by-the-unit,
   //  which would key every positionKey() below to "(whole unit)".
   const basis = leasingGrain(leasing_basis);
   if (!basis) throw refusal(409, GRAIN_NOT_ESTABLISHED, GRAIN_REFUSAL_MESSAGE);
   return { artifact, asOf, parsed, plan, mapped, basis,
+    //  A SOURCE ASSERTION plus the check it passed — carried so the review
+    //  screen can show "we read your file and it adds up", never merged
+    //  into anything canonical.
+    source_totals: totals,
     ledgerRows: mapped.map(m => ({ ...m, _source_cells: m._raw })) };
 }
 

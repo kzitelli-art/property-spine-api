@@ -286,6 +286,65 @@ function isTerminalNumericSubtotal(grid, index, candidate) {
   return true;
 }
 
+/*  ── THE SOURCE'S OWN STATED TOTALS ─────────────────────────────────
+ *  A Yardi rent roll ends with its own footer: "Total: 1325 - The
+ *  Greenery Apartments (crm1325)  105.00 ... 113,500.00  101,200.00 ...".
+ *  The adapter found that row only to STOP at it, and threw the numbers
+ *  away.
+ *
+ *  Those numbers are NOT an oracle about the building. They come out of
+ *  the same Yardi report as the detail rows, so agreement proves the
+ *  EXTRACTION, not the tenancy — a stale lease is stated identically in
+ *  both. What they are is the only independent check on our own parsing
+ *  that ships inside the file, and it is a strong one: a layout we read
+ *  wrongly almost never lands on the source's own totals by accident.
+ *
+ *  Kept as `source_declared_totals`, deliberately apart from anything
+ *  canonical, so nothing downstream can mistake a source assertion for
+ *  an established fact.  */
+function declaredTotalsFrom(row, headers, plan) {
+  const totals = {};
+  //  "Total Beds" is in KNOWN_UNUSED for DETAIL rows — each states 1.00 and
+  //  the bed IS the row, so mapping it would store the same fact twice. In
+  //  the FOOTER the same column states the property's bed count, which is
+  //  the most legible check there is: 105 stated, 105 read. Found by header
+  //  rather than through the plan, precisely because the plan ignores it.
+  const bedIndex = headers.findIndex(
+    (h) => ["totalbeds", "beds", "ofbeds"].includes(
+      String(h == null ? "" : h).toLowerCase().replace(/[^a-z0-9]/g, "")));
+  if (bedIndex >= 0) {
+    const raw = text(row[bedIndex]);
+    if (raw && numericSourceValue(raw)) {
+      const n = Number(raw.replace(/[()$,\s]/g, ""));
+      if (Number.isFinite(n) && n > 0) totals.bed_count = n;
+    }
+  }
+  for (const field of ["sqft", "market_rent", "actual_rent", "deposit", "other", "balance"]) {
+    const index = fieldIndex(headers, plan, field);
+    if (index < 0) continue;
+    const raw = text(row[index]);
+    if (!raw || !numericSourceValue(raw)) continue;
+    const negative = /^\(.*\)$/.test(raw);
+    const n = Number(raw.replace(/[()$,\s]/g, ""));
+    if (!Number.isFinite(n)) continue;
+    totals[field] = negative ? -n : n;
+  }
+  return Object.keys(totals).length ? totals : null;
+}
+
+/*  Either order: some exports print "Summary Groups" before the
+ *  "Total:" line and some after, so the whole tail is scanned rather
+ *  than assuming the footer is the row we stopped on. */
+function findDeclaredTotals(grid, from, candidate) {
+  for (let index = from; index < grid.length; index += 1) {
+    const row = grid[index] || [];
+    if (!isTotalFooter(row, candidate.headers, candidate.plan)) continue;
+    const totals = declaredTotalsFrom(row, candidate.headers, candidate.plan);
+    if (totals) return { totals, source_label: text(row[0]) };
+  }
+  return null;
+}
+
 function rowsFromCandidate(grid, firstRow, candidate) {
   const rows = [];
   let section = "current";
@@ -317,6 +376,7 @@ function rowsFromCandidate(grid, firstRow, candidate) {
 
     if (text(source[0]).toLowerCase() === "summary groups" ||
         isTotalFooter(source, candidate.headers, candidate.plan)) {
+      rows.stoppedAt = index;
       break;
     }
 
@@ -338,6 +398,7 @@ function rowsFromCandidate(grid, firstRow, candidate) {
     rows.push(row);
     sawData = true;
   }
+  if (rows.stoppedAt === undefined) rows.stoppedAt = grid.length;
   return rows;
 }
 
@@ -366,8 +427,13 @@ function parseRentRollSource({ buffer, filename, mime_type: _mimeType = null } =
 
   const chosen = sheets[0];
   const rows = rowsFromCandidate(chosen.grid, chosen.firstRow, chosen.candidate);
+  const declared = findDeclaredTotals(chosen.grid, rows.stoppedAt, chosen.candidate);
   return {
-    rows,
+    rows: Array.from(rows),
+    //  A SOURCE ASSERTION, never a canonical total. Null when the layout
+    //  states none — absence is not a failed check, it is no check.
+    source_declared_totals: declared ? declared.totals : null,
+    source_declared_totals_label: declared ? declared.source_label : null,
     source_as_of_date: sourceDate(chosen.grid, chosen.candidate.headerStart),
     format,
     sheet_name: format === "csv" ? null : chosen.sheetName,
