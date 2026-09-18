@@ -255,29 +255,53 @@ ln -s "$ROOT/node_modules" "$PARENT_WORKTREE/node_modules" || exit 1
 # the canonical runner refuses a ledger with a gap below its ceiling (198
 # missing while a higher version sits at the top). Restore the whole numbered
 # suffix through the migration runner immediately afterwards; do not
-# hand-author successor DDL. This block was extended once already, 198→199
-# (commit 3b92d652); it now also covers 200 for the same reason — reuse this
-# same mechanism again the next time a migration lands above it, rather than
-# re-deriving one.
+# hand-author successor DDL.
+#
+# THE SUCCESSOR SUFFIX IS DERIVED FROM migrations/ ON DISK, NOT HARDCODED.
+# This block was hand-extended twice already (198->199 in commit 3b92d652,
+# 199->200 in commit de9b199e) and each time the DELETE and the assertions
+# kept the OLD ceiling as a literal, so the next migration above the last one
+# named here broke the rehearsal again with the exact same "RELEASE REFUSED —
+# you expected ceiling 197; the database says <newer>" message. Reading the
+# migrations directory for RECONSTRUCT_FILES means a migration landing above
+# 200 does not require this block to be hand-edited a third time. 198 itself,
+# and 197 as its fixed numeric predecessor, stay literals below: this block
+# exists to rehearse migration 198's own reviewed claim-index policy — that
+# is the reviewed SUBJECT under test, not an artifact of chain length.
+RECONSTRUCT_FILES=$(ls migrations/*.sql | xargs -n1 basename | awk 'substr($0,1,3)+0>=198' | sort)
+if [ -z "$RECONSTRUCT_FILES" ]; then
+  echo "FATAL: no migration >= 198 found under migrations/ — expected at least 198_proposed_source_claim_identity.sql" >&2
+  exit 1
+fi
+RECONSTRUCT_VERSIONS_SQL=""
+RECONSTRUCT_ASSERT_SQL=""
+RESTORE_ASSERT_SQL=""
+while IFS= read -r f; do
+  v=$(printf '%s' "$f" | cut -c1-3)
+  stripped=$(printf '%s' "$f" | sed -E 's/^[0-9]{3}_//; s/\.sql$//')
+  RECONSTRUCT_VERSIONS_SQL="$RECONSTRUCT_VERSIONS_SQL'$v',"
+  RECONSTRUCT_ASSERT_SQL="$RECONSTRUCT_ASSERT_SQL
+    if not exists (select 1 from schema_migrations where version='$v' and name in ('$stripped','$f')) then
+      raise exception 'expected numbered $v ledger row before parent witness';
+    end if;"
+  RESTORE_ASSERT_SQL="$RESTORE_ASSERT_SQL
+    if not exists (select 1 from schema_migrations where version='$v' and name in ('$stripped','$f')) then
+      raise exception 'numbered $v ledger row was not restored';
+    end if;"
+  NEWEST_MIGRATION_VERSION="$v"
+done <<EOF
+$RECONSTRUCT_FILES
+EOF
+RECONSTRUCT_VERSIONS_SQL="${RECONSTRUCT_VERSIONS_SQL%,}"
 step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
   do \$\$ begin
-    if not exists (select 1 from schema_migrations where version='198' and name in ('proposed_source_claim_identity','198_proposed_source_claim_identity.sql')) then
-      raise exception 'expected numbered 198 ledger row before parent witness';
-    end if;
     if not exists (select 1 from pg_indexes where schemaname='public' and indexname='uq_proposed_natural'
                    and indexdef = 'CREATE UNIQUE INDEX uq_proposed_natural ON public.proposed_records USING btree (activation_id, target_type, natural_key) WHERE ((natural_key IS NOT NULL) AND (import_source_row_id IS NULL))') then
       raise exception 'expected exact 198 natural-key index before parent witness';
     end if;
-    if not exists (select 1 from schema_migrations where version='199'
-                   and name in ('property_display_name_command','199_property_display_name_command.sql')) then
-      raise exception 'expected numbered 199 ledger row before parent witness';
-    end if;
-    if not exists (select 1 from schema_migrations where version='200'
-                   and name in ('unresolved_inquiry_evidence','200_unresolved_inquiry_evidence.sql')) then
-      raise exception 'expected numbered 200 ledger row before parent witness';
-    end if;
+    $RECONSTRUCT_ASSERT_SQL
   end \$\$;
-  delete from schema_migrations where version in ('198','199','200');
+  delete from schema_migrations where version in ($RECONSTRUCT_VERSIONS_SQL);
   drop index uq_proposed_natural;
   create unique index uq_proposed_natural
     on proposed_records (activation_id, target_type, natural_key)
@@ -286,20 +310,10 @@ step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR
 step "parent onboarding source defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_source.db.js
 step "parent onboarding lifecycle defect" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_lifecycle.db.js
 step "parent onboarding snapshot defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_snapshot.db.js
-step "restore numbered 198-200 ledger" env DATABASE_URL="$E2E_DATABASE_URL" MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=197 node migrations/migrate.js --apply
+step "restore numbered 198-$NEWEST_MIGRATION_VERSION ledger" env DATABASE_URL="$E2E_DATABASE_URL" MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=197 node migrations/migrate.js --apply
 step "verify restored 198 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
   do \$\$ begin
-    if not exists (select 1 from schema_migrations where version='198' and name in ('proposed_source_claim_identity','198_proposed_source_claim_identity.sql')) then
-      raise exception 'numbered 198 ledger row was not restored';
-    end if;
-    if not exists (select 1 from schema_migrations where version='199'
-                   and name in ('property_display_name_command','199_property_display_name_command.sql')) then
-      raise exception 'numbered 199 ledger row was not restored';
-    end if;
-    if not exists (select 1 from schema_migrations where version='200'
-                   and name in ('unresolved_inquiry_evidence','200_unresolved_inquiry_evidence.sql')) then
-      raise exception 'numbered 200 ledger row was not restored';
-    end if;
+    $RESTORE_ASSERT_SQL
     if (select pg_get_indexdef(i.indexrelid) from pg_index i
        where i.indexrelid=to_regclass('public.uq_proposed_natural')) is distinct from
        'CREATE UNIQUE INDEX uq_proposed_natural ON public.proposed_records USING btree (activation_id, target_type, natural_key) WHERE ((natural_key IS NOT NULL) AND (import_source_row_id IS NULL))' then
