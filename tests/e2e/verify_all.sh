@@ -179,6 +179,10 @@ step "property line identity and inbound doors" node tests/unit/property_line_id
 if app_rung_ready; then
   step "browser: retained inquiry is recoverable in the app (app $APP_PIN_SHORT)" \
     env CHROMIUM="${CHROMIUM:-}" node "$APP_ROOT/retained_inquiry_dom.test.js"
+  #  §50 · the identity ingress gate. Pure-function rung; the coupled
+  #  signed-in browser rung lives beside the owned server below.
+  step "app: nothing unestablished opens a Person Card" \
+    node "$APP_ROOT/person_identity_ingress.test.js"
 else
   echo "── browser: retained inquiry          SKIPPED ($(app_rung_skip_reason))"
   SKIPPED="retained inquiry app proof"
