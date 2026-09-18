@@ -2285,3 +2285,294 @@ intent
 The final line matters. Every build should name the parallel path it must **not**
 create. That is how the product protects itself from competent local decisions
 that slowly assemble a second operating system beside the first.
+
+---
+
+## 42. The Rent Roll Is the Core
+
+**The rent roll is not one feature among Leasing, Maintenance, Money and Asset
+Management. It is the operating model those systems establish, change,
+reconcile against, or consume.**
+
+> **If the rent roll is wrong, the rest of Spine can look sophisticated while
+> being wrong underneath. If it is right, much of the rest starts snapping
+> together.**
+
+Every party who cares about a property asks the same question in different
+words. A lender asks what the in-place income is and how durable it is. An owner
+asks what they are earning and what is at risk. A property manager asks who is
+in which home, paying what, until when. An asset manager asks what rolls next
+quarter. A buyer says prove it.
+
+Those are not five reports. They are five readings of one fact set: which
+rentable positions exist, who is in them, under what contract, until when, for
+how much.
+
+This section is doctrine about the model. The code that carries it already
+exists — `src/tenancy/dated_positions.js`, `src/tenancy/position_classifier.js`,
+`src/surfaces/rent_roll_canonical.js`, and migrations 157 and 179. The job of
+any thread touching this area is to integrate what is there, never to invent a
+second rent-roll architecture beside it.
+
+### 42.1 It is a read, not a table
+
+There is intentionally no canonical rent roll table. `currentRentRoll()` writes
+nothing. It derives what is true from canonical facts **at a date**.
+
+```text
+                 one canonical set of dated rights and facts
+                                    │
+     ┌──────────────┬───────────────┼───────────────┬──────────────────┐
+     ▼              ▼               ▼               ▼                  ▼
+What is true   What is        What will be     What rights exist   What can be
+    now?       expiring?      true on a        over a future       marketed?
+                              future date?     interval?
+     │              │               │               │                  │
+ Current Rent   Renewals      Future Rent      Dated/interval      Contractual
+     Roll                         Roll           position          + operating
+                                                                   availability
+```
+
+The question changes. The truth does not.
+
+This is why the leasing tracker cannot become "the future rent roll table."
+There must be no future-rent-roll store maintained beside a current-rent-roll
+store. A lease beginning 1 August changes the 1 August read because **the lease
+changed**, not because somebody updated a separate August spreadsheet.
+
+Reporting is a read of operating truth, not a reconstruction of it (§1).
+
+### 42.2 The tracker is evidence. It is not the truth.
+
+A tracker may be excellent evidence. During onboarding it may be the best
+evidence available. It does not get to define reality because somebody has
+maintained it for years.
+
+> **BEGINS FROM CANONICAL SPACES, never from import rows.**
+> — `dated_positions.js`
+
+The imported file cannot define the number of rows in the property. The property
+defines its positions. The import says things **about** those positions.
+
+```text
+Property → Unit → Rentable Space          durable identity, established first
+                        ↑
+   leases · possession · opening claims · future commitments · other evidence
+                        attach to those identities
+```
+
+Never the other way around. Migration 179 puts this in the schema: a rent-roll
+activation and a leasing-tracker activation occupy different `source_kind` lanes
+and cannot supersede one another. They were never two versions of one source.
+
+### 42.3 The canonical position is the atomic object
+
+The row spine is the building. It does not expand or contract with operating
+conditions.
+
+A bed that is temporarily down has not ceased to exist. It remains a canonical
+position carrying a physical condition that may remove it from the leasable
+population. `currentRentRoll` reports `inventory`, `leasable` and `down`
+separately for exactly this reason.
+
+**Never let an import's row count become the inventory denominator**, and never
+let the row count move because something became temporarily unavailable.
+
+### 42.4 A position does not have one status
+
+This is the most important technical consequence of the model, and the one most
+often lost to a UI wanting a single badge.
+
+A bed can simultaneously be contractually occupied, supported by inconclusive
+opening evidence, missing trusted economics, and physically not ready. All four
+statements can be true at once. Collapsing them into one label destroys
+information.
+
+**The basis question comes first**, before any tenancy classification: does
+Spine hold enough authoritative evidence to say anything about this position at
+all? That produces Established or Not Established, and it is not a tenancy
+value.
+
+Then the independent axes: **tenancy**, **evidence**, **economics**, **proof
+basis** — and, carried separately again, whether the contractual **terms** are
+established. Occupied must never secretly mean a canonical lease exists.
+
+### 42.5 Absence of evidence is not contradiction of evidence
+
+```text
+I have evidence and it disagrees        →  Needs Review
+I do not have enough evidence to know   →  Not Established
+```
+
+A blank file and two conflicting leases are not the same problem, and they send
+an operator to do different work. The distinction recurs across every domain: no
+insurance evidence is not two insurance records disagreeing; no payoff balance
+is not two payoff balances conflicting. Preserve it everywhere.
+
+Not Established is deliberately **not** a fifth tenancy bucket.
+
+### 42.6 Open is a classification, never a remainder
+
+The operator-facing buckets are Occupied, Pending Activation, Open and Needs
+Review, with Not Established reported beside them rather than among them.
+
+> **You may never compute `Open = total beds − occupied beds`.**
+
+That subtraction is exactly how unknown and contested inventory gets
+accidentally marketed. A bed becomes Open because Spine holds affirmative
+vacancy evidence and nothing capable of refuting it wins.
+
+### 42.7 Occupancy and vacancy are asymmetric on purpose
+
+Several facts can establish that a position is spoken for: an operative lease, a
+commenced lease pending activation, recorded possession, an accepted per-space
+occupancy claim. Vacancy has one basis and it is the weakest of them — an
+accepted document claim, dated once, that nothing re-observes and nothing
+expires.
+
+So the vacancy arm is evaluated **last**, after every fact capable of refuting
+it.
+
+The reason is economic, not aesthetic. A stale occupancy fact over-holds a bed
+and costs vacancy days, which is visible and recoverable. A stale vacancy fact
+leases a bed somebody already occupies and produces a double-let, which is not.
+
+When uncertain, Spine fails toward *"I cannot establish that this is
+available"*, never *"nobody proved it occupied, therefore sell it."*
+
+### 42.8 Trusted rent is deliberately narrower than claimed rent
+
+`contractual_rent_trusted` includes only positions with an uncontested spanning
+lease and usable economics. That is a hard standard and it stays hard.
+
+But narrow is not silent. If an accepted source says someone occupies a bed at
+$900 and Spine holds no governing lease, that $900 is neither contractual rent
+nor nothing. It is `claimed_rent_unverified`, reported beside trusted rent and
+never inside it, with the positions whose source named no rent at all counted
+separately so the gap in the claimed figure cannot be mistaken for
+completeness.
+
+That distinction — **proven revenue versus unverified claimed revenue** — is not
+an embarrassment to hide. It is one of the most valuable things Spine can tell
+an owner, a lender or an asset manager, because it exposes the line between what
+the property says and what the property can prove.
+
+Do not manufacture leases to make the numbers reconcile. Do not copy claimed
+rent into contractual rent. Do not coerce missing rent to `$0`. **Unknown is
+unknown** (§5).
+
+### 42.9 Contested economics stay visible without being counted
+
+Two live lease claims overlapping one position do not resolve to whichever row
+loaded first. The position is contested, trusted rent takes **zero** from it,
+and the competing claims and the dollars they implicate remain readable under
+`contested_claims`.
+
+A lender-facing read must be able to say *"there is $X of disputed contractual
+exposure here"* without saying *"we believe Lease A."*
+
+One nuance: contested does not imply identical downstream behaviour. The rent
+roll refuses to choose a governing lease; availability separately decides
+whether something can safely be marketed. Do not invent that consequence inside
+the rent-roll reader.
+
+### 42.10 Opening positions are the bridge, not a second rent roll
+
+Migration 157 records the **establishing act**: what was established, as of what
+date, from which evidence, by whom, and what remained unresolved. It holds no
+row per lease and must never grow one — that would be the parallel truth store
+the whole design exists to prevent.
+
+The operating facts stay in spaces, leases, persons, possession and the dated
+reads. The opening position is historical evidence of what was believed at
+cutover. It is not rewritten to stay current. A later established source
+supersedes an earlier one and does not erase it.
+
+Authority is explicit. It is never `max(created_at)`; newest is chronology, not
+authority.
+
+### 42.11 There must be a tracker cutover date
+
+During transition a refreshed tracker may keep arriving as governed evidence.
+That has to end.
+
+Once Spine owns operations there must be a named date after which the tracker is
+no longer independently authored. It can be archived. It can be exported from
+Spine if anyone wants spreadsheet-shaped output. It remains evidence of
+historical leasing.
+
+What cannot happen is one person maintaining a future reality in Excel while
+Spine maintains another. Both look plausible; a month later nobody knows which
+is real. That is not integration, it is two systems of record and delayed
+reconciliation.
+
+**A go-live plan without a tracker cutoff is incomplete.**
+
+### 42.12 What happens after cutover is the entire product
+
+The rent roll is not finished after onboarding. Move-in, move-out, renewal, new
+lease, transfer, rent change, concession, termination, eviction, lease
+correction, possession correction and future commitment each change the
+underlying facts when they happen. The read then changes because it sees
+different facts.
+
+Nobody should ever have to remember to *"go update the rent roll."* If Spine
+executed the lease, Spine knows about the lease. If Spine recorded the move-in,
+possession changed. The read follows.
+
+That is the difference between Property Spine and a better spreadsheet.
+
+### 42.13 Expose uncertainty rather than eliminate it cosmetically
+
+Do not make a first rent roll look tidy as the objective. Make it truthful.
+
+Show the lease where there is one. Say so where an accepted source claims
+occupancy without a lease. Show Needs Review where facts conflict, Not
+Established where Spine holds nothing, and Open only where vacancy is
+affirmatively established.
+
+**An ugly first rent roll is valuable** because it states what the organization
+knows versus what it merely assumes. Closing those gaps with real evidence
+improves the property. Closing them by collapsing categories improves the
+screenshot.
+
+### 42.14 Unmatched evidence runs in two directions
+
+```text
+Inventory exists, the source says nothing about it   →  Not Established
+The source says something, no canonical position     →  opening_claims_unattached
+  can be identified for it
+```
+
+Both are onboarding findings and both matter. A source may name a room that does
+not exist, apply a unit-grain row to a bed-grain property, or point at retired
+inventory.
+
+**Do not manufacture a space to make a row attach.** Report the unattached
+claim.
+
+### 42.15 The failure this section exists to prevent
+
+That a competent-looking system is assembled on top of a row spine some
+spreadsheet defined, so that every downstream number is confidently wrong in a
+way nobody can see — which is worse than a blank (§5).
+
+And its sibling: two systems of record, both plausible, reconciled monthly by a
+person who is the only reason the numbers ever agree.
+
+### 42.16 The end state
+
+The end state is not "Spine has a great rent-roll module."
+
+> **Spine continuously knows the dated operating position of every rentable
+> space, because the rest of the system naturally changes those underlying facts
+> as the property operates.**
+
+Then the current rent roll is today's read. The future rent roll is a
+future-date read. Renewals are a lease-expiration interpretation. Availability
+is contractual rights plus operating readiness. Asset Management rolls the
+economics upward. Money reconciles collections against obligations. Ask Spine
+answers from the same truth (§40).
+
+The tracker disappears, and nobody rebuilds the property from a spreadsheet
+every month.
