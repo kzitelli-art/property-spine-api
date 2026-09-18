@@ -195,7 +195,12 @@ console.log("\n== the canonical occupancy rides alongside, and a disagreement is
    *                        occupied_contractual 94
    *                        occupied_terms_not_established 1
    *
-   *  THEY AGREE on the coarse count. What I had called "a disagreement of
+   *  THEY AGREE on the coarse count — ON GREENERY. On the claim-backed fixture
+   *  (availability_uncorroborated_claim.db.js) this surface reads occupied 2
+   *  and the canonical reader occupied 4, so agrees_with_canonical is FALSE
+   *  there; observed over real HTTP, because the stub pool below cannot serve
+   *  the canonical reader and only the `null` branch runs in this file.
+   *  What I had called "a disagreement of
    *  one bed" was me comparing `occupied` against `contractually_occupied`
    *  — the exact category error `occupied != contractually occupied` names,
    *  committed in my own description of the defect while fixing it

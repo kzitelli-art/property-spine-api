@@ -32,7 +32,7 @@ they were, and the order is what made that visible instead of theoretical.
 | 3 | 143 | — | Ask Spine's projection had the same collapse, where it costs most |
 | 4 | 144–145 | — | CI-defending 143; the collapse pinned on a fixture that already existed |
 | 5 | 146 | `management_read` is a second definition | Vacancy was a **remainder** |
-| 6 | 147 | — | **Disproved my own framing**: the two derivations *agree* |
+| 6 | 147 | — | **Disproved my own framing**: the two derivations agree *on Greenery* — then disproved again: they diverge on claim-backed buildings |
 | 7 | 148 | — | A renewal counted twice; I had deferred it for a ruling it never needed |
 | 8 | 149 | — | **Row 146 broke a ratio** it fed, and I had dismissed it as prose |
 
@@ -67,9 +67,15 @@ interesting.
 
 1. **`/units` is not a dated read** (rows 134, 138) — it is. A frozen number
    looks exactly like a read that ignores its date.
-2. **The two occupancy derivations disagree** (rows 138, 146) — they agree. I
-   was comparing `occupied` against `contractually_occupied`: the exact
-   category error this work exists to stop, made in the sentence describing it.
+2. **The two occupancy derivations disagree** (rows 138, 146) — they agree on
+   Greenery. I was comparing `occupied` against `contractually_occupied`: the
+   exact category error this work exists to stop, made in the sentence
+   describing it.
+   **And then the correction itself was over-general.** On the claim-backed
+   fixture they diverge — `occupied 2` here, `4` canonical — and
+   `agrees_with_canonical` reads `false`. Agreement was a fact about Greenery,
+   not about the code. *Agreement is not convergence*, caught twice in one
+   thread on the same field.
 3. **`upcoming_pct` needs a ruling before it can be fixed** (row 146) — it
    needed arithmetic. Under either reading, a renewed bed is one bed.
 4. **`riskReason` is prose, not a published number** (row 146) — the same ratio
