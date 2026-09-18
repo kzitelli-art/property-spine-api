@@ -296,6 +296,79 @@ const rung = (name, how) => { if (!evidence.calls.find((c) => c.name === name)) 
     evidence.lease_rows = { before: leasesBefore.length, after: leasesAfter.length, identical: JSON.stringify(leasesBefore) === JSON.stringify(leasesAfter) };
     ok("no lease row was created, replaced or changed by any read — 4 rows before, 4 after, every column of every row identical", leasesBefore.length === 4 && leasesAfter.length === 4 && evidence.lease_rows.identical, JSON.stringify(evidence.lease_rows));
 
+    /*  ── §40.5 · THE COLLAPSE ITSELF, WHICH IS WHAT THIS FIXTURE CAN PIN
+     *  AND `canonical_occupancy_holds` CANNOT (CURRENT_STATE 141, 143, 144)
+     *
+     *  `occupied` on the Ask Spine standing read sums `contractually_occupied`
+     *  and `occupied_terms_not_established`. On The Greenery it sat at 95 at
+     *  every date while the split moved 94/1 -> 0/95: a true number under a
+     *  word that means something else, and a sentence — unlike a screen —
+     *  cannot be opened to see which.
+     *
+     *  Row 144 put the ARITHMETIC of that split under CI in
+     *  canonical_occupancy_holds.db.js, but recorded honestly that that
+     *  fixture cannot exhibit the collapse: its beds carry NATIVE leases with
+     *  no confirmed opening claim, so past every lease end the positions
+     *  leave BOTH buckets (occupied 0 · open 0 · NOT_ESTABLISHED) and any
+     *  assertion about them would pass on an empty set.
+     *
+     *  THIS fixture is the missing half, and it was already here: beds with an
+     *  ACCEPTED OCCUPIED OPENING CLAIM and a lease that ends. The claim holds
+     *  the position occupied after the lease lapses, which is exactly what
+     *  keeps Greenery's 95 in the bucket. Measured on it:
+     *
+     *      2026-07-31   occupied 4 = 1 contractual + 3 without terms
+     *      2028-01-01   occupied 5 = 0 contractual + 5 without terms
+     *
+     *  and the sharpest fact in this whole thread is in those two lines: the
+     *  coarse count went UP, 4 -> 5, while contractual occupancy went to
+     *  ZERO. A reader watching `occupied` alone would see the building
+     *  improve at the moment it stopped being able to prove a single term.  */
+    {
+      const LAPSED = "2028-01-01";   // every claim's lease ends 2027-12-31
+      const now = await readTenancyStanding(pool, { property_id: P.id, as_of: AS_OF });
+      const later = await readTenancyStanding(pool, { property_id: P.id, as_of: LAPSED });
+      const shape = JSON.stringify({ [AS_OF]: now.position, [LAPSED]: later.position });
+
+      for (const [when, st] of [[AS_OF, now], [LAPSED, later]]) {
+        const pos = st.position || {};
+        //  Both sides must be real numbers: a bare equality here compares
+        //  undefined with undefined on a tree without the fix and reports
+        //  green about two fields that do not exist (row 144).
+        const line = (st.unknowns || {}).occupied_positions_with_contractual_terms_not_established;
+        ok(`standing ${when}: the occupied split reconciles and the unknowns line agrees`,
+          typeof pos.occupied_contractual === "number"
+          && typeof pos.occupied_terms_not_established === "number"
+          && typeof pos.occupied_state_unknown === "number"
+          && typeof line === "number"
+          && pos.occupied_contractual + pos.occupied_terms_not_established
+             + pos.occupied_state_unknown === pos.occupied
+          && line === pos.occupied_terms_not_established, shape);
+      }
+
+      //  The mixed case, at a date the leases cover: one bed contractual and
+      //  three occupied on a claim alone. `occupied` alone cannot tell them
+      //  apart; the split can.
+      ok("standing: an accepted claim without a lease is occupied WITHOUT established terms",
+        now.position.occupied > now.position.occupied_contractual
+        && now.position.occupied_contractual > 0
+        && now.position.occupied_terms_not_established > 0, shape);
+
+      //  THE COLLAPSE. Not vacuous: occupied is non-zero at the lapsed date,
+      //  because the claims hold the positions there.
+      ok("standing: past every lease end the claims still read occupied, and NONE is contractual",
+        later.position.occupied > 0
+        && later.position.occupied_contractual === 0
+        && later.position.occupied_terms_not_established === later.position.occupied, shape);
+
+      //  AND THE INDICTMENT: the coarse word did not merely stay flat, it
+      //  IMPROVED while every term Spine could stand behind disappeared.
+      ok("standing: `occupied` rose while contractual occupancy fell to zero — the word cannot carry this alone",
+        later.position.occupied >= now.position.occupied
+        && later.position.occupied_contractual < now.position.occupied_contractual
+        && later.position.occupied_contractual === 0, shape);
+    }
+
     // ── OPTIONAL PICKER FIXTURE ─────────────────────────────────────
     // This is a canonical application path fixture for the browser proof.
     // Intake is property-bound by the server's LEASING_INTAKE_PROPERTY_IDS;
