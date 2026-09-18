@@ -211,7 +211,31 @@ module.exports = function managementRead(deps) {
 
       const revenueSpaces = totalSpaces - down - model;   // leasable
       const currentPct = revenueSpaces ? Math.round((occupied + commercial) / revenueSpaces * 1000) / 10 : null;
-      const upcomingPct = revenueSpaces ? Math.round(((occupied + commercial + futureCount) / revenueSpaces) * 1000) / 10 : null;
+      /*  A RENEWAL IS ONE BED, SO UPCOMING MAY NOT EXCEED THE BUILDING.
+       *
+       *  This read `(occupied + commercial + futureCount) / revenueSpaces`,
+       *  and `futureCount` counts every row carrying a fut_lease_id —
+       *  INCLUDING a bed that also has a current lease, which is exactly what
+       *  a renewal is. A fully renewed building counted each bed twice and
+       *  reported 200% of itself as upcoming; a mixed one reported 75% where
+       *  two of four beds are held.
+       *
+       *  This was first filed as needing a ruling on what "upcoming" MEANS.
+       *  It does not. Under either reading — "beds with someone in them or
+       *  coming" or "beds spoken for" — a renewed bed is ONE bed, and a
+       *  percentage above 100% of the leasable denominator is wrong under
+       *  both. The semantics stay open; the arithmetic does not.
+       *
+       *  `occupied + commercial + committed` is already the deduplicated
+       *  count, because `committed` (added for the vacancy fix) is FUTURE
+       *  WITHOUT CURRENT by construction — the renewal is in `occupied` and
+       *  cannot also be in `committed`. No clamp, no max(): the numerator is
+       *  simply a set of beds counted once.
+       *
+       *  `future_leases` below keeps `futureCount` untouched: it counts
+       *  LEASES and is correct as a lease count.                          */
+      const upcomingHeld = occupied + commercial + committed;
+      const upcomingPct = revenueSpaces ? Math.round((upcomingHeld / revenueSpaces) * 1000) / 10 : null;
 
       // ── leasing risk: vacant + thin future leasing = exposure ──
       // risk rises when there are many vacant/expiring spaces and few future signed.

@@ -244,6 +244,47 @@ console.log("\n== the canonical occupancy rides alongside, and a disagreement is
   }
 }
 
+console.log("\n== a renewal is ONE bed, so upcoming may not exceed the building ==");
+{
+  /*  `upcoming_pct = (occupied + commercial + futureCount) / revenueSpaces`,
+   *  and `futureCount` counts every row carrying a fut_lease_id — INCLUDING
+   *  a bed that also has a current lease, which is what a renewal is. So a
+   *  fully renewed building counts each of its beds twice and reports more
+   *  than 100% of itself as upcoming.
+   *
+   *  I first filed this as needing a product ruling on what "upcoming"
+   *  means. It does not. Under EITHER reading — "beds with someone in them
+   *  or coming" or "beds spoken for" — a renewed bed is ONE bed. The
+   *  semantics are open; the arithmetic is not, and a percentage above 100%
+   *  of the leasable denominator is wrong under both. Fixed without taking
+   *  the ruling, and `future_leases` is deliberately left alone because it
+   *  counts LEASES and is correct as a lease count.                       */
+  const RENEWED = (n) => row({ space_id: "renewed" + n, unit_number: n,
+    cur_lease_id: "L" + n, cur_rent: "900.00", cur_tenant: "Resident " + n, fut_lease_id: "F" + n });
+
+  const b = await read([RENEWED("101"), RENEWED("102")]);
+  const o = b.occupancy || {}, up = b.upcoming || {};
+  const d = JSON.stringify({ occupancy: o, upcoming: up });
+
+  ok(o.occupied === 2, "both beds are occupied now", d);
+  ok(o.committed === 0, "neither is committed-and-empty — somebody is already in", d);
+  ok(o.vacant === 0, "and nothing is vacant", d);
+  ok(up.future_leases === 2, "two future leases exist, and that count is about LEASES", d);
+  ok(up.upcoming_pct === 100,
+    "upcoming is 100%, not 200% — a renewed bed is counted once (got " + up.upcoming_pct + ")", d);
+  ok(up.upcoming_pct <= 100,
+    "and no reading of 'upcoming' permits more than the whole building", d);
+
+  //  The mixed control, so the cap is not achieved by clamping: one renewal,
+  //  one bed committed but empty, two open. Upcoming should be 2 of 4.
+  const c = await read([RENEWED("201"), COMMITTED("202"), OPEN("203"), OPEN("204")]);
+  const cu = c.upcoming || {}, co = c.occupancy || {};
+  const cd = JSON.stringify({ occupancy: co, upcoming: cu });
+  ok(co.occupied === 1 && co.committed === 1 && co.vacant === 2, "1 in, 1 signed, 2 open", cd);
+  ok(cu.upcoming_pct === 50,
+    "upcoming counts the renewed bed once and the committed bed once: 2 of 4 = 50% (got " + cu.upcoming_pct + ")", cd);
+}
+
 console.log("\n== " + pass + " passed, " + fail + " failed ==\n");
 process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error("HARNESS ERROR:", e && e.stack || e); process.exit(2); });
