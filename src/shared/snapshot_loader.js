@@ -26,6 +26,8 @@ const { resolvePropertyIdentity, resolutionError } = require("../identity/proper
 //  (/operator/rent-roll/import) is deliberately NOT behind this.
 const { syntheticTargetAllowed, syntheticRefusal } = require("./synthetic_data_perimeter.js");
 const { spacePosition } = require("../tenancy/space_position");
+const { resolveLeasingGrain, GRAIN_NOT_ESTABLISHED, GRAIN_REFUSAL_MESSAGE } =
+  require("../tenancy/leasing_grain.js");
 const { publishedSourceBatchSql } = require("../tenancy/dated_positions");
 //  The ONE canonical inventory-materialization rule. The evidence pass must
 //  not create beds beside the trigger's provisional whole-unit placeholder.
@@ -924,8 +926,16 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
      *  authority, and a caller that disagrees does not get to reshape it.  */
     const basisRow = (await client.query(
       `select leasing_basis from properties where id = $1`, [propertyId])).rows[0];
-    const grain = String((basisRow && basisRow.leasing_basis) || options.leasingModel || "unit")
-      .toLowerCase() === "bed" ? "bed" : "unit";
+    //  LAST WALL. `=== "bed" ? "bed" : "unit"` stood here: a two-way branch
+    //  over a three-value column, so 'unknown' — the column's own NOT NULL
+    //  DEFAULT — resolved to 'unit' and every bed in the building collapsed
+    //  into its unit with no discrepancy raised. See tenancy/leasing_grain.js.
+    const grain = resolveLeasingGrain({
+      property: basisRow && basisRow.leasing_basis, supplied: options.leasingModel });
+    if (!grain) {
+      throw Object.assign(new Error(GRAIN_REFUSAL_MESSAGE),
+        { code: GRAIN_NOT_ESTABLISHED, status: 409 });
+    }
 
     /*  The source's OWN statement of this property's grain, per unit, in
      *  first-seen order — the same construction loadSnapshot uses. Needed

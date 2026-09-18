@@ -58,6 +58,10 @@ const personIngress = require("../identity/person_ingress.js"); // the ONE door 
 const { dateColumnToIso } = require("../shared/date_column");
 
 const { describePlan, planFor } = require("./rent_roll_field_map.js");
+//  Migration 026 gave leasing_basis three values. Six places read it as two.
+//  This is the one reading, and 'unknown' resolves to NOTHING on purpose.
+const { resolveLeasingGrain, GRAIN_NOT_ESTABLISHED, GRAIN_REFUSAL_MESSAGE } =
+  require("../tenancy/leasing_grain.js");
 const artifacts = require("./source_artifact_service.js");
 const dealService = require("./deal_service.js");
 const { competingOperativeLeases, describeCompeting, asDate } =
@@ -263,8 +267,12 @@ async function previewRentRoll(db, {
   }
   if (act.status !== "open" || act.import_batch_id) throw refusal(409, "setup_already_read_source",
     "This setup already has retained review. Start a new setup to review a correction.");
-  const basis = ["unit", "bed"].includes(leasing_basis)
-    ? leasing_basis : (scope.property.leasing_basis === "bed" ? "bed" : "unit");
+  //  NOT `=== "bed" ? "bed" : "unit"`. A property whose grain nobody has
+  //  established cannot be told what its source rows mean, and guessing
+  //  'unit' on a by-the-bed building erases its vacant beds outright.
+  const basis = resolveLeasingGrain({
+    supplied: leasing_basis, property: scope.property.leasing_basis });
+  if (!basis) throw refusal(409, GRAIN_NOT_ESTABLISHED, GRAIN_REFUSAL_MESSAGE);
   const prepared = await homeIdentity.prepareSource(db, { property_id, rows,
     source_artifact_id, source_as_of_date, leasing_basis: basis, refusal });
   const review = await homeIdentity.planReview(db, { property_id, activation_id, prepared });
@@ -327,8 +335,9 @@ async function ingestRentRoll(db, {
   // authority is deliberately resolved again under the activation lock below
   // before leasing basis or inventory can change.
   const initialScope = await resolveActivationScope(db, { user_id, deal_intake_id, property_id });
-  const reviewedBasis = ["unit", "bed"].includes(leasing_basis)
-    ? leasing_basis : (initialScope.property.leasing_basis === "bed" ? "bed" : "unit");
+  const reviewedBasis = resolveLeasingGrain({
+    supplied: leasing_basis, property: initialScope.property.leasing_basis });
+  if (!reviewedBasis) throw refusal(409, GRAIN_NOT_ESTABLISHED, GRAIN_REFUSAL_MESSAGE);
   const prepared = await homeIdentity.prepareSource(db, { property_id, rows,
     source_artifact_id, source_as_of_date, leasing_basis: reviewedBasis, refusal });
   const { artifact, asOf, parsed, plan, mapped, ledgerRows } = prepared;
@@ -480,13 +489,18 @@ async function ingestRentRoll(db, {
       entry.decision_id = decision.id;
     }
 
-    if (["unit", "bed"].includes(leasing_basis)) {
+    if (resolveLeasingGrain({ supplied: leasing_basis })) {
       await client.query("update properties set leasing_basis=$1 where id=$2",
-        [leasing_basis, property_id]);
+        [resolveLeasingGrain({ supplied: leasing_basis }), property_id]);
     }
-    const basis = (await client.query(
-      "select coalesce(leasing_basis,'unit') as b from properties where id=$1",
-      [property_id])).rows[0].b;
+    //  Re-read under the lock: the authority is the property, not the caller.
+    //  `coalesce(...,'unit')` used to stand here, which never fired (the
+    //  column is NOT NULL DEFAULT 'unknown') and, when it did, answered a
+    //  question nobody had asked. An unestablished grain refuses.
+    const basis = resolveLeasingGrain({ property: (await client.query(
+      "select leasing_basis from properties where id=$1",
+      [property_id])).rows[0].leasing_basis });
+    if (!basis) throw refusal(409, GRAIN_NOT_ESTABLISHED, GRAIN_REFUSAL_MESSAGE);
 
     //  THE EXISTING LEDGER IMPORTER. Not reimplemented, not forked —
     //  called, inside this transaction.
@@ -502,7 +516,7 @@ async function ingestRentRoll(db, {
       targetPropertyId: property_id,
       sourceFile: artifact.original_filename,
       sourceAsOfDate: asOf,
-      leasingModel: basis === "bed" ? "bed" : "unit",
+      leasingModel: basis,   //  already resolved, or we refused above
       confidence: "extracted",
       sourceArtifactId: source_artifact_id,
       // A later activation may explicitly reuse or correct a prior reviewed

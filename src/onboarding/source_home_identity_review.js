@@ -5,6 +5,8 @@ const { createHash } = require("node:crypto");
 const artifacts = require("./source_artifact_service.js");
 const { parseRentRollSource } = require("./rent_roll_source_adapter.js");
 const { mapRows, describePlan } = require("./rent_roll_field_map.js");
+const { leasingGrain, GRAIN_NOT_ESTABLISHED, GRAIN_REFUSAL_MESSAGE } =
+  require("../tenancy/leasing_grain.js");
 const { referencesTo } = require("../tenancy/inventory_materialization.js");
 
 function digest(value) {
@@ -95,7 +97,11 @@ async function prepareSource(db, {
   if (!plan.mapped.unit_number) throw refusal(422, "no_unit_column",
     `Spine could not find a unit column in that file. It read these columns: ${plan.headers.slice(0, 12).join(", ")}${plan.headers.length > 12 ? "…" : ""}.`,
     { columns: plan.headers });
-  const basis = leasing_basis === "bed" ? "bed" : "unit";
+  //  BACKSTOP. Callers resolve the grain before they get here; this refuses
+  //  rather than silently reading an unestablished property as by-the-unit,
+  //  which would key every positionKey() below to "(whole unit)".
+  const basis = leasingGrain(leasing_basis);
+  if (!basis) throw refusal(409, GRAIN_NOT_ESTABLISHED, GRAIN_REFUSAL_MESSAGE);
   return { artifact, asOf, parsed, plan, mapped, basis,
     ledgerRows: mapped.map(m => ({ ...m, _source_cells: m._raw })) };
 }
