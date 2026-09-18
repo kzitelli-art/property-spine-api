@@ -1,0 +1,39 @@
+{
+  "checked_at": "2026-09-16T20:51:21.537Z",
+  "source_checkout_commit": "f2f63c8edf79069fd9607849d274e39ea968f033",
+  "deployed_product_commit": "cd7279ebb23865f4e3e7f9c827dd4b5cc52d475f",
+  "delta_since_deployed_product": "documentation and retained evidence only",
+  "database": "production read-only",
+  "property_id": "14e41b7c-e91c-49e8-9651-10c4908a8f6a",
+  "reads": {
+    "property_surface": {
+      "status": 200,
+      "route": "/properties/14e41b7c-e91c-49e8-9651-10c4908a8f6a/surface",
+      "identity": {
+        "name": "Skyline Apartments",
+        "canonical_key": "1417",
+        "model": "bed"
+      }
+    },
+    "leasing_detail": {
+      "status": 200,
+      "route": "/properties/14e41b7c-e91c-49e8-9651-10c4908a8f6a/leasing",
+      "identity": {
+        "name": "Skyline Apartments",
+        "canonical_key": "1417",
+        "model": "bed"
+      }
+    },
+    "reporting_dashboard": {
+      "status": 200,
+      "route": "/properties/14e41b7c-e91c-49e8-9651-10c4908a8f6a/monthly-reporting-dashboard",
+      "identity": {
+        "id": "14e41b7c-e91c-49e8-9651-10c4908a8f6a",
+        "name": "Skyline Apartments",
+        "canonical_key": "1417",
+        "model": "bed"
+      }
+    }
+  },
+  "status": "pass"
+}
