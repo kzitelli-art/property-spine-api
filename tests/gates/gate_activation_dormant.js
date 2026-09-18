@@ -92,8 +92,12 @@ ok("D1  no runtime file imports the activation service or proof state",
 const ENTRIES = ["activateRelease0", "recordActivation", "runActivation", "activate("];
 const callers = [];
 for (const f of runtime) {
+//  One alternation, not two chained replaces: a `/*` inside a `//`
+//  comment (server.js prose says `/operator/*`) would otherwise open a
+//  block comment that closes 569 lines later. See
+//  tests/unit/shared_conversational_path.test.js for the full account.
   const src = fs.readFileSync(path.join(ROOT, f), "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^\s*\/\/.*$/gm, " ");
+    .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, " ");
   for (const e of ENTRIES) if (src.includes(e)) callers.push(`${f} → ${e}`);
 }
 ok("D2  no runtime file calls an activation entry point by name",

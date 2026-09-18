@@ -24,8 +24,12 @@ function ok(label, cond, detail) {
 }
 /** Source with comments stripped — a mention is not a guard. */
 function code(rel) {
+//  One alternation, not two chained replaces: a `/*` inside a `//`
+//  comment (server.js prose says `/operator/*`) would otherwise open a
+//  block comment that closes 569 lines later. See
+//  tests/unit/shared_conversational_path.test.js for the full account.
   return fs.readFileSync(path.join(root, rel), "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
 }
 
 console.log("\nPROPERTY LINE IDENTITY\n");

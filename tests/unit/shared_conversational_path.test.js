@@ -47,8 +47,29 @@ function ok(label, cond, detail) {
 
 /** Source with comments stripped — a mention is not a guard. */
 function code(rel) {
+//  ── ONE PASS, NOT TWO. THIS ORDER IS LOAD-BEARING. ────────────────
+//  This was two chained replaces: block comments first, then line
+//  comments. server.js documents its own routing in prose, and that
+//  prose contains `/operator/*`, `/admin/*`, `/tenant/*` — nineteen
+//  times, four of them in TRAILING `//` comments. Stripping blocks
+//  first, the `/*` inside `/operator/*` opens a comment that the regex
+//  closes at the next real `*/`, 569 lines later. It swallowed the
+//  wiring this file asserts and reported the web and SMS paths as
+//  using different actions, which was false.
+//
+//  Nothing on either side was wrong alone: the deployed lineage had no
+//  `*/` in server.js at all, so the fake opener never closed and the
+//  bug was invisible. Merging a tree that HAD one gave it a closer.
+//
+//  One alternation cannot do this: at a `//` the block branch cannot
+//  match, so the line branch consumes the whole comment and the `/*`
+//  inside it with it. Do not split this back into two replaces.
+//  Residual, named honestly: this is still a regex, not a tokenizer. A
+//  `/*` inside a STRING or REGEX literal would still fool it. server.js
+//  has none today — every occurrence is inside a comment — but that is
+//  a fact about today's source, not a guarantee.
   return fs.readFileSync(path.join(root, rel), "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
 }
 
 //  The four intents the web message door treats as actions, read out of the
