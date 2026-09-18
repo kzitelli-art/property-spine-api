@@ -238,6 +238,11 @@ step "property operating day is the building's" node tests/unit/property_operati
 step "management-read reads the grain, never infers it" node tests/unit/management_read_grain_label.test.js
 step "a resident identifier is never a rent-roll status" node tests/unit/rent_roll_status_not_identity.test.js
 step "occupied is not contractually occupied" node tests/unit/rent_roll_occupied_is_not_contractual.test.js
+#  Found unregistered while working row 143: DB-free, green, and it guards
+#  the §40.8 assertion that an unentitled question never reaches a READ
+#  (proved by the reader never being called, not by inspecting the answer).
+#  Free to run and it was defending nothing in CI.
+step "tenancy is readable by Ask Spine, entitled before it is read" node tests/unit/tenancy_ask_spine.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
 step "rent roll source totals reconcile" node tests/unit/rent_roll_source_totals.test.js
 step "institutional rent projection" node tests/unit/rent_roll_institutional_projection.test.js

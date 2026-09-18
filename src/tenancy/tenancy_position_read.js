@@ -252,6 +252,30 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
       units: units.size,
       rentable_positions: positions.length,
       occupied: tally.occupied,
+      /*  `occupied` IS A COLLAPSING WORD, AND THIS IS THE CONVERSATIONAL
+       *  READER, SO THE COLLAPSE IS THE MOST EXPENSIVE HERE.
+       *
+       *  CURRENT_STATE 141 measured it on the Rent Roll: the bucket sums
+       *  `contractually_occupied` and `occupied_terms_not_established`, and
+       *  on The Greenery those two always total 95, so the headline sits
+       *  still while the split moves —
+       *
+       *      2026-09-18   95 = 94 contractual +  1 without terms
+       *      2027-08-01   95 =  0 contractual + 95 without terms
+       *
+       *  A screen commits to an altitude and a person can open the row. A
+       *  SENTENCE cannot be opened. Asked "what is our occupancy in August
+       *  2027", this read answered `occupied: 95` with nothing anywhere in
+       *  the projection saying that not one position has established
+       *  contractual terms at that date — and the only unknown that moved
+       *  was `no_recorded_rent`, which is the RENT axis, not the terms axis.
+       *
+       *  §40.4 requires a fact to carry its epistemic status in its shape,
+       *  not to be one number a wording layer is trusted to qualify. So the
+       *  split travels with the count.  */
+      occupied_contractual: tally.occupied_contractual,
+      occupied_terms_not_established: tally.occupied_terms_not_established,
+      occupied_state_unknown: tally.occupied_state_unknown,
       //  A CLASSIFICATION, never a remainder.
       open: tally.open,
       //  Spoken for and not offerable — never folded into Open.
@@ -269,6 +293,13 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
 
     //  WHAT SPINE DOES NOT KNOW, in numbers a sentence can carry.
     unknowns: {
+      /*  THE TERMS AXIS, which nothing here carried before. Distinct from
+       *  the two rent lines below it: a position can have established
+       *  contractual terms and no recorded rent, and — at a forward date —
+       *  a recorded rent with no established terms. Same number, same
+       *  tally as `position.occupied_terms_not_established`, so the two
+       *  cannot drift apart and be reconciled by a reader.  */
+      occupied_positions_with_contractual_terms_not_established: tally.occupied_terms_not_established,
       occupied_positions_with_no_recorded_rent: rentUnknown.length,
       occupied_positions_with_unavailable_contract_economics: unavailableContractEconomics.length,
       positions_with_unresolved_occupancy_evidence: evidenceUnresolved.length,
