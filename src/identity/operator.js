@@ -249,11 +249,34 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
     const o = req.operator;
     res.set("Cache-Control", "no-store");
     let propertyName = null;
+    //  ── §14b · A PLANNING CYCLE IS PROPERTY CONFIGURATION, NOT A NAME ──
+    //  The operator app decided whether a property runs a student leasing
+    //  cycle with a REGEX OVER THE PROPERTY NAME (/solo|4233\s+chestnut/i).
+    //  That is "if (property === 'Solo')" wearing a disguise, and it was
+    //  wrong on the facts: Greenery and Skyline are student housing, do not
+    //  match, and so were denied the September planning date that matters
+    //  most to them. The cycle now travels as configuration. Unconfigured is
+    //  NULL — the app shows rolling horizons and says the cycle is not set,
+    //  rather than inferring one from a string.
+    let leasingCycle = null, leasingBasis = null;
     try {
       // display_name (migration 060) is what humans call the property; the
       // internal name is load-bearing plumbing. Honest chrome shows the former.
-      const p = (await pool.query("select coalesce(display_name, name) as name from properties where id=$1", [o.property_id])).rows[0];
+      const p = (await pool.query(
+        "select coalesce(display_name, name) as name, leasing_basis, lease_config from properties where id=$1",
+        [o.property_id])).rows[0];
       propertyName = p ? p.name : null;
+      leasingBasis = p ? (p.leasing_basis || null) : null;
+      const cfg = p && p.lease_config;
+      const raw = cfg && (cfg.leasing_cycle || cfg.planning_cycle);
+      if (raw && typeof raw === "object") {
+        //  { kind:'student', anchor_month:9, anchor_day:1 } — named, not guessed.
+        leasingCycle = { kind: raw.kind || null,
+                         anchor_month: Number(raw.anchor_month) || null,
+                         anchor_day: Number(raw.anchor_day) || null,
+                         label: raw.label || null };
+        if (!leasingCycle.kind || !leasingCycle.anchor_month || !leasingCycle.anchor_day) leasingCycle = null;
+      }
     } catch (_) { /* honest null beats a failed handshake */ }
     // allowed_modules is LIVE on req.operator from the shared resolveSession
     // (same source the leasing-module gate reads). Forwarding it here makes
@@ -266,7 +289,13 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const pr = (await pool.query(`select platform_role from users where id=$1`, [o.id])).rows[0];
       platform_role = pr ? (pr.platform_role || 'member') : 'member';
     } catch (_) {}
-    return res.json({ id: o.id, name: o.name, role: o.role, property_id: o.property_id, property_name: propertyName, allowed_modules: Array.isArray(o.allowed_modules) ? o.allowed_modules : [], platform_role });
+    return res.json({ id: o.id, name: o.name, role: o.role, property_id: o.property_id,
+      property_name: propertyName,
+      leasing_basis: leasingBasis,
+      //  null means NOT CONFIGURED. It never means "no cycle" and it may
+      //  never be filled in by matching the property's name.
+      leasing_cycle: leasingCycle,
+      allowed_modules: Array.isArray(o.allowed_modules) ? o.allowed_modules : [], platform_role });
   });
 
   // ── property-scope verification helpers (used by every read/write below) ──

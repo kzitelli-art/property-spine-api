@@ -183,6 +183,10 @@ if app_rung_ready; then
   #  signed-in browser rung lives beside the owned server below.
   step "app: nothing unestablished opens a Person Card" \
     node "$APP_ROOT/person_identity_ingress.test.js"
+  step "app: forward semantics belong to the server" \
+    node "$APP_ROOT/forward_semantics_are_the_servers.test.js"
+  step "app: unknown forward is not a percentage" \
+    node "$APP_ROOT/forward_occupancy_unresolved.test.js"
 else
   echo "── browser: retained inquiry          SKIPPED ($(app_rung_skip_reason))"
   SKIPPED="retained inquiry app proof"
