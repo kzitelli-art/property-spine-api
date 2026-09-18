@@ -20,6 +20,133 @@
 //  updates the current pointer + 075 projection columns. That is all.
 // ════════════════════════════════════════════════════════════════════
 const crypto = require("crypto");
+const {
+  readApplicationOffer,
+  assertCurrentApplicationOffer,
+} = require("../money/application_offer_terms");
+
+// Offer terms are read from the existing application-offer owner.  This
+// adapter deliberately does not re-normalize or reconstruct the snapshot:
+// the offer reader returns the immutable application_terms object and its
+// terms_hash, which are the applicant's acknowledged version.
+async function readPendingApplicationOffer(client, app, { lock = true } = {}) {
+  if (!app || !app.id || !app.property_id) return null;
+  const pending = (await client.query(
+    `select id, application_offer_id, property_id, person_id, space_id
+       from application_invitations
+      where lease_application_id = $1
+        and application_offer_id is not null
+        and application_offer_id is distinct from $2
+      order by created_at desc
+      limit 2`,
+    [app.id, app.application_offer_id || null],
+  )).rows;
+  if (pending.length > 1) {
+    throw conflict("application_offer_lineage_ambiguous",
+      "The application has more than one pending offer relationship.");
+  }
+  const invitation = pending[0];
+  if (!invitation) return null;
+  if (String(invitation.property_id) !== String(app.property_id) ||
+      !app.person_id || !invitation.person_id ||
+      String(invitation.person_id) !== String(app.person_id)) {
+    throw refused("application_offer_target_mismatch");
+  }
+  if (!app.space_id || !invitation.space_id ||
+      String(invitation.space_id) !== String(app.space_id)) {
+    throw conflict("application_offer_target_missing",
+      "The pending application offer is missing the application's exact space target.");
+  }
+  const offer = await readApplicationOffer(client, {
+    offer_id: invitation.application_offer_id,
+    property_id: app.property_id,
+    person_id: app.person_id,
+    space_id: app.space_id,
+    lock,
+  });
+  if (!offer || String(offer.offer_id) !== String(invitation.application_offer_id) ||
+      !offer.application_terms || typeof offer.application_terms !== "object" ||
+      !offer.terms_hash) {
+    throw conflict("application_offer_lineage_missing",
+      "The pending application offer cannot be read as one complete immutable version.");
+  }
+  return { id: offer.offer_id, hash: String(offer.terms_hash), terms: offer.application_terms };
+}
+
+async function readBoundApplicationOffer(client, app, { allowHistorical = false, lock = true } = {}) {
+  if (!app.application_offer_id) {
+    const pending = await readPendingApplicationOffer(client, app, { lock });
+    if (!pending) return null;
+    if (!allowHistorical) {
+      throw conflict("APPLICATION_TERMS_REVIEW_REQUIRED",
+        "The applicant must review and acknowledge the pending application offer.");
+    }
+    return {
+      id: null, hash: null, terms: null,
+      pending_review: { id: pending.id, terms_hash: pending.hash, terms: pending.terms },
+    };
+  }
+  if (!app.person_id || !app.space_id) {
+    throw conflict("application_offer_target_missing",
+      "The application offer is missing its exact person or space target.");
+  }
+  const offer = await readApplicationOffer(client, {
+    offer_id: app.application_offer_id,
+    property_id: app.property_id,
+    person_id: app.person_id,
+    space_id: app.space_id,
+    lock,
+  });
+  const offerId = offer && offer.offer_id;
+  const rawTerms = offer && offer.application_terms;
+  const termsHash = offer && offer.terms_hash;
+  if (!offerId || String(offerId) !== String(app.application_offer_id) ||
+      !rawTerms || typeof rawTerms !== "object" || !termsHash) {
+    throw conflict("application_offer_lineage_missing",
+      "The application's acknowledged offer cannot be read as one complete immutable version.");
+  }
+  const target = rawTerms.target || {};
+  if (String(rawTerms.property_id) !== String(app.property_id) ||
+      String(rawTerms.person_id) !== String(app.person_id) ||
+      !target.space_id || String(target.space_id) !== String(app.space_id)) {
+    throw refused("application_offer_target_mismatch");
+  }
+  if (!rawTerms.rent || rawTerms.security_deposit == null ||
+      !rawTerms.lease_start_date || !rawTerms.lease_end_date ||
+      !Array.isArray(rawTerms.fees) || !rawTerms.concessions ||
+      typeof rawTerms.concessions !== "object") {
+    throw conflict("application_offer_terms_missing",
+      "The acknowledged application offer is missing required commercial terms.");
+  }
+  if (app.application_terms_acknowledged_at == null ||
+      String(app.application_terms_hash || "") !== String(termsHash)) {
+    throw conflict("application_terms_not_acknowledged",
+      "The applicant has not acknowledged the current application terms.");
+  }
+  // Confirmation and packet generation must operate on the current offer.
+  // Review may explicitly request the historical acknowledged offer so it can
+  // show a pending successor without pretending the old acknowledgement moved.
+  if (!allowHistorical) await assertCurrentApplicationOffer(client, offerId);
+  const result = { id: offerId, terms: rawTerms, hash: String(termsHash) };
+  if (allowHistorical) {
+    const pending = await readPendingApplicationOffer(client, app, { lock });
+    if (pending) {
+      result.pending_review = {
+        id: pending.id, terms_hash: pending.hash, terms: pending.terms,
+      };
+    }
+  }
+  return result;
+}
+
+function sameMoney(a, b) {
+  const left = Number(a), right = Number(b);
+  return Number.isFinite(left) && Number.isFinite(right) && left === right;
+}
+
+function sameDate(a, b) {
+  return String(a || "").slice(0, 10) === String(b || "").slice(0, 10);
+}
 
 // ── SHARED authority resolver (used here AND by the packet services in Part 4).
 //    Derives the basis from the obligation ROW — never a route-supplied literal.
@@ -89,7 +216,6 @@ async function confirmProposedTerms(client, input) {
   if (!application_id) throw badRequest("application_id_required");
   if (!idempotency_key) throw badRequest("idempotency_key_required");
   if (!actor || !actor.user_id || !actor.property_id) throw badRequest("actor_context_required");
-  if (concession_status !== "none") throw refused("structured_source_not_supported"); // r2: none-only this slice
 
   // validate + normalize BEFORE any write; hash the canonical form
   if (Number(rent) <= 0) throw badRequest("rent_must_be_positive");
@@ -100,12 +226,32 @@ async function confirmProposedTerms(client, input) {
   // ── LOCK ORDER (r2): application → terms_review obligation → current confirmation → (packet check)
   // 1. lock exact application
   const app = (await client.query(
-    `select id, property_id, status, terms_review_obligation_id, proposed_terms_confirmation_id
+    `select id, property_id, person_id, unit_id, space_id, status,
+            terms_review_obligation_id, proposed_terms_confirmation_id,
+            application_offer_id, application_terms_hash,
+            application_terms_acknowledged_at
        from lease_applications where id=$1 for update`, [application_id])).rows[0];
   if (!app) throw err(404, "application_not_found");
 
   // property wall
   if (app.property_id !== actor.property_id) throw refused("property_mismatch");
+
+  const boundOffer = await readBoundApplicationOffer(client, app);
+  if (!boundOffer && concession_status !== "none") {
+    throw refused("structured_source_not_supported"); // r2: none-only legacy slice
+  }
+  if (boundOffer) {
+    const offered = boundOffer.terms;
+    const offeredConcession = offered.concessions && offered.concessions.status;
+    if (!sameMoney(canonical.rent, offered.rent) ||
+        !sameMoney(canonical.security_deposit, offered.security_deposit) ||
+        !sameDate(canonical.lease_start_date, offered.lease_start_date) ||
+        !sameDate(canonical.lease_end_date, offered.lease_end_date) ||
+        String(concession_status) !== String(offeredConcession || "")) {
+      throw conflict("application_terms_conflict",
+        "Management terms must match the applicant's acknowledged application offer.");
+    }
+  }
 
   // governed window: v3 terms-review lifecycle only
   if (app.status !== "lease_ready") throw refused("not_lease_ready");
@@ -131,18 +277,30 @@ async function confirmProposedTerms(client, input) {
   let current = null;
   if (app.proposed_terms_confirmation_id) {
     current = (await client.query(
-      `select id, payload_hash from application_proposed_terms_confirmations where id=$1 for update`,
+      `select id, payload_hash, application_offer_id, application_terms_hash
+         from application_proposed_terms_confirmations where id=$1 for update`,
       [app.proposed_terms_confirmation_id])).rows[0];
   }
 
   // idempotency: same (app, actor, key) already recorded?
   const existing = (await client.query(
-    `select id, payload_hash from application_proposed_terms_confirmations
+    `select id, payload_hash, application_offer_id, application_terms_hash
+       from application_proposed_terms_confirmations
       where application_id=$1 and actor_user_id=$2 and idempotency_key=$3`,
     [application_id, actor.user_id, idempotency_key])).rows[0];
   if (existing) {
     if (existing.payload_hash === payload_hash) {
-      return { idempotent: true, confirmation_id: existing.id, authority_basis: auth.basis };
+      if (boundOffer &&
+          (String(existing.application_offer_id || "") !== String(boundOffer.id) ||
+           String(existing.application_terms_hash || "") !== String(boundOffer.hash))) {
+        throw conflict("application_terms_lineage_conflict",
+          "The existing confirmation does not point to the applicant's acknowledged offer.");
+      }
+      return {
+        idempotent: true, confirmation_id: existing.id, authority_basis: auth.basis,
+        application_offer_id: boundOffer ? boundOffer.id : null,
+        application_terms_hash: boundOffer ? boundOffer.hash : null,
+      };
     }
     throw conflict("idempotency_conflict", "Same key, different terms.");
   }
@@ -175,12 +333,14 @@ async function confirmProposedTerms(client, input) {
     `insert into application_proposed_terms_confirmations
        (application_id, property_id, actor_user_id, event_id, rent, security_deposit,
         lease_start_date, lease_end_date, concession_status, source, authority_basis,
-        idempotency_key, payload_hash, supersedes_confirmation_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,'none','operator_proposed_terms',$9,$10,$11,$12)
+        idempotency_key, payload_hash, supersedes_confirmation_id,
+        application_offer_id, application_terms_hash)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,'none','operator_proposed_terms',$9,$10,$11,$12,$13,$14)
      returning id, created_at`,
     [application_id, app.property_id, actor.user_id, ev.id,
      canonical.rent, canonical.security_deposit, canonical.lease_start_date, canonical.lease_end_date,
-     auth.basis, idempotency_key, payload_hash, supersedes])).rows[0];
+     auth.basis, idempotency_key, payload_hash, supersedes,
+     boundOffer ? boundOffer.id : null, boundOffer ? boundOffer.hash : null])).rows[0];
 
   // update current pointer + 075 projection columns (term_source is now GOVERNED)
   await client.query(
@@ -198,7 +358,184 @@ async function confirmProposedTerms(client, input) {
   return {
     idempotent: false, confirmation_id: conf.id, authority_basis: auth.basis,
     supersedes_confirmation_id: supersedes, payload_hash, confirmed_at: conf.created_at,
+    application_offer_id: boundOffer ? boundOffer.id : null,
+    application_terms_hash: boundOffer ? boundOffer.hash : null,
   };
 }
 
-module.exports = { confirmProposedTerms, resolveObligationAuthority, normalizeAndHash };
+//  TWO-STEP LEASING (195). Writes (or reuses) the derived lineage record for a submitted,
+//  offer-bound application. Idempotent per (application, actor, offer):
+//  the same preparer regenerating against the same offer reuses the row;
+//  a different current offer (offer corrected after a voided packet)
+//  supersedes the previous derived row. Requires a server-derived actor —
+//  the key-gated legacy door cannot author this record.
+async function deriveConfirmationFromAuthoredOffer(client, {
+  app, offer, actorUserId, currentConfirmationId,
+  /*  ── AUTOMATED PREPARATION (owner ruling, 2026-09-15) ─────────────
+   *  Spine may prepare and deliver the package itself against the
+   *  current, authorized, applicant-acknowledged offer. Two things must
+   *  stay separable and both must be recorded:
+   *
+   *    COMMERCIAL AUTHORITY  the offer's AUTHOR. They made the decision
+   *                          these terms express, and it is their
+   *                          authority this record rests on.
+   *    EXECUTOR              Spine. It performed the later preparation.
+   *
+   *  ⚠ NO STAFF SESSION IS FABRICATED AND NONE IS IMPLIED. This flag is
+   *  an EXPLICIT argument, never a fallback from a null actor: every
+   *  other caller that arrives without an actor still gets the refusal
+   *  below, unchanged. Nothing here mints an identity, a session or a
+   *  credential, so no access control anywhere else is widened.       */
+  automatedPreparation = false,
+} = {}) {
+  const authorship = (await client.query(
+    `select authority_basis_snapshot from lease_offers where id=$1`, [offer.id])).rows[0];
+  const authorSnapshot = (authorship && authorship.authority_basis_snapshot) || {};
+  const offerAuthor = authorSnapshot.actor_user_id || null;
+
+  if (!actorUserId && automatedPreparation) {
+    //  The authority is the author's, so an offer with no recorded author
+    //  cannot be prepared automatically — there would be nobody whose
+    //  decision this record expresses. That is a refusal, not a default.
+    if (!offerAuthor) {
+      throw conflict("offer_author_unrecorded",
+        "This offer carries no recorded author, so Spine cannot prepare a package on its authority.");
+    }
+    actorUserId = offerAuthor;
+  }
+  if (!actorUserId) {
+    throw conflict("preparation_actor_required",
+      "Preparing a signing package from the applicant's acknowledged offer requires a signed-in staff actor.");
+  }
+  const terms = offer.terms;
+  const current = currentConfirmationId ? (await client.query(
+    `select id, source, application_offer_id, application_terms_hash
+       from application_proposed_terms_confirmations where id=$1`, [currentConfirmationId])).rows[0] : null;
+  if (current && String(current.application_offer_id || "") === String(offer.id)
+      && String(current.application_terms_hash || "") === String(offer.hash)) {
+    return current.id; // already derived for this exact offer version
+  }
+  if (current && current.source !== "authored_offer_acknowledged") {
+    //  A human confirmation exists on a still-submitted application. That
+    //  is not a state the released writers produce (confirmation requires
+    //  lease_ready); refuse rather than silently supersede a human record.
+    throw conflict("application_terms_lineage_conflict",
+      "The application carries an operator terms confirmation that does not match its acknowledged offer.");
+  }
+  //  The admission engine compares the executed lease's canonical terms
+  //  hash with THIS row's payload_hash; the derived record therefore
+  //  carries the same canonical hash an operator confirmation would.
+  const { canonical, payload_hash } = normalizeAndHash({
+    rent: terms.rent, security_deposit: terms.security_deposit,
+    lease_start_date: terms.lease_start_date, lease_end_date: terms.lease_end_date,
+    concession_status: "none",
+  });
+  const idempotencyKey = `authored_offer:${offer.id}`;
+  const existing = (await client.query(
+    `select id from application_proposed_terms_confirmations
+      where application_id=$1 and actor_user_id=$2 and idempotency_key=$3`,
+    [app.id, actorUserId, idempotencyKey])).rows[0];
+  let confirmationId;
+  if (existing) {
+    confirmationId = existing.id;
+  } else {
+    /*  THE EXECUTOR IS RECORDED HERE, IN ITS OWN EVENT TYPE.
+     *  `authority_basis` is CHECK-constrained to four values and stays
+     *  'authored_offer' — widening it would be a migration for something
+     *  the audit trail already carries. A distinct event type is
+     *  queryable, needs no schema, and cannot be confused with a staff
+     *  member having opened a screen. The obligation that drove this is
+     *  owner_type 'system' for the same reason.                        */
+    const evType = automatedPreparation
+      ? "application_terms_derived_from_authored_offer_by_spine"
+      : "application_terms_derived_from_authored_offer";
+    const evNote = automatedPreparation
+      ? `signing package prepared AUTOMATICALLY BY SPINE from acknowledged application offer ${offer.id} `
+        + `for application ${app.id} (hash ${String(offer.hash).slice(0, 12)}); commercial authority is the `
+        + `offer author ${offerAuthor}, who did not perform this preparation`
+      : `signing package prepared from acknowledged application offer ${offer.id} for application ${app.id} (hash ${String(offer.hash).slice(0, 12)})`;
+    const ev = (await client.query(
+      `insert into events (property_id, person_id, unit_id, type, note)
+       values ($1, $2, $3, $5, $4) returning id`,
+      [app.property_id, app.person_id || null, app.unit_id || null, evNote, evType])).rows[0];
+    confirmationId = (await client.query(
+      `insert into application_proposed_terms_confirmations
+         (application_id, property_id, actor_user_id, event_id, rent, security_deposit,
+          lease_start_date, lease_end_date, concession_status, source, authority_basis,
+          idempotency_key, payload_hash, supersedes_confirmation_id,
+          application_offer_id, application_terms_hash)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,'none','authored_offer_acknowledged','authored_offer',
+               $9,$10,$11,$12,$13)
+       returning id`,
+      [app.id, app.property_id, actorUserId, ev.id,
+       canonical.rent, canonical.security_deposit, canonical.lease_start_date, canonical.lease_end_date,
+       idempotencyKey, payload_hash, current ? current.id : null,
+       offer.id, String(offer.hash)])).rows[0].id;
+  }
+  await client.query(
+    `update lease_applications
+        set proposed_terms_confirmation_id=$2,
+            lease_start_date=$3, lease_end_date=$4, rent=$5, deposit=$6,
+            term_source='authored_offer_acknowledged',
+            terms_completed_at=coalesce(terms_completed_at, now()),
+            terms_completed_by=coalesce(terms_completed_by, $7),
+            concession_status='none'
+      where id=$1`,
+    [app.id, confirmationId, canonical.lease_start_date, canonical.lease_end_date,
+     canonical.rent, canonical.security_deposit, authorSnapshot.actor_user_id || actorUserId]);
+  return confirmationId;
+}
+
+
+async function readCurrentTermsConfirmation(client, app) {
+  if (!app || !app.proposed_terms_confirmation_id) return null;
+  const row = (
+    await client.query(
+      `select c.*, o.authority_basis_snapshot as offer_authority,
+            o.created_at as offer_authored_at
+       from application_proposed_terms_confirmations c
+       left join lease_offers o on o.id=c.application_offer_id
+         and o.property_id=c.property_id and o.person_id=$4
+         and o.space_id=$5 and o.source='application_proposal'
+      where c.id=$1 and c.application_id=$2 and c.property_id=$3`,
+      [
+        app.proposed_terms_confirmation_id,
+        app.id,
+        app.property_id,
+        app.person_id || null,
+        app.space_id || null,
+      ],
+    )
+  ).rows[0];
+  if (!row)
+    throw conflict(
+      "application_terms_lineage_missing",
+      "The application's current terms record cannot be read in its property scope.",
+    );
+  const derived = row.source === "authored_offer_acknowledged";
+  const authority = row.offer_authority;
+  return {
+    ...row,
+    confirmed_by: derived ? null : row.actor_user_id || null,
+    confirmed_at: derived ? null : row.created_at || null,
+    prepared_by: derived ? row.actor_user_id || null : null,
+    prepared_at: derived ? row.created_at || null : null,
+    offer_author:
+      authority && authority.actor_user_id
+        ? {
+            user_id: authority.actor_user_id,
+            authored_at: row.offer_authored_at || null,
+            authority,
+          }
+        : null,
+  };
+}
+
+module.exports = {
+  readCurrentTermsConfirmation,
+  deriveConfirmationFromAuthoredOffer,
+  confirmProposedTerms,
+  resolveObligationAuthority,
+  normalizeAndHash,
+  readBoundApplicationOffer,
+};

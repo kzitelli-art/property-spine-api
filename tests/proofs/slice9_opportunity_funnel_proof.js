@@ -18,7 +18,7 @@
 const path = require("path");
 const { Pool } = require("pg");
 const REPO = path.resolve(__dirname, "..", "..");
-const { seedJourney } = require("./fixtures/slice9_journey_fixture");
+const { seedJourney } = require("../fixtures/slice9_journey_fixture");
 const {
   opportunityFunnelRows, aggregateOpportunityFunnel, EVIDENCE, APPLICATION_LINK,
   MISSING_CANONICAL_FACTS,

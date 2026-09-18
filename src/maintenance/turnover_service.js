@@ -3,6 +3,8 @@
 
 "use strict";
 
+const { spacePosition } = require('../tenancy/space_position');
+
 const GATES = Object.freeze(["moveout_photos", "deposit_review"]);
 
 const serviceError = (httpStatus, code, message, extra = {}) =>
@@ -201,10 +203,27 @@ function makeTurnoverService(deps) {
       moveOutNote = "No outgoing_lease_id - turn only; no possession-end event.";
     }
 
-    // Compatibility cache only. The unit event above remains possession truth.
+    // A bed's move-out cannot vacate a sibling whose possession remains live.
+    // Reuse the canonical as-of reader, including its correction/date handling;
+    // this compatibility label does not establish rentable-space availability.
+    const positions = await spacePosition(client, { property_id: unit.property_id });
+    const unitPositions = positions.positions.filter(position => String(position.unit_id) === String(unit_id));
+    const stillPossessed = unitPositions.some(position => position.current_possession);
+    // No recorded move-in is not a recorded vacancy. A whole-unit move-out
+    // retains its existing single-position meaning; on a shared unit each
+    // position needs its own recorded end before this cache can say vacant.
+    const allEnded = unitPositions.length > 0 && unitPositions.every(position =>
+      position.last_possession_end?.event_id && position.last_possession_end?.lease_id
+      && position.conflict_state === 'clear'
+      && !position.activation_pending_lease_position
+      && !(position.other_spanning_lease_positions || []).length
+      && (!position.current_lease_position
+        || position.current_lease_position.lease_id === position.last_possession_end.lease_id));
+    const occupancy = stillPossessed ? 'occupied'
+      : unitPositions.length === 1 || allEnded ? 'vacant' : 'unknown';
     await client.query(
-      "update units set occupancy_status='vacant', updated_at=now() where id=$1",
-      [unit_id]
+      "update units set occupancy_status=$2, updated_at=now() where id=$1",
+      [unit_id, occupancy]
     );
     const updatedUnit = (await client.query(
       "select id, unit_number, occupancy_status, operating_use, is_down from units where id=$1",

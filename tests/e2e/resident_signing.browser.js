@@ -44,8 +44,9 @@ const bad = (n, d) => { fail++; console.log(`  ✗ ${n}  — ${d}`); };
   const shows = (s) => seen.includes(s);
   if (shows("1025") || shows("1,025")) ok("the rent is visible to the resident"); else bad("rent visible", "no rent in the rendered text");
   if (/Bed B|3B/.test(seen)) ok("the space is visible", /Bed B/.test(seen) ? "Bed B" : "Unit 3B"); else bad("space visible", "neither unit nor bed rendered");
-  if (/not the complete lease|does not replace|demonstration/i.test(seen)) ok("the not-the-lease statement is visible");
-  else bad("not-the-lease statement", "the disclaimer did not render");
+  if (/Official lease package/i.test(seen) && /Governing lease form/i.test(seen))
+    ok("the governing package and retained lease form are visible");
+  else bad("governing package visible", "the official-package identity or retained form did not render");
 
   // ── the resident acts, in the browser ───────────────────────────
   const controls = await page.$$('button, [role="button"], input[type="checkbox"]');
@@ -62,13 +63,22 @@ const bad = (n, d) => { fail++; console.log(`  ✗ ${n}  — ${d}`); };
     let acted = false;
     for (const el of els) {
       const t = ((await el.innerText().catch(() => "")) || "").trim();
-      if (/^(acknowledge|sign)$/i.test(t)) {
+      if (/^acknowledge$/i.test(t)) {
         try { await el.click({ timeout: 2000 }); clicked++; acted = true; await page.waitForTimeout(600); } catch (_) {}
         break;
       }
     }
     if (!acted) break;
   }
+  const signer = (await q(
+    `select display_name from lease_packet_signers
+      where lease_packet_id=$1 and signer_role='tenant'`, [P.packetId]
+  )).rows[0];
+  try {
+    await page.fill('input[aria-label="Full legal name"]', signer.display_name);
+    await page.click('button:has-text("Sign")');
+    clicked++;
+  } catch (e) { errors.push("signature: " + e.message.slice(0, 90)); }
   await page.waitForTimeout(800);
   const after = (await q(`select count(*)::int n from lease_packet_fields
                            where lease_packet_id=$1 and completed=true`, [P.packetId])).rows[0].n;
@@ -93,6 +103,23 @@ const bad = (n, d) => { fail++; console.log(`  ✗ ${n}  — ${d}`); };
 
   if (!errors.length) ok("no failures from this server", `${sandbox.length} external request(s) blocked by this container's egress proxy — harness, not product`);
   else bad("failures from this server", errors.slice(0, 3).join(" || "));
+
+  /*  ── AND RELEASE THE SHARED BED THIS SCENARIO TOOK ────────────────
+   *  ctx({wipe:true}) clears what PRIOR scenarios left on this fixture,
+   *  which is why it now supersedes their packages too — but the package
+   *  THIS rung just signed is created after that wipe, and the next rung
+   *  (tests/e2e/tour_application_lease.e2e.js) does not use ctx at all.
+   *  Leaving it signed and current holds Bed B, and that rung is then
+   *  correctly refused with `application_target_held_for_signed_applicant`
+   *  at its post-tour reply — which is exactly how this turned CI red.
+   *
+   *  Same mechanism, same reasoning, one application: superseded, never
+   *  deleted (migration 192 freezes signer identity after issue). It runs
+   *  after every assertion above, so nothing proven here depends on it.  */
+  const rel = await q(`update lease_packets set superseded_at = now(), updated_at = now()
+                        where application_id=$1 and superseded_at is null`, [P.appId]);
+  if (rel.rowCount > 0) ok("the scenario releases the shared fixture bed it held");
+  else bad("releasing the shared fixture bed", "no current package to supersede");
 
   console.log(`\n  screenshots: ${OUT}/resident_page.png · ${OUT}/resident_after_clicks.png`);
   console.log(`  BROWSER RUNG: ${pass} passed, ${fail} failed`);

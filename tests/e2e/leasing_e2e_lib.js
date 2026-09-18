@@ -3,6 +3,7 @@
 module.paths.unshift(require("path").join(__dirname, "..", "..", "node_modules"));
 const { Pool } = require("pg");
 const sess = require("../../src/identity/staff_session_service.js");
+const { normalizeE164 } = require("../../src/identity/phone_identity.js");
 const CONN = process.env.E2E_DATABASE_URL || "postgres://postgres:spineproof@127.0.0.1:5432/spine_e2e";
 const BASE = "http://127.0.0.1:3000";
 const pool = new Pool({ connectionString: CONN });
@@ -12,6 +13,29 @@ const q = (s, p) => pool.query(s, p);
 //  refused all of them as ambiguous — the right answer to a wrong fixture.
 let __n = 0;
 const HOSTILE_NAME = () => `Probe Tester ${Date.now().toString(36)}${(++__n)}`;
+
+// Intake resolves identity by phone before email. Randomly drawing four digits
+// from the shared 555 fixture range can therefore adopt an earlier suite person
+// and retain that person's name. Allocate from the same range only after
+// checking both canonical and legacy phone columns in this owned database.
+async function unclaimedFixturePhone() {
+  const rows = (await q(
+    `select phone, primary_phone_e164
+       from persons
+      where phone is not null or primary_phone_e164 is not null`)).rows;
+  const claimed = new Set();
+  for (const row of rows) {
+    for (const raw of [row.primary_phone_e164, row.phone]) {
+      const normalized = normalizeE164(raw);
+      if (normalized) claimed.add(normalized);
+    }
+  }
+  for (let suffix = 1000; suffix <= 9999; suffix++) {
+    const candidate = `+1215555${suffix}`;
+    if (!claimed.has(candidate)) return candidate;
+  }
+  throw new Error("fixture: no unclaimed phone remains in +1 215-555-xxxx");
+}
 
 async function api(method, path, { token, body, key } = {}) {
   const h = { "content-type": "application/json" };
@@ -45,6 +69,33 @@ async function ctx({ wipe = true } = {}) {
               where executed_lease_record_id in (select id from executed_lease_records where property_id=$1)`, [prop]);
     await q(`delete from executed_lease_records where property_id=$1`, [prop]);
     await q(`delete from leases where property_id=$1`, [prop]);
+    /*  ── AND THE PACKAGES PRIOR SCENARIOS SIGNED ───────────────────
+     *  Every scenario on this fixture shares ONE bed ("Bed B"), and each
+     *  leaves behind an application whose packet a resident signed. Those
+     *  used to be inert once the lease rows above were gone. They are not
+     *  any more: `application_inventory_hold` reads a signed, current,
+     *  non-terminal package as A HOME SOMEBODY HAS SIGNED FOR, so the bed
+     *  stops being offerable and the NEXT scenario is refused with
+     *  `application_target_held_for_signed_applicant`.
+     *
+     *  That is the product working — two people must not sign for one bed
+     *  — and it is why this wipe has to clear it. It turned CI red one
+     *  rung later (tests/e2e/tour_application_lease.e2e.js, "Spine retains
+     *  the tour receipt and requests complete terms before send
+     *  confirmation"), where the post-tour reply correctly said someone
+     *  had already signed for the home instead of asking for terms.
+     *  Reproduced by leaving a signed packet on Bed B and watching that
+     *  exact assertion fail.
+     *
+     *  ⚠ SUPERSEDED, NOT DELETED. Migration 192's mutation guard freezes
+     *  signer identity once a packet leaves `draft` ("lease packet signer
+     *  identity is frozen after issue"), and that wall is not worked
+     *  around. `superseded_at` is the product's own way of saying a
+     *  package is no longer the current one, it is what resolveSignerAccess
+     *  and the hold read both already honour, and it is true of a finished
+     *  scenario's package. Scoped to this fixture property.            */
+    await q(`update lease_packets set superseded_at = now(), updated_at = now()
+              where property_id=$1 and superseded_at is null`, [prop]);
   }
   const mike = (await q("select id from users where name='Mike Grivna' limit 1")).rows[0].id;
   const c = await pool.connect();
@@ -63,13 +114,44 @@ async function ctx({ wipe = true } = {}) {
 /*  Drives lead → application@bed → approve → terms → packet → send.
     Returns { appId, packetId, rawTok }.  Stops before the resident signs.  */
 async function toPacket(C, { bed, rent = 1025, name = null } = {}) {
+  /*  ── START A FRESH JOURNEY ON THIS BED ─────────────────────────────
+   *  Callers use this helper seven times in a row on ONE fixture bed —
+   *  leasing_hostile.e2e.js alone runs seven independent hostile cases
+   *  against C.bedB — and every case that signs leaves a live signed
+   *  package behind.
+   *
+   *  That used to be inert. It is not any more: the tenant's signature now
+   *  serializes on the bed and refuses a second live signed claimant, so
+   *  scenario two was refused with `home_already_signed_for` and its packet
+   *  never left `tenant_in_progress`. The product is right — two people must
+   *  not sign for one home — and the fixture has to stop pretending seven
+   *  sequential scenarios are one continuous story.
+   *
+   *  ctx({wipe:true}) does exactly this at the scope of the PROPERTY, at the
+   *  start of a rung. This is the same statement at the scope of the BED, at
+   *  the start of a journey: whatever was current on this bed belongs to a
+   *  finished scenario and is no longer the current package.
+   *
+   *  ⚠ SUPERSEDED, NEVER DELETED — migration 192 freezes signer identity
+   *  once a packet leaves `draft`, and `superseded_at` is the product's own
+   *  way of saying a package is no longer current. Scoped to this one bed.  */
+  await q(`update lease_packets p set superseded_at = now(), updated_at = now()
+            from lease_applications a
+           where a.id = p.application_id and a.space_id = $1
+             and p.superseded_at is null`, [bed]);
+
   const __name = name || HOSTILE_NAME();
-  const phone = "+1215555" + String(Math.floor(1000 + Math.random() * 8999));
+  const phone = await unclaimedFixturePhone();
   const intake = await api("POST", "/leasing/intake", { key: "e2e-key", body: {
     intake_secret: "e2e-intake", property_id: C.prop, name: __name,
     phone, email: `h${Date.now()}${Math.floor(Math.random()*999)}@example.com`, source: "e2e" }});
   if (intake.status >= 400) throw new Error("intake: " + JSON.stringify(intake.body));
   const person = intake.body.person_id;
+  const durablePerson = (await q("select name from persons where id=$1", [person])).rows[0];
+  if (!durablePerson || durablePerson.name !== __name) {
+    throw new Error("fixture identity: intake did not retain the requested person name "
+      + JSON.stringify({ requested: __name, durable: durablePerson && durablePerson.name }));
+  }
   const unitOf = (await q("select unit_id from spaces where id=$1", [bed])).rows[0].unit_id;
   const sub = await api("POST", `/properties/${C.prop}/applications`, { token: C.token, key: "e2e-key", body: {
     applicant_name: __name, person_id: person, unit_id: unitOf, space_id: bed,
@@ -95,9 +177,16 @@ async function toPacket(C, { bed, rent = 1025, name = null } = {}) {
 async function residentSigns(rawTok) {
   const view = await api("GET", `/t/lease/${rawTok}/data`);
   const required = ((view.body.packet && view.body.packet.fields) || []).filter((f) => f.required);
+  const signerName = view.body.packet && view.body.packet.current_signer
+    && view.body.packet.current_signer.display_name;
+  if (!signerName) throw new Error("packet: current signer name is missing");
   for (const f of required) {
     const r = await api("POST", `/t/lease/${rawTok}/fields/${f.id}/complete`, {
-      body: { value: f.field_type === "signature" ? "Hostile Tester" : "HT", session_id: "hostile" } });
+      body: {
+        value: f.field_type === "signature" ? signerName : "HT",
+        consent: f.field_type === "signature",
+        session_id: "hostile",
+      } });
     if (r.status >= 400) throw new Error("field: " + JSON.stringify(r.body));
   }
   return api("POST", `/t/lease/${rawTok}/submit`, { body: {} });

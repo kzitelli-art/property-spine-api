@@ -1,0 +1,13 @@
+{
+  "api_head": "9f2acff97af311e6ebdcd5e2219f8cf873894748",
+  "app_head": "c05ae68f6f8bc49ca4b5bd752adc928e1f4e0d88",
+  "state": "local_uncommitted",
+  "sha256": {
+    "src/identity/operator.js": "b1180af0a7740f626b8306217ec1019320306fd0cf8cee2e6a1f81c5811f347d",
+    "tests/unit/prospect_vitals_failure.test.js": "f57c0f25b025aa1da174d44dde0fe781460df17b32e810a8839fdff729304c39",
+    "tests/e2e/prospect_vitals_http.js": "c6b5022a9175b841e0bdc5079fb222ff8b558021a069a27224dce2cb022b6de7",
+    "tests/verify_source_governance.js": "32a8e7c6eace8566fa02fca42e2ff7a5b62691a07f6801def94319ec8b660fbb",
+    "tests/proofs/application_turn_window.db.js": "8c3814c9b95bc4c17d50a4ed23313603a95febd6ccc8cf4b9868ced938b37300",
+    "tests/e2e/application_target_dates_browser.js": "ca27a9c26fb17c4a06fe26a95d2f94b48f720af55666dac9c4a6de0581479ed8"
+  }
+}

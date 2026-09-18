@@ -1,0 +1,13 @@
+# Recorded tour history in the shared Leasing standing read
+
+2026-09-09. API HEAD9f2acff97af311e6ebdcd5e2219f8cf873894748 plus dirty candidate; board/CURRENT_STATE inspected; complete prior PHILOSOPHY read retained, unchanged SHA256977B30A4C41B0F8C1511DA3521D030E031AB13B9D1897EEA5970F011F487FC28.
+
+Intention: Ask's existing Leasing reader must know the outcome staff recorded by SMS. Existing readLeasingStanding omitted tour events altogether; Ask's entitled leasing_person branch already consumes this same reader and strips database IDs before composition. No new Ask writer, intent route or data store is needed.
+
+First red owned9d90c376: SMS, immutable event and Person Card HTTP checks passed, but shared Leasing standing lacked the same outcome. Smallest addition in src/leasing/leasing_standing_read.js reads up to five recent immutable completed/no-show/corrected events, joined through both tour and lead property and exact person. It reports truncation and explicitly labels this HISTORY, not today's readiness or application delivery. Existing normalizeStanding owns vocabulary; original notes and recording actor/name survive. Corrections remain separate historical entries with their reference/reason. No private pending staff-thread read is added. No current recommendation is inferred from history.
+
+Successor owned20508189 passed the focused SMS/Person Card HTTP flow plus real-DB service assertion that shared standing contains the exact original notes, explicit standing and staff actor. Different-property history is empty. Injected source failure and timeout produce separate READ_FAILED/READ_TIMED_OUT with null events, not an empty successful history. Full 54 source-governance gates passed sequentially after final source changes and runtime cleanup. Both owned DBs dropped and cluster data removed.
+
+Commands: existing onboarding_review_local.ps1 wrapper with PROOF_STAFF_SMS_PARTIAL=1, PROOF_TENANT_JOURNEY=1, ONBOARDING_SPACE_PROOF_ONLY=1 and established local app/workbook/Postgres/Chrome inputs; node tests/verify_source_governance.js. Test additions in existing tests/e2e/staff_sms_partial_capture.js. No production migration, deployment, push, live message or model call.
+
+Proof ceiling: real database shared-reader proof after an HTTP capture, with separate Person Card HTTP proof. NOT an Ask HTTP/model-answer acceptance proof. Historical correction normalization and five-event truncation need further targeted controls before claiming comprehensive history coverage. Model wording, current-stage interpretation, partial pre-standing visibility and full phone-only matching/terms/application still OPEN.

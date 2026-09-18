@@ -8,12 +8,14 @@
 //   PATCH /admin/organizations/:id         update org metadata (name, plan, status, notes)
 //   POST /admin/organizations/:id/properties      assign an existing property to an org
 //   POST /admin/organizations/:id/properties/new  create a NEW property tied to an org (wizard)
+//   POST /admin/organizations/:id/operations-line activate the first staff text line
 //   POST /admin/organizations/:orgId/invite   create/invite the first admin user for an org
 //
 //   GET  /admin/users                      list all users platform-wide
 //   PATCH /admin/users/:id                 update platform_role or organization_id
 //
 //   GET  /admin/platform                   high-level platform stats
+//   PUT  /admin/properties/:propertyId/display-name  governed human-facing label
 //
 // AUTH: The requireSuperAdmin middleware resolves the x-staff-session header,
 // then checks users.platform_role = 'super_admin'. Any other session → 403.
@@ -27,6 +29,7 @@ const express = require("express");
 const staffSessions = require("./staff_session_service.js");
 const propertyCreation = require("./property_creation_service.js"); // Build 1A-1: THE property write
 const propertyHierarchy = require("./property_hierarchy_service.js");  // Build 1A-2: adoption yes, reparenting no
+const communicationLines = require("../comms/communication_lines.js");
 
 function slugify(name) {
   return name
@@ -136,7 +139,7 @@ module.exports = function superAdminModule({ pool }) {
       const org = (await pool.query(`select * from organizations where id = $1`, [req.params.id])).rows[0];
       if (!org) return res.status(404).json({ error: "Organization not found." });
 
-      const [properties, users] = await Promise.all([
+      const [properties, users, operationsLine] = await Promise.all([
         pool.query(
           `select id, coalesce(display_name, name) as name, address, city, state,
                   sms_number, created_at
@@ -151,12 +154,71 @@ module.exports = function superAdminModule({ pool }) {
             order by u.created_at`,
           [org.id]
         ),
+        communicationLines.readOperationsLineForOrganization(pool, org.id),
       ]);
 
-      res.json({ ...org, properties: properties.rows, users: users.rows });
+      res.json({ ...org, properties: properties.rows, users: users.rows,
+                 operations_line: operationsLine.line,
+                 operations_line_outcome: operationsLine.outcome });
     } catch (e) {
       console.error("admin/organizations get error", e);
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── POST /admin/organizations/:id/operations-line ───────────────────────
+  // First activation only. Replacement, retirement and transfer are separate
+  // operating events and cannot hide behind this friendly setup command.
+  router.post("/admin/organizations/:id/operations-line", requireSuperAdmin, async (req, res) => {
+    try {
+      const out = await communicationLines.activateOperationsLine(pool, {
+        organizationId: req.params.id,
+        phoneNumber: (req.body || {}).phone_number,
+        actorUserId: req.operator.id,
+      });
+      res.status(out.already ? 200 : 201).json({
+        status: "connected",
+        already: out.already,
+        receipt: out.receipt,
+        line: out.line,
+      });
+    } catch (e) {
+      if (e.httpStatus) {
+        return res.status(e.httpStatus).json({
+          error: e.publicMessage || e.message,
+          reason: e.refusalReason || "operations_line_refused",
+          ...(e.detail || {}),
+        });
+      }
+      console.error("admin/organization operations line error", e);
+      res.status(500).json({ error: "Staff texting could not be connected." });
+    }
+  });
+
+  router.post("/admin/organizations/:id/operations-line/transfer", requireSuperAdmin, async (req, res) => {
+    try {
+      const out = await communicationLines.transferOperationsLine(pool, {
+        sourceLineId: (req.body || {}).source_line_id,
+        targetOrganizationId: req.params.id,
+        actorUserId: req.operator.id,
+      });
+      res.status(out.already ? 200 : 201).json({
+        status: "connected",
+        already: out.already,
+        receipt: out.receipt,
+        retired_line_id: out.retiredLineId,
+        line: out.line,
+      });
+    } catch (e) {
+      if (e.httpStatus) {
+        return res.status(e.httpStatus).json({
+          error: e.publicMessage || e.message,
+          reason: e.refusalReason || "operations_line_transfer_refused",
+          ...(e.detail || {}),
+        });
+      }
+      console.error("admin/organization operations line transfer error", e);
+      res.status(500).json({ error: "Staff texting could not be transferred." });
     }
   });
 
@@ -294,12 +356,17 @@ module.exports = function superAdminModule({ pool }) {
   // platform_role: 'org_admin' | 'member' (defaults to 'member')
   router.post("/admin/organizations/:orgId/invite", requireSuperAdmin, async (req, res) => {
     try {
-      const { name, phone, email, property_id, role_key = "property_admin", platform_role = "member" } = req.body || {};
+      //  platform_role is OPTIONAL. Omitted means "leave the account's role
+      //  as it is" for an existing account and 'member' for a new one. It
+      //  used to default to 'member' here, which silently demoted an org
+      //  admin invited to a second property (proved in
+      //  tests/proofs/greenery_staff_onboarding.db.js).
+      const { name, phone, email, property_id, role_key = "property_admin", platform_role = null } = req.body || {};
       if (!name || !phone) return res.status(400).json({ error: "name and phone are required." });
       if (!property_id) return res.status(400).json({ error: "property_id is required — the user logs into a specific property." });
 
       const allowed_platform_roles = ["org_admin", "member"];
-      if (!allowed_platform_roles.includes(platform_role)) {
+      if (platform_role != null && !allowed_platform_roles.includes(platform_role)) {
         return res.status(400).json({ error: `platform_role must be one of: ${allowed_platform_roles.join(", ")}` });
       }
 
@@ -328,24 +395,31 @@ module.exports = function superAdminModule({ pool }) {
       if (email && email.trim()) {
         user = (await pool.query(
           `insert into users (name, email, phone, role, auth_provider, platform_role, organization_id, is_active, status)
-           values ($1, $2, $3, 'property_manager', 'phone_otp', $4, $5, true, 'active')
+           values ($1, $2, $3, 'property_manager', 'phone_otp', coalesce($4, 'member'), $5, true, 'active')
            on conflict (email) do update
              set name = excluded.name, phone = excluded.phone,
-                 platform_role = excluded.platform_role,
+                 platform_role = coalesce($4, users.platform_role),
                  organization_id = excluded.organization_id,
                  is_active = true, status = 'active', updated_at = now()
-           returning id, name, email, phone`,
+           returning id, name, email, phone, platform_role`,
           [name.trim(), email.trim(), e164, platform_role, org.id]
         )).rows[0];
       } else {
         user = (await pool.query(
+          //  The conflict target must name the index that actually exists:
+          //  users carries no plain UNIQUE (phone); it carries the partial
+          //  expression index uq_users_phone_normalized. "on conflict (phone)"
+          //  was refused by Postgres on every call, so a phone-only account
+          //  could never be provisioned here.
           `insert into users (name, phone, role, auth_provider, platform_role, organization_id, is_active, status)
-           values ($1, $2, 'property_manager', 'phone_otp', $3, $4, true, 'active')
-           on conflict (phone) do update
-             set name = excluded.name, platform_role = excluded.platform_role,
+           values ($1, $2, 'property_manager', 'phone_otp', coalesce($3, 'member'), $4, true, 'active')
+           on conflict ((regexp_replace(phone, '\\D', '', 'g')))
+             where phone is not null and length(regexp_replace(phone, '\\D', '', 'g')) >= 10
+           do update
+             set name = excluded.name, platform_role = coalesce($3, users.platform_role),
                  organization_id = excluded.organization_id,
                  is_active = true, status = 'active', updated_at = now()
-           returning id, name, email, phone`,
+           returning id, name, email, phone, platform_role`,
           [name.trim(), e164, platform_role, org.id]
         )).rows[0];
       }
@@ -374,7 +448,7 @@ module.exports = function superAdminModule({ pool }) {
         organization_id: org.id,
         property_id,
         role_key: preset.key,
-        platform_role,
+        platform_role: user.platform_role,
         note: "User provisioned. They can now log in via phone OTP at the operator app.",
       });
     } catch (e) {
@@ -573,6 +647,42 @@ module.exports = function superAdminModule({ pool }) {
       return res.json(await operatingTimezoneHistory(pool, { property_id: req.params.propertyId }));
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  });
+
+  // Human-facing label only. `properties.name` remains internal identity.
+  // The actor comes from the staff session and the command re-checks current
+  // super-admin authority inside its transaction before it writes.
+  router.put("/admin/properties/:propertyId/display-name", requireSuperAdmin, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { setPropertyDisplayName } = require("../shared/property_display_name_command");
+      const b = req.body || {};
+      const out = await setPropertyDisplayName(pool, {
+        property_id: req.params.propertyId,
+        display_name: b.display_name,
+        actor_user_id: req.operator.id,
+        reason: b.reason || null,
+        idempotency_key: b.idempotency_key || null,
+      });
+      return res.json({
+        receipt: out.changed
+          ? `The property is now shown as ${out.after}. Its internal identity was not changed.`
+          : `The property is already shown as ${out.after}. Nothing new was written.`,
+        ...out,
+      });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.code || "display_name_failed", receipt: e.publicMessage || e.message });
+    }
+  });
+
+  router.get("/admin/properties/:propertyId/display-name/history", requireSuperAdmin, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { propertyDisplayNameHistory } = require("../shared/property_display_name_command");
+      return res.json(await propertyDisplayNameHistory(pool, { property_id: req.params.propertyId }));
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.code || "display_name_history_failed", receipt: e.publicMessage || e.message });
     }
   });
 

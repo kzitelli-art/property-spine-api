@@ -54,7 +54,7 @@ async function computeExposure(pool, propertyId) {
   }
 
   const prop = (await pool.query(
-    "select id, name, canonical_key from properties where id=$1", [propertyId])).rows[0];
+    "select id, name, display_name, canonical_key from properties where id=$1", [propertyId])).rows[0];
   if (!prop) return null;
 
       // ── source: DEPOSITS (009) ──────────────────────────────────────
@@ -135,7 +135,7 @@ async function computeExposure(pool, propertyId) {
       const complete = unavailable.length === 0;
 
   return {
-        property: { id: prop.id, name: prop.name, canonical_key: prop.canonical_key },
+        property: { id: prop.id, name: prop.display_name || prop.name, canonical_key: prop.canonical_key },
         gross_unproven_exposure: Number(total.toFixed(2)),
         headline_note: complete
           ? "gross across all proof rungs — never net, never the same dollar twice"

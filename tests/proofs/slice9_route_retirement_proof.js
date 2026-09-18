@@ -91,8 +91,12 @@ console.log("\n── NO ADAPTER WAS BUILT ────────────�
 //  Comments are stripped first, the same way slice9_status_read_drift_guard
 //  does it: prose EXPLAINING what the retired projection used to do is not a
 //  reimplementation of it.
+//  One alternation, not two chained replaces: a `/*` inside a `//`
+//  comment (server.js prose says `/operator/*`) would otherwise open a
+//  block comment that closes 569 lines later. See
+//  tests/unit/shared_conversational_path.test.js for the full account.
 const stripComments = (src) =>
-  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
 const LEGACY_ONLY = /readAvailability\s*\(|commitment_tier|projected_ready_date|date_confidence|tourable_in_person/;
 const shim = codeFiles.filter((f) => LEGACY_ONLY.test(stripComments(fs.readFileSync(f, "utf8"))));
 ok(shim.length === 0,

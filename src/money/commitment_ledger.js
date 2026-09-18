@@ -1039,6 +1039,10 @@ module.exports = function commitmentLedgerModule({ pool, spawnObligationFromEven
     const q = await client.query(`select * from lease_offers where id = $1 for update`, [offer_id]);
     if (q.rowCount === 0) throw ledgerError("NOT_FOUND", "offer not found");
     const offer = q.rows[0];
+    if (offer.source === "application_proposal") {
+      throw ledgerError("APPLICATION_PROPOSAL_NOT_LEDGER",
+        "application proposal terms are acknowledged application facts; they do not qualify as a generic concession offer.");
+    }
     if (offer.status === "draft") {
       throw ledgerError("DRAFT_NOT_PROMISE",
         "this offer is a draft — it was never evidenced as communicated to the prospect, so it cannot qualify (draft ≠ promise)");
@@ -1086,6 +1090,7 @@ module.exports = function commitmentLedgerModule({ pool, spawnObligationFromEven
     const r = await client.query(
       `select * from lease_offers
         where application_id = $1
+          and source <> 'application_proposal'
           and status in ('sent','earned')
         order by created_at desc`,
       [application_id]
@@ -1120,6 +1125,10 @@ module.exports = function commitmentLedgerModule({ pool, spawnObligationFromEven
     const oQ = await client.query(`select * from lease_offers where id = $1 for update`, [offer_id]);
     if (oQ.rowCount === 0) throw ledgerError("NOT_FOUND", "offer not found");
     let offer = oQ.rows[0];
+    if (offer.source === "application_proposal") {
+      throw ledgerError("APPLICATION_PROPOSAL_NOT_LEDGER",
+        "application proposal terms are acknowledged application facts; they cannot become a concession schedule.");
+    }
     if (offer.property_id !== application.property_id) {
       throw ledgerError("PROPERTY_MISMATCH", "offer and application belong to different properties — the wall holds");
     }
@@ -1418,6 +1427,10 @@ module.exports = function commitmentLedgerModule({ pool, spawnObligationFromEven
       const out = await inTx(async (c) => {
         const r = await c.query(`select * from lease_offers where id = $1`, [req.params.id]);
         if (r.rowCount === 0) throw ledgerError("NOT_FOUND", "offer not found");
+        if (r.rows[0].source === "application_proposal") {
+          throw ledgerError("APPLICATION_PROPOSAL_NOT_LEDGER",
+            "application proposal terms are available through the application terms reader, not the generic offer endpoint.");
+        }
         return r.rows[0];
       });
       res.json(out);

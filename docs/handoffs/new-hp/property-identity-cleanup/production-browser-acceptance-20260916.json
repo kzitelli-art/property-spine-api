@@ -1,0 +1,153 @@
+{
+  "app": "https://property-spine-app.onrender.com/?release=3607b3d",
+  "api": "https://property-spine-api.onrender.com",
+  "checked_at": "2026-09-16T12:38:39.017Z",
+  "checks": [
+    {
+      "name": "authorized property chooser",
+      "status": "pass",
+      "rows": [
+        {
+          "property_id": "a29181cd-3ba1-461c-aead-cd989add1d11",
+          "property_name": "Greenery Apartments",
+          "address": "1325 N 15th Street, Philadelphia"
+        },
+        {
+          "property_id": "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe",
+          "property_name": "Property Spine Demo — Solo Shape",
+          "address": "1 Demo Way"
+        },
+        {
+          "property_id": "14e41b7c-e91c-49e8-9651-10c4908a8f6a",
+          "property_name": "Skyline Apartments",
+          "address": "1417 n 15 phily"
+        },
+        {
+          "property_id": "9e2bb96e-08e2-41db-81c2-91055ceb50a3",
+          "property_name": "Solo on Chestnut",
+          "address": "4233 Chestnut St"
+        },
+        {
+          "property_id": "260b6bac-4738-47c4-b86d-511b726adc48",
+          "property_name": "Uno on Chestnut",
+          "address": "4125 Chestnut St"
+        }
+      ],
+      "element_from_point": {
+        "visible": true,
+        "center": {
+          "x": 720,
+          "y": 543
+        },
+        "hit_tag": "SPAN",
+        "hit_text": "Solo on Chestnut",
+        "covered": false
+      }
+    },
+    {
+      "name": "Skyline UI and governed identity",
+      "status": "pass",
+      "session": {
+        "id": "78375274-922a-44c5-8b61-0c285d1b9911",
+        "name": "KZ",
+        "role": "property_manager",
+        "property_id": "14e41b7c-e91c-49e8-9651-10c4908a8f6a",
+        "property_name": "Skyline Apartments",
+        "allowed_modules": [
+          "management",
+          "leasing",
+          "maintenance",
+          "reporting",
+          "asset_management"
+        ],
+        "platform_role": "super_admin"
+      },
+      "identity": {
+        "id": "14e41b7c-e91c-49e8-9651-10c4908a8f6a",
+        "name": "skyline",
+        "display_name": "Skyline Apartments",
+        "canonical_key": "1417",
+        "leasing_basis": "bed",
+        "registry_model": "bed"
+      },
+      "element_from_point": {
+        "home": {
+          "visible": true,
+          "center": {
+            "x": 720,
+            "y": 136
+          },
+          "hit_tag": "H1",
+          "hit_text": "Skyline Apartments",
+          "covered": false
+        },
+        "management": {
+          "visible": true,
+          "center": {
+            "x": 149,
+            "y": 56
+          },
+          "hit_tag": "SPAN",
+          "hit_text": "Skyline Apartments",
+          "covered": false
+        }
+      }
+    },
+    {
+      "name": "Greenery UI and governed identity",
+      "status": "pass",
+      "session": {
+        "id": "78375274-922a-44c5-8b61-0c285d1b9911",
+        "name": "KZ",
+        "role": "property_manager",
+        "property_id": "a29181cd-3ba1-461c-aead-cd989add1d11",
+        "property_name": "Greenery Apartments",
+        "allowed_modules": [
+          "management",
+          "leasing",
+          "maintenance",
+          "reporting",
+          "asset_management"
+        ],
+        "platform_role": "super_admin"
+      },
+      "identity": {
+        "id": "a29181cd-3ba1-461c-aead-cd989add1d11",
+        "name": "greenery",
+        "display_name": "Greenery Apartments",
+        "canonical_key": "1325-N-15",
+        "leasing_basis": "unknown",
+        "registry_model": "bed"
+      },
+      "element_from_point": {
+        "home": {
+          "visible": true,
+          "center": {
+            "x": 720,
+            "y": 136
+          },
+          "hit_tag": "H1",
+          "hit_text": "Greenery Apartments",
+          "covered": false
+        },
+        "leasing": {
+          "visible": true,
+          "center": {
+            "x": 153,
+            "y": 56
+          },
+          "hit_tag": "SPAN",
+          "hit_text": "Greenery Apartments",
+          "covered": false
+        }
+      }
+    }
+  ],
+  "screenshots": [
+    "C:\\Users\\kamer\\Documents\\ChatGPT\\Property Spine\\property-spine-api\\docs\\handoffs\\new-hp\\property-identity-cleanup\\production-property-chooser-20260916.png",
+    "C:\\Users\\kamer\\Documents\\ChatGPT\\Property Spine\\property-spine-api\\docs\\handoffs\\new-hp\\property-identity-cleanup\\production-skyline-management-20260916.png",
+    "C:\\Users\\kamer\\Documents\\ChatGPT\\Property Spine\\property-spine-api\\docs\\handoffs\\new-hp\\property-identity-cleanup\\production-greenery-leasing-20260916.png"
+  ],
+  "page_errors": [],
+  "status": "pass"
+}

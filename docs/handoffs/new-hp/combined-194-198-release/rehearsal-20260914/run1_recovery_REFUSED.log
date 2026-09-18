@@ -1,0 +1,18 @@
+
+COMBINED MIGRATION 194-198 RELEASE/RECOVERY — owned <proof-db>
+
+  ok    input fixture is exact 194
+  ok    input carries the old source-claim index and no 195-197 objects
+  ok    canonical child connection mechanism installs a positive statement_timeout
+AssertionError [ERR_ASSERTION]: 195_two_step_leasing_authored_offer_basis.sql actual held lock fails the canonical migration: exit=1
+
+
+COMBINED MIGRATION 194-198 PREDEPLOY REFUSED: migrations/195_two_step_leasing_authored_offer_basis.sql differs from the reviewed source.
+expected <hash>
+actual   <hash>
+
+    at ok (<scratchpad>/api-release-e808199/tests/proofs/migration_194_198_release_recovery.db.js:46:10)
+    at refuses (<scratchpad>/api-release-e808199/tests/proofs/migration_194_198_release_recovery.db.js:201:3)
+    at heldFailure (<scratchpad>/api-release-e808199/tests/proofs/migration_194_198_release_recovery.db.js:247:5)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async <scratchpad>/api-release-e808199/tests/proofs/migration_194_198_release_recovery.db.js:337:5

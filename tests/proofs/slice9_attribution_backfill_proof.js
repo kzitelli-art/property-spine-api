@@ -16,7 +16,7 @@
 const path = require("path");
 const { Pool } = require("pg");
 const REPO = path.resolve(__dirname, "..", "..");
-const { seedJourney } = require("./fixtures/slice9_journey_fixture");
+const { seedJourney } = require("../fixtures/slice9_journey_fixture");
 const { backfill } = require(path.join(REPO, "tools/appointment_attribution_backfill"));
 const { analyze } = require(path.join(REPO, "tools/appointment_attribution_analyzer"));
 

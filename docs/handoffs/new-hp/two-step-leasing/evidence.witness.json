@@ -1,0 +1,2232 @@
+{
+  "server": "<hash>",
+  "summary": {
+    "passed": 134,
+    "failed": 32,
+    "observations": 4,
+    "witness": true
+  },
+  "results": [
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "Skyline-shaped fixture property exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "the fixture's configured company signer with the governed override exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "fixture: the property's operating timezone is set so tour times can be published (an owner input in production)",
+      "ok": true,
+      "kind": "observe",
+      "detail": null
+    },
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "fixture unit 3B with established Bed B exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "Bed B carries no live lease at the start (fresh database; no reset performed)",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "fixture: three further beds established under the fixture activation with confirmed-vacancy lineage",
+      "ok": true,
+      "kind": "observe",
+      "detail": {
+        "units": [
+          "C8-f64493a0",
+          "C9-f64493a0",
+          "D1-f64493a0"
+        ]
+      }
+    },
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "KZ is a configured company signer",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "signers": 1
+      }
+    },
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "Mike joins through the governed invite and OTP as property_manager",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "invite": 200,
+        "verify": 200
+      }
+    },
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "Mike: property_manager, no can_manage_roles",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "role_key": "property_manager",
+        "can_manage_roles": false,
+        "allowed_modules": [
+          "management",
+          "leasing",
+          "maintenance"
+        ]
+      }
+    },
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "a leasing_agent joins (will be placed on the signer list only)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "verify": 200
+      }
+    },
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "a property_admin joins (override, not a signer)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "verify": 200
+      }
+    },
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "the approver-only actor holds the governed override",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "signer list: KZ + the leasing agent; the approver-only admin is absent",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "signers": 2
+      }
+    },
+    {
+      "section": "fixture · property, beds and the four actors",
+      "label": "actors ready",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J1 · inquiry, ownership, tour",
+      "label": "the website inquiry is captured (no consent, capture only)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J1 · inquiry, ownership, tour",
+      "label": "no model call, no text",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J1 · inquiry, ownership, tour",
+      "label": "Mike takes ownership",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J1 · inquiry, ownership, tour",
+      "label": "Mike records the email he already sent",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J1 · inquiry, ownership, tour",
+      "label": "a native slot is published",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Tour time published.",
+          "slot": {
+            "id": "<id-1>",
+            "property_id": "<id-2>",
+            "unit_id": "<id-3>",
+            "leasing_agent_id": "<id-4>",
+            "starts_at": "2026-09-16T02:04:58.553Z",
+            "ends_at": "2026-09-16T03:04:58.553Z",
+            "capacity": 1,
+            "status": "open",
+            "booked_tour_id": null,
+            "created_by": "<id-4>",
+            "created_at": "2026-09-13T02:04:58.557Z",
+            "updated_at": "2026-09-13T02:04:58.557Z"
+          },
+          "created": true
+        }
+      }
+    },
+    {
+      "section": "J1 · inquiry, ownership, tour",
+      "label": "Mike books the tour",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Tour booked. No confirmation message was sent.",
+          "tour_id": "<id-5>",
+          "slot_id": "<id-1>",
+          "scheduled_for": "2026-09-16T02:04:58.553Z",
+          "status": "scheduled",
+          "idempotent": false
+        }
+      }
+    },
+    {
+      "section": "J1 · inquiry, ownership, tour",
+      "label": "Mike records the outcome as ready to apply",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Outcome recorded — tour given. Follow-up rail opened — outcome · owner set to the actual host.",
+          "tour_id": "<id-5>",
+          "conversion_id": "<id-6>"
+        }
+      }
+    },
+    {
+      "section": "J1 · inquiry, ownership, tour",
+      "label": "the conversion belongs to the same person",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J1 · AUTHOR (decision 1)",
+      "label": "conversion exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J1 · AUTHOR (decision 1)",
+      "label": "the exact-home selector read succeeds",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J1 · AUTHOR (decision 1)",
+      "label": "3B Bed B is offerable as an exact choice",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "marketing_state": "marketable_now",
+        "basis": "chosen_space"
+      }
+    },
+    {
+      "section": "J1 · AUTHOR (decision 1)",
+      "label": "Mike cannot author terms (no override, no pricing grant)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403,
+        "error": "NO_APPLICATION_OFFER_AUTHORITY"
+      }
+    },
+    {
+      "section": "J1 · AUTHOR (decision 1)",
+      "label": "KZ authors the offer for the chosen bed",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "application_offer_id": "<id-7>",
+          "application_terms": {
+            "schema_version": 1,
+            "property_id": "<id-2>",
+            "person_id": "<id-8>",
+            "target": {
+              "space_id": "<id-9>",
+              "unit_id": "<id-3>"
+            },
+            "rent": "1025.00",
+            "security_deposit": "1025.00",
+            "lease_start_date": "2026-10-13",
+            "lease_end_date": "2027-10-12",
+            "fees": [],
+            "concessions": {
+              "status": "none"
+            }
+          },
+          "idempotent": false,
+          "applicant_review_required": false,
+          "draft_revision": false,
+          "receipt": "Application offer prepared."
+        }
+      }
+    },
+    {
+      "section": "J1 · AUTHOR (decision 1)",
+      "label": "KZ corrects the unsent draft (explicit successor)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "application_offer_id": "<id-10>",
+          "application_terms": {
+            "schema_version": 1,
+            "property_id": "<id-2>",
+            "person_id": "<id-8>",
+            "target": {
+              "space_id": "<id-9>",
+              "unit_id": "<id-3>"
+            },
+            "rent": "1100.00",
+            "security_deposit": "1100.00",
+            "lease_start_date": "2026-10-13",
+            "lease_end_date": "2027-10-12",
+            "fees": [],
+            "concessions": {
+              "status": "none"
+            }
+          },
+          "idempotent": false,
+          "applicant_review_required": false,
+          "draft_revision": true,
+          "receipt": "Application draft corrected. No invitation was created and no message was sent."
+        }
+      }
+    },
+    {
+      "section": "J1 · AUTHOR (decision 1)",
+      "label": "the authored offer carries KZ as author, its hash and its lineage",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "author_is_kz": true
+      }
+    },
+    {
+      "section": "J1 · AUTHOR (decision 1)",
+      "label": "[J1] the Leasing desk loads for Mike after the authored offer exists",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J1 · AUTHOR (decision 1)",
+      "label": "[J1] the conversation queue loads after the authored offer exists",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J1 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "authored offer exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J1 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "Mike prepares the application link for email; nothing is sent",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "prepared": true,
+          "sent": false,
+          "dispatched": false,
+          "delivery_method": "manual_email",
+          "conversion_id": "<id-6>",
+          "invitation_id": "<id-11>",
+          "send_obligation_id": "<id-12>",
+          "prepare_obligation_id": "<id-13>",
+          "unit_id": "<id-3>",
+          "space_id": "<id-9>",
+          "intended_move_in": "2026-10-13",
+          "link": "http://127.0.0.1:3111/t/application/<token>",
+          "recipient_snapshot": "<email>",
+          "email": "<email>",
+          "receipt": "Application link prepared. Nothing was sent. Email it externally, then record that you sent it."
+        }
+      }
+    },
+    {
+      "section": "J1 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "preparation sent nothing and called no model",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J1 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "Mike attests that he emailed the link",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "finalized": true,
+          "invitation_id": "<id-11>",
+          "status": "manually_sent",
+          "send_obligation_id": "<id-12>",
+          "parent_obligation_id": "<id-14>",
+          "receipt": "Send attested. The post-tour follow-up is closed and the applicant follow-up is open."
+        }
+      }
+    },
+    {
+      "section": "J1 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "the applicant sees the authored terms",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "rent": "1100.00"
+      }
+    },
+    {
+      "section": "J1 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "the applicant submits against the acknowledged terms",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Application submitted for TwoStep Prospect J1 f64493a0. Now with leasing_manager for approval.",
+          "application": {
+            "id": "<id-15>",
+            "property_id": "<id-2>",
+            "unit_id": "<id-3>",
+            "person_id": "<id-8>",
+            "status": "submitted",
+            "applicant_name": "TwoStep Prospect J1 f64493a0",
+            "unit_label": null,
+            "rent": "1100.00",
+            "deposit": "1100.00",
+            "guarantor_name": "Guarantor J1 f64493a0",
+            "captured": {
+              "pets": "None",
+              "email": "<email>",
+              "phone": "<phone>",
+              "address": {
+                "city": "Philadelphia",
+                "line1": "100 Test Street",
+                "line2": "",
+                "state": "PA",
+                "postal_code": "19147"
+              },
+              "employer": "Test Employer",
+              "has_pets": "no",
+              "job_title": "Analyst",
+              "occupants": 1,
+              "income_notes": "",
+              "current_since": "2024-01",
+              "date_of_birth": "1995-04-12",
+              "income_amount": 72000,
+              "income_status": "employed",
+              "housing_status": "rent",
+              "desired_move_in": "2026-10-13",
+              "household_names": "",
+              "additional_notes": "",
+              "guarantor_needed": "yes",
+              "income_frequency": "annual",
+              "move_flexibility": "plus_minus_7",
+              "guarantor_contact": {
+                "name": "Guarantor J1 f64493a0",
+                "email": "<email>",
+                "phone": "<phone>"
+              },
+              "application_form_version": "tenant_v3",
+              "electronic_delivery_consent": true,
+              "applicant_accuracy_certified": true
+            },
+            "activation_obligation_id": null,
+            "applicant_signed_at": null,
+            "guarantor_signed_at": null,
+            "countersigned_at": null,
+            "activated_at": null,
+            "created_at": "2026-09-13T02:04:58.900Z",
+            "updated_at": "2026-09-13T02:04:58.900Z",
+            "conversion_id": "<id-6>",
+            "source": "applicant",
+            "decision_by_user_id": null,
+            "decision_reason": null,
+            "decided_at": null,
+            "approval_obligation_id": "<id-16>",
+            "lease_start_date": "2026-10-13T00:00:00.000Z",
+            "lease_end_date": "2027-10-12T00:00:00.000Z",
+            "term_source": null,
+            "terms_completed_at": null,
+            "terms_completed_by": null,
+            "concession_status": "none",
+            "terms_review_obligation_id": null,
+            "proposed_terms_confirmation_id": null,
+            "executed_lease_record_id": null,
+            "leasing_lead_id": "<id-17>",
+            "submitted_at": "2026-09-13T02:04:58.900Z",
+            "approved_at": null,
+            "terminal_at": null,
+            "terminal_code": null,
+            "space_id": "<id-9>",
+            "intended_move_in": "2026-10-13T00:00:00.000Z",
+            "application_offer_id": "<id-10>",
+            "application_terms_hash": "<hash>",
+            "application_terms_acknowledged_at": "2026-09-13T02:04:58.900Z"
+          },
+          "approval_obligation_id": "<id-16>",
+          "rung_closed": null
+        }
+      }
+    },
+    {
+      "section": "J1 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "the application is submitted, bound to the acknowledged offer and exact bed, unapproved, with its approval obligation open",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": "submitted"
+      }
+    },
+    {
+      "section": "J1 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J1] the Leasing desk loads for Mike after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J1 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J1] the desk retains this application, person, unit and tenancy identity after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "count": 1,
+        "lease_id": null
+      }
+    },
+    {
+      "section": "J1 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J1] the conversation queue loads after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J1 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J1] Application Review loads after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J1 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J1] Application Review loads before any packet",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J1 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "Application Review's next action is to prepare the signing package from the acknowledged offer (not to approve)",
+      "ok": false,
+      "kind": "check",
+      "detail": {
+        "code": "approve_application",
+        "label": "Approve the application."
+      }
+    },
+    {
+      "section": "J1 · packet from the acknowledged offer (no approval, no reconfirmation)",
+      "label": "application exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J1 · packet from the acknowledged offer (no approval, no reconfirmation)",
+      "label": "Mike prepares the signing package while the application is still submitted",
+      "ok": false,
+      "kind": "check",
+      "detail": {
+        "status": 403,
+        "error": "not_permitted",
+        "receipt": "This action is not permitted."
+      }
+    },
+    {
+      "section": "J1 · packet from the acknowledged offer (no approval, no reconfirmation)",
+      "label": "section aborted: need: Mike prepares the signing package while the application is still submitted",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J1 · signatures, then refusals before EXECUTE",
+      "label": "links exist",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J1 · signatures, then refusals before EXECUTE",
+      "label": "section aborted: need: links exist",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J1 · rollback of a failing composition boundary",
+      "label": "packet exists",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J1 · rollback of a failing composition boundary",
+      "label": "section aborted: need: packet exists",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J1 · EXECUTE (decision 2): approve + sign for the company, once",
+      "label": "packet exists",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J1 · EXECUTE (decision 2): approve + sign for the company, once",
+      "label": "section aborted: need: packet exists",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J2 · inquiry, ownership, tour",
+      "label": "the website inquiry is captured (no consent, capture only)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J2 · inquiry, ownership, tour",
+      "label": "no model call, no text",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J2 · inquiry, ownership, tour",
+      "label": "Mike takes ownership",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J2 · inquiry, ownership, tour",
+      "label": "Mike records the email he already sent",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J2 · inquiry, ownership, tour",
+      "label": "a native slot is published",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Tour time published.",
+          "slot": {
+            "id": "<id-18>",
+            "property_id": "<id-2>",
+            "unit_id": "<id-19>",
+            "leasing_agent_id": "<id-4>",
+            "starts_at": "2026-09-17T02:04:59.145Z",
+            "ends_at": "2026-09-17T03:04:59.145Z",
+            "capacity": 1,
+            "status": "open",
+            "booked_tour_id": null,
+            "created_by": "<id-4>",
+            "created_at": "2026-09-13T02:04:59.148Z",
+            "updated_at": "2026-09-13T02:04:59.148Z"
+          },
+          "created": true
+        }
+      }
+    },
+    {
+      "section": "J2 · inquiry, ownership, tour",
+      "label": "Mike books the tour",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Tour booked. No confirmation message was sent.",
+          "tour_id": "<id-20>",
+          "slot_id": "<id-18>",
+          "scheduled_for": "2026-09-17T02:04:59.145Z",
+          "status": "scheduled",
+          "idempotent": false
+        }
+      }
+    },
+    {
+      "section": "J2 · inquiry, ownership, tour",
+      "label": "Mike records the outcome as ready to apply",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Outcome recorded — tour given. Follow-up rail opened — outcome · owner set to the actual host.",
+          "tour_id": "<id-20>",
+          "conversion_id": "<id-21>"
+        }
+      }
+    },
+    {
+      "section": "J2 · inquiry, ownership, tour",
+      "label": "the conversion belongs to the same person",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J2 · AUTHOR (decision 1)",
+      "label": "conversion exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J2 · AUTHOR (decision 1)",
+      "label": "the exact-home selector read succeeds",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J2 · AUTHOR (decision 1)",
+      "label": "C8-f64493a0 Bed A is offerable as an exact choice",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "marketing_state": "marketable_now",
+        "basis": "chosen_space"
+      }
+    },
+    {
+      "section": "J2 · AUTHOR (decision 1)",
+      "label": "Mike cannot author terms (no override, no pricing grant)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403,
+        "error": "NO_APPLICATION_OFFER_AUTHORITY"
+      }
+    },
+    {
+      "section": "J2 · AUTHOR (decision 1)",
+      "label": "KZ authors the offer for the chosen bed",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "application_offer_id": "<id-22>",
+          "application_terms": {
+            "schema_version": 1,
+            "property_id": "<id-2>",
+            "person_id": "<id-23>",
+            "target": {
+              "space_id": "<id-24>",
+              "unit_id": "<id-19>"
+            },
+            "rent": "915.00",
+            "security_deposit": "915.00",
+            "lease_start_date": "2026-10-13",
+            "lease_end_date": "2027-10-12",
+            "fees": [],
+            "concessions": {
+              "status": "none"
+            }
+          },
+          "idempotent": false,
+          "applicant_review_required": false,
+          "draft_revision": false,
+          "receipt": "Application offer prepared."
+        }
+      }
+    },
+    {
+      "section": "J2 · AUTHOR (decision 1)",
+      "label": "KZ corrects the unsent draft (explicit successor)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "application_offer_id": "<id-25>",
+          "application_terms": {
+            "schema_version": 1,
+            "property_id": "<id-2>",
+            "person_id": "<id-23>",
+            "target": {
+              "space_id": "<id-24>",
+              "unit_id": "<id-19>"
+            },
+            "rent": "990.00",
+            "security_deposit": "990.00",
+            "lease_start_date": "2026-10-13",
+            "lease_end_date": "2027-10-12",
+            "fees": [],
+            "concessions": {
+              "status": "none"
+            }
+          },
+          "idempotent": false,
+          "applicant_review_required": false,
+          "draft_revision": true,
+          "receipt": "Application draft corrected. No invitation was created and no message was sent."
+        }
+      }
+    },
+    {
+      "section": "J2 · AUTHOR (decision 1)",
+      "label": "the authored offer carries KZ as author, its hash and its lineage",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "author_is_kz": true
+      }
+    },
+    {
+      "section": "J2 · AUTHOR (decision 1)",
+      "label": "[J2] the Leasing desk loads for Mike after the authored offer exists",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J2 · AUTHOR (decision 1)",
+      "label": "[J2] the conversation queue loads after the authored offer exists",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J2 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "authored offer exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J2 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "Mike prepares the application link for email; nothing is sent",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "prepared": true,
+          "sent": false,
+          "dispatched": false,
+          "delivery_method": "manual_email",
+          "conversion_id": "<id-21>",
+          "invitation_id": "<id-26>",
+          "send_obligation_id": "<id-27>",
+          "prepare_obligation_id": "<id-28>",
+          "unit_id": "<id-19>",
+          "space_id": "<id-24>",
+          "intended_move_in": "2026-10-13",
+          "link": "http://127.0.0.1:3111/t/application/<token>",
+          "recipient_snapshot": "<email>",
+          "email": "<email>",
+          "receipt": "Application link prepared. Nothing was sent. Email it externally, then record that you sent it."
+        }
+      }
+    },
+    {
+      "section": "J2 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "preparation sent nothing and called no model",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J2 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "Mike attests that he emailed the link",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "finalized": true,
+          "invitation_id": "<id-26>",
+          "status": "manually_sent",
+          "send_obligation_id": "<id-27>",
+          "parent_obligation_id": "<id-29>",
+          "receipt": "Send attested. The post-tour follow-up is closed and the applicant follow-up is open."
+        }
+      }
+    },
+    {
+      "section": "J2 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "the applicant sees the authored terms",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "rent": "990.00"
+      }
+    },
+    {
+      "section": "J2 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "the applicant submits against the acknowledged terms",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Application submitted for TwoStep Prospect J2 f64493a0. Now with leasing_manager for approval.",
+          "application": {
+            "id": "<id-30>",
+            "property_id": "<id-2>",
+            "unit_id": "<id-19>",
+            "person_id": "<id-23>",
+            "status": "submitted",
+            "applicant_name": "TwoStep Prospect J2 f64493a0",
+            "unit_label": null,
+            "rent": "990.00",
+            "deposit": "990.00",
+            "guarantor_name": "Guarantor J2 f64493a0",
+            "captured": {
+              "pets": "None",
+              "email": "<email>",
+              "phone": "<phone>",
+              "address": {
+                "city": "Philadelphia",
+                "line1": "100 Test Street",
+                "line2": "",
+                "state": "PA",
+                "postal_code": "19147"
+              },
+              "employer": "Test Employer",
+              "has_pets": "no",
+              "job_title": "Analyst",
+              "occupants": 1,
+              "income_notes": "",
+              "current_since": "2024-01",
+              "date_of_birth": "1995-04-12",
+              "income_amount": 72000,
+              "income_status": "employed",
+              "housing_status": "rent",
+              "desired_move_in": "2026-10-13",
+              "household_names": "",
+              "additional_notes": "",
+              "guarantor_needed": "yes",
+              "income_frequency": "annual",
+              "move_flexibility": "plus_minus_7",
+              "guarantor_contact": {
+                "name": "Guarantor J2 f64493a0",
+                "email": "<email>",
+                "phone": "<phone>"
+              },
+              "application_form_version": "tenant_v3",
+              "electronic_delivery_consent": true,
+              "applicant_accuracy_certified": true
+            },
+            "activation_obligation_id": null,
+            "applicant_signed_at": null,
+            "guarantor_signed_at": null,
+            "countersigned_at": null,
+            "activated_at": null,
+            "created_at": "2026-09-13T02:04:59.447Z",
+            "updated_at": "2026-09-13T02:04:59.447Z",
+            "conversion_id": "<id-21>",
+            "source": "applicant",
+            "decision_by_user_id": null,
+            "decision_reason": null,
+            "decided_at": null,
+            "approval_obligation_id": "<id-31>",
+            "lease_start_date": "2026-10-13T00:00:00.000Z",
+            "lease_end_date": "2027-10-12T00:00:00.000Z",
+            "term_source": null,
+            "terms_completed_at": null,
+            "terms_completed_by": null,
+            "concession_status": "none",
+            "terms_review_obligation_id": null,
+            "proposed_terms_confirmation_id": null,
+            "executed_lease_record_id": null,
+            "leasing_lead_id": "<id-32>",
+            "submitted_at": "2026-09-13T02:04:59.447Z",
+            "approved_at": null,
+            "terminal_at": null,
+            "terminal_code": null,
+            "space_id": "<id-24>",
+            "intended_move_in": "2026-10-13T00:00:00.000Z",
+            "application_offer_id": "<id-25>",
+            "application_terms_hash": "<hash>",
+            "application_terms_acknowledged_at": "2026-09-13T02:04:59.447Z"
+          },
+          "approval_obligation_id": "<id-31>",
+          "rung_closed": null
+        }
+      }
+    },
+    {
+      "section": "J2 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "the application is submitted, bound to the acknowledged offer and exact bed, unapproved, with its approval obligation open",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": "submitted"
+      }
+    },
+    {
+      "section": "J2 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J2] the Leasing desk loads for Mike after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J2 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J2] the desk retains this application, person, unit and tenancy identity after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "count": 1,
+        "lease_id": null
+      }
+    },
+    {
+      "section": "J2 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J2] the conversation queue loads after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J2 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J2] Application Review loads after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J2 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J2] Application Review loads before any packet",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J2 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "Application Review's next action is to prepare the signing package from the acknowledged offer (not to approve)",
+      "ok": false,
+      "kind": "check",
+      "detail": {
+        "code": "approve_application",
+        "label": "Approve the application."
+      }
+    },
+    {
+      "section": "J2 · packet from the acknowledged offer (no approval, no reconfirmation)",
+      "label": "application exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J2 · packet from the acknowledged offer (no approval, no reconfirmation)",
+      "label": "Mike prepares the signing package while the application is still submitted",
+      "ok": false,
+      "kind": "check",
+      "detail": {
+        "status": 403,
+        "error": "not_permitted",
+        "receipt": "This action is not permitted."
+      }
+    },
+    {
+      "section": "J2 · packet from the acknowledged offer (no approval, no reconfirmation)",
+      "label": "section aborted: need: Mike prepares the signing package while the application is still submitted",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J2 · signatures, then refusals before EXECUTE",
+      "label": "links exist",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J2 · signatures, then refusals before EXECUTE",
+      "label": "section aborted: need: links exist",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J2 · EXECUTE (decision 2): approve + sign for the company, once",
+      "label": "packet exists",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J2 · EXECUTE (decision 2): approve + sign for the company, once",
+      "label": "section aborted: need: packet exists",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "both leases stand",
+      "label": "both journeys executed",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "both leases stand",
+      "label": "section aborted: need: both journeys executed",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J3 · inquiry, ownership, tour",
+      "label": "the website inquiry is captured (no consent, capture only)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J3 · inquiry, ownership, tour",
+      "label": "no model call, no text",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J3 · inquiry, ownership, tour",
+      "label": "Mike takes ownership",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J3 · inquiry, ownership, tour",
+      "label": "Mike records the email he already sent",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J3 · inquiry, ownership, tour",
+      "label": "a native slot is published",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Tour time published.",
+          "slot": {
+            "id": "<id-33>",
+            "property_id": "<id-2>",
+            "unit_id": "<id-34>",
+            "leasing_agent_id": "<id-4>",
+            "starts_at": "2026-09-18T02:04:59.627Z",
+            "ends_at": "2026-09-18T03:04:59.627Z",
+            "capacity": 1,
+            "status": "open",
+            "booked_tour_id": null,
+            "created_by": "<id-4>",
+            "created_at": "2026-09-13T02:04:59.629Z",
+            "updated_at": "2026-09-13T02:04:59.629Z"
+          },
+          "created": true
+        }
+      }
+    },
+    {
+      "section": "J3 · inquiry, ownership, tour",
+      "label": "Mike books the tour",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Tour booked. No confirmation message was sent.",
+          "tour_id": "<id-35>",
+          "slot_id": "<id-33>",
+          "scheduled_for": "2026-09-18T02:04:59.627Z",
+          "status": "scheduled",
+          "idempotent": false
+        }
+      }
+    },
+    {
+      "section": "J3 · inquiry, ownership, tour",
+      "label": "Mike records the outcome as ready to apply",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Outcome recorded — tour given. Follow-up rail opened — outcome · owner set to the actual host.",
+          "tour_id": "<id-35>",
+          "conversion_id": "<id-36>"
+        }
+      }
+    },
+    {
+      "section": "J3 · inquiry, ownership, tour",
+      "label": "the conversion belongs to the same person",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J3 · AUTHOR (decision 1)",
+      "label": "conversion exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J3 · AUTHOR (decision 1)",
+      "label": "the exact-home selector read succeeds",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J3 · AUTHOR (decision 1)",
+      "label": "C9-f64493a0 Bed A is offerable as an exact choice",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "marketing_state": "marketable_now",
+        "basis": "chosen_space"
+      }
+    },
+    {
+      "section": "J3 · AUTHOR (decision 1)",
+      "label": "Mike cannot author terms (no override, no pricing grant)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403,
+        "error": "NO_APPLICATION_OFFER_AUTHORITY"
+      }
+    },
+    {
+      "section": "J3 · AUTHOR (decision 1)",
+      "label": "KZ authors the offer for the chosen bed",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "application_offer_id": "<id-37>",
+          "application_terms": {
+            "schema_version": 1,
+            "property_id": "<id-2>",
+            "person_id": "<id-38>",
+            "target": {
+              "space_id": "<id-39>",
+              "unit_id": "<id-34>"
+            },
+            "rent": "935.00",
+            "security_deposit": "935.00",
+            "lease_start_date": "2026-10-13",
+            "lease_end_date": "2027-10-12",
+            "fees": [],
+            "concessions": {
+              "status": "none"
+            }
+          },
+          "idempotent": false,
+          "applicant_review_required": false,
+          "draft_revision": false,
+          "receipt": "Application offer prepared."
+        }
+      }
+    },
+    {
+      "section": "J3 · AUTHOR (decision 1)",
+      "label": "KZ corrects the unsent draft (explicit successor)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "application_offer_id": "<id-40>",
+          "application_terms": {
+            "schema_version": 1,
+            "property_id": "<id-2>",
+            "person_id": "<id-38>",
+            "target": {
+              "space_id": "<id-39>",
+              "unit_id": "<id-34>"
+            },
+            "rent": "1010.00",
+            "security_deposit": "1010.00",
+            "lease_start_date": "2026-10-13",
+            "lease_end_date": "2027-10-12",
+            "fees": [],
+            "concessions": {
+              "status": "none"
+            }
+          },
+          "idempotent": false,
+          "applicant_review_required": false,
+          "draft_revision": true,
+          "receipt": "Application draft corrected. No invitation was created and no message was sent."
+        }
+      }
+    },
+    {
+      "section": "J3 · AUTHOR (decision 1)",
+      "label": "the authored offer carries KZ as author, its hash and its lineage",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "author_is_kz": true
+      }
+    },
+    {
+      "section": "J3 · AUTHOR (decision 1)",
+      "label": "[J3] the Leasing desk loads for Mike after the authored offer exists",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J3 · AUTHOR (decision 1)",
+      "label": "[J3] the conversation queue loads after the authored offer exists",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J3 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "authored offer exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J3 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "Mike prepares the application link for email; nothing is sent",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "prepared": true,
+          "sent": false,
+          "dispatched": false,
+          "delivery_method": "manual_email",
+          "conversion_id": "<id-36>",
+          "invitation_id": "<id-41>",
+          "send_obligation_id": "<id-42>",
+          "prepare_obligation_id": "<id-43>",
+          "unit_id": "<id-34>",
+          "space_id": "<id-39>",
+          "intended_move_in": "2026-10-13",
+          "link": "http://127.0.0.1:3111/t/application/<token>",
+          "recipient_snapshot": "<email>",
+          "email": "<email>",
+          "receipt": "Application link prepared. Nothing was sent. Email it externally, then record that you sent it."
+        }
+      }
+    },
+    {
+      "section": "J3 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "preparation sent nothing and called no model",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J3 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "Mike attests that he emailed the link",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "finalized": true,
+          "invitation_id": "<id-41>",
+          "status": "manually_sent",
+          "send_obligation_id": "<id-42>",
+          "parent_obligation_id": "<id-44>",
+          "receipt": "Send attested. The post-tour follow-up is closed and the applicant follow-up is open."
+        }
+      }
+    },
+    {
+      "section": "J3 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "the applicant sees the authored terms",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "rent": "1010.00"
+      }
+    },
+    {
+      "section": "J3 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "the applicant submits against the acknowledged terms",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Application submitted for TwoStep Prospect J3 f64493a0. Now with leasing_manager for approval.",
+          "application": {
+            "id": "<id-45>",
+            "property_id": "<id-2>",
+            "unit_id": "<id-34>",
+            "person_id": "<id-38>",
+            "status": "submitted",
+            "applicant_name": "TwoStep Prospect J3 f64493a0",
+            "unit_label": null,
+            "rent": "1010.00",
+            "deposit": "1010.00",
+            "guarantor_name": "Guarantor J3 f64493a0",
+            "captured": {
+              "pets": "None",
+              "email": "<email>",
+              "phone": "<phone>",
+              "address": {
+                "city": "Philadelphia",
+                "line1": "100 Test Street",
+                "line2": "",
+                "state": "PA",
+                "postal_code": "19147"
+              },
+              "employer": "Test Employer",
+              "has_pets": "no",
+              "job_title": "Analyst",
+              "occupants": 1,
+              "income_notes": "",
+              "current_since": "2024-01",
+              "date_of_birth": "1995-04-12",
+              "income_amount": 72000,
+              "income_status": "employed",
+              "housing_status": "rent",
+              "desired_move_in": "2026-10-13",
+              "household_names": "",
+              "additional_notes": "",
+              "guarantor_needed": "yes",
+              "income_frequency": "annual",
+              "move_flexibility": "plus_minus_7",
+              "guarantor_contact": {
+                "name": "Guarantor J3 f64493a0",
+                "email": "<email>",
+                "phone": "<phone>"
+              },
+              "application_form_version": "tenant_v3",
+              "electronic_delivery_consent": true,
+              "applicant_accuracy_certified": true
+            },
+            "activation_obligation_id": null,
+            "applicant_signed_at": null,
+            "guarantor_signed_at": null,
+            "countersigned_at": null,
+            "activated_at": null,
+            "created_at": "2026-09-13T02:04:59.853Z",
+            "updated_at": "2026-09-13T02:04:59.853Z",
+            "conversion_id": "<id-36>",
+            "source": "applicant",
+            "decision_by_user_id": null,
+            "decision_reason": null,
+            "decided_at": null,
+            "approval_obligation_id": "<id-46>",
+            "lease_start_date": "2026-10-13T00:00:00.000Z",
+            "lease_end_date": "2027-10-12T00:00:00.000Z",
+            "term_source": null,
+            "terms_completed_at": null,
+            "terms_completed_by": null,
+            "concession_status": "none",
+            "terms_review_obligation_id": null,
+            "proposed_terms_confirmation_id": null,
+            "executed_lease_record_id": null,
+            "leasing_lead_id": "<id-47>",
+            "submitted_at": "2026-09-13T02:04:59.853Z",
+            "approved_at": null,
+            "terminal_at": null,
+            "terminal_code": null,
+            "space_id": "<id-39>",
+            "intended_move_in": "2026-10-13T00:00:00.000Z",
+            "application_offer_id": "<id-40>",
+            "application_terms_hash": "<hash>",
+            "application_terms_acknowledged_at": "2026-09-13T02:04:59.853Z"
+          },
+          "approval_obligation_id": "<id-46>",
+          "rung_closed": null
+        }
+      }
+    },
+    {
+      "section": "J3 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "the application is submitted, bound to the acknowledged offer and exact bed, unapproved, with its approval obligation open",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": "submitted"
+      }
+    },
+    {
+      "section": "J3 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J3] the Leasing desk loads for Mike after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J3 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J3] the desk retains this application, person, unit and tenancy identity after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "count": 1,
+        "lease_id": null
+      }
+    },
+    {
+      "section": "J3 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J3] the conversation queue loads after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J3 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J3] Application Review loads after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J3 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J3] Application Review loads before any packet",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J3 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "Application Review's next action is to prepare the signing package from the acknowledged offer (not to approve)",
+      "ok": false,
+      "kind": "check",
+      "detail": {
+        "code": "approve_application",
+        "label": "Approve the application."
+      }
+    },
+    {
+      "section": "J3 · packet from the acknowledged offer (no approval, no reconfirmation)",
+      "label": "application exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J3 · packet from the acknowledged offer (no approval, no reconfirmation)",
+      "label": "Mike prepares the signing package while the application is still submitted",
+      "ok": false,
+      "kind": "check",
+      "detail": {
+        "status": 403,
+        "error": "not_permitted",
+        "receipt": "This action is not permitted."
+      }
+    },
+    {
+      "section": "J3 · packet from the acknowledged offer (no approval, no reconfirmation)",
+      "label": "section aborted: need: Mike prepares the signing package while the application is still submitted",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J3 · signatures, then refusals before EXECUTE",
+      "label": "links exist",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J3 · signatures, then refusals before EXECUTE",
+      "label": "section aborted: need: links exist",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J3 · withdrawal before EXECUTE",
+      "label": "packet exists",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J3 · withdrawal before EXECUTE",
+      "label": "section aborted: need: packet exists",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J4 · inquiry, ownership, tour",
+      "label": "the website inquiry is captured (no consent, capture only)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J4 · inquiry, ownership, tour",
+      "label": "no model call, no text",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J4 · inquiry, ownership, tour",
+      "label": "Mike takes ownership",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J4 · inquiry, ownership, tour",
+      "label": "Mike records the email he already sent",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J4 · inquiry, ownership, tour",
+      "label": "a native slot is published",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Tour time published.",
+          "slot": {
+            "id": "<id-48>",
+            "property_id": "<id-2>",
+            "unit_id": "<id-49>",
+            "leasing_agent_id": "<id-4>",
+            "starts_at": "2026-09-19T02:05:00.012Z",
+            "ends_at": "2026-09-19T03:05:00.012Z",
+            "capacity": 1,
+            "status": "open",
+            "booked_tour_id": null,
+            "created_by": "<id-4>",
+            "created_at": "2026-09-13T02:05:00.014Z",
+            "updated_at": "2026-09-13T02:05:00.014Z"
+          },
+          "created": true
+        }
+      }
+    },
+    {
+      "section": "J4 · inquiry, ownership, tour",
+      "label": "Mike books the tour",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Tour booked. No confirmation message was sent.",
+          "tour_id": "<id-50>",
+          "slot_id": "<id-48>",
+          "scheduled_for": "2026-09-19T02:05:00.012Z",
+          "status": "scheduled",
+          "idempotent": false
+        }
+      }
+    },
+    {
+      "section": "J4 · inquiry, ownership, tour",
+      "label": "Mike records the outcome as ready to apply",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Outcome recorded — tour given. Follow-up rail opened — outcome · owner set to the actual host.",
+          "tour_id": "<id-50>",
+          "conversion_id": "<id-51>"
+        }
+      }
+    },
+    {
+      "section": "J4 · inquiry, ownership, tour",
+      "label": "the conversion belongs to the same person",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J4 · AUTHOR (decision 1)",
+      "label": "conversion exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J4 · AUTHOR (decision 1)",
+      "label": "the exact-home selector read succeeds",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J4 · AUTHOR (decision 1)",
+      "label": "D1-f64493a0 Bed A is offerable as an exact choice",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "marketing_state": "marketable_now",
+        "basis": "chosen_space"
+      }
+    },
+    {
+      "section": "J4 · AUTHOR (decision 1)",
+      "label": "Mike cannot author terms (no override, no pricing grant)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 403,
+        "error": "NO_APPLICATION_OFFER_AUTHORITY"
+      }
+    },
+    {
+      "section": "J4 · AUTHOR (decision 1)",
+      "label": "KZ authors the offer for the chosen bed",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "application_offer_id": "<id-52>",
+          "application_terms": {
+            "schema_version": 1,
+            "property_id": "<id-2>",
+            "person_id": "<id-53>",
+            "target": {
+              "space_id": "<id-54>",
+              "unit_id": "<id-49>"
+            },
+            "rent": "930.00",
+            "security_deposit": "930.00",
+            "lease_start_date": "2026-10-13",
+            "lease_end_date": "2027-10-12",
+            "fees": [],
+            "concessions": {
+              "status": "none"
+            }
+          },
+          "idempotent": false,
+          "applicant_review_required": false,
+          "draft_revision": false,
+          "receipt": "Application offer prepared."
+        }
+      }
+    },
+    {
+      "section": "J4 · AUTHOR (decision 1)",
+      "label": "KZ corrects the unsent draft (explicit successor)",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "application_offer_id": "<id-55>",
+          "application_terms": {
+            "schema_version": 1,
+            "property_id": "<id-2>",
+            "person_id": "<id-53>",
+            "target": {
+              "space_id": "<id-54>",
+              "unit_id": "<id-49>"
+            },
+            "rent": "1005.00",
+            "security_deposit": "1005.00",
+            "lease_start_date": "2026-10-13",
+            "lease_end_date": "2027-10-12",
+            "fees": [],
+            "concessions": {
+              "status": "none"
+            }
+          },
+          "idempotent": false,
+          "applicant_review_required": false,
+          "draft_revision": true,
+          "receipt": "Application draft corrected. No invitation was created and no message was sent."
+        }
+      }
+    },
+    {
+      "section": "J4 · AUTHOR (decision 1)",
+      "label": "the authored offer carries KZ as author, its hash and its lineage",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "author_is_kz": true
+      }
+    },
+    {
+      "section": "J4 · AUTHOR (decision 1)",
+      "label": "[J4] the Leasing desk loads for Mike after the authored offer exists",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J4 · AUTHOR (decision 1)",
+      "label": "[J4] the conversation queue loads after the authored offer exists",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J4 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "authored offer exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J4 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "Mike prepares the application link for email; nothing is sent",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "prepared": true,
+          "sent": false,
+          "dispatched": false,
+          "delivery_method": "manual_email",
+          "conversion_id": "<id-51>",
+          "invitation_id": "<id-56>",
+          "send_obligation_id": "<id-57>",
+          "prepare_obligation_id": "<id-58>",
+          "unit_id": "<id-49>",
+          "space_id": "<id-54>",
+          "intended_move_in": "2026-10-13",
+          "link": "http://127.0.0.1:3111/t/application/<token>",
+          "recipient_snapshot": "<email>",
+          "email": "<email>",
+          "receipt": "Application link prepared. Nothing was sent. Email it externally, then record that you sent it."
+        }
+      }
+    },
+    {
+      "section": "J4 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "preparation sent nothing and called no model",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J4 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "Mike attests that he emailed the link",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "finalized": true,
+          "invitation_id": "<id-56>",
+          "status": "manually_sent",
+          "send_obligation_id": "<id-57>",
+          "parent_obligation_id": "<id-59>",
+          "receipt": "Send attested. The post-tour follow-up is closed and the applicant follow-up is open."
+        }
+      }
+    },
+    {
+      "section": "J4 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "the applicant sees the authored terms",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "rent": "1005.00"
+      }
+    },
+    {
+      "section": "J4 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "the applicant submits against the acknowledged terms",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200,
+        "body": {
+          "receipt": "Application submitted for TwoStep Prospect J4 f64493a0. Now with leasing_manager for approval.",
+          "application": {
+            "id": "<id-60>",
+            "property_id": "<id-2>",
+            "unit_id": "<id-49>",
+            "person_id": "<id-53>",
+            "status": "submitted",
+            "applicant_name": "TwoStep Prospect J4 f64493a0",
+            "unit_label": null,
+            "rent": "1005.00",
+            "deposit": "1005.00",
+            "guarantor_name": "Guarantor J4 f64493a0",
+            "captured": {
+              "pets": "None",
+              "email": "<email>",
+              "phone": "<phone>",
+              "address": {
+                "city": "Philadelphia",
+                "line1": "100 Test Street",
+                "line2": "",
+                "state": "PA",
+                "postal_code": "19147"
+              },
+              "employer": "Test Employer",
+              "has_pets": "no",
+              "job_title": "Analyst",
+              "occupants": 1,
+              "income_notes": "",
+              "current_since": "2024-01",
+              "date_of_birth": "1995-04-12",
+              "income_amount": 72000,
+              "income_status": "employed",
+              "housing_status": "rent",
+              "desired_move_in": "2026-10-13",
+              "household_names": "",
+              "additional_notes": "",
+              "guarantor_needed": "yes",
+              "income_frequency": "annual",
+              "move_flexibility": "plus_minus_7",
+              "guarantor_contact": {
+                "name": "Guarantor J4 f64493a0",
+                "email": "<email>",
+                "phone": "<phone>"
+              },
+              "application_form_version": "tenant_v3",
+              "electronic_delivery_consent": true,
+              "applicant_accuracy_certified": true
+            },
+            "activation_obligation_id": null,
+            "applicant_signed_at": null,
+            "guarantor_signed_at": null,
+            "countersigned_at": null,
+            "activated_at": null,
+            "created_at": "2026-09-13T02:05:00.258Z",
+            "updated_at": "2026-09-13T02:05:00.258Z",
+            "conversion_id": "<id-51>",
+            "source": "applicant",
+            "decision_by_user_id": null,
+            "decision_reason": null,
+            "decided_at": null,
+            "approval_obligation_id": "<id-61>",
+            "lease_start_date": "2026-10-13T00:00:00.000Z",
+            "lease_end_date": "2027-10-12T00:00:00.000Z",
+            "term_source": null,
+            "terms_completed_at": null,
+            "terms_completed_by": null,
+            "concession_status": "none",
+            "terms_review_obligation_id": null,
+            "proposed_terms_confirmation_id": null,
+            "executed_lease_record_id": null,
+            "leasing_lead_id": "<id-62>",
+            "submitted_at": "2026-09-13T02:05:00.258Z",
+            "approved_at": null,
+            "terminal_at": null,
+            "terminal_code": null,
+            "space_id": "<id-54>",
+            "intended_move_in": "2026-10-13T00:00:00.000Z",
+            "application_offer_id": "<id-55>",
+            "application_terms_hash": "<hash>",
+            "application_terms_acknowledged_at": "2026-09-13T02:05:00.258Z"
+          },
+          "approval_obligation_id": "<id-61>",
+          "rung_closed": null
+        }
+      }
+    },
+    {
+      "section": "J4 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "the application is submitted, bound to the acknowledged offer and exact bed, unapproved, with its approval obligation open",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": "submitted"
+      }
+    },
+    {
+      "section": "J4 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J4] the Leasing desk loads for Mike after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J4 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J4] the desk retains this application, person, unit and tenancy identity after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "count": 1,
+        "lease_id": null
+      }
+    },
+    {
+      "section": "J4 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J4] the conversation queue loads after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J4 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J4] Application Review loads after the application is submitted",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J4 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "[J4] Application Review loads before any packet",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "J4 · Mike prepares, attests; applicant and guarantor apply",
+      "label": "Application Review's next action is to prepare the signing package from the acknowledged offer (not to approve)",
+      "ok": false,
+      "kind": "check",
+      "detail": {
+        "code": "approve_application",
+        "label": "Approve the application."
+      }
+    },
+    {
+      "section": "J4 · packet from the acknowledged offer (no approval, no reconfirmation)",
+      "label": "application exists",
+      "ok": true,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J4 · packet from the acknowledged offer (no approval, no reconfirmation)",
+      "label": "Mike prepares the signing package while the application is still submitted",
+      "ok": false,
+      "kind": "check",
+      "detail": {
+        "status": 403,
+        "error": "not_permitted",
+        "receipt": "This action is not permitted."
+      }
+    },
+    {
+      "section": "J4 · packet from the acknowledged offer (no approval, no reconfirmation)",
+      "label": "section aborted: need: Mike prepares the signing package while the application is still submitted",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J4 · signatures, then refusals before EXECUTE",
+      "label": "links exist",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J4 · signatures, then refusals before EXECUTE",
+      "label": "section aborted: need: links exist",
+      "ok": false,
+      "kind": "check",
+      "detail": null
+    },
+    {
+      "section": "J4 · signatures, then refusals before EXECUTE",
+      "label": "J4 left at resident_executed for the browser slice",
+      "ok": true,
+      "kind": "observe",
+      "detail": {
+        "handoff": "two_step_handoff.json"
+      }
+    },
+    {
+      "section": "second property shape · incomplete setup refuses honestly",
+      "label": "what the lease configuration read says for a property with no governing instrument",
+      "ok": true,
+      "kind": "observe",
+      "detail": {
+        "status": 200,
+        "body": "{\"configuration\":{\"property\":{\"id\":\"<id-63>\",\"name\":\"TwoStep Other f64493a0\",\"address\":\"2 Scope Wall\"},\"terms\":{\"landlord_entity\":\"\",\"application_fee\":\"\",\"amenity_fee\":\"\",\"utility_responsibility\":\"\",\"late_fee\":\"\",\"notice_requirement\":\"\",\"rent_payment_location\":\"\",\"insura"
+      }
+    },
+    {
+      "section": "second property shape · incomplete setup refuses honestly",
+      "label": "the configuration read answers rather than failing",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 200
+      }
+    },
+    {
+      "section": "second property shape · incomplete setup refuses honestly",
+      "label": "a property whose setup is incomplete names the missing input instead of publishing a tour time",
+      "ok": true,
+      "kind": "check",
+      "detail": {
+        "status": 422,
+        "error": "property_operating_timezone_not_configured"
+      }
+    },
+    {
+      "section": "second property shape · incomplete setup refuses honestly",
+      "label": "the other property's session cannot execute the first property's packet",
+      "ok": false,
+      "kind": "check",
+      "detail": {
+        "status": 404
+      }
+    },
+    {
+      "section": "completion",
+      "label": "two journeys each completed with exactly two commercial decisions and one pending lease",
+      "ok": false,
+      "kind": "check",
+      "detail": {
+        "leases": []
+      }
+    }
+  ]
+}

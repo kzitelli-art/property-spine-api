@@ -39,9 +39,12 @@ const read = (p) => fs.readFileSync(p, "utf8");
 //  explaining the rename, and not a property read. `w.stage_decision_required`
 //  is how the column is read; the test is whether its name can ever reach a
 //  person. So: strip comments, then keep only string and template literals.
+//  One alternation, not two chained replaces: a `/*` inside a `//`
+//  comment (server.js prose says `/operator/*`) would otherwise open a
+//  block comment that closes 569 lines later. See
+//  tests/unit/shared_conversational_path.test.js for the full account.
 const stripComments = (s) => s
-  .replace(/\/\*[\s\S]*?\*\//g, "")
-  .split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+  .replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
 //  `${i.stage_decision_note}` prints the note's VALUE, not the field's name, so
 //  interpolation expressions are dropped before the copy is examined.
 const printable = (s) =>

@@ -75,9 +75,32 @@ const { normalizePropertyLine } = require("./property_line"); // the one canonic
 const clarification = require("../conversation/clarification");
 const { operatingReceipt, deliveryReceipt, composeReceipt } = require("../conversation/receipt");
 const technicianConversation = require("../technician/conversation");
+const { routeStaffSmsTurn } = require("../conversation/staff_sms_router");
+const { makeStaffGovernedRead } = require("./staff_governed_read");
+const { makeStaffLeasingAction } = require("../leasing/staff_sms_action");
+const defaultAskSpineAnswer = require("../agent/ask_spine_answer");
+const { createComplianceReferenceService } = require("../asset/compliance_references");
 
-module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService }) {
+module.exports = function tenantLinkModule({
+  pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService,
+  askSpineAnswer = defaultAskSpineAnswer, complianceReferenceService = null,
+  applicationsService = null,
+  getLeasingTourService = null,
+  getConversionService = null,
+  getApplicationInvitations = null,
+  staffLeasingAction: injectedStaffLeasingAction = null,
+}) {
   const router = express.Router();
+  const complianceReferences = complianceReferenceService || createComplianceReferenceService({
+    secret: process.env.COMPLIANCE_REFERENCE_SECRET,
+  });
+  const staffGovernedRead = makeStaffGovernedRead({ askSpineAnswer });
+  const staffLeasingAction = injectedStaffLeasingAction || makeStaffLeasingAction({
+    getLeasingTourService, getConversionService, getApplicationInvitations,
+  });
+  if (!staffLeasingAction || typeof staffLeasingAction.run !== "function") {
+    throw new Error("tenant_link requires the canonical staff leasing action service");
+  }
 
   // ── DEPENDENCY ASSERTION (symmetric with maintenance.js) ──────────────
   //  POST /tenant/maintenance and /tenant/maintenance/:id/add delegate every
@@ -380,84 +403,34 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
   });
 
   // ════════════════════════════════════════════════════════════════════
-  //  2b. SET THE PROPERTY TEXT LINE (030)
-  //  The Twilio number this property speaks from. Identity for inbound
-  //  routing: webhook "To" → exactly one property. Operator-gated.
+  //  2b. DELETED — POST /properties/:propertyId/sms-number  (was here)
+  //
+  //  It wrote a property_facing line with outbound_enabled=false and no
+  //  outbound_policy, so the column defaulted to 'disabled'. Migration 132's
+  //  ck_cl_outbound_flag_matches_policy reads
+  //      outbound_enabled = (outbound_policy <> 'disabled')
+  //  which for that row is false = false. THE CHECK PASSES. The row is
+  //  internally consistent and operationally false: every other
+  //  property_facing line is 'proactive', so a line recorded here would
+  //  accept inbound and silently refuse every outbound message, with nothing
+  //  rejecting it and nothing warning.
+  //
+  //  Removed rather than documented, because a route that writes a
+  //  plausible-looking wrong row is worse than no route: the refusal it
+  //  causes later reads as policy rather than as a bad write.
+  //
+  //  REMOVAL PROOF (2026-09-16) — deterministic local grep, not a code-search
+  //  index. Zero callers of "sms-number" in this repo outside this file, and
+  //  zero in property-spine-app on ANY remote branch. The app touches
+  //  `sms_number` twice (index.html:30727, 31076); both are display-only
+  //  table cells reading the projection, neither is a POST.
+  //  ⚠ RESIDUAL, STATED PLAINLY: this route was requireOperator-gated and the
+  //  shared operator key is held outside this repo, so source cannot prove no
+  //  external caller ever existed. A 404 is the honest answer for one.
+  //
+  //  Lines are authored through communication_lines with a real policy;
+  //  properties.sms_number stays a projection (trg_cl_project_property_line).
   // ════════════════════════════════════════════════════════════════════
-  router.post("/properties/:propertyId/sms-number", requireOperator, async (req, res) => {
-    try {
-      const { propertyId } = req.params;
-      const raw = req.body && req.body.sms_number;
-      const number = raw === null || raw === "" ? null : normalizePhone(raw);
-      if (raw && !number) {
-        return res.status(400).json({ receipt: "That doesn't look like a valid US phone number. Use 10 digits or +1 format." });
-      }
-      if (number) {
-        //  Checked against the CANONICAL model, not the projection. The
-        //  database enforces this too (uq_communication_lines_active_e164);
-        //  this exists to answer with a sentence instead of a constraint
-        //  violation.
-        const clash = await pool.query(
-          `select p.id, p.name, p.address
-             from communication_lines cl
-             join properties p on p.id = cl.property_id
-            where cl.e164 = $1 and cl.status = 'active'
-              and cl.line_type = 'property_facing' and cl.property_id <> $2`,
-          [number, propertyId]);
-        if (clash.rows.length) {
-          return res.status(409).json({
-            receipt: `That number is already the text line for ${clash.rows[0].name || clash.rows[0].address}. One line, one property — inbound routing depends on it.`,
-          });
-        }
-      }
-      //  CANONICAL CONFIGURATION WRITE (migration 130). communication_lines
-      //  is the only writable source of line configuration;
-      //  properties.sms_number is a read-only projection maintained by a
-      //  trigger, and a direct write to it is refused by the database.
-      //
-      //  Supersession, not mutation: the previous line is RETIRED rather
-      //  than overwritten, so a number moving between properties stays
-      //  auditable (§6 — corrections do not erase history).
-      await pool.query("begin");
-      try {
-        await pool.query(
-          `update communication_lines
-              set status = 'retired', superseded_at = now(), updated_at = now()
-            where property_id = $1 and line_type = 'property_facing' and status = 'active'`,
-          [propertyId]);
-
-        if (number) {
-          await pool.query(
-            `insert into communication_lines
-               (e164, line_type, property_id, authority_ceiling, permitted_audience,
-                inbound_enabled, outbound_enabled, status, notes)
-             values ($1, 'property_facing', $2, 'external', 'residents_and_prospects',
-                true, false, 'active', 'configured via operator property-line route')`,
-            [number, propertyId]);
-        }
-        await pool.query("commit");
-      } catch (e) {
-        await pool.query("rollback");
-        throw e;
-      }
-
-      const r = await pool.query(
-        `select id, name, address, sms_number from properties where id = $1`,
-        [propertyId]);
-      if (!r.rows.length) return res.status(404).json({ receipt: "No property with that id." });
-      const p = r.rows[0];
-      res.json({
-        receipt: number
-          ? `${p.name || p.address} text line set to ${number}. Invites, replies, and OTP codes now go out as real texts from this number.`
-          : `${p.name || p.address} text line cleared — back to link-only behavior.`,
-        property: { id: p.id, name: p.name, sms_number: p.sms_number },
-        sms_transport: smsReady() ? "configured" : "not_configured (set Twilio env vars in Render)",
-      });
-    } catch (e) {
-      console.error("sms-number:", e);
-      res.status(500).json({ receipt: "Could not set the text line.", error: e.message });
-    }
-  });
 
   // ════════════════════════════════════════════════════════════════════
   //  3. CREATE SETUP LINK (supersedes old active links; opens the thread)
@@ -766,10 +739,16 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
       const ledger = (await pool.query(
         `select label, kind, amount, occurred_at from ledger_entries
           where lease_id = $1 order by occurred_at desc limit 10`, [place.lease_id])).rows;
+      //  work_orders.person_id was dropped by migration 098, which split it
+      //  into reported_by_person_id and affected_person_id. This query kept
+      //  the old name, so every resident's /tenant/me answered 500 since.
+      //  A resident's open work is what they REPORTED or what AFFECTS their
+      //  home — 098's two relationships, both of them theirs.
       const workOrders = (await pool.query(
         `select id, title, issue_type, description, status, created_at
            from work_orders
-          where person_id = $1 and property_id = $2 and status <> 'complete'
+          where (reported_by_person_id = $1 or affected_person_id = $1)
+            and property_id = $2 and status <> 'complete'
           order by created_at desc`, [sess.person_id, sess.property_id])).rows;
 
       res.json({
@@ -1259,30 +1238,80 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
           //  turn must not become a provider timeout and a redelivery.
           emptyTwiml(res);
 
+          const attachments = twilioAttachments(req.body);
+          const route = routeStaffSmsTurn({ text: body || "", attachments });
           let turn;
-          const t = await pool.connect();
-          try {
-            await t.query("begin");
-            turn = await technicianConversation.runOperationsTurn(t, {
-              organizationId: ctx.organizationId, userId: ctx.staffUserId,
-              lineId: ctx.lineId, body: body || "",
-              providerMessageId: MessageSid,
-              //  MMS attachments as the carrier described them. The provider's
-              //  own media identity travels; its URL is a reference, never proof.
-              attachments: twilioAttachments(req.body),
-            }, { fetchMedia: sms && typeof sms.fetchMedia === "function" ? sms.fetchMedia : null });
-            await t.query("commit");
-          } catch (e) {
-            await t.query("rollback").catch(() => {});
-            //  A redelivery that lost the correlation-key race has already
-            //  been answered. Nothing to do, and nothing wrong.
-            if (e.code === "23505") {
-              console.error(`inbound-sms: operations turn already answered (${MessageSid}) — duplicate suppressed.`);
+
+          if (route.destination === "ask_spine") {
+            try {
+              turn = await staffGovernedRead.run(pool, anthropic, {
+                organizationId: ctx.organizationId,
+                userId: ctx.staffUserId,
+                lineId: ctx.lineId,
+                body: body || "",
+                providerMessageId: MessageSid,
+                propertyContext: ctx.propertyContext,
+                clarification: ctx.clarification,
+                askOptions: {
+                  mintComplianceReference: complianceReferences.mintReference,
+                  applicationsService,
+                },
+              });
+            } catch (e) {
+              if (e.code === "23505") {
+                console.error(`inbound-sms: operations read already answered (${MessageSid}) - duplicate suppressed.`);
+                return;
+              }
+              console.error("inbound-sms: operations read failed - inbound preserved, no reply sent:", e.message);
               return;
             }
-            console.error("inbound-sms: operations turn failed — inbound preserved, no reply sent:", e.message);
-            return;
-          } finally { t.release(); }
+          } else if (route.destination === "leasing") {
+            try {
+              turn = await staffLeasingAction.run(pool, {
+                organizationId: ctx.organizationId,
+                userId: ctx.staffUserId,
+                lineId: ctx.lineId,
+                body: body || "",
+                providerMessageId: MessageSid,
+                propertyContext: ctx.propertyContext,
+                clarification: ctx.clarification,
+                intent: route.leasing,
+              });
+            } catch (e) {
+              if (e.code === "23505") {
+                console.error(`inbound-sms: operations leasing turn already answered (${MessageSid}) - duplicate suppressed.`);
+                return;
+              }
+              console.error("inbound-sms: operations leasing turn failed - inbound preserved for human follow-up:", e.message);
+              return;
+            }
+          } else {
+            const t = await pool.connect();
+            try {
+              await t.query("begin");
+              turn = await technicianConversation.runOperationsTurn(t, {
+                organizationId: ctx.organizationId, userId: ctx.staffUserId,
+                lineId: ctx.lineId, body: body || "",
+                providerMessageId: MessageSid,
+                //  MMS attachments as the carrier described them. The provider's
+                //  own media identity travels; its URL is a reference, never proof.
+                attachments,
+              }, { fetchMedia: sms && typeof sms.fetchMedia === "function" ? sms.fetchMedia : null });
+              await t.query("commit");
+            } catch (e) {
+              await t.query("rollback").catch(() => {});
+              //  A redelivery that lost the correlation-key race has already
+              //  been answered. Nothing to do, and nothing wrong.
+              if (e.code === "23505") {
+                console.error(`inbound-sms: operations turn already answered (${MessageSid}) - duplicate suppressed.`);
+                return;
+              }
+              console.error("inbound-sms: operations turn failed - inbound preserved, no reply sent:", e.message);
+              return;
+            } finally {
+              t.release();
+            }
+          }
 
           //  TRANSPORT, AFTER THE COMMIT. The operating action is done and
           //  is not revised by anything the carrier does.

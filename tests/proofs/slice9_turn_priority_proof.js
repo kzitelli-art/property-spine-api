@@ -19,7 +19,7 @@
 const path = require("path");
 const { Pool } = require("pg");
 const REPO = path.resolve(__dirname, "..", "..");
-const { seedInventory } = require("./fixtures/slice9_inventory_fixture");
+const { seedInventory } = require("../fixtures/slice9_inventory_fixture");
 const { rankTurnPriority } = require(path.join(REPO, "src/maintenance/turn_priority"));
 const { readNextCommittedMoveIn } = require(path.join(REPO, "src/maintenance/unit_move_in_read"));
 const { closeActiveTurnoversForReadiness } = require(path.join(REPO, "src/maintenance/readiness_service"));

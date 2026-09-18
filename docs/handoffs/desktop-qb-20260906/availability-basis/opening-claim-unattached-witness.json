@@ -1,0 +1,43 @@
+{
+  "mode": "positive_defect_witness",
+  "evidence": [
+    {
+      "tally_established": 4,
+      "positions": 10,
+      "not_established": 8,
+      "open": 2,
+      "unknowns": {
+        "occupied_positions_with_no_recorded_rent": 0,
+        "positions_with_unresolved_occupancy_evidence": 8,
+        "positions_with_overlapping_lease_claims": 0,
+        "occupied_positions_proven_only_by_the_opening_import": 0,
+        "occupied_positions_with_no_linked_resident": 0
+      },
+      "unattached": null,
+      "rent_roll_totals": {
+        "units": 4,
+        "rentable_positions": 10,
+        "occupied": 0,
+        "activation_pending": 0,
+        "open": 2,
+        "needs_review": 0,
+        "not_established": 8,
+        "established": 2,
+        "unclassified": 0,
+        "with_next_known": 0,
+        "rent_not_in_source": 0
+      },
+      "availability": {
+        "marketable_now": 2,
+        "occupancy_unknown": 8
+      },
+      "ask_unknowns": {
+        "occupied_positions_with_no_recorded_rent": 0,
+        "positions_with_unresolved_occupancy_evidence": 8,
+        "positions_with_overlapping_lease_claims": 0,
+        "occupied_positions_proven_only_by_the_opening_import": 0,
+        "occupied_positions_with_no_linked_resident": 0
+      }
+    }
+  ]
+}

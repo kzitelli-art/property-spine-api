@@ -30,8 +30,9 @@ set -u
 E="${E2E_DATABASE_URL:-postgres://postgres:spineproof@127.0.0.1:5432/spine_e2e}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 1
+node tests/e2e/proof_boundary.js check || exit 1
 
-psql "$E" -q -f migrations/000_schema_migrations.sql >/dev/null 2>&1
+psql "$E" -q -v ON_ERROR_STOP=1 -f migrations/000_schema_migrations.sql || exit 1
 FAILED=0
 for f in $(ls migrations/*.sql | grep -vE '000_schema_migrations' | sort); do
   v=$(basename "$f" | cut -c1-3)
@@ -50,10 +51,11 @@ for f in $(ls migrations/*.sql | grep -vE '000_schema_migrations' | sort); do
     if ! psql "$E" -q -v ON_ERROR_STOP=1 -f "$pre" >/tmp/pre.log 2>&1; then
       echo "   PRECONDITION FAILED for $v"
       grep -oE 'ERROR:.*' /tmp/pre.log | head -2 | sed 's/^/        /'
+      exit 1
     fi
   fi
   if psql "$E" -q -v ON_ERROR_STOP=1 -f "$f" >/tmp/mig.log 2>&1; then
-    psql "$E" -q -c "insert into schema_migrations (version,name) values ('$v','$(basename "$f")') on conflict do nothing" >/dev/null 2>&1
+    psql "$E" -q -v ON_ERROR_STOP=1 -c "insert into schema_migrations (version,name) values ('$v','$(basename "$f")') on conflict do nothing" || exit 1
   else
     err=$(grep -oE 'ERROR:.*' /tmp/mig.log | head -1 | cut -c1-95)
     if echo "$err" | grep -q "duplicate key value.*schema_migrations_pkey"; then

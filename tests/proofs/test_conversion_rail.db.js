@@ -185,6 +185,8 @@ async function main() {
     // and it's a real row in the shared obligations table
     const ob = (await pool.query(`select * from obligations where id=$1`, [tf.obligation_id])).rows[0];
     assert(ob && ob.module === "leasing" && ob.type === "tour_followup", "obligation not in shared table");
+    assert(ob.assigned_user_id === ctx.katie,
+      "the canonical obligation does not carry the eligible rung owner");
     firstObId = tf.obligation_id;
     // history origin row present
     assert(view.ownership_history[0].kind === "origin" && view.ownership_history[0].to_user_id === ctx.katie, "no origin history");
@@ -228,11 +230,8 @@ async function main() {
       assert(tf.owner_user_id !== id, `ownership was invented — rung fell through to ${who}`);
     }
     const ob = (await pool.query(`select * from obligations where id=$1`, [tf.obligation_id])).rows[0];
-    // WEAK EVIDENCE, KEPT DELIBERATELY. spawnRung never passes assigned_user_id
-    // at all, so this holds for an OWNED rung too — it does not by itself prove
-    // the unowned case. It is here to catch a future spawn path that starts
-    // stamping the obligation row, which must not stamp an ineligible user.
-    // The load-bearing proof of UNASSIGNED is the ledger event below.
+    // The canonical obligation carries the same ownership decision as the
+    // conversion link: an ineligible host must never be stamped here.
     assert(ob.assigned_user_id === null, "obligation carries an assigned user despite no eligible owner");
     assert(ob.status === "open", "the unowned obligation must still be OPEN and visible, not hidden");
 
@@ -292,6 +291,10 @@ async function main() {
     // the OPEN tour_followup rung moved to Candace
     const tf = view.rungs.find(r => r.rung === "tour_followup");
     assert(tf.owner_user_id === ctx.candace, "open rung did not move to new owner");
+    const ob = (await pool.query(
+      `select assigned_user_id from obligations where id=$1`, [tf.obligation_id])).rows[0];
+    assert(ob.assigned_user_id === ctx.candace,
+      "explicit handoff moved the leasing link but not the canonical obligation");
   });
 
   // reject handoff to nobody

@@ -18,7 +18,7 @@
 const path = require("path");
 const { Pool } = require("pg");
 const REPO = path.resolve(__dirname, "..", "..");
-const { seedInventory } = require("./fixtures/slice9_inventory_fixture");
+const { seedInventory } = require("../fixtures/slice9_inventory_fixture");
 const crypto = require("crypto");
 
 let pass = 0, fail = 0;

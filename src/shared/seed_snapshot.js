@@ -31,7 +31,7 @@ const personIngress = require("../identity/person_ingress.js"); // the ONE door 
 // ════════════════════════════════════════════════════════════════════
 
 const { Pool } = require("pg");
-const { resolvePropertyForImport } = require("../identity/property_resolution_service.js");
+const { resolvePropertyIdentity } = require("../identity/property_resolution_service.js");
 
 const DATASETS = {
   skyline: require("../../seeds/data_skyline.js"),
@@ -49,7 +49,7 @@ function dt(v){ if (!v) return null; const m = String(v).trim().match(/^(\d{1,2}
 //  src/identity/property_resolution_service.js for why a single text
 //  match is a proposal and not an answer.
 async function resolveProperty(client, cfg){
-  const res = await resolvePropertyForImport(client, {
+  const res = await resolvePropertyIdentity(client, {
     canonical_key: cfg.property_key || null,
     match_tokens: cfg.property_match || [],
   });
@@ -80,7 +80,7 @@ async function seedOne(pool, key){
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const resolution = await resolvePropertyForImport(client, {
+    const resolution = await resolvePropertyIdentity(client, {
       canonical_key: cfg.property_key || null, match_tokens: cfg.property_match || [] });
     const propertyId = resolution.status === "resolved" ? resolution.property_id : null;
     if (!propertyId){
@@ -223,7 +223,7 @@ async function rollbackOne(pool, key){
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const resolution = await resolvePropertyForImport(client, {
+    const resolution = await resolvePropertyIdentity(client, {
       canonical_key: cfg.property_key || null, match_tokens: cfg.property_match || [] });
     const propertyId = resolution.status === "resolved" ? resolution.property_id : null;
     if (!propertyId){

@@ -21,7 +21,7 @@ const path = require("path");
 const { Pool } = require("pg");
 
 const REPO = path.resolve(__dirname, "..", "..");
-const { seedInventory } = require("./fixtures/slice9_inventory_fixture");
+const { seedInventory } = require("../fixtures/slice9_inventory_fixture");
 
 // DERIVED, not hardcoded. This was the literal "2026-10-25", which quietly
 // becomes a PAST date once the clock passes it — at which point "positions

@@ -52,6 +52,25 @@ const claim = (v) => String(v || "").toLowerCase();
 //  Same normalisation, named so it reads clearly inside positionBasis.
 const claimOf = claim;
 
+// A committed import batch is evidence. It is publishable operating truth
+// immediately only when it predates the activation lifecycle; once an
+// activation owns it, the current established opening position is its sole
+// publication authority. Kept as one SQL fragment so the canonical receipt
+// and the legacy snapshot projection cannot disagree about eligibility.
+function publishedSourceBatchSql(alias = "b") {
+  if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(alias)) throw new Error("invalid SQL alias");
+  return `(
+    not exists (select 1 from activations a where a.import_batch_id=${alias}.id)
+    or exists (
+      select 1
+        from activations a
+        join opening_tenancy_positions otp
+          on otp.activation_id=a.id and otp.import_batch_id=${alias}.id
+       where a.import_batch_id=${alias}.id and otp.status='established'
+    )
+  )`;
+}
+
 // ── FOUR INDEPENDENT AXES ────────────────────────────────────────────
 //  A position can simultaneously be contractually occupied, have
 //  inconclusive opening evidence, and have unavailable economics. Those are
@@ -68,8 +87,32 @@ const claimOf = claim;
 //                           when the imported claim is 'unknown' — opening
 //                           evidence being inconclusive does not un-occupy a
 //                           position that has a real lease.
-//   unresolved              no spanning lease, but the opening claim says
-//                           occupied, or says nothing conclusive. NOT vacant.
+//   activation_pending      a lease has COMMENCED but economic tenancy is not
+//                           active. A contractual commitment exists, so the
+//                           bed is spoken for; offering it is the expensive
+//                           mistake. Listed here since 2026-09: the code has
+//                           yielded it for some time while this list said
+//                           four, which is how it reached tenancy_summary
+//                           with no bucket and fourteen positions went
+//                           missing from a lender's column.
+//   occupied_terms_not_established
+//                           no spanning lease, and the opening position
+//                           ACCEPTED this bed as occupied with nothing
+//                           contradicting it. Someone occupies it; the rent,
+//                           term and legal right governing that occupancy
+//                           are not established. NOT vacant, and NOT the
+//                           same as not knowing — see below.
+//   unresolved              no spanning lease and the opening claim says
+//                           NOTHING conclusive, or never settled at all.
+//                           NOT vacant.
+//
+//   ⚠ THESE LAST TWO WERE ONE VALUE, AND MERGING THEM WAS THE DEFECT.
+//   "the claim says occupied" and "the claim says nothing" answer different
+//   questions and send an operator to do different work. Held together they
+//   read to a lender as "we do not know whether anyone lives there" about
+//   beds the operator had explicitly accepted as occupied — 92 of them on
+//   the Skyline shape, reported in the same number as 10 genuinely
+//   unreconciled ones.
 //   vacant                  no spanning lease and the opening claim agrees.
 /*  ── WHICH OCCUPANCY CLAIM ANSWERS FOR THIS POSITION ────────────────
  *  The per-SPACE claim accepted by the established opening position wins
@@ -211,7 +254,32 @@ function tenancyState(p) {
    *  axis is the value most likely to be trusted by a future reader.  */
   if ((p.other_spanning_lease_positions || []).length) return "unresolved";
   if (claim(p._opening_space_claim) === "vacant") return "vacant";
-  return "unresolved";                     // 'occupied' claim, or 'unknown'
+  /*  ── ACCEPTED OCCUPANCY IS NOT "UNRESOLVED" ───────────────────────
+   *  A position the operator explicitly accepted as occupied, with no
+   *  lease on record, read `unresolved` on this axis — which to a lender
+   *  means "we do not know whether anyone lives there". That is not what
+   *  Spine knows. It knows someone occupies the bed, and that the rent,
+   *  term and legal right governing that occupancy are not established.
+   *  The row already said so in `bucket_reason_code`
+   *  (OPENING_OCCUPANCY_ACCEPTED_TERMS_UNKNOWN) and in
+   *  `contractual_terms_state`; the contractual axis was the one place
+   *  still calling it a mystery.
+   *
+   *  `unresolved` KEEPS its meaning for genuinely unreconciled positions —
+   *  an unknown claim, or an opening position that never settled. Two
+   *  different situations, two different words, because the operator sent
+   *  to chase them does different work in each case.
+   *
+   *  The predicate is the SAME ONE the reason code uses: an accepted
+   *  `occupied` claim whose evidence is `uncorroborated` (no lease
+   *  contradicts it, and none supports it either). It is deliberately not
+   *  the `disagrees` branch that shares the reason code — there the
+   *  operator's claim IS contradicted, and calling that accepted would be
+   *  the confident wrong answer this change exists to remove. The proof
+   *  asserts the two sets rather than assuming they coincide.          */
+  if (claim(p._opening_space_claim) === "occupied"
+      && evidenceState(p) === "uncorroborated") return "occupied_terms_not_established";
+  return "unresolved";                     // 'unknown' claim, or unreconciled
 }
 
 /*  ── THE FOUR BUCKETS A RENT ROLL SHOWS ─────────────────────────────
@@ -587,15 +655,17 @@ function contractualTermsState(p) {
 }
 
 // AXIS 3 — ECONOMICS COMPLETENESS. Independent of whether it is occupied.
-//   available      a spanning lease with populated contractual rent.
-//   unavailable    a spanning lease whose rent is missing. The position is
-//                  still occupied; the rent is simply not known, and is
-//                  never coerced to $0 at the row level.
+//   available      a spanning lease with a finite, strictly positive
+//                  contractual rent.
+//   unavailable    a spanning lease whose amount cannot support that claim.
+//                  The position is still occupied; retain the source amount
+//                  for inspection, but never coerce it to $0 or trust it.
 //   not_applicable no spanning lease, so there is no contractual rent to have.
 function economicsState(p) {
   const lease = p.current_lease_position;
   if (!lease) return "not_applicable";
-  return (lease.rent == null || Number(lease.rent) === 0) ? "unavailable" : "available";
+  const rent = Number(lease.rent);
+  return Number.isFinite(rent) && rent > 0 ? "available" : "unavailable";
 }
 
 // AXIS 4 — proof_basis, already decided by the classifier.
@@ -629,8 +699,9 @@ async function openingTruth(pool, property_id) {
   const rows = (await pool.query(
     `select id, source_type, source_file,
             to_char(source_as_of_date, 'YYYY-MM-DD') as source_as_of_date,
-            confidence, status, leasing_model, loaded_at, notes
-       from import_batches where property_id=$1
+            confidence, status, leasing_model, loaded_at, notes,
+            ${publishedSourceBatchSql("b")} as operating_published
+       from import_batches b where property_id=$1
       order by source_as_of_date desc nulls last, loaded_at desc`, [property_id]
   )).rows;
   const sources = rows.map((b) => ({
@@ -640,13 +711,64 @@ async function openingTruth(pool, property_id) {
     source_as_of_date: b.source_as_of_date || null,   // already YYYY-MM-DD text
     confidence: b.confidence || null,
     status: b.status || null,
+    operating_published: Boolean(b.operating_published),
     leasing_model: b.leasing_model || null,
     attribution: { loaded_at: b.loaded_at, notes: b.notes || null },
   }));
   return {
     sources,
-    latest_confirmed_source: sources.find((s) => s.status === "committed" && s.source_type !== "rent_roll_reconciliation") || null,
+    latest_confirmed_source: sources.find((s) => s.status === "committed" &&
+      s.source_type !== "rent_roll_reconciliation" && s.operating_published) || null,
     latest_reconciliation: sources.find((s) => s.source_type === "rent_roll_reconciliation") || null,
+  };
+}
+
+/*  ── RETAINED BUT UNATTACHED ───────────────────────────────────────
+ *  A confirmed source row is history: a human accepted it, and the
+ *  activation's tally counts it as established. Whether it ATTACHES to a
+ *  rentable position is the reader's finding, and the two can disagree —
+ *  a bare-unit vacancy confirmed under the old writer on a three-bed unit,
+ *  a named room the unit does not have, a claim whose lineage points at
+ *  retired inventory. Every position then reads not established and
+ *  nothing says why: "no fact supplied" and "a retained claim could not be
+ *  attached" collapsed into one silence.
+ *
+ *  This names the gap without inventing a relationship. The rows are
+ *  reported by the key the source gave them, never broadcast to N beds,
+ *  never counted as positions, never given a bed by inference. Derived at
+ *  read time from the SAME proposals the candidate subquery reads, under
+ *  the SAME chosen baseline — no second store.  */
+async function unattachedOpeningClaims(pool, baseline, rawPositions) {
+  if (!baseline || !baseline.activation_id) {
+    return { read: "no_baseline", promoted: 0, held: 0, source_rows: [] };
+  }
+  const referenced = new Set();
+  for (const p of rawPositions || []) {
+    const src = p._opening_claim_source;
+    if (!src) continue;
+    if (src.proposal_id) referenced.add(String(src.proposal_id));
+    for (const id of src.supporting_proposal_ids || []) referenced.add(String(id));
+    for (const id of src.conflicting_proposal_ids || []) referenced.add(String(id));
+  }
+  const rows = (await pool.query(
+    `select pr.id, pr.natural_key, pr.status
+       from proposed_records pr
+      where pr.activation_id = $1
+        and pr.target_type = 'lease'
+        and pr.status in ('promoted','needs_review','conflicted')
+        and coalesce(lower(pr.normalized_json->>'section'), 'current') = 'current'
+      order by pr.natural_key, pr.id`, [baseline.activation_id])).rows;
+  const unattached = rows.filter((r) => !referenced.has(String(r.id)));
+  return {
+    read: "ok",
+    //  Confirmed by a human and attached to nothing: the surprising class.
+    promoted: unattached.filter((r) => r.status === "promoted").length,
+    //  Held for review and attached to nothing: already a review-queue item.
+    held: unattached.filter((r) => r.status !== "promoted").length,
+    //  The key the source gave the row (unit, or unit|room) — a label an
+    //  operator can act on, not a record id. Bounded.
+    source_rows: unattached.slice(0, 50).map((r) => ({ source_key: r.natural_key, status: r.status })),
+    truncated: unattached.length > 50,
   };
 }
 
@@ -828,6 +950,8 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
      *
      *  Surfaces must branch on this BEFORE presenting buckets. */
     opening_baseline: sp.opening_baseline,
+    //  Confirmed source rows under that baseline that no position reads.
+    opening_claims_unattached: await unattachedOpeningClaims(pool, sp.opening_baseline, sp.positions),
     positions,
   };
 }
@@ -1011,6 +1135,7 @@ module.exports = {
   //  counts as Open" is how the subtraction got there in the first place.
   rentRollBuckets, rentRollBucketOf, rentRollExplain, REASON, positionBasis,
   contractualTermsState,
+  publishedSourceBatchSql,
   RENT_ROLL_LABELS, NOT_ESTABLISHED_LABEL, occupancyClaim,
   //  Re-exported so a surface can ask which baseline answers for a date
   //  without reaching into space_position for it.

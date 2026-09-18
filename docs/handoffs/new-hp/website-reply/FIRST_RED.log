@@ -1,0 +1,27 @@
+(node:12160) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+PASS phone inquiry captures the original question in the staff thread
+PASS capture-only inquiry does not send or claim a text
+PASS missing consent does not become texting permission
+FIRST RED capture-only website phone inquiry should not add an unsolicited outbound text to communication history
+PASS undelivered prepared text does not falsely answer the question
+PASS initial opening text is distinct from an actionable agent draft
+PHONE_OBSERVATION {"intake_response":{"state":"captured","lead_event_id":"3adda7b0-0b83-4cf5-9567-3ce7a0301471","response_state":"prepared"},"thread_outbound":[{"channel":"text","direction":"outbound","sender_role":"ai","provider_status":null}],"queue":{"waiting_on":"manager","delivery_state":"unknown","bucket_reason_code":"website_inquiry_pending_human"},"model_calls_added":1}
+PASS email-only inquiry is captured and honestly awaits staff
+PASS staff claims the existing conversation through the governed takeover action
+PASS takeover names accountable staff and does not mean answered
+FIRST RED staff should be able to record an actual external email reply without a phone or text send
+PASS baseline refusal is phone-specific and records no fabricated reply
+PASS after refused email capture the original question still reads unanswered
+PASS refusal preserves the accountable open reply work
+PASS entire witness makes zero fake transport sends
+EMAIL_OBSERVATION {"reply":{"status":409,"body":{"error":"This person has no verified text number."}},"thread_channels":["website"],"waiting_on":"manager","work_status":"in_progress"}
+Website reply witness: 12 passed, 2 first reds
+capture-only website phone inquiry should not add an unsolicited outbound text to communication history; staff should be able to record an actual external email reply without a phone or text send
+
+2 !== 0
+
+Error: Proof exit 1
+    at ChildProcess.<anonymous> (C:\Users\kamer\Documents\ChatGPT\Property Spine\tmp\website-reply-runtime.js:63:72)
+    at ChildProcess.emit (node:events:509:28)
+    at ChildProcess._handle.onexit (node:internal/child_process:295:12)

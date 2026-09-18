@@ -20,6 +20,8 @@ const { resolveAuthority } = require(path.join(ROOT, "src/identity/authority_res
 const { pricingAuthority } = require(path.join(ROOT, "src/money/pricing_authority.js"));
 const { resolveSpaceEconomics } = require(path.join(ROOT, "src/money/effective_pricing.js"));
 const { datedPropertyPositions } = require(path.join(ROOT, "src/tenancy/dated_positions.js"));
+const { establishAuthorizedReviewer } = require(path.join(
+  ROOT, "tests/support/authority_reviewer_fixture.js"));
 
 const pool = new Pool({ connectionString: process.env.E2E_DATABASE_URL });
 const svc = buildStaffBridge({ pool })._service;
@@ -92,6 +94,9 @@ async function tx(fn) {
     `insert into users (name,email,role,is_active,status,account_kind,person_id)
      values ($1,$2,'asset_manager',true,'active','human_staff',$3) returning id`,
     [tag + " KZ Login", tag + "kz@example.com", person])).rows[0].id;
+  const reviewer = await establishAuthorizedReviewer(pool, {
+    userId: admin, propertyId: prop, label: tag + " Authority Reviewer",
+  });
   await pool.query(
     `insert into person_contexts (person_id, context_type, property_id, created_by_user_id)
      values ($1,'staff',$2,$3)`, [person, prop, admin]);
@@ -154,11 +159,11 @@ async function tx(fn) {
   L("══════════════════════════════════════════════════════════════");
 
   await pool.query("delete from assignments where property_id=$1", [prop]);
-  await pool.query("delete from person_contexts where person_id=$1", [person]);
+  await pool.query("delete from person_contexts where property_id=$1", [prop]);
   await pool.query("delete from spaces where unit_id in (select id from units where property_id=$1)", [prop]);
   await pool.query("delete from units where property_id=$1", [prop]);
   await pool.query("delete from users where id = any($1)", [[user, admin]]);
-  await pool.query("delete from persons where id=$1", [person]);
+  await pool.query("delete from persons where id=any($1)", [[person, reviewer.personId]]);
   await pool.query("delete from properties where id=$1", [prop]);
   await pool.end();
 })().catch((e) => { console.error("DIED:", e && e.stack ? e.stack : e); process.exit(1); });

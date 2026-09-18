@@ -351,6 +351,7 @@ module.exports = function workAcceptance(deps) {
         flow: out.flow,
         work: states.map((s) => ({
           work_id: s.work.id, work_text: s.work.work_text, stage: s.work.stage,
+          scope_kind: s.work.scope_kind, space_id: s.work.space_id, scope_label: s.work.scope_label,
           status: s.status, accepted: s.accepted,
           owner_user_id: s.owner_user_id, accepted_by_user_id: s.accepted_by_user_id,
           due_at: s.due_at, commitment_source: s.commitment_source,

@@ -1,0 +1,205 @@
+COMBINED MIGRATION 194-198 PREDEPLOY: exact 194 accepted (182 ledger rows); full pin, reviewed hashes, and physical fingerprint verified.
+
+  Connected to the database.  (RELEASE)
+
+  ── MIGRATION RELEASE ──────────────────────────────────
+     ledger ceiling (verified): 194
+     build:                     03550a8f1cf0  (git HEAD)
+     sha pin:                   VERIFIED against git HEAD — tree clean, all migrations in the commit
+     to apply:                  195_two_step_leasing_authored_offer_basis.sql, 196_source_home_identity_review.sql, 197_inventory_correction_hardening.sql, 198_proposed_source_claim_identity.sql
+  ───────────────────────────────────────────────────────
+
+  • 001_baseline.sql  — already applied, skipping.
+  • 002_revenue_and_supply.sql  — already applied, skipping.
+  • 003_down_units.sql  — already applied, skipping.
+  • 004_org_chart.sql  — already applied, skipping.
+  • 005_money_events.sql  — already applied, skipping.
+  • 006_unit_occupancy_state.sql  — already applied, skipping.
+  • 007_money_report_ready.sql  — already applied, skipping.
+  • 008_category_report_map.sql  — already applied, skipping.
+  • 009_onboarding.sql  — already applied, skipping.
+  • 010_ledger_reconciliation.sql  — already applied, skipping.
+  • 011_property_registry.sql  — already applied, skipping.
+  • 012_bank_intake.sql  — already applied, skipping.
+  • 013_public_rent_roll_review.sql  — already applied, skipping.
+  • 014_intake.sql  — already applied, skipping.
+  • 015_deal_intake.sql  — already applied, skipping.
+  • 016_report_compare.sql  — already applied, skipping.
+  • 017_categorization.sql  — already applied, skipping.
+  • 018_variance_explanations.sql  — already applied, skipping.
+  • 019_vendor_property_categories.sql  — already applied, skipping.
+  • 020_multi_nature_vendors.sql  — already applied, skipping.
+  • 021_payment_return_exception.sql  — already applied, skipping.
+  • 022_rc_pairings.sql  — already applied, skipping.
+  • 023_needs_review.sql  — already applied, skipping.
+  • 024_deal_funnel.sql  — already applied, skipping.
+  • 025_deal_properties.sql  — already applied, skipping.
+  • 026_leasing_basis.sql  — already applied, skipping.
+  • 027_tenant_link.sql  — already applied, skipping.
+  • 028_tenant_messages.sql  — already applied, skipping.
+  • 029_property_noi_goals.sql  — already applied, skipping.
+  • 030_sms_transport.sql  — already applied, skipping.
+  • 031_plaid_items.sql  — already applied, skipping.
+  • 032_leasing_snapshot.sql  — already applied, skipping.
+  • 033_lease_applications.sql  — already applied, skipping.
+  • 034_lease_packets.sql  — already applied, skipping.
+  • 035_phone_first_team.sql  — already applied, skipping.
+  • 036_scheduled_charges.sql  — already applied, skipping.
+  • 037_payment_proof.sql  — already applied, skipping.
+  • 038_leasing_leads.sql  — already applied, skipping.
+  • 039_tour_scheduling.sql  — already applied, skipping.
+  • 040_proposed_records.sql  — already applied, skipping.
+  • 041_widen_assignment_roles.sql  — already applied, skipping.
+  • 042_work_order_not_done_reason.sql  — already applied, skipping.
+  • 043_leasing_thread_wiring.sql  — already applied, skipping.
+  • 044_auto_confirm_switch.sql  — already applied, skipping.
+  • 045_money_event_attributions.sql  — already applied, skipping.
+  • 046_historical_snapshot_provenance.sql  — already applied, skipping.
+  • 047_leasing_conversion_rail.sql  — already applied, skipping.
+  • 048_interaction_ledger_and_scheduling.sql  — already applied, skipping.
+  • 049_outlook_acuity_sync.sql  — already applied, skipping.
+  • 050_identity_aliases_and_shadow_import.sql  — already applied, skipping.
+  • 051_application_invitations.sql  — already applied, skipping.
+  • 052_demo_orchestration.sql  — already applied, skipping.
+  • 053_agent_supervised_drafts.sql  — already applied, skipping.
+  • 054_leasing_lead_lifecycle.sql  — already applied, skipping.
+  • 055_lead_event_prepared_type.sql  — already applied, skipping.
+  • 056_tour_booking_links.sql  — already applied, skipping.
+  • 057_tour_outcome_capture.sql  — already applied, skipping.
+  • 058_noshow_recovery_rail.sql  — already applied, skipping.
+  • 059_decision_rail.sql  — already applied, skipping.
+  • 060_property_display_name.sql  — already applied, skipping.
+  • 061_person_attributes.sql  — already applied, skipping.
+  • 062_pricing_authority.sql  — already applied, skipping.
+  • 063_lease_offer_economics.sql  — already applied, skipping.
+  • 064_decision_concession_type.sql  — already applied, skipping.
+  • 065_guardrail_incidents.sql  — already applied, skipping.
+  • 066_incident_dedupe.sql  — already applied, skipping.
+  • 067_staff_identity_bridge.sql  — already applied, skipping.
+  • 068_leasing_task_rung.sql  — already applied, skipping.
+  • 069_leasing_conversion_obligation_events.sql  — already applied, skipping.
+  • 070_operator_session_bootstrap.sql  — already applied, skipping.
+  • 071_bridge_prep.sql  — already applied, skipping.
+  • 072_term_confirmation.sql  — already applied, skipping.
+  • 073_property_leasing_calendar.sql  — already applied, skipping.
+  • 074_unit_events_lease_link.sql  — already applied, skipping.
+  • 075_application_structured_terms.sql  — already applied, skipping.
+  • 076_person_property_classifications.sql  — already applied, skipping.
+  • 077_agent_auto_dispatch.sql  — already applied, skipping.
+  • 078_work_order_urgency_and_idempotency.sql  — already applied, skipping.
+  • 079_tour_booking_idempotency.sql  — already applied, skipping.
+  • 080_tenancy_anchor_idempotency.sql  — already applied, skipping.
+  • 081_effective_possession_and_space_grain.sql  — already applied, skipping.
+  • 082_unit_events_add_effective_possession_types.sql  — already applied, skipping.
+  • 083_terms_review_and_packet_versioning.sql  — already applied, skipping.
+  • 084_application_intent_prepare_send.sql  — already applied, skipping.
+  • 085_proposed_terms_confirmation.sql  — already applied, skipping.
+  • 086_operational_escalation_idempotency.sql  — already applied, skipping.
+  • 087_internal_qa_leasing_coverage.sql  — already applied, skipping.
+  • 088_executed_lease_evidence.sql  — already applied, skipping.
+  • 089_economic_tenancy_and_move_in_handoff.sql  — already applied, skipping.
+  • 090_admin_users.sql  — already applied, skipping.
+  • 091_lead_source_system_bucket.sql  — already applied, skipping.
+  • 092_person_attributes_provenance.sql  — already applied, skipping.
+  • 093_organizations.sql  — already applied, skipping.
+  • 094_property_channel_capabilities.sql  — already applied, skipping.
+  • 095_staff_roles.sql  — already applied, skipping.
+  • 096_tour_outcome_prompts.sql  — already applied, skipping.
+  • 097_tour_origin.sql  — already applied, skipping.
+  • 098_work_order_operational_facts.sql  — already applied, skipping.
+  • 099_billback_decision.sql  — already applied, skipping.
+  • 100_durable_position_classification.sql  — already applied, skipping.
+  • 101_pricing_unit_type_reference.sql  — already applied, skipping.
+  • 102_pricing_lifecycle_and_authority.sql  — already applied, skipping.
+  • 103_pricing_supersession_history.sql  — already applied, skipping.
+  • 104_person_record_retirement.sql  — already applied, skipping.
+  • 105_governed_charges.sql  — already applied, skipping.
+  • 106_quote_activation_boundary.sql  — already applied, skipping.
+  • 107_property_planned_unit_count.sql  — already applied, skipping.
+  • 108_active_charge_term_immutability.sql  — already applied, skipping.
+  • 109_immutability_message_fix.sql  — already applied, skipping.
+  • 110_governed_charge_assessed_per.sql  — already applied, skipping.
+  • 111_governed_charge_rulings.sql  — already applied, skipping.
+  • 112_unit_triage_capture.sql  — already applied, skipping.
+  • 113_unit_turn_scope.sql  — already applied, skipping.
+  • 114_inherited_work_stage_decision.sql  — already applied, skipping.
+  • 115_work_acceptance_and_proof.sql  — already applied, skipping.
+  • 116_readiness_certification.sql  — already applied, skipping.
+  • 117_staff_agent_capture.sql  — already applied, skipping.
+  • 118_work_proof_attachments.sql  — already applied, skipping.
+  • 119_renewal_operating_rail.sql  — already applied, skipping.
+  • 120_ai_leasing_strategy_foundation.sql  — already applied, skipping.
+  • 121_ai_leasing_operating_context.sql  — already applied, skipping.
+  • 122_governed_economics_lineage.sql  — already applied, skipping.
+  • 123_property_operating_timezone.sql  — already applied, skipping.
+  • 124_application_lifecycle_milestones.sql  — already applied, skipping.
+  • 126_obligation_missed_recognition.sql  — already applied, skipping.
+  • 127_appointment_attribution_bridge.sql  — already applied, skipping.
+  • 128_lifecycle_event_opportunity_attribution.sql  — already applied, skipping.
+  • 129_property_line_uniqueness.sql  — already applied, skipping.
+  • 130_communication_lines.sql  — already applied, skipping.
+  • 131_work_acceptance.sql  — already applied, skipping.
+  • 132_outbound_line_policy.sql  — already applied, skipping.
+  • 133_work_order_reference.sql  — already applied, skipping.
+  • 134_technician_lifecycle.sql  — already applied, skipping.
+  • 135_delivery_attempts.sql  — already applied, skipping.
+  • 136_one_resident_update_per_cause.sql  — already applied, skipping.
+  • 137_release_0_completion_proof.sql  — already applied, skipping.
+  • 140_post_activation_completion_guard.sql  — already applied, skipping.
+  • 150_canonical_property_creation.sql  — already applied, skipping.
+  • 151_authority_mutation_containment.sql  — already applied, skipping.
+  • 152_fifth_creation_door.sql  — already applied, skipping.
+  • 153_source_artifacts.sql  — already applied, skipping.
+  • 154_deal_authority.sql  — already applied, skipping.
+  • 155_deal_membership_currency.sql  — already applied, skipping.
+  • 156_activation_lineage.sql  — already applied, skipping.
+  • 157_opening_positions.sql  — already applied, skipping.
+  • 158_import_batch_source_type_reality.sql  — already applied, skipping.
+  • 159_opening_tenancy_position.sql  — already applied, skipping.
+  • 160_asset_management_module.sql  — already applied, skipping.
+  • 161_insurance_economic_truth.sql  — already applied, skipping.
+  • 162_insurance_coverage_participation.sql  — already applied, skipping.
+  • 163_insurance_funding.sql  — already applied, skipping.
+  • 164_legal_entities.sql  — already applied, skipping.
+  • 165_philadelphia_tax_position.sql  — already applied, skipping.
+  • 166_tax_funding.sql  — already applied, skipping.
+  • 167_tax_payment_identity.sql  — already applied, skipping.
+  • 168_compliance_canonical_truth.sql  — already applied, skipping.
+  • 169_utilities_canonical_truth.sql  — already applied, skipping.
+  • 170_compliance_extended_truth.sql  — already applied, skipping.
+  • 171_contracted_services_canonical_truth.sql  — already applied, skipping.
+  • 172_contracted_service_nullable_commencement_trigger.sql  — already applied, skipping.
+  • 173_debt_instruments.sql  — already applied, skipping.
+  • 174_equity_positions.sql  — already applied, skipping.
+  • 175_meeting_evidence_provider_inbox.sql  — already applied, skipping.
+  • 176_meeting_receipt_v0.sql  — already applied, skipping.
+  • 177_person_ingress_resolution_kind.sql  — already applied, skipping.
+  • 178_property_leasing_cycles.sql  — already applied, skipping.
+  • 179_activation_source_supersession.sql  — already applied, skipping.
+  • 180_inventory_retirement.sql  — already applied, skipping.
+  • 181_meeting_evidence_binding_finality_lineage.sql  — already applied, skipping.
+  • 182_application_space_grain.sql  — already applied, skipping.
+  • 183_pricing_override_uniqueness.sql  — already applied, skipping.
+  • 184_governing_lease_execution.sql  — already applied, skipping.
+  • 185_spine_execution_basis.sql  — already applied, skipping.
+  • 186_property_lease_config.sql  — already applied, skipping.
+  • 187_lease_security_deposit.sql  — already applied, skipping.
+  • 188_native_tour_scheduler.sql  — already applied, skipping.
+  • 189_unified_staff_onboarding.sql  — already applied, skipping.
+  • 190_application_move_in_lineage.sql  — already applied, skipping.
+  • 191_lease_instrument_source.sql  — already applied, skipping.
+  • 192_lease_packet_signers.sql  — already applied, skipping.
+  • 193_application_offer_lineage.sql  — already applied, skipping.
+  • 194_required_work_target.sql  — already applied, skipping.
+  → 195_two_step_leasing_authored_offer_basis.sql  — applying...
+    ✓ applied and recorded.
+  → 196_source_home_identity_review.sql  — applying...
+    ✓ applied and recorded.
+  → 197_inventory_correction_hardening.sql  — applying...
+    ✓ applied and recorded.
+  → 198_proposed_source_claim_identity.sql  — applying...
+    ✓ applied and recorded.
+
+  Done.
+
+COMBINED MIGRATION 194-198 RELEASE VERIFIED: 186 ledger rows, ceiling 198, all reviewed physical contracts present.

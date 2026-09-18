@@ -1,0 +1,151 @@
+{
+  "proof": "canonical_onboarding_review",
+  "phase": "stage",
+  "mode": "server_interpreted_retained_source",
+  "app_source": "successor_index_html",
+  "api_origin": "literal_loopback",
+  "external_requests_blocked_before_egress": 0,
+  "confirmations_attempted": 0,
+  "sources": [
+    {
+      "source": "synthetic_conflicts",
+      "source_sha256": "cb22676b26c946a847fb24d8b16f72066f74a46217f445deff600d5f57c553c7",
+      "source_byte_count": 16411,
+      "upload_status": 201,
+      "download_status": 200,
+      "retained_exact_hash_and_bytes": true,
+      "read_source_status": 201,
+      "rows_read": 2,
+      "review_counts": {
+        "total": 2,
+        "current": 2,
+        "future": 0,
+        "assigned": 2,
+        "unassigned_future": 0,
+        "unassigned_current": 0,
+        "missing_actual_current_occupied": 0,
+        "missing_actual_assigned_future": 0
+      },
+      "status_counts": {
+        "staged": 0,
+        "needs_review": 0,
+        "blocked": 0,
+        "confirmed": 0,
+        "promoted": 0,
+        "rejected": 0,
+        "conflicted": 2
+      },
+      "vacancy_count": 0,
+      "server_source_format_verified": true,
+      "server_source_sheet_present": true,
+      "server_mapping_present": true,
+      "visible_review": true,
+      "confirmations_attempted": 0
+    },
+    {
+      "source": "synthetic_unassigned_current",
+      "source_sha256": "6bd71da3dae778801908eefea2f3744afc6b5cb01e80595f6f530ae289562762",
+      "source_byte_count": 16325,
+      "upload_status": 201,
+      "download_status": 200,
+      "retained_exact_hash_and_bytes": true,
+      "read_source_status": 201,
+      "rows_read": 2,
+      "review_counts": {
+        "total": 2,
+        "current": 2,
+        "future": 0,
+        "assigned": 1,
+        "unassigned_future": 0,
+        "unassigned_current": 1,
+        "missing_actual_current_occupied": 0,
+        "missing_actual_assigned_future": 0
+      },
+      "status_counts": {
+        "staged": 1,
+        "needs_review": 0,
+        "blocked": 1,
+        "confirmed": 0,
+        "promoted": 0,
+        "rejected": 0,
+        "conflicted": 0
+      },
+      "vacancy_count": 1,
+      "server_source_format_verified": true,
+      "server_source_sheet_present": true,
+      "server_mapping_present": true,
+      "visible_review": true,
+      "confirmations_attempted": 0
+    },
+    {
+      "source": "july",
+      "source_sha256": "96b901af41a17d8268d218604f3d15d7ab018bc60f86f2825e9080b654853cda",
+      "source_byte_count": 35849,
+      "upload_status": 201,
+      "download_status": 200,
+      "retained_exact_hash_and_bytes": true,
+      "read_source_status": 201,
+      "rows_read": 164,
+      "review_counts": {
+        "total": 164,
+        "current": 105,
+        "future": 59,
+        "assigned": 145,
+        "unassigned_future": 19,
+        "unassigned_current": 0,
+        "missing_actual_current_occupied": 46,
+        "missing_actual_assigned_future": 40
+      },
+      "status_counts": {
+        "staged": 59,
+        "needs_review": 86,
+        "blocked": 19,
+        "confirmed": 0,
+        "promoted": 0,
+        "rejected": 0,
+        "conflicted": 0
+      },
+      "vacancy_count": 53,
+      "server_source_format_verified": true,
+      "server_source_sheet_present": true,
+      "server_mapping_present": true,
+      "visible_review": true,
+      "confirmations_attempted": 0
+    },
+    {
+      "source": "skyline",
+      "source_sha256": "51ae5893b43a80308f88696156e9538972e8ea0212900f1fd71c5a068caa9f4a",
+      "source_byte_count": 40859,
+      "upload_status": 201,
+      "download_status": 200,
+      "retained_exact_hash_and_bytes": true,
+      "read_source_status": 201,
+      "rows_read": 262,
+      "review_counts": {
+        "total": 262,
+        "current": 160,
+        "future": 102,
+        "assigned": 251,
+        "unassigned_future": 11,
+        "unassigned_current": 0,
+        "missing_actual_current_occupied": 0,
+        "missing_actual_assigned_future": 0
+      },
+      "status_counts": {
+        "staged": 160,
+        "needs_review": 91,
+        "blocked": 11,
+        "confirmed": 0,
+        "promoted": 0,
+        "rejected": 0,
+        "conflicted": 0
+      },
+      "vacancy_count": 123,
+      "server_source_format_verified": true,
+      "server_source_sheet_present": true,
+      "server_mapping_present": true,
+      "visible_review": true,
+      "confirmations_attempted": 0
+    }
+  ]
+}

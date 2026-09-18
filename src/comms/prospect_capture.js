@@ -38,7 +38,7 @@ module.exports = function prospectCapture(deps) {
 
   function extractionPrompt(inboundLines) {
     return (
-      "You extract structured facts a rental PROSPECT explicitly volunteered in their own text messages. " +
+      "You extract structured facts a rental PROSPECT explicitly volunteered in their own messages or website inquiries. " +
       "Below are ONLY the prospect's messages (newest last), from one conversation with an apartment community.\n\n" +
       "Return ONLY valid JSON (no prose, no fences) with EXACTLY these keys:\n" +
       '{ "move_month": null, "budget": null, "unit_type": null, "occupants": null, "pets": null, "reason": null }\n\n' +
@@ -101,7 +101,7 @@ module.exports = function prospectCapture(deps) {
       // real observation.
       const inbound = (await pool.query(
         `select id, body, occurred_at from comm_events
-          where conversation_id=$1 and channel='text' and direction='inbound' and body is not null
+          where conversation_id=$1 and channel in ('text','website') and direction='inbound' and body is not null
           order by occurred_at desc nulls last, id desc limit 12`,
         [conversationId]
       )).rows.reverse();

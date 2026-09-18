@@ -107,7 +107,7 @@ async function pricingAuthority(pool, { property_id, person_id, user_id = null }
       order by case when role in ('owner','asset_manager') then 0 else 1 end
       limit 1`, [property_id, person.id])).rows[0] || null;
 
-  const grant = (await pool.query(
+  const grants = (await pool.query(
     `select id, may_edit_pricing, may_review_pricing, may_publish_public_offers,
             may_manage_concession_authority, may_prepare_pricing,
             effective_from, effective_until
@@ -115,30 +115,27 @@ async function pricingAuthority(pool, { property_id, person_id, user_id = null }
       where property_id=$1 and person_id=$2
         and effective_from <= now()
         and (effective_until is null or effective_until > now())
-      order by effective_from desc limit 1`, [property_id, person.id])).rows[0] || null;
+      order by effective_from, id`, [property_id, person.id])).rows;
 
   const byRole = !!(role && FULL_AUTHORITY_ROLES.has(role.role));
   const roleBasis = byRole ? `assignment:${role.role}` : null;
 
-  const resolve = (grantField) => {
+  // Every live grant is a valid authorization — the same rule actor_context
+  // applies. A verb is granted when ANY live grant grants it, and the basis
+  // names the earliest such grant, never whichever row came back first.
+  const resolve = (...grantFields) => {
     if (byRole) return { granted: true, basis: roleBasis };
-    if (grant && grant[grantField]) return { granted: true, basis: `grant:${grant.id}` };
-    return { granted: false, basis: null };
+    const grant = grants.find((g) => grantFields.some((f) => g[f]));
+    return grant ? { granted: true, basis: `grant:${grant.id}` } : { granted: false, basis: null };
   };
 
   // may_prepare is satisfied by either the new explicit column or the
   // pre-existing may_edit_pricing, which meant the same thing before the verb
   // had a name. Honouring the old column avoids silently revoking authority
   // somebody was already given.
-  const prepare = byRole ? { granted: true, basis: roleBasis }
-    : grant && (grant.may_prepare_pricing || grant.may_edit_pricing)
-      ? { granted: true, basis: `grant:${grant.id}` }
-      : { granted: false, basis: null };
+  const prepare = resolve("may_prepare_pricing", "may_edit_pricing");
   const review = resolve("may_review_pricing");
-  const publish = byRole ? { granted: true, basis: roleBasis }
-    : grant && grant.may_publish_public_offers
-      ? { granted: true, basis: `grant:${grant.id}` }
-      : { granted: false, basis: null };
+  const publish = resolve("may_publish_public_offers");
   const manage = resolve("may_manage_concession_authority");
 
   return {

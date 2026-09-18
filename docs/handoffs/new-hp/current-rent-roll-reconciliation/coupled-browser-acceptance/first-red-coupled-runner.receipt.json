@@ -1,0 +1,16 @@
+{
+  "api_origin_routed": "https://property-spine-api.onrender.com",
+  "tls_front": "https://127.0.0.1:8443 → http://127.0.0.1:3111",
+  "transport": "route.continue on every allowed request; no request is rebuilt in Node",
+  "stats": {
+    "routed_to_tls_front": 17,
+    "direct_loopback": 24,
+    "aborted": [
+      "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500;600&",
+      "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js",
+      "https://cdn.plaid.com/link/v2/stable/link-initialize.js"
+    ],
+    "uploads": [],
+    "property_selection": null
+  }
+}

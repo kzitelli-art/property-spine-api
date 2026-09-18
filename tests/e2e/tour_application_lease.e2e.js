@@ -1,0 +1,1523 @@
+/* Full real-server proof of the tenant leasing path:
+   staff invite + OTP acceptance -> native slot -> booked tour -> post-tour
+   capture -> exact-bed application SMS -> public application -> separate
+   resident/guarantor execution -> authorized company execution -> exact-bed
+   tenancy. Dashboard and staff SMS read the same personal and property-signing
+   Ask Spine answers from canonical server reads.
+   The E2E launcher forces fake_sms_preload.js, so no real SMS can leave. */
+"use strict";
+
+module.paths.unshift(require("path").join(__dirname, "..", "..", "node_modules"));
+const fs = require("fs");
+const { Pool } = require("pg");
+const { databaseSsl } = require("../../src/shared/database_ssl");
+const staffSessions = require("../../src/identity/staff_session_service");
+const communicationsBoundary = require("../../src/comms/communications_boundary");
+const { routeStaffSmsTurn } = require("../../src/conversation/staff_sms_router");
+const { resolveLeasingSubject } = require("../../src/leasing/leasing_standing_read");
+
+if (process.env.E2E_DISPOSABLE_DATABASE !== "true") {
+  console.error("FATAL: E2E_DISPOSABLE_DATABASE=true is required.");
+  process.exit(1);
+}
+
+const CONN = process.env.E2E_DATABASE_URL;
+const BASE = process.env.E2E_BASE_URL || "http://127.0.0.1:3000";
+const SMS_LOG = process.env.E2E_SMS_LOG;
+const ANTHROPIC_LOG = process.env.E2E_ANTHROPIC_LOG || "/tmp/property_spine_e2e_anthropic.log";
+if (!CONN || !SMS_LOG) {
+  console.error("FATAL: E2E_DATABASE_URL and E2E_SMS_LOG are required.");
+  process.exit(1);
+}
+
+const pool = new Pool({ connectionString: CONN, ssl: databaseSsl(CONN) });
+const q = (sql, params) => pool.query(sql, params);
+let passed = 0;
+let smsCursor = 0;
+function pass(message, detail) {
+  passed++;
+  console.log(`  PASS ${String(passed).padStart(2, "0")}  ${message}${detail ? " | " + detail : ""}`);
+}
+function expect(condition, message, detail) {
+  if (!condition) throw new Error(`${message}${detail ? ": " + detail : ""}`);
+  pass(message, detail);
+}
+async function api(method, route, { token, key = false, body } = {}) {
+  const headers = { "content-type": "application/json" };
+  if (token) headers["x-staff-session"] = token;
+  if (key) headers["x-operator-key"] = "e2e-key";
+  const response = await fetch(BASE + route, {
+    method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => null);
+  return { status: response.status, body: data };
+}
+function requireOk(result, label) {
+  if (result.status >= 400) {
+    throw new Error(`${label} returned HTTP ${result.status}: ${JSON.stringify(result.body)}`);
+  }
+  return result.body;
+}
+async function completeLeaseSigner({ token, name, initials, sessionId }) {
+  const packet = requireOk(await api("GET", `/t/lease/${token}/data`, { key: false }),
+    `${name} lease packet read`);
+  const requiredFields = ((packet.packet && packet.packet.fields) || [])
+    .filter((field) => field.required);
+  if (process.env.PROOF_TENANT_BROWSER === "1") {
+    const submissionResult = await require("./tenant_journey_browser").signLease(BASE,token,name,requiredFields);
+    return {packet,requiredFields,submitted:submissionResult.body,submissionResult};
+  }
+  for (const field of requiredFields) {
+    requireOk(await api("POST", `/t/lease/${token}/fields/${field.id}/complete`, {
+      key: false,
+      body: {
+        value: field.field_type === "signature" ? name : initials,
+        consent: field.field_type === "signature",
+        session_id: sessionId,
+      },
+    }), `${name} field ${field.field_key}`);
+  }
+  const submissionResult = await api("POST", `/t/lease/${token}/submit`, {
+    key: false, body: { session_id: sessionId },
+  });
+  const submitted = requireOk(submissionResult, `${name} lease submission`);
+  return { packet, requiredFields, submitted, submissionResult };
+}
+function futureLeaseDates() {
+  const start = new Date();
+  start.setUTCDate(start.getUTCDate() + (process.env.PROOF_TENANT_MOVE_IN === "1" ? 0 : 30));
+  const end = new Date(start);
+  end.setUTCFullYear(end.getUTCFullYear() + 1);
+  end.setUTCDate(end.getUTCDate() - 1);
+  return { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) };
+}
+function smsMessages() {
+  if (!fs.existsSync(SMS_LOG)) return [];
+  return fs.readFileSync(SMS_LOG, "utf8").trim().split(/\r?\n/).filter(Boolean)
+    .map((line) => JSON.parse(line));
+}
+function anthropicAttempts() {
+  if (!fs.existsSync(ANTHROPIC_LOG)) return 0;
+  return fs.readFileSync(ANTHROPIC_LOG, "utf8").split(/\r?\n/).filter(Boolean).length;
+}
+async function waitForSms(predicate, label) {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const messages = smsMessages();
+    for (let index = smsCursor; index < messages.length; index++) {
+      if (predicate(messages[index])) {
+        smsCursor = index + 1;
+        return messages[index];
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`the fake transport did not record ${label}`);
+}
+async function sendStaffSms({ from, to, body, sid }) {
+  const payload = new URLSearchParams({
+    MessageSid: sid,
+    From: from,
+    To: to,
+    Body: body,
+  });
+  const response = await fetch(BASE + "/communications/inbound-sms", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: payload.toString(),
+  });
+  const text = await response.text();
+  if (response.status >= 400) {
+    throw new Error(`staff SMS returned HTTP ${response.status}: ${text}`);
+  }
+  return { status: response.status, body: text };
+}
+async function waitForStaffReply(providerMessageId) {
+  for (let attempt = 0; attempt < 80; attempt++) {
+    const reply = (await q(
+      `select inbound.id as inbound_id, inbound.needs_human, inbound.classification,
+              outbound.id as outbound_id, outbound.body, outbound.reply_reason,
+              outbound.sms_status, outbound.sms_sid
+        from comm_events inbound
+         left join comm_events outbound on outbound.in_reply_to_comm_event_id = inbound.id
+        where inbound.sms_sid = $1
+        order by outbound.id desc nulls last
+        limit 1`,
+      [providerMessageId]
+    )).rows[0];
+    if (reply && reply.outbound_id) return reply;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Ask Spine did not record a reply for ${providerMessageId}`);
+}
+
+(async () => {
+  console.log("\n== tour to exact-bed lease ==");
+  const property = (await q(
+    "select id,organization_id,name,display_name from properties where name='Skyline E2E' order by created_at desc limit 1"
+  )).rows[0];
+  expect(!!property, "Skyline-shaped disposable fixture exists");
+  const propertyId = property.id;
+  if (!property.organization_id) {
+    const organization = (await q(
+      `insert into organizations (name,slug)
+       values ('Skyline E2E Organization','skyline-e2e-organization')
+       on conflict (slug) do update set name=excluded.name
+       returning id`
+    )).rows[0];
+    await q("update properties set organization_id=$2 where id=$1", [propertyId, organization.id]);
+    property.organization_id = organization.id;
+  }
+  const unit = (await q(
+    "select id, unit_number from units where property_id=$1 and unit_number='3B' limit 1",
+    [propertyId]
+  )).rows[0];
+  const spaces = (await q(
+    "select id, space_label from spaces where unit_id=$1 order by space_label",
+    [unit.id]
+  )).rows;
+  const bedB = spaces.find((space) => space.space_label === "Bed B");
+  expect(!!unit && !!bedB && spaces.length > 1, "fixture is genuinely by-bed", "Unit 3B / Bed B");
+
+  await q("update properties set operating_timezone='America/New_York' where id=$1", [propertyId]);
+  await q("update spaces set use_type='residential' where unit_id=$1", [unit.id]);
+  await q("update lease_applications set executed_lease_record_id=null where property_id=$1", [propertyId]);
+  await q(`delete from executed_lease_admission_evaluations
+            where executed_lease_record_id in
+              (select id from executed_lease_records where property_id=$1)`, [propertyId]);
+  await q("delete from executed_lease_records where property_id=$1", [propertyId]);
+  await q("delete from leases where property_id=$1", [propertyId]);
+
+  const companySigner = (await q(
+    "select id,person_id from users where name='Mike Grivna' and is_active=true limit 1"
+  )).rows[0];
+  expect(!!companySigner, "configured company signer fixture exists");
+  const suffix = String(Date.now()).slice(-7);
+  const mikePhone = "+1312" + suffix;
+  const operationsLine = "+12125550172";
+  await q("delete from communication_lines where property_id=$1", [propertyId]);
+  await q(`insert into communication_lines
+             (e164,line_type,property_id,authority_ceiling,permitted_audience,
+              inbound_enabled,outbound_enabled,outbound_policy,status)
+           values ('+12155559999','property_facing',$1,'external','residents_and_prospects',
+                   true,true,'proactive','active')`, [propertyId]);
+
+  // The canonical outbound resolver, not properties.sms_number, decides
+  // whether this exact send path may reach transport. This is a service-level
+  // Class 3 control against the real migrated database; the injected transport
+  // records calls in memory and cannot reach a provider.
+  const lineCalls = [];
+  const lineBoundary = communicationsBoundary({
+    pool,
+    sms: {
+      enabled: () => true,
+      sendSms: async (message) => {
+        lineCalls.push(message);
+        return { sent: true, status: "queued", sid: `SM_LINE_${lineCalls.length}` };
+      },
+    },
+  });
+  const priorSendMode = process.env.SMS_SEND_MODE;
+  const priorProofCell = process.env.SMS_PROOF_CELL;
+  const proofCell = "+15005550199";
+  try {
+    process.env.SMS_SEND_MODE = "proof_only";
+    process.env.SMS_PROOF_CELL = proofCell;
+    const enabled = await lineBoundary.sendPropertySms({
+      property_id: propertyId, recipient: proofCell, body: "line authority proof",
+      purpose: "proof_text",
+    });
+    expect(enabled.sent === true && lineCalls.length === 1
+        && lineCalls[0].from === "+12155559999",
+      "an enabled canonical property line reaches the fake transport exactly once");
+
+    await q(`update communication_lines
+                set outbound_enabled=false, outbound_policy='disabled'
+              where property_id=$1 and line_type='property_facing' and status='active'`,
+      [propertyId]);
+    const projection = (await q(
+      "select sms_number from properties where id=$1", [propertyId]
+    )).rows[0].sms_number;
+    const disabled = await lineBoundary.sendPropertySms({
+      property_id: propertyId, recipient: proofCell, body: "must not leave",
+      purpose: "proof_text",
+    });
+    expect(projection === "+12155559999"
+        && disabled.sent === false && disabled.reason === "outbound_not_enabled"
+        && lineCalls.length === 1,
+      "an active outbound-disabled line refuses canonically and projection drift cannot send",
+      JSON.stringify({ projection, disabled, provider_calls: lineCalls.length }));
+  } finally {
+    if (priorSendMode === undefined) delete process.env.SMS_SEND_MODE;
+    else process.env.SMS_SEND_MODE = priorSendMode;
+    if (priorProofCell === undefined) delete process.env.SMS_PROOF_CELL;
+    else process.env.SMS_PROOF_CELL = priorProofCell;
+    await q(`update communication_lines
+                set outbound_enabled=true, outbound_policy='proactive'
+              where property_id=$1 and line_type='property_facing' and status='active'`,
+      [propertyId]);
+  }
+  await q(`update communication_lines
+              set status='retired', inbound_enabled=false,
+                  outbound_policy='disabled', outbound_enabled=false
+            where (organization_id=$1 and line_type='operations') or e164=$2`,
+    [property.organization_id, operationsLine]);
+  await q(`insert into communication_lines
+             (e164,line_type,organization_id,authority_ceiling,permitted_audience,
+              inbound_enabled,outbound_enabled,outbound_policy,status)
+           values ($1,'operations',$2,'operational','staff',true,true,'reply_only','active')`,
+    [operationsLine, property.organization_id]);
+
+  smsCursor = smsMessages().length;
+  const sessionClient = await pool.connect();
+  let companyToken;
+  try {
+    await sessionClient.query("begin");
+    const issued = await staffSessions.issueStaffSession(sessionClient, {
+      userId: companySigner.id, propertyId, purpose: "bootstrap_invite",
+    });
+    companyToken = issued.session_token || issued.token;
+    await sessionClient.query("commit");
+  } catch (error) {
+    await sessionClient.query("rollback").catch(() => {});
+    throw error;
+  } finally {
+    sessionClient.release();
+  }
+
+  const mikePerson = (await q(
+    `insert into persons (name,phone,primary_phone_e164,lifecycle_status,source)
+     values ('Mike Grivna',$1,$1,'lead','team_invite_fixture') returning id`,
+    [mikePhone]
+  )).rows[0];
+  let invited, inviteToken, inviteText, otpStarted, otpText;
+  await q(
+    "update properties set name='Property Spine Demo Building', display_name='Skyline' where id=$1",
+    [propertyId]
+  );
+  try {
+    invited = requireOk(await api("POST", `/properties/${propertyId}/team-invites`, {
+      token: companyToken,
+      body: {
+        invited_name: "Mike Grivna", phone_number: mikePhone,
+        role_key: "leasing_agent", scope_type: "property", person_id: mikePerson.id,
+      },
+    }), "Mike staff invite");
+    expect(invited.delivery === "sms_sent" && invited.person_id === mikePerson.id,
+      "the governed invite texts the manager-confirmed Person");
+    inviteToken = String(invited.link || "").split("/join/")[1];
+    inviteText = await waitForSms(
+      (message) => message.to === mikePhone && /\/join\//.test(message.body || ""),
+      "the staff invitation"
+    );
+    expect(!!inviteToken && inviteText.to === mikePhone,
+      "the fake carrier records the exact invite without reaching a phone");
+    expect(/added to Skyline on Property Spine/.test(inviteText.body || "")
+        && !/Property Spine Demo Building/.test(inviteText.body || ""),
+      "the staff invitation uses the property display name without leaking its internal name");
+    const joinResponse = await fetch(invited.link, { redirect: "error" });
+    const joinHtml = await joinResponse.text();
+    expect(joinResponse.status === 200
+        && /Set up your Property Spine access/i.test(joinHtml)
+        && !/Missing or wrong x-operator-key/i.test(joinHtml),
+      "the literal text link reaches the public staff acceptance door without an operator key");
+
+    otpStarted = requireOk(await api("POST", "/auth/sms/start", {
+      body: { token: inviteToken },
+    }), "Mike invite OTP start");
+    expect(otpStarted.delivery === "sms_sent" && otpStarted.flow === "invite_accept",
+      "the invite uses the shared phone-verification door");
+    otpText = await waitForSms(
+      (message) => message.to === mikePhone && /access code is \d{6}/.test(message.body || ""),
+      "the staff access code"
+    );
+    expect(/Your Skyline access code is \d{6}/.test(otpText.body || "")
+        && !/Property Spine Demo Building/.test(otpText.body || ""),
+      "the staff OTP uses the property display name without leaking its internal name");
+  } finally {
+    await q("update properties set name=$2, display_name=$3 where id=$1",
+      [propertyId, property.name, property.display_name]);
+  }
+  const otpCode = String(otpText.body || "").match(/access code is (\d{6})/)[1];
+  const accepted = requireOk(await api("POST", "/auth/sms/verify", {
+    body: { token: inviteToken, code: otpCode },
+  }), "Mike invite acceptance");
+  const staffToken = accepted.session_token;
+  const mike = { id: accepted.user.id, person_id: accepted.person_id };
+  expect(accepted.person_id === mikePerson.id && accepted.role_key === "leasing_agent",
+    "one acceptance returns Mike's confirmed identity and canonical leasing role");
+
+  const me = requireOk(await api("GET", "/operator/me", { token: staffToken }), "operator session");
+  expect(me.property_id === propertyId, "accepted staff session is bound to the fixture property");
+  const acceptedIdentity = (await q(
+    `select u.person_id, pta.primary_for_modules,
+            exists(select 1 from person_contexts pc
+                    where pc.person_id=u.person_id and pc.property_id=pta.property_id
+                      and pc.context_type='staff' and pc.active_to is null) as has_staff_context,
+            exists(select 1 from assignments a
+                    where a.person_id=u.person_id and a.property_id=pta.property_id
+                      and a.role='leasing' and a.is_active=true) as has_leasing_assignment
+       from users u
+       join property_team_assignments pta on pta.user_id=u.id and pta.property_id=$2
+      where u.id=$1`,
+    [mike.id, propertyId]
+  )).rows[0];
+  expect(acceptedIdentity && acceptedIdentity.person_id === mikePerson.id
+      && acceptedIdentity.has_staff_context && acceptedIdentity.has_leasing_assignment
+      && acceptedIdentity.primary_for_modules.includes("leasing"),
+    "acceptance creates Mike's bridge, staff context, access, and work assignment together");
+
+  async function comparePropertySigning(stage, inspect) {
+    const question = "Which signer is still outstanding?";
+    const dashboard = requireOk(await api("POST", "/operator/ask-spine/message", {
+      token: staffToken, body: { message: question },
+    }), `${stage} property-wide signing dashboard read`);
+    const sid = `SM_E2E_SIGNER_${stage.toUpperCase()}_${suffix}`;
+    await sendStaffSms({ from: mikePhone, to: operationsLine, sid, body: question });
+    const sms = await waitForStaffReply(sid);
+    const review = requireOk(await api("GET", "/operator/leasing/applications-review", {
+      token: staffToken,
+    }), `${stage} canonical application review list`);
+    expect(dashboard.kind === "answer" && dashboard.outcome === "answered"
+        && sms.reply_reason === "governed_read"
+        && sms.body === dashboard.answer,
+      `${stage}: dashboard and staff SMS return the same deterministic signer answer`,
+      JSON.stringify({ dashboard, sms }));
+    expect(dashboard.grounded_on.applications_waiting_on_signature_count
+          === review.signing.applications_waiting_on_signature_count
+        && dashboard.grounded_on.outstanding_signer_count
+          === review.signing.outstanding_signer_count,
+      `${stage}: conversational grounding equals the canonical Application Review projection`,
+      JSON.stringify({ grounded_on: dashboard.grounded_on, signing: review.signing }));
+    inspect({ dashboard, sms, review });
+  }
+
+  for (const [question, subject, sidLabel] of [
+    ["has Skyline signed Jane's lease", "leasing_person", "LEASE_READ"],
+    ["upcoming tour availability", "tour_schedule", "TOUR_READ"],
+  ]) {
+    const routedRead = routeStaffSmsTurn({ text: question, attachments: [] });
+    expect(routedRead.destination === "ask_spine" && routedRead.subject === subject,
+      `Mike's SMS ${subject} shorthand reaches the same governed read as the dashboard`,
+      JSON.stringify({ question, routedRead }));
+    const readSid = `SM_E2E_${sidLabel}_${suffix}`;
+    const readAck = await sendStaffSms({
+      from: mikePhone, to: operationsLine, sid: readSid, body: question,
+    });
+    const readReply = await waitForStaffReply(readSid);
+    expect(readAck.status === 200 && readReply.reply_reason === "governed_read"
+        && typeof readReply.body === "string" && readReply.body.trim().length > 0,
+      `phone-derived Mike receives an honest ${subject} governed-read receipt`,
+      JSON.stringify({ question, status: readAck.status, readReply }));
+  }
+
+  const retiredIntakeBefore = (await q(
+    `select
+       (select count(*)::int from intake_media) as media_count,
+       (select count(*)::int from intake_events) as intake_event_count,
+       (select count(*)::int from comm_events) as comm_event_count`
+  )).rows[0];
+  const modelAttemptsBefore = anthropicAttempts();
+  const forgedSender = `+1555000${suffix.slice(-4)}`;
+  const forgedPayload = new URLSearchParams({
+    MessageSid: `SM_FORGED_INTAKE_${suffix}`,
+    From: forgedSender,
+    To: operationsLine,
+    Body: "Infer Skyline and record a completed repair.",
+    NumMedia: "1",
+    MediaUrl0: "https://api.twilio.invalid/forged-media",
+    MediaContentType0: "image/jpeg",
+  });
+  const retiredIntakeResponse = await fetch(BASE + "/intake/twilio", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: forgedPayload.toString(),
+  });
+  const retiredIntakeBody = await retiredIntakeResponse.text();
+  const retiredIntakeAfter = (await q(
+    `select
+       (select count(*)::int from intake_media) as media_count,
+       (select count(*)::int from intake_events) as intake_event_count,
+       (select count(*)::int from comm_events) as comm_event_count,
+       (select count(*)::int from intake_events where sender=$1) as sender_event_count`,
+    [forgedSender]
+  )).rows[0];
+  const retiredEvidence = {
+    status: retiredIntakeResponse.status,
+    route_state: retiredIntakeResponse.headers.get("x-property-spine-route-state"),
+    media_delta: retiredIntakeAfter.media_count - retiredIntakeBefore.media_count,
+    intake_event_delta: retiredIntakeAfter.intake_event_count - retiredIntakeBefore.intake_event_count,
+    comm_event_delta: retiredIntakeAfter.comm_event_count - retiredIntakeBefore.comm_event_count,
+    sender_event_count: retiredIntakeAfter.sender_event_count,
+    model_call_delta: anthropicAttempts() - modelAttemptsBefore,
+  };
+  expect(retiredEvidence.status === 410 && retiredEvidence.route_state === "retired"
+      && retiredEvidence.media_delta === 0 && retiredEvidence.intake_event_delta === 0
+      && retiredEvidence.comm_event_delta === 0 && retiredEvidence.sender_event_count === 0
+      && retiredEvidence.model_call_delta === 0,
+    "retired intake Twilio door refuses before model, sender/property inference, or database writes",
+    JSON.stringify(retiredEvidence));
+  expect(retiredIntakeBody === "<Response></Response>"
+      && /text\/xml/.test(retiredIntakeResponse.headers.get("content-type") || "")
+      && retiredIntakeResponse.headers.get("cache-control") === "no-store",
+    "retired intake Twilio door returns the deterministic no-store TwiML wall");
+  const intakeSource = fs.readFileSync(
+    require("path").join(__dirname, "..", "..", "src", "onboarding", "intake.js"), "utf8"
+  );
+  const retiredRouteSource = intakeSource.match(
+    /router\.post\("\/intake\/twilio"[\s\S]*?\n  \}\);/
+  );
+  expect(!!retiredRouteSource
+      && !/express\.urlencoded|req\.body|captureCore|pool\.query|anthropic/.test(retiredRouteSource[0]),
+    "retired intake Twilio mount contains no parser, model, resolver, or database path");
+
+  const name = `Skyline Journey ${suffix}`;
+  const phone = "+1215" + suffix;
+  const intake = requireOk(await api("POST", "/leasing/intake", { body: {
+    intake_secret: "e2e-intake", property_id: propertyId, name, phone,
+    email: `skyline-${suffix}@example.com`, source: "e2e", attempt_sms: false,
+  }}), "prospect intake");
+  expect(!!intake.person_id && !!intake.lead_id, "prospect entered through canonical intake");
+
+  const addressedPeople = [];
+  for (const candidateName of ["Priya Nand", "Dana Whitfield", "Dana Flores"]) {
+    const person = (await q(
+      `insert into persons (name,lifecycle_status,source)
+       values ($1,'prospect','leasing_subject_e2e') returning id`,
+      [candidateName]
+    )).rows[0];
+    await q(`insert into leasing_leads (person_id,property_id) values ($1,$2)`,
+      [person.id, propertyId]);
+    addressedPeople.push({ id: person.id, name: candidateName });
+  }
+  const uniquePartial = await resolveLeasingSubject(pool, {
+    property_id: propertyId, text: "Has Priya signed?",
+  });
+  expect(uniquePartial.resolved && uniquePartial.person.id === addressedPeople[0].id,
+    "a unique partial name resolves inside Mike's exact property",
+    JSON.stringify(uniquePartial));
+  const ambiguousPartial = await resolveLeasingSubject(pool, {
+    property_id: propertyId, text: "Has Dana signed?",
+  });
+  expect(!ambiguousPartial.resolved && ambiguousPartial.reason === "ambiguous"
+      && ambiguousPartial.candidates.length === 2
+      && ambiguousPartial.candidates.every((candidate) => candidate.name.startsWith("Dana ")),
+    "a shared partial name asks for clarification instead of choosing a person",
+    JSON.stringify(ambiguousPartial));
+  const exactOutranksPartial = await resolveLeasingSubject(pool, {
+    property_id: propertyId, text: "Has Dana Whitfield signed?",
+  });
+  expect(exactOutranksPartial.resolved
+      && exactOutranksPartial.person.id === addressedPeople[1].id,
+    "a complete recorded name outranks another person's shared first name",
+    JSON.stringify(exactOutranksPartial));
+  await q(`insert into contact_preferences
+             (person_id,channel,consent_state,source,updated_at)
+           values ($1,'text','opted_in','internal_qa_enrollment',now())
+           on conflict (person_id,channel) do update
+             set consent_state='opted_in',source='internal_qa_enrollment',updated_at=now()`,
+    [intake.person_id]);
+
+  const starts = new Date(Date.now() + 3 * 86400000);
+  const ends = new Date(starts.getTime() + 60 * 60000);
+  const opened = requireOk(await api("POST", "/leasing/availability", { token: staffToken, key: true, body: {
+    property_id: propertyId, starts_at: starts.toISOString(), ends_at: ends.toISOString(),
+    unit_id: unit.id, leasing_agent_id: mike.id, capacity: 1,
+    idempotency_key: `journey-slot-${suffix}`,
+  }}), "publish native tour time");
+  expect(opened.slot && opened.slot.id, "native scheduler published a 60-minute Mike slot");
+
+  const booked = requireOk(await api("POST", `/leasing/slots/${opened.slot.id}/book`, {
+    token: staffToken, key: true,
+    body: { lead_id: intake.lead_id, idempotency_key: `journey-book-${suffix}` },
+  }), "book native tour slot");
+  expect(!!booked.tour_id && booked.slot_id === opened.slot.id, "prospect booked onto that exact slot");
+
+  requireOk(await api("POST", `/leasing/tours/${booked.tour_id}/check-in`, {
+    key: true, body: { actor_id: mike.id },
+  }), "tour check-in");
+
+  // Class 3 focused mode: reuse the canonical intake, staff and booked-tour
+  // fixture above, then stop before the independent full lease journey.
+  if (process.env.PROOF_STAFF_SMS_PARTIAL === '1') {
+    await require('./staff_sms_partial_capture').runStaffSmsPartialCapture({
+      q, sendStaffSms, waitForStaffReply, propertyId, tourId:booked.tour_id,
+      personId:intake.person_id, mikePhone, operationsLine, suffix,
+      readPersonCard: () => api('GET', `/operator/leasing/person-card?person_id=${intake.person_id}`, {token:staffToken}),
+    });
+    console.log('STAFF_SMS_PARTIAL_HTTP_PASSED');
+    return;
+  }
+
+  const vagueSid = `SM_E2E_VAGUE_${suffix}`;
+  const vagueAck = await sendStaffSms({
+    from: mikePhone,
+    to: operationsLine,
+    sid: vagueSid,
+    body: `${name}'s Skyline E2E tour went really well. Send the application.`,
+  });
+  expect(vagueAck.status === 200 && /<Response><\/Response>/.test(vagueAck.body),
+    "the real operations webhook acknowledges Mike's first text");
+  const vagueReply = await waitForStaffReply(vagueSid);
+  expect(vagueReply.reply_reason === "clarification"
+      && /Ready to Apply, Hot Lead, Possible, or Not Moving Forward/.test(vagueReply.body),
+    "Ask Spine asks for the canonical standing instead of guessing from 'went well'");
+  const stillOpen = (await q(
+    "select status,completed_at from leasing_tours where id=$1", [booked.tour_id]
+  )).rows[0];
+  expect(stillOpen.status !== "completed" && !stillOpen.completed_at,
+    "the vague text records no tour outcome");
+
+  const captureSid = `SM_E2E_CAPTURE_${suffix}`;
+  const captureWords = "Tour went well. She wants bed B and wants to apply.";
+  await sendStaffSms({
+    from: mikePhone,
+    to: operationsLine,
+    sid: captureSid,
+    body: captureWords,
+  });
+  const captureReply = await waitForStaffReply(captureSid);
+  expect(captureReply.reply_reason === "execution_receipt"
+      && /Recorded .* tour as Ready to Apply/.test(captureReply.body),
+    "Mike's ordinary post-tour wording records the explicit Ready to Apply standing");
+  expect(/Unit 3B, Bed B/.test(captureReply.body)
+      && /Nothing was sent/.test(captureReply.body)
+      && /offer|terms/i.test(captureReply.body) && !/Confirm sca1\./.test(captureReply.body),
+    "Spine retains the tour receipt and requests complete terms before send confirmation");
+  const capturedInbound = (await q(
+    `select body,actor_user_id,communication_line_id,needs_human,classification
+       from comm_events where sms_sid=$1`, [captureSid]
+  )).rows[0];
+  expect(capturedInbound && capturedInbound.body === captureWords
+      && capturedInbound.actor_user_id === mike.id
+      && capturedInbound.needs_human === false,
+    "the raw wording is retained against phone-derived Mike identity before the reply");
+
+  await sendStaffSms({
+    from: mikePhone,
+    to: operationsLine,
+    sid: captureSid,
+    body: captureWords,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const replayState = (await q(
+    `select
+       (select count(*)::int from comm_events where sms_sid=$1) as inbound_count,
+       (select count(*)::int from comm_events o
+          where o.in_reply_to_comm_event_id=(select id from comm_events where sms_sid=$1)) as reply_count,
+       (select count(*)::int from tour_events
+          where tour_id=$2 and event_type='completed') as completion_count,
+       (select count(*)::int from leasing_conversions
+          where origin_tour_id=$2 and property_id=$3) as conversion_count`,
+    [captureSid, booked.tour_id, propertyId]
+  )).rows[0];
+  expect(replayState && replayState.inbound_count === 1 && replayState.reply_count === 1
+      && replayState.completion_count === 1 && replayState.conversion_count === 1,
+    "provider-message replay creates no second inbound, reply, tour completion, or conversion",
+    JSON.stringify(replayState));
+
+  const completed = (await q(
+    `select id as conversion_id from leasing_conversions
+      where origin_tour_id=$1 and property_id=$2`,
+    [booked.tour_id, propertyId]
+  )).rows[0];
+  expect(!!completed && !!completed.conversion_id,
+    "the staff text opened the canonical application conversion");
+  const dates = futureLeaseDates();
+  const beforeTermsSend = await api("POST", `/operator/leasing/conversions/${completed.conversion_id}/send-application`, {
+    token: staffToken, body: { unit_id:unit.id, space_id:bedB.id, idempotency_key:`missing-terms-${suffix}` },
+  });
+  expect(beforeTermsSend.status === 409 && beforeTermsSend.body.error === "APPLICATION_TERMS_REQUIRED",
+    "a new application cannot be dispatched before complete terms exist", JSON.stringify(beforeTermsSend.body));
+  expect((await q("select count(*)::int as n from application_invitations where conversion_id=$1",[completed.conversion_id])).rows[0].n === 0,
+    "missing terms create no invitation");
+  const unbridgedOffer = await api("POST", `/operator/leasing/conversions/${completed.conversion_id}/application-offer`, {
+    token: companyToken, body: { space_id:bedB.id, rent:1025, security_deposit:1025,
+      lease_start_date:dates.start, lease_end_date:dates.end, fees:[], concessions:{status:"none"}, idempotency_key:`unbridged-${suffix}` },
+  });
+  expect(unbridgedOffer.status === 403 && unbridgedOffer.body.error === "ACTOR_IDENTITY_UNRESOLVED",
+    "even a manager session cannot author terms without its canonical staff identity");
+  // Explicit disposable fixture identity, not a name-based bridge or product fallback.
+  const offerAuthor = (await q("insert into persons(name,source) values ('Synthetic offer author','terms_first_fixture') returning id")).rows[0];
+  await q("update users set person_id=$2, account_kind='human_staff' where id=$1", [companySigner.id,offerAuthor.id]);
+  await q("insert into assignments(person_id,property_id,role,provenance) values($1,$2,'owner',$3)",
+    [offerAuthor.id,propertyId,JSON.stringify({source:"synthetic_terms_first_fixture",user_id:companySigner.id})]);
+  let phoneOffer=null;
+  if(process.env.PROOF_PHONE_TERMS==='1') {
+    const before=(await q("select count(*)::int n from lease_offers where person_id=(select person_id from leasing_conversions where id=$1)",[completed.conversion_id])).rows[0].n;
+    const partialSid=`SM_PHONE_TERMS_PARTIAL_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:partialSid,
+      body:`Terms for ${name}, Unit 3B Bed B: rent 1025; start ${dates.start}`});
+    const partial=await waitForStaffReply(partialSid);
+    expect(/Still need/.test(partial.body)&&/deposit/.test(partial.body),'partial terms ask only for missing values',partial.body);
+    expect((await q("select count(*)::int n from lease_offers where person_id=(select person_id from leasing_conversions where id=$1)",[completed.conversion_id])).rows[0].n===before,'partial SMS creates no incomplete offer');
+    const deniedSid=`SM_PHONE_TERMS_DENIED_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:deniedSid,
+      body:`Terms: deposit 0; end ${dates.end}; fees none; concessions none`});
+    const denied=await waitForStaffReply(deniedSid);
+    expect(/cannot set application pricing/.test(denied.body),'complete text does not grant pricing authority',denied.body);
+    expect((await q("select count(*)::int n from lease_offers where person_id=(select person_id from leasing_conversions where id=$1)",[completed.conversion_id])).rows[0].n===before,'unauthorized terms create no offer');
+    // Existing server-established pricing authority, not client role claims.
+    await q('update property_team_assignments set can_manage_roles=true where user_id=$1 and property_id=$2',[mike.id,propertyId]);
+    // Synthetic recorded future readiness, only in this owned database. Planning
+    // is not exercised here: no move-out writer or possession fact is asserted.
+    const phoneTurn=(await q("insert into turnovers(property_id,unit_id,status,ready_date) values($1,$2,'in_progress',$3) returning id",[propertyId,unit.id,dates.start])).rows[0];
+    const tooEarly=new Date(Date.parse(dates.start+'T00:00:00Z')-86400000).toISOString().slice(0,10);
+    const earlySid=`SM_PHONE_TERMS_EARLY_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:earlySid,
+      body:`Terms for ${name}, Unit 3B Bed B: rent 1025; deposit 0; start ${tooEarly}; end ${dates.end}; fees none; concessions none`});
+    const early=await waitForStaffReply(earlySid);
+    expect((await q("select count(*)::int n from lease_offers where person_id=(select person_id from leasing_conversions where id=$1)",[completed.conversion_id])).rows[0].n===before,'phone terms before recorded readiness create no offer');
+    expect(/ready|readiness/i.test(early.body)&&!/Still need.*exact unit/.test(early.body),'phone explains readiness refusal instead of losing the named bed',early.body);
+    expect((await q('select count(*)::int n from application_invitations where conversion_id=$1',[completed.conversion_id])).rows[0].n===0,'refused dated terms create no invitation');
+    const completeSid=`SM_PHONE_TERMS_COMPLETE_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:completeSid,
+      body:`Terms: deposit 0; start ${dates.start}; end ${dates.end}; fees none; concessions none`});
+    const complete=await waitForStaffReply(completeSid);
+    expect(/Offer prepared/.test(complete.body)&&/\$1,025.00/.test(complete.body)&&/\$0.00/.test(complete.body)
+      && complete.body.includes(dates.start)&&complete.body.includes(dates.end),'phone continuation preserves prior rent/date and displays all complete terms',complete.body);
+    const token=complete.body.match(/Confirm (sca1\.[A-Za-z0-9_.-]+)/)?.[1];
+    expect(!!token,'phone-prepared offer reaches bound confirmation');
+    const repeatedSid=`SM_PHONE_TERMS_REPEAT_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:repeatedSid,
+      body:`Terms for ${name}, Unit 3B Bed B: rent 2500; deposit 0; start ${dates.start}; end ${dates.end}; fees none; concessions none`});
+    await waitForStaffReply(repeatedSid);
+    expect((await q("select count(*)::int n from lease_offers where person_id=(select person_id from leasing_conversions where id=$1)",[completed.conversion_id])).rows[0].n===before+1,
+      'another terms statement cannot silently create a competing draft');
+    if(process.env.PROOF_PHONE_FULL==='1') {
+      await q('delete from turnovers where id=$1',[phoneTurn.id]);
+      const rows=(await q("select id from lease_offers where person_id=(select person_id from leasing_conversions where id=$1) and source='application_proposal'",[completed.conversion_id])).rows;
+      expect(rows.length===1,'one phone-authored offer enters the complete tenant journey');
+      phoneOffer={application_offer_id:rows[0].id};
+      // The remaining full-path control expects a leasing-only actor. Pricing
+      // management was granted solely for the preceding owned authoring step.
+      await q('update property_team_assignments set can_manage_roles=false where user_id=$1 and property_id=$2',[mike.id,propertyId]);
+    } else {
+    const confirmationSid=`SM_PHONE_TERMS_CONFIRM_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:confirmationSid,body:'Confirm application'});
+    const sent=await waitForStaffReply(confirmationSid);
+    expect(/Application sent/.test(sent.body),'phone-authored terms can advance to application send',sent.body);
+    const bound=(await q(`select inv.application_offer_id,lo.offered_terms_snapshot from application_invitations inv
+      join lease_offers lo on lo.id=inv.application_offer_id where inv.conversion_id=$1`,[completed.conversion_id])).rows;
+    expect(bound.length===1&&bound[0].offered_terms_snapshot.application_terms.rent==='1025.00'
+      &&bound[0].offered_terms_snapshot.application_terms.security_deposit==='0.00'
+      &&bound[0].offered_terms_snapshot.application_terms.target.space_id===bedB.id,'invitation retains the exact bed and phone-authored terms including zero');
+    console.log('PHONE_TERMS_HTTP_PASSED');
+    return;
+    }
+  }
+  let applicationOffer = phoneOffer || requireOk(await api("POST", `/operator/leasing/conversions/${completed.conversion_id}/application-offer`, {
+    token: companyToken, body: { space_id: bedB.id, rent: 1025, security_deposit: 1025,
+      lease_start_date: dates.start, lease_end_date: dates.end, fees: [],
+      concessions: { status: "none" }, idempotency_key: `journey-offer-${suffix}` },
+  }), "authorized complete offer before application");
+  expect(!!applicationOffer.application_offer_id, "staff prepares a retained offer before invitation dispatch");
+  if(!phoneOffer) {
+  const offerReplay = requireOk(await api("POST", `/operator/leasing/conversions/${completed.conversion_id}/application-offer`, {
+    token:companyToken,body:{space_id:bedB.id,rent:1025,security_deposit:1025,
+      lease_start_date:dates.start,lease_end_date:dates.end,fees:[],concessions:{status:"none"},idempotency_key:`journey-offer-${suffix}`},
+  }), "offer retry after JSONB round-trip");
+  expect(offerReplay.idempotent && offerReplay.application_offer_id === applicationOffer.application_offer_id,
+    "an identical offer retry survives database JSON key ordering and returns the same offer");
+  }
+
+  if (process.env.PROOF_SMS_OFFER_REFUSAL === '1') {
+    // Fable's ambiguity reproduction, using this owned runner and assertions
+    // instead of another bootstrap or diagnostic-only copy of the journey.
+    const proposal = requireOk(await api('POST','/operator/ask-spine/message', {
+      token:staffToken,body:{message:`Send ${name} the application for Unit 3B, Bed B.`},
+    }), 'proposal before competing offer');
+    expect(!!proposal.confirmation?.token,'one complete offer permits a confirmation proposal');
+    const replaced = process.env.PROOF_SMS_OFFER_REPLACED === '1';
+    let competingOffer;
+    if (replaced) {
+      // Pre-invitation supersession is reachable at the canonical service, not
+      // the operator revision route (which requires an existing invitation).
+      const client=await pool.connect();
+      try {
+        await client.query('begin');
+        const person=(await client.query('select person_id from leasing_conversions where id=$1',[completed.conversion_id])).rows[0];
+        const made=await require('../../src/money/application_offer_terms').prepareApplicationOffer(client,{
+          actor:{id:companySigner.id,property_id:propertyId},person_id:person.person_id,space_id:bedB.id,
+          rent:2500,security_deposit:2500,lease_start_date:dates.start,lease_end_date:dates.end,
+          fees:[],concessions:{status:'none'},idempotency_key:`replaced-offer-${suffix}`,
+          supersedes_application_offer_id:applicationOffer.application_offer_id,
+        });
+        competingOffer={application_offer_id:made.offer.id};
+        await client.query('commit');
+      } catch(error) {await client.query('rollback');throw error;} finally {client.release();}
+    } else competingOffer = requireOk(await api('POST',`/operator/leasing/conversions/${completed.conversion_id}/application-offer`, {
+      token:companyToken,body:{space_id:bedB.id,rent:2500,security_deposit:2500,
+        lease_start_date:dates.start,lease_end_date:dates.end,fees:[],concessions:{status:'none'},
+        idempotency_key:`competing-offer-${suffix}`},
+    }), 'competing current offer');
+    const before = await q(`select id,status,offered_terms_snapshot from lease_offers
+      where id in ($1,$2) order by id`,[applicationOffer.application_offer_id,competingOffer.application_offer_id]);
+    expect(before.rows.length===2,'both retained offers exist for the changed-terms control');
+    const sid=`SM_OFFER_REFUSAL_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid,body:`Confirm ${proposal.confirmation.token}`});
+    const reply=await waitForStaffReply(sid);
+    expect(reply.classification===(replaced?'leasing_APPLICATION_TERMS_REVIEW_REQUIRED':'leasing_APPLICATION_TERMS_REQUIRED')
+      && /terms|offer/i.test(reply.body) && /Nothing was sent/.test(reply.body),
+      'changed or ambiguous terms at redemption require a fresh review, not a send',reply.body);
+    const state=(await q(`select
+      (select count(*)::int from application_invitations where conversion_id=$1) invitations,
+      (select count(*)::int from application_intents where conversion_id=$1) intents`,[completed.conversion_id])).rows[0];
+    expect(state.invitations===0 && state.intents===0,'refused redemption rolls back invitation and intent');
+    const after=await q(`select id,status,offered_terms_snapshot from lease_offers
+      where id in ($1,$2) order by id`,[applicationOffer.application_offer_id,competingOffer.application_offer_id]);
+    expect(JSON.stringify(before.rows)===JSON.stringify(after.rows),'refusal preserves original offer terms and status');
+    console.log('STAFF_SMS_OFFER_REFUSAL_HTTP_PASSED');
+    return;
+  }
+  const captureEvent = (await q(
+    `select metadata from tour_events where tour_id=$1 and event_type='completed' order by event_at desc limit 1`,
+    [booked.tour_id]
+  )).rows[0];
+  expect(captureEvent && captureEvent.metadata.standing === "ready_to_apply",
+    "the agent's ready-to-apply judgment was recorded as truth");
+  const followupOwner = (await q(
+    `select lco.owner_user_id, o.assigned_user_id
+       from leasing_conversion_obligations lco
+       join obligations o on o.id=lco.obligation_id
+      where lco.conversion_id=$1 and lco.rung='tour_followup' and lco.outcome is null`,
+    [completed.conversion_id]
+  )).rows[0];
+  expect(followupOwner && followupOwner.owner_user_id === mike.id
+      && followupOwner.assigned_user_id === mike.id,
+    "post-tour follow-up reaches Mike through the canonical obligations queue");
+  const personalAttention = requireOk(await api("POST", "/operator/ask-spine/ask", {
+    token: staffToken, body: { question: "What should I do today?" },
+  }), "personal Ask Spine read after the tour");
+  expect(personalAttention.outcome === "answered"
+      && personalAttention.grounded_on.attention_scope === "personal"
+      && personalAttention.grounded_on.personal_open_items >= 1,
+    "Mike's Ask Spine answer is grounded in his canonical personal queue");
+  const attentionSid = `SM_E2E_ATTENTION_${suffix}`;
+  await sendStaffSms({
+    from: mikePhone,
+    to: operationsLine,
+    sid: attentionSid,
+    body: "What should I do today?",
+  });
+  const smsAttention = await waitForStaffReply(attentionSid);
+  expect(smsAttention.reply_reason === "governed_read"
+      && smsAttention.body === personalAttention.answer,
+    "dashboard and staff SMS return the same personal Ask Spine answer");
+
+  const targets = requireOk(await api("GET", "/operator/leasing/leaseable-units", {
+    token: staffToken,
+  }), "leaseable target read");
+  const chosen = (targets.eligible_targets || []).find(
+    (target) => target.unit_id === unit.id && target.space_id === bedB.id
+  );
+  expect(!!chosen && chosen.resolution_basis === "chosen_space",
+    "the application selector offers exact Bed B instead of guessing");
+
+  async function applicationActionState() {
+    return (await q(
+      `select
+         (select count(*)::int from application_intents
+           where conversion_id=$1) as intent_count,
+         (select count(*)::int from application_invitations
+           where conversion_id=$1) as invitation_count,
+         (select count(*)::int from events e
+           where e.id in (select event_id from application_intents where conversion_id=$1)) as event_count,
+         (select count(*)::int from obligations o
+           where (o.related_type='leasing_conversion' and o.related_id=$1
+                    and o.type='prepare_application_link')
+              or (o.related_type='application_invitation'
+                    and o.related_id in (select id from application_invitations where conversion_id=$1)
+                    and o.type='send_application_link')) as child_obligation_count,
+         (select count(*)::int from lease_applications
+           where conversion_id=$1) as application_count`,
+      [completed.conversion_id]
+    )).rows[0];
+  }
+
+  const actionBefore = await applicationActionState();
+  expect(actionBefore.intent_count === 0 && actionBefore.invitation_count === 0
+      && actionBefore.event_count === 0 && actionBefore.child_obligation_count === 0
+      && actionBefore.application_count === 0,
+    "post-tour capture and proposal create no application intent, invitation, event, child obligation, or application",
+    JSON.stringify(actionBefore));
+
+  const keyOnlyProposal = await api("POST", "/operator/ask-spine/message", {
+    key: true, body: { message: `Send ${name} the application for Unit 3B, Bed B.` },
+  });
+  expect(keyOnlyProposal.status === 401,
+    "the dashboard action has no x-operator-key authentication fallback");
+  const claimedScope = await api("POST", "/operator/ask-spine/message", {
+    token: staffToken,
+    body: {
+      message: `Send ${name} the application for Unit 3B, Bed B.`,
+      property_id: "00000000-0000-0000-0000-000000000001",
+    },
+  });
+  expect(claimedScope.status === 403,
+    "a dashboard-supplied property claim is refused before the action");
+  const inventedAuthority = await api("POST", "/operator/ask-spine/message", {
+    token: staffToken,
+    body: {
+      message: `Send ${name} the application for Unit 3B, Bed B.`,
+      person_id: intake.person_id,
+    },
+  });
+  expect(inventedAuthority.status === 400,
+    "the dashboard cannot supply a Person or any action payload beside its request");
+  const queryScope = await api(
+    "POST", `/operator/ask-spine/message?property_id=${propertyId}`, {
+      token: staffToken,
+      body: { message: `Send ${name} the application for Unit 3B, Bed B.` },
+    }
+  );
+  expect(queryScope.status === 400,
+    "even a matching property query is refused because action scope is session-only");
+  const unsupported = await api("POST", "/operator/ask-spine/message", {
+    token: staffToken, body: { message: "Update the lease." },
+  });
+  expect(unsupported.status === 200
+      && unsupported.body.kind === "clarification_or_refusal"
+      && unsupported.body.outcome !== "answered",
+    "vague lease-update wording is refused without a generic conversational writer");
+  const missingSubject = await api("POST", "/operator/ask-spine/message", {
+    token: staffToken, body: { message: "Send the application for Unit 3B, Bed B." },
+  });
+  expect(missingSubject.status === 200
+      && missingSubject.body.outcome === "leasing_clarification"
+      && missingSubject.body.confirmation === null && missingSubject.body.sent === false,
+    "the dashboard must name the subject even when only one follow-up is open");
+
+  const retiredProposalDoor = await api(
+    "POST", "/operator/ask-spine/application-send/propose", {
+      token: staffToken,
+      body: { request: `Send ${name} the application for Unit 3B, Bed B.` },
+    }
+  );
+  expect(retiredProposalDoor.status === 404,
+    "the dashboard has no second prose proposal door");
+
+  const canonicalReadQuestion = "Which signer is still outstanding?";
+  const readCompatibility = requireOk(await api("POST", "/operator/ask-spine/ask", {
+    token: staffToken, body: { question: canonicalReadQuestion },
+  }), "read-only Ask Spine compatibility result");
+  const readThroughMessage = requireOk(await api("POST", "/operator/ask-spine/message", {
+    token: staffToken, body: { message: canonicalReadQuestion },
+  }), "single-door Ask Spine read");
+  expect(readThroughMessage.kind === "answer"
+      && readThroughMessage.outcome === readCompatibility.outcome
+      && readThroughMessage.answer === readCompatibility.answer
+      && JSON.stringify(readThroughMessage.grounded_on) === JSON.stringify(readCompatibility.grounded_on)
+      && JSON.stringify(readThroughMessage.references) === JSON.stringify(readCompatibility.references),
+    "ordinary dashboard prose delegates to the byte-equivalent canonical Ask Spine answer owner");
+  expect(JSON.stringify(await applicationActionState()) === JSON.stringify(actionBefore),
+    "ordinary and unsupported message prose create no application writes");
+
+  const unusedProposal = requireOk(await api('POST','/operator/ask-spine/message', {
+    token:staffToken, body:{message:`Send ${name} the application for Unit 3B, Bed B.`},
+  }), 'unused complete-offer proposal for expiry control');
+  const proposal = requireOk(await api(
+    "POST", "/operator/ask-spine/message", {
+      token: staffToken,
+      body: { message: `Send ${name} the application for Unit 3B, Bed B.` },
+    }
+  ), "single-door dashboard application-send proposal");
+  let confirmation = proposal.confirmation && proposal.confirmation.token;
+  if(phoneOffer) {
+    const phoneAskSid=`SM_PHONE_FULL_ASK_${suffix}`;
+    await sendStaffSms({from:mikePhone,to:operationsLine,sid:phoneAskSid,body:`Send ${name} the application for Unit 3B, Bed B.`});
+    const phoneProposal=await waitForStaffReply(phoneAskSid);
+    confirmation=phoneProposal.body.match(/Confirm (sca1\.[A-Za-z0-9_.-]+)/)?.[1];
+    expect(!!confirmation&&phoneProposal.body.includes('$1,025.00'),'actual send confirmation comes from phone offer review');
+  }
+  expect(proposal.kind === "application_send_proposal"
+      && proposal.outcome === "application_send_proposed"
+      && proposal.action_code === "send_application_after_tour"
+      && proposal.confirmation_required === true && !!confirmation
+      && proposal.sent === false && proposal.subject.display_name === name
+      && proposal.target.label === "Unit 3B, Bed B",
+    "the authenticated dashboard receives a server-selected proposal and opaque confirmation",
+    JSON.stringify(proposal));
+  const visibleProposal = JSON.stringify(proposal);
+  expect(![propertyId, completed.conversion_id, intake.person_id, unit.id, bedB.id, mike.id]
+      .some((id) => visibleProposal.includes(String(id))),
+    "the dashboard proposal exposes no property, conversion, Person, target, or actor database identifiers");
+  expect(JSON.stringify(await applicationActionState()) === JSON.stringify(actionBefore),
+    "dashboard proposal and all refusals leave canonical application state unchanged");
+
+  const wrongActor = await api("POST", "/operator/ask-spine/application-send/confirm", {
+    token: companyToken, body: { confirmation },
+  });
+  expect(wrongActor.status === 403 && wrongActor.body.outcome === "confirmation_actor_mismatch",
+    "another staff session cannot use Mike's confirmation receipt");
+  expect(JSON.stringify(await applicationActionState()) === JSON.stringify(actionBefore),
+    "wrong-session confirmation refusal writes nothing");
+
+  const targetSid = `SM_E2E_TARGET_${suffix}`;
+  await sendStaffSms({
+    from: mikePhone,
+    to: operationsLine,
+    sid: targetSid,
+    body: phoneOffer ? 'Confirm application' : `Confirm ${confirmation}`,
+  });
+  const targetReply = await waitForStaffReply(targetSid);
+  expect(targetReply.reply_reason === "execution_receipt"
+      && /Application sent to .* for Unit 3B, Bed B/.test(targetReply.body),
+    "Mike's SMS confirmation invokes the canonical application send command selected by the dashboard");
+  const invitation = (await q(
+    `select id,conversion_id,unit_id,space_id,status
+       from application_invitations
+      where conversion_id=$1
+      order by created_at desc limit 1`,
+    [completed.conversion_id]
+  )).rows[0];
+  expect(invitation && invitation.unit_id === unit.id && invitation.space_id === bedB.id,
+    "the staff-text application invitation persists exact Bed B");
+  expect(invitation.status === "provider_dispatched",
+    "the provider acceptance is recorded separately from Ask Spine's reply to Mike");
+  const actionAfter = await applicationActionState();
+  expect(actionAfter.intent_count === 1 && actionAfter.invitation_count === 1
+      && actionAfter.event_count === 1 && actionAfter.child_obligation_count === 2
+      && actionAfter.application_count === 0,
+    "one confirmation creates exactly one canonical intent, event, invitation, and two governed child obligations",
+    JSON.stringify(actionAfter));
+  const sms = await waitForSms(
+    (message) => message.to === phone && /\/t\/application\//.test(message.body || ""),
+    "the application text"
+  );
+  expect(sms.to === phone, "the application text was addressed to the prospect in the fake transport");
+
+  const replay = await api("POST", "/operator/ask-spine/application-send/confirm", {
+    token: staffToken, body: { confirmation },
+  });
+  expect(replay.status === 409 && replay.body.outcome === "confirmation_used"
+      && replay.body.sent === false && replay.body.replayed === true,
+    "dashboard replay receives a canonical used receipt and cannot claim a second send",
+    JSON.stringify(replay.body));
+  expect(JSON.stringify(await applicationActionState()) === JSON.stringify(actionAfter),
+    "cross-transport confirmation replay creates no second intent, event, invitation, obligation, or application");
+  const applicationTexts = smsMessages().filter(
+    (message) => message.to === phone && /\/t\/application\//.test(message.body || "")
+  );
+  expect(applicationTexts.length === 1,
+    "cross-transport replay creates zero duplicate provider calls");
+
+  const askAgainQuestion = `Has ${name}'s application link been sent?`;
+  const askAgain = requireOk(await api("POST", "/operator/ask-spine/message", {
+    token: staffToken, body: { message: askAgainQuestion },
+  }), "post-action Ask Spine read");
+  expect(askAgain.kind === "answer" && askAgain.outcome === "answered"
+      && askAgain.grounded_on.leasing_read_state === "OK"
+      && askAgain.grounded_on.leasing_opportunity_stage === "applicant_followup"
+      && askAgain.grounded_on.application_link_sent === true
+      && new RegExp(`Yes .*${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}.*has been sent`).test(askAgain.answer),
+    "ordinary Ask Spine reads the post-send applicant stage from canonical leasing standing",
+    JSON.stringify(askAgain));
+  const askAgainSid = `SM_E2E_ASK_AGAIN_${suffix}`;
+  await sendStaffSms({
+    from: mikePhone, to: operationsLine, sid: askAgainSid, body: askAgainQuestion,
+  });
+  const askAgainSms = await waitForStaffReply(askAgainSid);
+  expect(askAgainSms.reply_reason === "governed_read"
+      && askAgainSms.body === askAgain.answer,
+    "dashboard and SMS ask-again observe the same canonical updated standing");
+
+  const otherProperty = (await q(
+    `insert into properties (name,address,organization_id)
+     values ($1,'2 Scope Wall',$2) returning id`,
+    [`Conversation Scope ${suffix}`, property.organization_id]
+  )).rows[0];
+  await q(
+    `insert into property_team_assignments
+       (user_id,property_id,role_title,allowed_modules,primary_for_modules,active,can_manage_roles)
+     values ($1,$2,'leasing_agent','{leasing}','{leasing}',true,false)`,
+    [mike.id, otherProperty.id]
+  );
+  const noLeasingUser = (await q(
+    `insert into users (name,role,is_active,status,account_kind)
+     values ($1,'maintenance',true,'active','human_staff') returning id`,
+    [`Conversation No Leasing ${suffix}`]
+  )).rows[0];
+  await q(
+    `insert into property_team_assignments
+       (user_id,property_id,role_title,allowed_modules,primary_for_modules,active,can_manage_roles)
+     values ($1,$2,'maintenance','{maintenance}','{}',true,false)`,
+    [noLeasingUser.id, propertyId]
+  );
+  async function fixtureSession(userId, sessionPropertyId) {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const issued = await staffSessions.issueStaffSession(client, {
+        userId, propertyId: sessionPropertyId, purpose: "bootstrap_invite",
+      });
+      await client.query("commit");
+      return issued.session_token;
+    } catch (error) {
+      await client.query("rollback").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  const wrongPropertyToken = await fixtureSession(mike.id, otherProperty.id);
+  const noLeasingToken = await fixtureSession(noLeasingUser.id, propertyId);
+  const wrongProperty = await api("POST", "/operator/ask-spine/application-send/confirm", {
+    token: wrongPropertyToken, body: { confirmation },
+  });
+  expect(wrongProperty.status === 403
+      && wrongProperty.body.outcome === "confirmation_property_mismatch",
+    "the same actor's session at another property cannot use the scoped receipt");
+  const noModule = await api("POST", "/operator/ask-spine/application-send/confirm", {
+    token: noLeasingToken, body: { confirmation },
+  });
+  expect(noModule.status === 403 && noModule.body.outcome === "leasing_module_required",
+    "a session without Leasing cannot cross the shared action boundary");
+  expect(JSON.stringify(await applicationActionState()) === JSON.stringify(actionAfter),
+    "wrong-property and missing-module confirmation refusals write nothing");
+  await q("delete from properties where id=$1", [otherProperty.id]);
+
+  const expiresAt = new Date(proposal.confirmation.expires_at).getTime();
+  const expiryWait = Math.max(0, expiresAt - Date.now() + 1100);
+  if (expiryWait) await new Promise((resolve) => setTimeout(resolve, expiryWait));
+  const expired = await api("POST", "/operator/ask-spine/application-send/confirm", {
+    token: staffToken, body: { confirmation: unusedProposal.confirmation.token },
+  });
+  expect(expired.status === 410 && expired.body.outcome === "confirmation_expired",
+    "an unused expired confirmation refuses without a write");
+  expect(JSON.stringify(await applicationActionState()) === JSON.stringify(actionAfter),
+    "expired confirmation refusal leaves canonical action state unchanged");
+
+  const tokenMatch = String(sms.body).match(/\/t\/application\/([A-Za-z0-9_-]+)/);
+  expect(!!tokenMatch, "the captured text contains the public application token");
+  const applicationToken = tokenMatch[1];
+
+  const context = requireOk(await api("GET", `/t/application/${applicationToken}/context`, {
+    key: false,
+  }), "public application context");
+  expect(context.state === "open" && /Bed B/.test(context.unit_label || ""),
+    "the tenant sees the exact home attached to the invitation");
+  expect(context.terms_required && context.application_terms.rent === "1025.00"
+      && context.application_terms.lease_start_date === dates.start,
+    "public application begins with server-owned complete commercial terms");
+  let acceptedTerms = { application_terms_hash: context.application_terms.terms_hash, application_terms_acknowledged: true };
+  const guarantorName = `Skyline Guarantor ${suffix}`;
+  const guarantorPhone = "+1412" + suffix;
+  const captured = {
+    application_form_version: "tenant_v3",
+    date_of_birth: "1995-04-12", email: `skyline-${suffix}@example.com`, phone,
+    address: { line1: "100 Test Street", line2: "", city: "Philadelphia", state: "PA", postal_code: "19147" },
+    current_since: "2024-01", housing_status: "rent",
+    income_status: "employed", employer: "Test Employer", job_title: "Analyst",
+    income_amount: 72000, income_frequency: "annual", income_notes: "",
+    desired_move_in: futureLeaseDates().start, move_flexibility: "plus_minus_7",
+    occupants: 1, household_names: "", has_pets: "no", pets: "None",
+    guarantor_needed: "yes",
+    guarantor_contact: {
+      name: guarantorName,
+      phone: guarantorPhone,
+      email: `guarantor-${suffix}@example.com`,
+    },
+    additional_notes: "",
+    applicant_accuracy_certified: true,
+    electronic_delivery_consent: true,
+  };
+  const conflictingGuarantor = await api("POST", "/applications/submit-public", {
+    key: false,
+    body: {
+      token: applicationToken,
+      ...acceptedTerms,
+      applicant_name: name,
+      guarantor_name: `Wrong Guarantor ${suffix}`,
+      captured,
+    },
+  });
+  expect(conflictingGuarantor.status === 400
+      && /conflicts with the guarantor contact/.test(
+        String(conflictingGuarantor.body && conflictingGuarantor.body.receipt || "")),
+    "a contradictory V3 guarantor name is refused before application birth", JSON.stringify(conflictingGuarantor));
+  for (const [label, change] of [
+    ["missing acknowledgement", { application_terms_acknowledged: false }],
+    ["wrong terms version", { application_terms_hash: "0".repeat(64) }],
+    ["applicant changed rent", { rent: "1.00" }],
+  ]) {
+    const refused = await api("POST", "/applications/submit-public", { key: false,
+      body: { token: applicationToken, applicant_name: name, captured, ...acceptedTerms, ...change } });
+    expect([400,409].includes(refused.status), `${label} refuses before application submission`);
+    const unchanged = requireOk(await api("GET", `/t/application/${applicationToken}/context`, { key:false }), "refused submission context");
+    expect(unchanged.state === "open", `${label} leaves invitation unconsumed`);
+  }
+  async function reviseOffer(rent,key){
+    applicationOffer = requireOk(await api("POST", `/operator/leasing/conversions/${completed.conversion_id}/application-offer`, {
+      token:companyToken, body:{space_id:bedB.id,rent,security_deposit:1025,lease_start_date:dates.start,
+        lease_end_date:dates.end,fees:[],concessions:{status:"none"},idempotency_key:key,
+        supersedes_application_offer_id:applicationOffer.application_offer_id},
+    }), "intentional successor offer");
+    const latest = requireOk(await api("GET",`/t/application/${applicationToken}/context`,{key:false}),"latest terms context");
+    acceptedTerms = {application_terms_hash:latest.application_terms.terms_hash,application_terms_acknowledged:true};
+    return latest;
+  }
+  const beforeSubmit = async()=>{
+    await reviseOffer(1030,`open-revision-${suffix}`);
+    expect(true,"staff can revise a sent but unsubmitted invitation without another application or message");
+  };
+  if(process.env.PROOF_TENANT_BROWSER !== "1") await beforeSubmit();
+  const submitted = process.env.PROOF_TENANT_BROWSER === "1"
+    ? await require("./tenant_journey_browser").submitApplication(BASE,applicationToken,name,captured,{beforeSubmit})
+    : requireOk(await api("POST", "/applications/submit-public", {
+    key: false,
+    body: { token: applicationToken, applicant_name: name, captured, ...acceptedTerms },
+  }), "public application submit");
+  const appId = submitted.application && submitted.application.id;
+  const appRow = (await q(
+    "select id,conversion_id,unit_id,space_id,status,application_offer_id,application_terms_hash,application_terms_acknowledged_at from lease_applications where id=$1",
+    [appId]
+  )).rows[0];
+  expect(appRow && appRow.conversion_id === completed.conversion_id,
+    "the tenant application remains attached to the post-tour conversion");
+  expect(appRow.unit_id === unit.id && appRow.space_id === bedB.id,
+    "the tenant application persists exact Bed B");
+  expect(appRow.application_offer_id === applicationOffer.application_offer_id
+      && appRow.application_terms_hash === acceptedTerms.application_terms_hash && !!appRow.application_terms_acknowledged_at,
+    "submission retains exact acknowledged offer and acknowledgement time");
+  expect((await q("select guarantor_name from lease_applications where id=$1", [appId])).rows[0].guarantor_name
+      === guarantorName,
+    "the application derives the named guarantor from the validated V3 capture");
+
+  const mikeApproval = await api("POST", `/operator/leasing/applications/${appId}/approve`, {
+    token: staffToken, body: {},
+  });
+  expect(mikeApproval.status === 403,
+    "Mike's leasing role cannot approve the application it helped collect");
+  requireOk(await api("POST", `/operator/leasing/applications/${appId}/approve`, {
+    token: companyToken, body: {},
+  }), "authorized application approval");
+  const changedLeaseTerms = await api("POST", `/operator/leasing/applications/${appId}/proposed-terms`, {
+    token:companyToken, body:{rent:1026,security_deposit:1025,lease_start_date:dates.start,
+      lease_end_date:dates.end,concession_status:"none",idempotency_key:`changed-terms-${suffix}`},
+  });
+  expect(changedLeaseTerms.status === 409, "management cannot silently change applicant-acknowledged rent");
+  const beforeRevision = (await q("select captured,rent,status from lease_applications where id=$1",[appId])).rows[0];
+  const oldAck = (await q("select * from application_terms_acknowledgements where application_id=$1 order by acknowledged_at",[appId])).rows;
+  const reviewContext = await reviseOffer(1025,`submitted-revision-${suffix}`);
+  expect(reviewContext.state === "terms_review" && reviewContext.previous_application_terms.rent === "1030.00"
+      && reviewContext.application_terms.rent === "1025.00", "same submitted application link shows previous and replacement terms");
+  const pendingConfirm = await api("POST",`/operator/leasing/applications/${appId}/proposed-terms`,{
+    token:companyToken,body:{rent:1030,security_deposit:1025,lease_start_date:dates.start,
+      lease_end_date:dates.end,concession_status:"none",idempotency_key:`pending-confirm-${suffix}`},
+  });
+  expect(pendingConfirm.status === 409,"old acknowledged terms cannot pass confirmation while replacement review is pending");
+  expect((await q("select rent from lease_applications where id=$1",[appId])).rows[0].rent === "1030.00",
+    "proposing replacement terms does not rewrite the applicant's accepted rent");
+  const staleReaccept = await api("POST","/applications/submit-public",{key:false,
+    body:{token:applicationToken,application_terms_acknowledged:true,application_terms_hash:oldAck[0].terms_hash}});
+  expect(staleReaccept.status === 409,"a previously consumed token cannot accept replacement terms using the old acknowledgement hash");
+  const reaccepted = process.env.PROOF_TENANT_BROWSER === "1"
+    ? await require("./tenant_journey_browser").acceptRevisedTerms(BASE,applicationToken)
+    : requireOk(await api("POST","/applications/submit-public",{key:false,body:{token:applicationToken,...acceptedTerms}}),"revised terms acceptance");
+  expect(reaccepted.terms_reaccepted && reaccepted.application.id === appId,"re-acceptance updates the same application, not a replacement application");
+  const afterRevision = (await q("select captured,rent,status from lease_applications where id=$1",[appId])).rows[0];
+  expect(afterRevision.rent === "1025.00" && afterRevision.status === beforeRevision.status
+      && JSON.stringify(afterRevision.captured) === JSON.stringify(beforeRevision.captured),
+    "re-acceptance preserves the personal application and approval status");
+  const ackHistory = (await q("select * from application_terms_acknowledgements where application_id=$1 order by acknowledged_at",[appId])).rows;
+  expect(ackHistory.length === 2 && JSON.stringify(ackHistory[0]) === JSON.stringify(oldAck[0]),
+    "old acknowledgement remains byte-identical beside the new acceptance");
+  const replayAcceptance = requireOk(await api("POST","/applications/submit-public",{key:false,
+    body:{token:applicationToken,...acceptedTerms}}),"revised acceptance replay");
+  expect(replayAcceptance.idempotent && replayAcceptance.application.id === appId
+      && (await q("select count(*)::int as n from application_terms_acknowledgements where application_id=$1",[appId])).rows[0].n === 2,
+    "repeated revised acceptance creates neither another application nor another acknowledgement");
+  let immutableRefused = false;
+  try { await q("update application_terms_acknowledgements set terms_hash=$1 where id=$2",["0".repeat(64),oldAck[0].id]); }
+  catch(e) { immutableRefused = /immutable/.test(e.message); }
+  expect(immutableRefused,"database refuses rewriting an earlier acknowledgement");
+  // An application is not an inventory hold. Exercise the migration-shape
+  // applicant while this bed is still free, before the main journey executes
+  // a lease and takes possession. Running it after move-in offered an occupied
+  // bed to a second person and concealed a targeting defect.
+  await require("./legacy_application_terms")({q,api,requireOk,expect,propertyId,unitId:unit.id,spaceId:bedB.id,
+    conversionId:completed.conversion_id,token:companyToken,base:BASE,dates});
+  requireOk(await api("POST", `/operator/leasing/applications/${appId}/proposed-terms`, {
+    token: companyToken, body: {
+      rent: 1025, security_deposit: 1025,
+      lease_start_date: dates.start, lease_end_date: dates.end,
+      concession_status: "none", idempotency_key: `journey-terms-${suffix}`,
+    },
+  }), "proposed terms confirmation");
+  const generated = requireOk(await api(
+    "POST", `/operator/leasing/applications/${appId}/lease-packet`, {
+      token: companyToken, body: {},
+    }
+  ), "lease packet generation");
+  const packetId = generated.packet && generated.packet.id;
+  expect(!!packetId, "governing lease packet was generated from confirmed terms");
+  const afterPacketRevision = await api("POST", `/operator/leasing/conversions/${completed.conversion_id}/application-offer`, {
+    token:companyToken, body:{space_id:bedB.id,rent:1026,security_deposit:1025,lease_start_date:dates.start,
+      lease_end_date:dates.end,fees:[],concessions:{status:"none"},idempotency_key:`packet-blocked-revision-${suffix}`,
+      supersedes_application_offer_id:applicationOffer.application_offer_id},
+  });
+  expect(afterPacketRevision.status === 409,"a prepared lease packet blocks further application-offer revision");
+  const packetLineage = (await q("select application_offer_id,application_terms_hash,terms_json,rendered_snapshot from lease_packets where id=$1",[packetId])).rows[0];
+  expect(packetLineage.application_offer_id === applicationOffer.application_offer_id
+      && packetLineage.application_terms_hash === acceptedTerms.application_terms_hash,
+    "lease packet retains the exact offer acknowledged before application");
+  expect(JSON.stringify(packetLineage.terms_json.fees) === "[]"
+      && JSON.stringify(packetLineage.rendered_snapshot.instrument.terms_schedule.economics.fees) === "[]",
+    "lease uses the acknowledged fee schedule rather than mutable property fees");
+  const issued = requireOk(await api("POST", `/operator/leasing/lease-packets/${packetId}/send`, {
+    token: companyToken, body: { idempotency_key: `journey-lease-${suffix}` },
+  }), "resident and guarantor lease-link issue");
+  const signingLinks = Object.fromEntries((issued.signing_links || [])
+    .map((link) => [link.signer_role, link]));
+  const leaseToken = String(signingLinks.tenant && signingLinks.tenant.url || "")
+    .split("/t/lease/")[1];
+  const guarantorToken = String(signingLinks.guarantor && signingLinks.guarantor.url || "")
+    .split("/t/lease/")[1];
+  expect(!!leaseToken && !!guarantorToken && leaseToken !== guarantorToken,
+    "one package issues separate resident and guarantor secrets");
+
+  const residentBeforeRoleProbe = requireOk(await api("GET", `/t/lease/${leaseToken}/data`, {
+    key: false,
+  }), "resident packet before signer-role isolation probe");
+  const guarantorBeforeRoleProbe = requireOk(await api("GET", `/t/lease/${guarantorToken}/data`, {
+    key: false,
+  }), "guarantor packet before signer-role isolation probe");
+  const residentSignerName = residentBeforeRoleProbe.packet
+    && residentBeforeRoleProbe.packet.current_signer
+    && residentBeforeRoleProbe.packet.current_signer.display_name;
+  const guarantorSignature = guarantorBeforeRoleProbe.packet
+    && (guarantorBeforeRoleProbe.packet.fields || [])
+      .find((field) => field.required && field.field_type === "signature");
+  expect(!!residentSignerName && !!guarantorSignature,
+    "both signer names and the guarantor signature field exist before completion");
+  const crossRoleCompletion = await api(
+    "POST", `/t/lease/${leaseToken}/fields/${guarantorSignature.id}/complete`, {
+      key: false,
+      body: {
+        value: residentSignerName, consent: true,
+        session_id: `resident-cross-role-${suffix}`,
+      },
+    }
+  );
+  const crossRoleStored = (await q(
+    `select field_key,completed,field_value,signed_by_person_id,signed_by_packet_signer_id
+       from lease_packet_fields where id=$1`, [guarantorSignature.id]
+  )).rows[0];
+  const crossRoleAudits = Number((await q(
+    `select count(*)::int n from lease_packet_audit_events
+      where lease_packet_id=$1 and event_type='field_completed'
+        and event_json->>'field_key'=$2`, [packetId, crossRoleStored.field_key]
+  )).rows[0].n);
+  expect(crossRoleCompletion.status === 404
+      && crossRoleStored.completed === false
+      && crossRoleStored.field_value == null
+      && crossRoleStored.signed_by_person_id == null
+      && crossRoleStored.signed_by_packet_signer_id == null
+      && crossRoleAudits === 0,
+    "a resident token cannot complete the guarantor's required signature field",
+    `HTTP ${crossRoleCompletion.status} body=${JSON.stringify(crossRoleCompletion.body)} ` +
+      `stored=${JSON.stringify(crossRoleStored)} audits=${crossRoleAudits}`);
+
+  const guarantorSigning = await completeLeaseSigner({
+    token: guarantorToken, name: guarantorName, initials: "SG",
+    sessionId: `guarantor-${suffix}`,
+  });
+  expect(guarantorSigning.requiredFields.length > 0
+      && guarantorSigning.requiredFields.every((field) => field.signer_role === "guarantor"),
+    "the guarantor sees and completes only guarantor controls");
+  const termsReviewObligationId = (await q(
+    "select terms_review_obligation_id from lease_applications where id=$1", [appId]
+  )).rows[0].terms_review_obligation_id;
+  const guarantorFirstPacket = (await q(
+    "select status,resident_executed_at from lease_packets where id=$1", [packetId]
+  )).rows[0];
+  const guarantorFirstSigners = (await q(
+    `select id,signer_role,display_name,submitted_at from lease_packet_signers
+      where lease_packet_id=$1 order by signer_role`, [packetId]
+  )).rows;
+  const guarantorFirstObligation = (await q(
+    `select id,status,required_inputs,completed_at from obligations where id=$1`,
+    [termsReviewObligationId]
+  )).rows[0];
+  const guarantorFirstEvidence = (await q(
+    `select id,type,note,occurred_at from events
+      where type='input_satisfied:terms_acknowledged'
+        and note like '%' || $1::text || '%'
+      order by occurred_at,id`, [termsReviewObligationId]
+  )).rows;
+  const guarantorSignerAfterFirst = guarantorFirstSigners
+    .find((signer) => signer.signer_role === "guarantor");
+  const tenantSignerAfterFirst = guarantorFirstSigners
+    .find((signer) => signer.signer_role === "tenant");
+  const guarantorFirstState = {
+    submit_http: guarantorSigning.submissionResult,
+    packet: guarantorFirstPacket,
+    signers: guarantorFirstSigners,
+    obligation: guarantorFirstObligation,
+    evidence: guarantorFirstEvidence,
+  };
+  expect(guarantorSigning.submitted.packet.status === "tenant_in_progress"
+      && guarantorFirstPacket.status === "tenant_in_progress"
+      && guarantorFirstPacket.resident_executed_at == null
+      && !!guarantorSignerAfterFirst && !!guarantorSignerAfterFirst.submitted_at
+      && !!tenantSignerAfterFirst && tenantSignerAfterFirst.submitted_at == null
+      && !!guarantorFirstObligation
+      && ["open", "in_progress"].includes(guarantorFirstObligation.status)
+      && (guarantorFirstObligation.required_inputs || []).includes("terms_acknowledged")
+      && guarantorFirstObligation.completed_at == null
+      && guarantorFirstEvidence.length === 0,
+    "guarantor-first submission leaves the applicant terms-review work open",
+    JSON.stringify(guarantorFirstState));
+
+  await comparePropertySigning("resident", ({ dashboard, review: propertyReview }) => {
+    const current = propertyReview.signing.outstanding_signers.filter(
+      (signer) => String(signer.application_id) === String(appId));
+    expect(current.length === 1 && current[0].signer_role === "tenant"
+        && current[0].display_name === name && dashboard.answer.includes(name),
+      "the property-wide read names the exact resident still outstanding",
+      JSON.stringify({ current, answer: dashboard.answer }));
+  });
+
+  const waitingReviewResult = await api(
+    "GET", `/operator/leasing/application-review?application_id=${appId}`, { token: staffToken }
+  );
+  const waitingReview = requireOk(waitingReviewResult,
+    "application review while the resident is outstanding");
+  expect(waitingReview.execution_primary_action
+      && waitingReview.execution_primary_action.action === "await_resident_execution"
+      && waitingReview.execution_primary_action.reason.includes(name),
+    "Application Records names the outstanding resident after guarantor-first submission",
+    JSON.stringify({ http: waitingReviewResult, action: waitingReview.execution_primary_action,
+      guarantor_first: guarantorFirstState }));
+  const prematureCompany = await api(
+    "POST", `/operator/leasing/lease-packets/${packetId}/company-sign`, {
+      token: companyToken, body: {},
+    }
+  );
+  expect(prematureCompany.status === 409,
+    "the authorized company signer is blocked while the resident is outstanding",
+    JSON.stringify({ http: prematureCompany, review: waitingReview.execution_primary_action,
+      guarantor_first: guarantorFirstState }));
+
+  const residentSigning = await completeLeaseSigner({
+    token: leaseToken, name, initials: "SJ", sessionId: `resident-${suffix}`,
+  });
+  expect(residentSigning.requiredFields.length > 0
+      && residentSigning.requiredFields.every((field) => field.signer_role === "tenant"),
+    "the resident sees and completes only resident controls");
+  const residentPacket = (await q(
+    "select status,resident_executed_at from lease_packets where id=$1", [packetId]
+  )).rows[0];
+  const signerState = (await q(
+    `select id,signer_role,display_name,submitted_at from lease_packet_signers
+      where lease_packet_id=$1 order by signer_role`, [packetId]
+  )).rows;
+  const residentObligation = (await q(
+    `select id,status,required_inputs,completed_at from obligations where id=$1`,
+    [termsReviewObligationId]
+  )).rows[0];
+  const residentEvidence = (await q(
+    `select id,type,note,occurred_at from events
+      where type='input_satisfied:terms_acknowledged'
+        and note like '%' || $1::text || '%'
+      order by occurred_at,id`, [termsReviewObligationId]
+  )).rows;
+  const tenantSigner = signerState.find((signer) => signer.signer_role === "tenant");
+  const guarantorSigner = signerState.find((signer) => signer.signer_role === "guarantor");
+  const residentProofNote = String(residentEvidence[0] && residentEvidence[0].note || "");
+  const residentCompletedState = {
+    submit_http: residentSigning.submissionResult,
+    packet: residentPacket,
+    signers: signerState,
+    obligation: residentObligation,
+    evidence: residentEvidence,
+  };
+  expect(residentSigning.submitted.packet.status === "resident_executed"
+      && residentPacket.status === "resident_executed" && !!residentPacket.resident_executed_at
+      && signerState.length === 2 && signerState.every((signer) => !!signer.submitted_at)
+      && residentObligation.status === "complete"
+      && (residentObligation.required_inputs || []).length === 0
+      && !!residentObligation.completed_at
+      && residentEvidence.length === 1
+      && residentProofNote.includes(`"terms_review_obligation_id":"${termsReviewObligationId}"`)
+      && residentProofNote.includes('"signer_role":"tenant"')
+      && residentProofNote.includes(`"packet_signer_id":"${tenantSigner && tenantSigner.id}"`)
+      && !residentProofNote.includes(`"packet_signer_id":"${guarantorSigner && guarantorSigner.id}"`),
+    "resident submission closes the exact terms-review obligation with tenant evidence",
+    JSON.stringify(residentCompletedState));
+  expect(signerState.length === 2 && signerState.every((signer) => !!signer.submitted_at),
+    "both resident-side submissions are recorded on the same packet");
+  expect(residentPacket.status === "resident_executed" && !!residentPacket.resident_executed_at,
+    "the package becomes company-signable only after both submissions");
+  expect((await q("select count(*)::int n from persons where name=$1", [guarantorName])).rows[0].n === 0,
+    "the guarantor remains packet-scoped instead of becoming a fabricated Person");
+
+  await comparePropertySigning("company", ({ dashboard, review: propertyReview }) => {
+    const current = propertyReview.signing.outstanding_signers.filter(
+      (signer) => String(signer.application_id) === String(appId));
+    expect(current.length === 1 && current[0].signer_role === "company"
+        && /Authorized company signer/.test(dashboard.answer),
+      "asking again moves the same application to the authorized company signer",
+      JSON.stringify({ current, answer: dashboard.answer }));
+  });
+
+  const review = requireOk(await api(
+    "GET", `/operator/leasing/application-review?application_id=${appId}`, { token: staffToken }
+  ), "application review after resident and guarantor signatures");
+  expect(review.execution_primary_action && review.execution_primary_action.action === "company_execute_lease",
+    "the review surface now asks the authorized company signer to finish");
+  const unauthorizedCompany = await api(
+    "POST", `/operator/leasing/lease-packets/${packetId}/company-sign`, {
+      token: staffToken, body: {},
+    }
+  );
+  expect(unauthorizedCompany.status === 403,
+    "Mike's leasing access cannot substitute for company signing authority");
+
+  const executed = requireOk(await api(
+    "POST", `/operator/leasing/lease-packets/${packetId}/company-sign`, {
+      token: companyToken, body: {},
+    }
+  ), "company lease execution");
+  const leaseId = executed.tenancy && executed.tenancy.lease_id;
+  expect(!!leaseId, "company signing creates the tenancy in the same act");
+  const lease = (await q(
+    `select id,space_id,lease_status,rent,security_deposit,start_date,end_date
+       from leases where id=$1`, [leaseId]
+  )).rows[0];
+  expect(lease && lease.space_id === bedB.id, "the executed tenancy is anchored to exact Bed B");
+  expect(Number(lease.rent) === 1025 && Number(lease.security_deposit) === 1025,
+    "the tenancy carries the confirmed economics");
+
+  await comparePropertySigning("complete", ({ dashboard, review: propertyReview }) => {
+    const current = propertyReview.signing.outstanding_signers.filter(
+      (signer) => String(signer.application_id) === String(appId));
+    expect(current.length === 0 && !dashboard.answer.includes(name),
+      "asking again after company execution removes this application from outstanding signatures",
+      JSON.stringify({ current, answer: dashboard.answer }));
+  });
+
+  const finalReview = requireOk(await api(
+    "GET", `/operator/leasing/application-review?application_id=${appId}`, { token: staffToken }
+  ), "final application review");
+  expect(finalReview.execution_primary_action && finalReview.execution_primary_action.action === "term_confirmed",
+    "the staff surface rereads the executed lease as complete");
+  const card = requireOk(await api(
+    "GET", `/operator/leasing/person-card?person_id=${intake.person_id}`, { token: staffToken }
+  ), "final person card");
+  expect(card.leasing_standing && card.leasing_standing.tenancy
+      && card.leasing_standing.tenancy.lease_id === leaseId,
+    "the person card reads the same executed lease truth");
+
+  if(process.env.PROOF_TENANT_MOVE_IN === "1") await require("./tenant_journey_move_in")({
+    api,requireOk,expect,q,leaseId,propertyId,unitId:unit.id,spaceId:bedB.id,personId:intake.person_id,name,token:companyToken,
+  });
+  console.log(`\n==== ${passed} full-path assertions passed; no real SMS sent ====\n`);
+})().catch((error) => {
+  console.error("\nFIRST RED:", error.message);
+  console.error(error.stack);
+  process.exitCode = 1;
+}).finally(async () => {
+  await pool.end().catch(() => {});
+});
+

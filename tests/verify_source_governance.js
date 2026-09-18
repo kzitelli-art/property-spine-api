@@ -61,6 +61,14 @@ const GATES = [
   //  maintenance action anonymous for as long as it was there.
   { file: "gate_operator_session_fields.js",
     what: "no req.operator read of a field the staff session does not define" },
+  { file: "gate_native_tour_scheduler.js",
+    what: "one Spine-owned tour-slot command; staff scope and attribution stay server-derived" },
+  { file: "unit/us_federal_holidays.test.js",
+    what: "federal holiday closures match the legal and OPM-observed calendar rules" },
+  { file: "unit/tour_schedule_ask_spine.test.js",
+    what: "dashboard and staff SMS Ask Spine read the same native tour schedule standing" },
+  { file: "unit/team_access_session_boundary.test.js",
+    what: "Team roster, invite and access changes use the signed-in staff boundary without a browser operator key" },
   //  Steps 2–3 candidates. Both are source-only and DB-free, so they
   //  belong on the standard path rather than in a harness nobody runs.
   { file: "gate_migration_137_promotion.js",
@@ -119,6 +127,8 @@ const GATES = [
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery
   //  receipt cannot be collapsed into one claim.
+  { file: "unit/prospect_vitals_failure.test.js",
+    what: "prospect preferences: failed lookup is not empty or legacy fallback" },
   { file: "unit/conversation_intent_extraction.test.js",
     what: "intent seam: one implementation, transport-independent, behaviour pinned" },
   { file: "unit/conversation_clarification_and_receipt.test.js",
@@ -132,6 +142,25 @@ const GATES = [
   //  confident lie, so the honesty properties are on the standard path.
   { file: "unit/ask_spine_answer.test.js",
     what: "Ask Spine: answers only from reads, names them, and an outage never reads as good news" },
+  { file: "unit/skyline_ask_spine_sms_matrix.test.js",
+    what: "Skyline Ask Spine: dashboard and SMS share routing, entitlement, signer, and identifier-firewall behavior" },
+  { file: "proofs/ask_spine_contract_proof.js",
+    what: "Ask Spine attention: one canonical obligations reader, scoped ranking, no conversational SQL copy" },
+  { file: "unit/leasing_knowledge.test.js", what: "Leasing knowledge shared reads, staff routing and authority" },
+  { file: "unit/property_identity_presentation.test.js",
+    what: "Property identity: mutable display label, durable identity, and registry leasing model stay separate" },
+  { file: "unit/prospect_matching.test.js", what: "Exact-space prospect matching over canonical targets and published economics" },
+  { file: "unit/staff_sms_router.test.js",
+    what: "staff SMS: governed reads converge on Ask Spine while actions and one-work-order turns remain operational" },
+  { file: "unit/staff_sms_preferences_failure.test.js", name: "Staff SMS preference failure receipt" },
+  { file: "unit/staff_sms_prompt_reply.test.js", name: "Staff SMS bare outcome subject boundary" },
+  { file: "unit/staff_sms_preferences.test.js", name: "Staff SMS explicit preference excerpts" },
+  { file: "unit/staff_sms_leasing_action.test.js",
+    what: "staff SMS leasing: explicit standing, exact target, canonical capture/send services, honest receipts" },
+  { file: "unit/operations_line_transfer.test.js",
+    what: "staff line transfer: one atomic owner change, preserved history, fixed posture, server-derived authority" },
+  { file: "unit/personal_attention_convergence.test.js",
+    what: "personal attention: dashboard and SMS share one person-scoped read using recorded accountability only" },
   { file: "gate_ask_spine_readers.js",
     what: "Ask Spine: every canonical standing domain is registered, pending, or explicitly waived" },
   //  ── docs/CURRENT_STATE.md CANNOT SILENTLY LOSE COVERAGE ────────────
@@ -152,13 +181,21 @@ const GATES = [
     what: "the reader gate itself goes RED when registration, discovery or the gather is broken" },
   { file: "unit/tenancy_ask_spine.test.js",
     what: "Tenancy Ask Spine: routing, entitlement before any read, the four silences, the truth walls" },
+  { file: "unit/economics_ask_spine.test.js",
+    what: "Economics Ask Spine: one canonical picture, lease-term menu preserved, entitlement before read" },
   //  Slice 2's primitive is PURE, which is why its whole edge-case surface
   //  runs here in milliseconds instead of behind a Postgres. The DB rung
   //  (interval_positions.db.js) proves the same states on 160 real beds.
   { file: "unit/application_space_grain.test.js",
     what: "Application space grain (182): the bed is durable from the aim, whole-unit behaviour is unchanged, a bed is never guessed, and the refusal prose stays out of the deployed app's false branch" },
+  { file: "unit/application_future_target.test.js",
+    what: "Future applications: the governed turn-ready date survives invitation, tenant submission, and application birth" },
   { file: "unit/interval_position_hostile.test.js",
     what: "Interval tenancy: closed-interval arithmetic, which rights count, honest refusals, and the line it does not cross" },
+  { file: "unit/prospect_fact_reading.test.js",
+    what: "Prospect facts: what a person said about budget and timing, read against the shapes prospect_capture.js actually writes — shorthand and ranges refuse instead of producing a confident negative, a named day is a deadline, and each refusal carries the replaced expression beside it" },
+  { file: "unit/date_column_timezone.test.js",
+    what: "Date columns: a `date` renders the recorded day in five real timezones, run in child processes with TZ set — and the test proves the old toISOString() expression really does lose a day in every zone ahead of UTC" },
   { file: "unit/meeting_evidence_ingress.test.js",
     what: "Meeting Evidence: Read AI raw-byte ingress, immutable inbox shape, and no Ask Spine/transcript fan-out" },
   { file: "unit/meeting_receipt_v0.test.js",

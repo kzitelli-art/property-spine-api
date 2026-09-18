@@ -1,0 +1,292 @@
+# Merge ruling — integrating the deployed line, 2026-09-18
+
+Binding on whoever performs the next merges. Written before the merge, not after,
+because the row-reference hazard below produces a document that reads correct and
+states something false.
+
+## Standing decision from the owner, tonight
+
+**No push to `main`.** Everything chains on owned branches; the owner takes one
+fast-forward in the morning. The integration line is
+`claude/main-integration-20260918`.
+
+## Verified facts (measured on this tree, not assumed)
+
+| claim | measurement |
+|---|---|
+| The deployed line and the integration line have genuinely diverged | 37 commits the deployed branch has that integration lacks; 48 the other way. It was a fast-follow against the board alone; the `determined-dirac` merge ended that. |
+| Migration 199 is not in the integration line | `53522e94` (which adds `199_property_display_name_command.sql`) is an ancestor of the deployed branch and **not** of integration. |
+| The integration line tops out at migration 198 | integration 198 / 187 files · `determined-dirac` 198 / 187 · deployed 200 / 189. Production's ledger is at 200. |
+| So the integration line is **not deployable** in the sense a reader would assume | `migrate.js` verify-only checks files ⊆ ledger, so a 198-file build starts against a 200 ledger. It starts; it is not the deployed schema. Do not let a green CI run on this branch be read as deploy-readiness. |
+| `institutional-bucket-truth` needs no merge | it is an ancestor of `determined-dirac`, already integrated. |
+| `codex/property-identity-cleanup` is docs-only **beyond the deployed line** | 9 of its 12 commits are already in the deployed branch (including `53522e94` and `3b92d652`); the 3 that are not are all `Record …` commits. |
+| `claude-opus/deal-reconciliation` touches no product code | 0 files under `src/`, `migrations/`, `server.js`; 1,194 insertions, all docs. It is a BUILD_CONTRACT whose work items require owner-authorised production writes. |
+| `claude/new-build-git-setup-o5l93r` must **not** be merged | 134 files, 19,097 deletions against the integration line. It is a separate artefact on a much older base, not a lane. Flagged for the owner. |
+
+## THE HAZARD, and the rule that governs it
+
+The deployed branch's own `CURRENT_STATE` rows are **85-90** (the shared base,
+board `2aab0db5`, tops out at 84). Those rows cross-reference each other by
+number — twelve references in total:
+
+```
+row 86 → row 87 (×3, one as "SUPERSEDED IN PART BY ROW 87")
+row 87 → row 86
+row 88 → row 87, and "SUPERSEDED BY ROW 90"
+row 89 → rows 87-88 (×2), and "SUPERSEDED BY ROW 90"
+row 90 → "rows 84-89 are live", row 86
+```
+
+The integration line already occupies 1-110. A plain renumber of 85-90 to the
+tail leaves every one of those references pointing at a row that exists and is
+about something else. The references do not dangle — **they resolve, and lie.**
+Concretely, on the integration line today:
+
+- integration row 87 reads *"FOUND, NOT FIXED — `main` and the deployed line have forked"*
+- integration row 88 reads *"MEASURED, NOT CHASED — 96 files hardcode `ssl: { rejectUnauthorized: false }`"*
+- integration row 90 reads *"date-column timezone fix, DB-proven in two timezones"*
+
+So an unrewritten renumber would publish *"rows 84-89 are live, production-verified"*
+pointing at rows that themselves say **not fixed** and **not chased**, and would
+claim the retention hardening was *"superseded by"* a timezone fix. That is
+precisely the confidently-wrong state document this file exists to prevent, and
+it is worse than a visible breakage because nothing looks wrong.
+
+**THE RULE, in four parts:**
+
+1. **Compute the offset at merge time**, from the integration line's actual
+   highest row — not from 110, which will move if another merge lands first.
+   Deployed rows 84-90 become `top+1 … top+7`.
+2. **Rewrite every reference inside the moved block by the same offset**, in all
+   its spellings: `row N`, `Row N`, `ROW N`, `rows N-M`, `rows N–M` (en dash and
+   hyphen both occur).
+3. **Do NOT offset a reference to a row ≤ 83. THE BOUNDARY IS 83, NOT 84 —
+   an earlier version of this rule said 84 and was wrong.** Corrected by
+   comparing content rather than trusting the number: row 83 is identical on
+   both lineages, but **row 84 is not**. The integration line's row 84 is the
+   production revert of the row-82 protection; the deployed line's row 84 is
+   the leasing context resolver. Two different rows that collided on one
+   number. So the deployed line's own block is **84-90, seven rows**, and
+   `rows 84-89` in its last row lies **wholly inside** the moved block — it
+   offsets with everything else, and the "spans the boundary" worry in the
+   earlier draft was an artifact of the wrong boundary, not a real hazard.
+
+   **The general lesson, which is the reusable part:** a row number is not an
+   identity. Two branches editing the same append-only table will reuse the
+   same next number for unrelated work, and the collision is invisible unless
+   you diff the row's *text*. Never establish a merge boundary from where the
+   numbers stop agreeing; establish it from where the content stops agreeing.
+4. **`ledger_rows 188` in row 90 is NOT a row reference.** It is a ledger row
+   count (`ceiling 200 · ledger_rows 188 · column 1 · constraint 1 · index 1`).
+   A regex sweep for `rows \d+` matches it. Leave it alone.
+
+The precedent this follows: the `determined-dirac` merge kept dirac's numbers
+and moved the four rows that had no internal references, because dirac's 84-105
+cross-reference each other. Here **both** sides have references, so keeping both
+sets of numbers is impossible and rewriting is mandatory rather than optional.
+
+## Merge order, revised by containment
+
+1. ✅ board `2aab0db5` → `773e2b4a` (CI 659 green)
+2. ✅ `determined-dirac` → `e8cbebc3` (CI 661 green; repairs the deployed
+   lender-label regression — see row 106)
+3. `claude/ci-ledger-200-20260918` — the deployed line **plus** the ledger
+   rehearsal fixes. Merging this branch rather than the deployed branch itself
+   is deliberate: it is the only version of that line whose CI ledger rehearsal
+   is honest at ceiling 200. **This is the merge the hazard above governs.**
+   On the institutional surface, resolve toward the integration line
+   (dirac's `statusLabel`); never toward `bucket_label`-first.
+4. `codex/property-identity-cleanup` — docs only once (3) has landed.
+5. `claude-opus/deal-reconciliation` — docs only; its contract needs owner
+   authorisation before any work item is executed.
+6. App-repo branches, separately.
+7. `claude/new-build-git-setup-o5l93r` — **do not merge.** Owner decision.
+
+## Owner decisions this raises
+
+- Migrations 199 and 200 are live in production and were released outside the
+  pinned, rehearsed path the 195-198 wrapper established. Pinning them
+  retroactively is queued; it does not undo the fact that the release happened
+  unrehearsed.
+- The BUILD_CONTRACT in (5) specifies production writes to property display
+  names, the deal registry and access assignments. None may be executed without
+  the owner saying so, per the standing constraints.
+
+---
+
+## Dry run of merge (3), performed and aborted before this was written
+
+The deployed line was merged with `--no-commit`, inspected, and `--abort`ed.
+Result: **exactly two conflicted files**, one hunk each.
+
+| file | resolution |
+|---|---|
+| `docs/CURRENT_STATE.md` | the row hazard above. Follow the four-part rule. |
+| `tests/e2e/app_pin.txt` | decided below. |
+
+### ⚠ THE FILE THAT DID *NOT* CONFLICT IS THE ONE TO CHECK
+
+`src/surfaces/rent_roll_institutional.js` **auto-merged with no conflict**, even
+though both sides rewrote `statusLabel`. A clean auto-merge of a function two
+branches both edited is exactly the case where a blend can appear with nothing
+to warn you: reintroducing `if (r.bucket_label) return r.bucket_label;` as an
+early return *alongside* the qualifier logic would restore the regression
+silently, and no conflict marker would exist to notice.
+
+**Verified by reading the merged result, not by the absence of a conflict:**
+
+```
+if (r.bucket == null) return "Occupancy Unconfirmed";
+const base = r.bucket_label;
+const qualifiers = [];
+... bucket === "occupied" && contractual_terms_state === "not_established" -> "terms not established"
+... bucket === "occupied" && economics_state === "unavailable"             -> "rent unavailable"
+... bucket === "needs_review" && tenancy_state === "contested"             -> "overlapping leases"
+... is_down                                                               -> "unit down"
+return qualifiers.length ? `${base} — ${qualifiers.join(" · ")}` : base;
+```
+
+Early `bucket_label` return: **0 occurrences**. Qualifier pushes: **4**. Dirac's
+version survives whole.
+
+**Re-run this check on the real merge.** It is cheap and it is the only thing
+standing between a clean-looking merge and a lender surface that calls an
+unverified bed "Occupied".
+
+A fifth thing dirac fixed, catalogued here because it was not in row 106: a
+physically down bed buckets as `open` and printed a bare **"Open"** — i.e.
+offered — so `is_down` now appends "unit down" as a qualifier rather than being
+swallowed by the bucket.
+
+### `tests/e2e/app_pin.txt` — RESOLVE FORWARD
+
+Both pins are on the **same app branch**, `claude/determined-dirac-qcvj5v`:
+
+| side | app sha | note |
+|---|---|---|
+| integration (from dirac) | `312a9992` | the pin dirac froze CI green against |
+| deployed line | `2e8199a4` | 2026-09-17, *"prove the panel is reachable in the real page, not just in the test"* |
+
+**Take `2e8199a4`.** It is not a rival pin, it is a forward move on the same
+branch, and the merged API is a superset of the deployed line that app was
+exercised against. Pinning the older app against newer API code is the riskier
+direction.
+
+This is a pin move, so it is the QB's to make and it is stated here rather than
+made silently. If a browser rung fails on it, that failure is a real signal
+about app/API coupling and must be diagnosed, **not** resolved by reverting the
+pin to make the suite green.
+
+### Not production pins
+
+`app_pin.txt` governs which app CI checks out for the browser rungs. It is not a
+release claim and has nothing to do with the deployed app (`6f92b50`). Do not
+conflate them.
+
+---
+
+## The app repo is in much better shape than the API repo
+
+Surveyed 2026-09-18. Unlike the API side, the app line is **strictly linear** —
+no divergence to reconcile.
+
+| fact | measurement |
+|---|---|
+| Deployed app `6f92b50` is an **ancestor** of the CI pin `2e8199a4` | 3 commits between them, **0** the other way |
+| App `origin/main` is contained in `2e8199a4` | app main is at `c6769ba`, 2026-08-18 — a month stale, same as API main |
+| So app integration is **one fast-forward**, not a merge | `main` → `2e8199a4` |
+
+The three commits production does not yet have:
+
+```
+312a999  2026-09-15  Formal rent roll: one totals definition, and the rows that qualify the ratio
+835ef2b  2026-09-17  operator can recover an unmatched inquiry from the queue
+2e8199a  2026-09-17  prove the panel is reachable in the real page, not just in the test
+```
+
+Every other app branch that reports "ahead" is an abandoned lane from August
+(`build-2-*`, `build-3-*`, `operator-ui-system-alignment`, and so on). They are
+noise, not integration candidates. Two recent ones are not:
+
+- `codex/property-navigation-polish-20260916` — 4 ahead of the pin.
+- `codex/fix-institutional-rent-roll-back` — 3 ahead of the pin, head `3607b3d`.
+
+### ⚠ The app authority change is in NEITHER production NOR the CI pin
+
+`3607b3d` *"Preserve platform role when adding property access"* sits on
+`codex/fix-institutional-rent-roll-back`, ahead of the pin and ahead of the
+deployed app. It is unmerged and unreviewed.
+
+It reads as a fix. It could equally be a widening — "preserve" and "grant" are
+one edit apart in an access path. It touches who may do what, so it does **not**
+get merged on the strength of its commit subject. The owner reads that diff
+before it lands anywhere, per the standing note that the QB may not decide an
+authority change alone.
+
+---
+
+## EXECUTED — 2026-09-18, integration branch at `d202d632`
+
+Two merges landed on `claude/main-integration-20260918`, in this order and for
+this reason: the deployed line first, the ledger-ceiling fix second. That order
+is not arbitrary. The ledger branch never touches `CURRENT_STATE.md`, so putting
+the deployed line first confines the whole state-file argument to one commit and
+leaves the second merge conflict-free. Reversing them would have produced the
+same conflict twice.
+
+**`7eb6b76a` — deployed line, `claude/leasing-context-resolver-20260916 @ 628ca1f5`.**
+The head moved from `9f92af41` while this ruling was being written, so the merge
+was re-planned against the new head rather than the one the dry run used. That
+mattered: `628ca1f5` is docs-only and its whole content is the leasing thread
+rewriting those eleven cross-references to read **by date and subject** — "the
+2026-09-17 retention row" — which made part 2 of the rule above almost entirely
+unnecessary. Two numeric references survived, both in the moved block, and were
+offset with it. Rows 84-90 became 111-117; the state gate reads 117 rows,
+numbered 1..117, no gaps or duplicates.
+
+The app pin moved forward to `2e8199a`. Checked in the app repo before adopting
+rather than inferred from the branch name: `312a999` is an ancestor of
+`2e8199a`, so the pin gained two commits and dropped none.
+
+**`d202d632` — ledger-ceiling fix, `claude/ci-ledger-200-20260918 @ 31caeede`.**
+Conflict-free as predicted. Both fixed sites were re-read after the auto-merge
+instead of being trusted: no hardcoded successor version survives in either, and
+`EXPECTED_LEDGER_CEILING=197` in the restore step is correct **by derivation** —
+the block deletes 198 upward, so 197 is what the ledger reads at that instant.
+
+**THE MUST-REPEAT CHECK, REPEATED.** `statusLabel` in
+`src/surfaces/rent_roll_institutional.js` auto-merged with no conflict, which is
+exactly the case this ruling flagged as dangerous. Re-read on the real merge: it
+still opens with `if (r.bucket == null) return "Occupancy Unconfirmed"`, so a bed
+with no established basis is still named as unconfirmed on the lender surface
+instead of inheriting a bucket label. The deployed lineage had that guard
+*second*, where it never ran. Nothing was reintroduced.
+
+**WHAT THE BRANCH NOW CONTAINS, verified by ancestry rather than asserted.**
+Production `ecfc9af4` is an ancestor. So is github `main` (`ed66d65a`). Those two
+facts together are the point of the morning fast-forward: **`main` has never
+carried production.** The deployed line was released to Render without ever
+being merged, so the fast-forward is what finally makes `main` a superset of
+what is live, rather than a branch that quietly lags it.
+
+Gates run bare with exit codes read, on the final tree: current-state 8/8,
+ask-spine readers 161/161, source governance 59/59, migration release gate
+33/33.
+
+## STILL THE OWNER'S — two glances this session cannot make
+
+Both were asked for and neither is refusable by a session under these standing
+constraints, so they are named rather than quietly dropped.
+
+1. **Confirm the app service serves `2e8199a`.** Not verifiable from here, and
+   not merely for lack of permission: a static site exposes no build identity,
+   so there is nothing to read even with access. The Render dashboard's deployed
+   commit for the static site is the only direct answer. There *is* a harness
+   that would settle it byte-for-byte if the host were reachable — the app repo's
+   served-asset check at `595e8653`, which diffs served bytes against the git
+   blob for a pinned commit — but the proxy refuses the production origin, and a
+   production read is outside what this session may do.
+2. **The Skyline carrier test.** Needs the Twilio console. A configured line is
+   still no evidence of provider control, registration, consent or arrival, and
+   nothing in this merge changes that: delivery remains the untested edge.
+

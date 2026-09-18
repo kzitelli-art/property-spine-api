@@ -215,6 +215,12 @@ async function call(port, method, path, { token, body } = {}) {
       [S.obO1]))).rows[0];
     assert(link.outcome === null && link.resolution === null, "terminal stamp cleared — active recovery cycle");
     assert(link.owner_user_id === S.kandice, "prior owner still eligible → preserved");
+    const reopenedObligation = (await read((c) => c.query(
+      `select assigned_user_id, owner_eligibility_state from obligations where id=$1`,
+      [S.obO1]))).rows[0];
+    assert(reopenedObligation.assigned_user_id === S.kandice
+      && reopenedObligation.owner_eligibility_state === "eligible_assignment",
+      "reopen preserved the link owner but not the canonical obligation owner");
     const ev = (await events(S.obO1)).find((e) => e.event_type === "reopened");
     assert(ev && ev.resolution_code === "completed" && ev.resolution_basis === "owner"
       && ev.reason === "closed_by_mistake" && ev.next_due_at, "prior close carried on the reopened event: " + JSON.stringify(ev));
@@ -261,6 +267,12 @@ async function call(port, method, path, { token, body } = {}) {
       { token: S.katieTok, body: { reason: "new_information", new_due_at: new Date(Date.now() + 3600e3).toISOString() } });
     assert(r.status === 200 && r.json.owner_user_id === null && r.json.owner_eligibility_state === "unassigned",
       r.status + " " + JSON.stringify(r.json));
+    const reopenedObligation = (await read((c) => c.query(
+      `select assigned_user_id, owner_eligibility_state from obligations where id=$1`,
+      [S.obE]))).rows[0];
+    assert(reopenedObligation.assigned_user_id === null
+      && reopenedObligation.owner_eligibility_state === "unassigned",
+      "stale owner survived on the canonical obligation after reopen");
     await tx((c) => c.query(
       `insert into assignments (person_id, property_id, role)
        select person_id, $2, 'leasing' from users where id=$1`, [S.kandice, S.prop]));

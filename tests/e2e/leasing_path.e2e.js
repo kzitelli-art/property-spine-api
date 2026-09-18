@@ -157,7 +157,11 @@ async function api(method, path, { token, body, key } = {}) {
 
   log("\n── 8 · RESIDENT ACKNOWLEDGES EVERY REQUIRED FIELD ─────────────");
   for (const f of required) {
-    const r = await api("POST", `/t/lease/${rawTok}/fields/${f.id}/complete`, { body: { value: f.field_type === "signature" ? "Jane Smith" : "JS", session_id: "e2e-resident" } });
+    const r = await api("POST", `/t/lease/${rawTok}/fields/${f.id}/complete`, { body: {
+      value: f.field_type === "signature" ? "Jane Smith" : "JS",
+      consent: f.field_type === "signature",
+      session_id: "e2e-resident",
+    } });
     if (r.status >= 400) stop(`resident completes field ${f.field_key}`, `HTTP ${r.status}`, r.body);
   }
   okStep("all required resident fields acknowledged", required.map((f) => f.field_key).join(", ").slice(0, 90));

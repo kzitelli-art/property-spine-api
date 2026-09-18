@@ -1,0 +1,18 @@
+OWNED_API_READY
+  ok    B1 the tracker's own labels are shown as received (101A / A), no home pre-selected, and the 0-of-4 counter is VISIBLE to the document (it carried a class with no CSS rule and was display:none)
+  ok    B2 every current source identity carries a picker, the blank current row included (a blank name is still a home the source names)
+  ok    B3 REPAIRED PICKER: existing beds are offered by canonical label (1417-101 · Room1 …) — the shipped picker filtered on a field the preview never sends and offered nothing
+  ok    B4 an already-inventoried property does not offer bulk creation of duplicate new homes, while individual reviewed choices remain
+  ok    B5 the picker is visible to the document (not covered)
+  ok    B6 the reviewed mapping shows 4 of 4 resolved before Apply
+  ok    B7 rows read: three signed rows are Ready with a blank term; the blank row Needs a look and is not vacancy
+  ok    B8 the mapping line names Monthly Rent as rent and the tracker columns as read
+  ok    B9 a signed, dateless row is Added as current occupancy with contractual terms unknown (no lease)
+  ok    B10 the bed's current resident is offered as the identity candidate (recognition over re-entry)
+  ok    B11 Add recognises the existing tenancy: Already represented, tied to the lease in force, no second lease
+  ok    B12 the blank row offers only Leave out — never Add, never vacancy
+  ok    B13 establishing records the position with the unresolved blank row still needing attention
+  ok    B14 browser emitted no page errors
+
+  14 passed, 0 failed
+  screenshots: <scratchpad>/current-rr-qb-runtime-20260913/artifacts/coupled-browser

@@ -37,8 +37,11 @@ const src = (p) => fs.readFileSync(path.join(REPO, p), "utf8");
 //  A comment explaining what a file does NOT do must not fail an assertion
 //  that the file does not do it. Code only, and for operator copy, only the
 //  strings a surface can actually print.
-const code = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "")
-  .split("\n").filter((l) => !/^\s*\/\//.test(l)).map((l) => l.replace(/\s\/\/.*$/, "")).join("\n");
+//  One alternation, not two chained replaces: a `/*` inside a `//`
+//  comment (server.js prose says `/operator/*`) would otherwise open a
+//  block comment that closes 569 lines later. See
+//  tests/unit/shared_conversational_path.test.js for the full account.
+const code = (s) => s.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
 //  `a.uploaded_by` prints a person's NAME; it does not print the word
 //  "uploaded_by". Member expressions and esc() calls are values, not copy, and
 //  leaving them in also breaks a naive quote lexer on concatenated HTML.

@@ -260,7 +260,7 @@ module.exports = function registry(deps) {
       if (p.rows.length === 0) return res.status(404).json({ error: "property not found" });
       try {
         const upd = await pool.query(
-          "update properties set canonical_key=$1, updated_at=now() where id=$2 returning id, name, address, canonical_key",
+          "update properties set canonical_key=$1, canonical_key_absent_reason=null, updated_at=now() where id=$2 returning id, name, address, canonical_key, canonical_key_absent_reason",
           [String(canonical_key).trim(), property_id]
         );
         res.json({ property: upd.rows[0], note: "Canonical key set. This is the one identity every system alias resolves to." });

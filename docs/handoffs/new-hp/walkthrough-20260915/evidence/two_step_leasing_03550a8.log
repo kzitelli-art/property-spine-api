@@ -1,0 +1,583 @@
+OWNED_API_READY
+
+== fixture · property, beds and the four actors ==
+(node:3301) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+  PASS  [fixture · property, beds and the four actors] Skyline-shaped fixture property exists
+  PASS  [fixture · property, beds and the four actors] the fixture's configured company signer with the governed override exists
+  NOTE  [fixture · property, beds and the four actors] fixture: the property's operating timezone is set so tour times can be published (an owner input in production)
+  PASS  [fixture · property, beds and the four actors] the CI fixture's established Bed B exists (left untouched by this proof)
+  NOTE  [fixture · property, beds and the four actors] fixture: five beds established under the fixture activation with confirmed-vacancy lineage | {"units":["C7-51ed0622","C8-51ed0622","C9-51ed0622","D1-51ed0622","E1-51ed0622"]}
+  PASS  [fixture · property, beds and the four actors] KZ is a configured company signer | {"signers":1}
+  PASS  [fixture · property, beds and the four actors] Mike joins through the governed invite and OTP as property_manager | {"invite":200,"verify":200}
+  PASS  [fixture · property, beds and the four actors] Mike: property_manager, no can_manage_roles | {"role_key":"property_manager","can_manage_roles":false,"allowed_modules":["management","leasing","maintenance"]}
+  PASS  [fixture · property, beds and the four actors] a leasing_agent joins (will be placed on the signer list only) | {"verify":200}
+  PASS  [fixture · property, beds and the four actors] a property_admin joins (override, not a signer) | {"verify":200}
+  PASS  [fixture · property, beds and the four actors] the approver-only actor holds the governed override
+  PASS  [fixture · property, beds and the four actors] signer list: KZ + the leasing agent; the approver-only admin is absent | {"signers":2}
+  PASS  [fixture · property, beds and the four actors] actors ready
+
+== J1 · inquiry, ownership, tour ==
+  PASS  [J1 · inquiry, ownership, tour] the website inquiry is captured (no consent, capture only) | {"status":200}
+  PASS  [J1 · inquiry, ownership, tour] no model call, no text
+  PASS  [J1 · inquiry, ownership, tour] Mike takes ownership | {"status":200}
+  PASS  [J1 · inquiry, ownership, tour] Mike records the email he already sent | {"status":200}
+  PASS  [J1 · inquiry, ownership, tour] a native slot is published | {"status":200,"body":{"receipt":"Tour time published.","slot":{"id":"<id-17>","property_id":"<id-2>","unit_id":"<id-18>","leasing_agent_id":"<id-19>","starts_at":"2026-09-17T10:46:44.031Z","ends_at":"2026-09-17T11:46:44.031Z","capacity":1,"status":"open","booked_tour_id":null,"created_by":"38fe6c42-8fa
+  PASS  [J1 · inquiry, ownership, tour] Mike books the tour | {"status":200,"body":{"receipt":"Tour booked. No confirmation message was sent.","tour_id":"<id-20>","slot_id":"<id-17>","scheduled_for":"2026-09-17T10:46:44.031Z","status":"scheduled","idempotent":false}}
+  PASS  [J1 · inquiry, ownership, tour] Mike records the outcome as ready to apply | {"status":200,"body":{"receipt":"Outcome recorded — tour given. Follow-up rail opened — outcome · owner set to the actual host.","tour_id":"<id-20>","conversion_id":"<id-21>"}}
+  PASS  [J1 · inquiry, ownership, tour] the conversion belongs to the same person
+
+== J1 · AUTHOR (decision 1) ==
+  PASS  [J1 · AUTHOR (decision 1)] conversion exists
+  PASS  [J1 · AUTHOR (decision 1)] the exact-home selector read succeeds | {"status":200}
+  PASS  [J1 · AUTHOR (decision 1)] C7-51ed0622 Bed A is offerable as an exact choice | {"marketing_state":"marketable_now","basis":"chosen_space"}
+  PASS  [J1 · AUTHOR (decision 1)] Mike cannot author terms (no override, no pricing grant) | {"status":403,"error":"NO_APPLICATION_OFFER_AUTHORITY"}
+  PASS  [J1 · AUTHOR (decision 1)] KZ authors the offer for the chosen bed | {"status":200,"body":{"application_offer_id":"<id-22>","application_terms":{"schema_version":1,"property_id":"<id-2>","person_id":"<id-23>","target":{"space_id":"<id-24>","unit_id":"<id-18>"},"rent":"1025.00","security_deposit":"1025.00","lease_start_date":"2026-10-14","lea
+  PASS  [J1 · AUTHOR (decision 1)] KZ corrects the unsent draft (explicit successor) | {"status":200,"body":{"application_offer_id":"<id-25>","application_terms":{"schema_version":1,"property_id":"<id-2>","person_id":"<id-23>","target":{"space_id":"<id-24>","unit_id":"<id-18>"},"rent":"1100.00","security_deposit":"1100.00","lease_start_date":"2026-10-14","lea
+  PASS  [J1 · AUTHOR (decision 1)] the authored offer carries KZ as author, its hash and its lineage | {"author_is_kz":true}
+  PASS  [J1 · AUTHOR (decision 1)] [J1] the Leasing desk loads for Mike after the authored offer exists | {"status":200}
+  PASS  [J1 · AUTHOR (decision 1)] [J1] the conversation queue loads after the authored offer exists | {"status":200}
+
+== J1 · Mike prepares, attests; applicant and guarantor apply ==
+  PASS  [J1 · Mike prepares, attests; applicant and guarantor apply] authored offer exists
+  PASS  [J1 · Mike prepares, attests; applicant and guarantor apply] Mike prepares the application link for email; nothing is sent | {"status":200,"body":{"prepared":true,"sent":false,"dispatched":false,"delivery_method":"manual_email","conversion_id":"<id-21>","invitation_id":"<id-26>","send_obligation_id":"<id-27>","prepare_obligation_id":"<id-28>","unit_id":"<id-18>","space_id":"1475e75a-f248-4e4b-b6eb
+  PASS  [J1 · Mike prepares, attests; applicant and guarantor apply] preparation sent nothing and called no model
+  PASS  [J1 · Mike prepares, attests; applicant and guarantor apply] Mike attests that he emailed the link | {"status":200,"body":{"finalized":true,"invitation_id":"<id-26>","status":"manually_sent","send_obligation_id":"<id-27>","parent_obligation_id":"<id-29>","receipt":"Send attested. The post-tour follow-up is closed and the applicant follow-up is open."}}
+  PASS  [J1 · Mike prepares, attests; applicant and guarantor apply] the applicant sees the authored terms | {"status":200,"rent":"1100.00"}
+  PASS  [J1 · Mike prepares, attests; applicant and guarantor apply] the applicant submits against the acknowledged terms | {"status":200,"body":{"receipt":"Application submitted for TwoStep Prospect J1 51ed0622. Now with leasing_manager for approval.","application":{"id":"<id-30>","property_id":"<id-2>","unit_id":"<id-18>","person_id":"<id-23>","status":"submitted","applicant_name":"TwoStep Prospect J1 51ed0622","unit_labe
+  PASS  [J1 · Mike prepares, attests; applicant and guarantor apply] the application is submitted, bound to the acknowledged offer and exact bed, unapproved, with its approval obligation open | {"status":"submitted"}
+  PASS  [J1 · Mike prepares, attests; applicant and guarantor apply] [J1] the Leasing desk loads for Mike after the application is submitted | {"status":200}
+  PASS  [J1 · Mike prepares, attests; applicant and guarantor apply] [J1] the desk retains this application, person, unit and tenancy identity after the application is submitted | {"count":1,"lease_id":null}
+  PASS  [J1 · Mike prepares, attests; applicant and guarantor apply] [J1] the conversation queue loads after the application is submitted | {"status":200}
+  PASS  [J1 · Mike prepares, attests; applicant and guarantor apply] [J1] Application Review loads after the application is submitted | {"status":200}
+  PASS  [J1 · Mike prepares, attests; applicant and guarantor apply] [J1] Application Review loads before any packet | {"status":200}
+  PASS  [J1 · Mike prepares, attests; applicant and guarantor apply] Application Review's next action is to prepare the signing package from the acknowledged offer (not to approve) | {"code":"prepare_lease_packet","label":"Prepare the signing package from the acknowledged offer."}
+
+== J1 · packet from the acknowledged offer (no approval, no reconfirmation) ==
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] application exists
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] Mike prepares the signing package while the application is still submitted | {"status":200,"receipt":"Lease package generated for TwoStep Prospect J1 51ed0622. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms."}
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] the packet carries the authored offer, its hash and the exact bed | {"space_matches":true}
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] the lineage record is SYSTEM-DERIVED from the acknowledged offer: named as such, actor = preparer (Mike), economics = the author's | {"source":"authored_offer_acknowledged","authority_basis":"authored_offer"}
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] preparing the packet approved nothing: still submitted, no approval instant, no terms-review gate; terms attributed to their author | {"status":"submitted","term_source":"authored_offer_acknowledged"}
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] no human decision was recorded by preparation (0 approvals, 0 operator confirmations) | {"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0}
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] the packet-generated audit names Mike as the actor | {"n":1}
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] a prepared packet blocks a further offer change (changed terms need a new package, never a silent swap) | {"status":409}
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] regenerating before issue returns the same draft (idempotent, one derived record) | {"status":200,"id":"<id-31>"}
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] still exactly one derived lineage record
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] Mike issues the resident and guarantor links | {"status":200,"body":{"receipt":"Separate resident and guarantor signing links issued (expires in 14 days). Each presents the same retained governing form and exact deal terms as one package.","already_issued":false,"tenant_url":"http://127.0.0.1:3111/t/lease/<token>","guarantor_url":"http://127.0.0.1:3111/t/lease/<token>","signing_links":[{"sign
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] [J1] the Leasing desk loads for Mike after the links are issued | {"status":200}
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] [J1] the desk retains this application, person, unit and tenancy identity after the links are issued | {"count":1,"lease_id":null}
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] [J1] the conversation queue loads after the links are issued | {"status":200}
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] [J1] Application Review loads after the links are issued | {"status":200}
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] [J1] Application Review loads after issue | {"status":200}
+  PASS  [J1 · packet from the acknowledged offer (no approval, no reconfirmation)] review: awaiting the resident's signature, application still submitted | {"code":"await_resident_acknowledgment"}
+
+== J1 · signatures, then refusals before EXECUTE ==
+  PASS  [J1 · signatures, then refusals before EXECUTE] links exist
+  PASS  [J1 · signatures, then refusals before EXECUTE] KZ cannot execute before the resident and guarantor sign | {"status":409,"error":"resident_has_not_executed"}
+  PASS  [J1 · signatures, then refusals before EXECUTE] the guarantor signs | {"status":200}
+  PASS  [J1 · signatures, then refusals before EXECUTE] with the applicant still outstanding, Execute is refused and names who is outstanding | {"status":409,"outstanding":["TwoStep Prospect J1 51ed0622"]}
+  PASS  [J1 · signatures, then refusals before EXECUTE] the applicant signs and the package reads resident executed | {"status":200,"body":{"receipt":"Signed. Every required resident-side signature on the complete lease package is recorded. The authorized company signer may now countersign.","satisfied_obligation_inputs":[],"application_next":"Company countersignature required","note":"The resident side is complete. No tenancy is activated until the authorized company signer countersigns the same package.","packet":{"id":"681e62b9-0
+  PASS  [J1 · signatures, then refusals before EXECUTE] the resident's acknowledgment evidence is frozen on the packet audit (obligation to be satisfied from it at Execute)
+  PASS  [J1 · signatures, then refusals before EXECUTE] signatures changed no application status and approved nothing
+  PASS  [J1 · signatures, then refusals before EXECUTE] [J1] the Leasing desk loads for Mike after both signatures | {"status":200}
+  PASS  [J1 · signatures, then refusals before EXECUTE] [J1] the desk retains this application, person, unit and tenancy identity after both signatures | {"count":1,"lease_id":null}
+  PASS  [J1 · signatures, then refusals before EXECUTE] [J1] the conversation queue loads after both signatures | {"status":200}
+  PASS  [J1 · signatures, then refusals before EXECUTE] [J1] Application Review loads after both signatures | {"status":200}
+  PASS  [J1 · signatures, then refusals before EXECUTE] [J1] Application Review loads with both signatures | {"status":200}
+  PASS  [J1 · signatures, then refusals before EXECUTE] review: the one remaining act is Execute, labelled as approve + sign | {"next":"execute_lease","primary":"execute_lease","label":"Approve the application and sign for the company"}
+  PASS  [J1 · signatures, then refusals before EXECUTE] review names both remaining commercial decisions
+  PASS  [J1 · signatures, then refusals before EXECUTE] Mike (staff, preparation only): refused, holding neither approval authority nor signer standing | {"status":403,"error":"execute_not_authorized","missing":["application_approval","company_signature"]}
+  PASS  [J1 · signatures, then refusals before EXECUTE] Mike cannot use the released company-sign door either | {"status":403,"error":"company_signer_not_authorized"}
+  PASS  [J1 · signatures, then refusals before EXECUTE] a signer-list member WITHOUT approval authority cannot decide: signer-list entry alone confers no approval | {"status":403,"error":"application_approval_not_authorized"}
+  PASS  [J1 · signatures, then refusals before EXECUTE] an approver who is NOT a configured signer cannot execute: approval authority alone confers no signature | {"status":403,"error":"company_signer_not_authorized"}
+  PASS  [J1 · signatures, then refusals before EXECUTE] KZ's session at another property cannot execute this packet | {"status":403}
+  PASS  [J1 · signatures, then refusals before EXECUTE] Execute carries exactly one explicit decision; anything else is refused before any write | {"status":400}
+  PASS  [J1 · signatures, then refusals before EXECUTE] an empty body is not a decision | {"status":400}
+  PASS  [J1 · signatures, then refusals before EXECUTE] ALTERNATIVE ROUTE CLOSED: the released company-sign door refuses to sign an unapproved application and points at Execute | {"status":409,"error":"application_not_approved"}
+  PASS  [J1 · signatures, then refusals before EXECUTE] every refusal above wrote no approval, signature, confirmation, offer or lease | {"before":{"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0},"after":{"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0}}
+  PASS  [J1 · signatures, then refusals before EXECUTE] the application is still submitted after every refusal
+
+== J1 · rollback of a failing composition boundary ==
+  PASS  [J1 · rollback of a failing composition boundary] packet exists
+  PASS  [J1 · rollback of a failing composition boundary] real approval, submission gate, terms proof/completion and company signature existed inside the failed transaction
+  PASS  [J1 · rollback of a failing composition boundary] ROLLBACK restored application without deleting earlier resident evidence
+  PASS  [J1 · rollback of a failing composition boundary] ROLLBACK restored obligations without deleting earlier resident evidence
+  PASS  [J1 · rollback of a failing composition boundary] ROLLBACK restored rail without deleting earlier resident evidence
+  PASS  [J1 · rollback of a failing composition boundary] ROLLBACK restored events without deleting earlier resident evidence
+  PASS  [J1 · rollback of a failing composition boundary] ROLLBACK restored packet without deleting earlier resident evidence
+  PASS  [J1 · rollback of a failing composition boundary] ROLLBACK restored fields without deleting earlier resident evidence
+  PASS  [J1 · rollback of a failing composition boundary] ROLLBACK restored audits without deleting earlier resident evidence
+  PASS  [J1 · rollback of a failing composition boundary] ROLLBACK restored leases without deleting earlier resident evidence
+  PASS  [J1 · rollback of a failing composition boundary] ROLLBACK restored executed without deleting earlier resident evidence
+
+== J1 · EXECUTE (decision 2): approve + sign for the company, once ==
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] packet exists
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] exactly ONE of three concurrent Execute requests decides | {"statuses":[201,200,200],"errors":[null,null,null]}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] the other two are replays or refusals, never a second decision | {"replays":2,"conflicts":0}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] Execute returns the pending tenancy and the two decisions it recorded | {"body":{"decisions":[{"decision":"application_approved","actor_user_id":"<id-32>","authority_basis":"managed_role_override","event_id":"<id-33>","at":"2026-09-14T10:46:45.794Z","terms_review_obligation_id":"<id-34>"},{"decision":"company_signed","actor_user_id":"<id-32>","authority_basis":"configured_c
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] decision 1 · application approved by KZ under the governed override, with its own event | {"decision":"application_approved","actor_user_id":"<id-32>","authority_basis":"managed_role_override","event_id":"<id-33>","at":"2026-09-14T10:46:45.794Z","terms_review_obligation_id":"<id-34>"}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] decision 2 · company signature by KZ on this packet, with its own timestamp | {"decision":"company_signed","actor_user_id":"<id-32>","authority_basis":"configured_company_signer","at":"2026-09-14T10:46:45.794Z","packet_id":"<id-31>"}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] the approval instant precedes or equals the signature instant
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] server evidence counts exactly two commercial decisions for this lease: 1 approval + 1 company signature (0 operator confirmations) | {"approvals":1,"company_signatures":1,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":1}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] the application carries an approval instant and its terms-review gate | {"status":"active","approved_at":true}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] the terms-review obligation spawned by approval is complete with exactly one canonical frozen-acknowledgment event | {"gate":"complete","proof_rows":1}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] the approval obligation born at submission is closed by the decision | {"status":"complete"}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] the packet audit records the one decision act with both consequences
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] the tenancy is anchored to the exact bed at the authored rent | {"rent":"1100.00","space_matches":true}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] execution leaves a PENDING lease: no economic activation, no possession | {"lease_status":"pending","move_in_events":0}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] Execute sent no text and called no model
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] a lost-response retry returns the recorded decisions and the same tenancy; nothing is decided twice | {"status":200}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] a different retry key on an executed packet still yields the one existing decision
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] the released company-sign door refuses the executed packet | {"status":409,"error":"packet_already_executed"}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] the released approve door reports the application already approved | {"status":409}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] a withdrawal after execution is refused | {"status":409}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] exactly one lease exists for this application and this bed
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] the selector read succeeds after execution | {"status":200}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] the leased bed leaves the selector
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] [J1] Application Review loads after execution | {"status":200}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] Application Review reads the same tenancy and bed with a truthful next action | {"next":"active","primary":"term_confirmed"}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] the Person Card reads the exact pending-bed tenancy | {"status":200}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] Person Card success conceals no leasing-standing read failure | {"uncertainty":[]}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] Ask Spine answers about this person after execution without a read failure | {"outcome":"unavailable","answer":"I couldn't reach the assistant just then. Try again in a moment."}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] [J1] the Leasing desk loads for Mike after execution | {"status":200}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] [J1] the desk retains this application, person, unit and tenancy identity after execution | {"count":1,"lease_id":"<id-35>"}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] [J1] the conversation queue loads after execution | {"status":200}
+  PASS  [J1 · EXECUTE (decision 2): approve + sign for the company, once] [J1] Application Review loads after execution | {"status":200}
+
+== J2 · inquiry, ownership, tour ==
+  PASS  [J2 · inquiry, ownership, tour] the website inquiry is captured (no consent, capture only) | {"status":200}
+  PASS  [J2 · inquiry, ownership, tour] no model call, no text
+  PASS  [J2 · inquiry, ownership, tour] Mike takes ownership | {"status":200}
+  PASS  [J2 · inquiry, ownership, tour] Mike records the email he already sent | {"status":200}
+  PASS  [J2 · inquiry, ownership, tour] a native slot is published | {"status":200,"body":{"receipt":"Tour time published.","slot":{"id":"<id-36>","property_id":"<id-2>","unit_id":"<id-37>","leasing_agent_id":"<id-19>","starts_at":"2026-09-18T10:46:46.427Z","ends_at":"2026-09-18T11:46:46.427Z","capacity":1,"status":"open","booked_tour_id":null,"created_by":"38fe6c42-8fa
+  PASS  [J2 · inquiry, ownership, tour] Mike books the tour | {"status":200,"body":{"receipt":"Tour booked. No confirmation message was sent.","tour_id":"<id-38>","slot_id":"<id-36>","scheduled_for":"2026-09-18T10:46:46.427Z","status":"scheduled","idempotent":false}}
+  PASS  [J2 · inquiry, ownership, tour] Mike records the outcome as ready to apply | {"status":200,"body":{"receipt":"Outcome recorded — tour given. Follow-up rail opened — outcome · owner set to the actual host.","tour_id":"<id-38>","conversion_id":"<id-39>"}}
+  PASS  [J2 · inquiry, ownership, tour] the conversion belongs to the same person
+
+== J2 · AUTHOR (decision 1) ==
+  PASS  [J2 · AUTHOR (decision 1)] conversion exists
+  PASS  [J2 · AUTHOR (decision 1)] the exact-home selector read succeeds | {"status":200}
+  PASS  [J2 · AUTHOR (decision 1)] C8-51ed0622 Bed A is offerable as an exact choice | {"marketing_state":"marketable_now","basis":"chosen_space"}
+  PASS  [J2 · AUTHOR (decision 1)] the earlier leased bed (J1) is still absent from the selector
+  PASS  [J2 · AUTHOR (decision 1)] Mike cannot author terms (no override, no pricing grant) | {"status":403,"error":"NO_APPLICATION_OFFER_AUTHORITY"}
+  PASS  [J2 · AUTHOR (decision 1)] KZ authors the offer for the chosen bed | {"status":200,"body":{"application_offer_id":"<id-40>","application_terms":{"schema_version":1,"property_id":"<id-2>","person_id":"<id-41>","target":{"space_id":"<id-42>","unit_id":"<id-37>"},"rent":"915.00","security_deposit":"915.00","lease_start_date":"2026-10-14","lease
+  PASS  [J2 · AUTHOR (decision 1)] KZ corrects the unsent draft (explicit successor) | {"status":200,"body":{"application_offer_id":"<id-43>","application_terms":{"schema_version":1,"property_id":"<id-2>","person_id":"<id-41>","target":{"space_id":"<id-42>","unit_id":"<id-37>"},"rent":"990.00","security_deposit":"990.00","lease_start_date":"2026-10-14","lease
+  PASS  [J2 · AUTHOR (decision 1)] the authored offer carries KZ as author, its hash and its lineage | {"author_is_kz":true}
+  PASS  [J2 · AUTHOR (decision 1)] [J2] the Leasing desk loads for Mike after the authored offer exists | {"status":200}
+  PASS  [J2 · AUTHOR (decision 1)] [J2] the desk still carries the earlier executed lease (J1) after the authored offer exists | {"lease_id":"<id-35>"}
+  PASS  [J2 · AUTHOR (decision 1)] [J2] the conversation queue loads after the authored offer exists | {"status":200}
+
+== J2 · Mike prepares, attests; applicant and guarantor apply ==
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] authored offer exists
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] Mike prepares the application link for email; nothing is sent | {"status":200,"body":{"prepared":true,"sent":false,"dispatched":false,"delivery_method":"manual_email","conversion_id":"<id-39>","invitation_id":"<id-44>","send_obligation_id":"<id-45>","prepare_obligation_id":"<id-46>","unit_id":"<id-37>","space_id":"db9ac853-2850-4b57-965e
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] preparation sent nothing and called no model
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] Mike attests that he emailed the link | {"status":200,"body":{"finalized":true,"invitation_id":"<id-44>","status":"manually_sent","send_obligation_id":"<id-45>","parent_obligation_id":"<id-47>","receipt":"Send attested. The post-tour follow-up is closed and the applicant follow-up is open."}}
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] the applicant sees the authored terms | {"status":200,"rent":"990.00"}
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] the applicant submits against the acknowledged terms | {"status":200,"body":{"receipt":"Application submitted for TwoStep Prospect J2 51ed0622. Now with leasing_manager for approval.","application":{"id":"<id-48>","property_id":"<id-2>","unit_id":"<id-37>","person_id":"<id-41>","status":"submitted","applicant_name":"TwoStep Prospect J2 51ed0622","unit_labe
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] the application is submitted, bound to the acknowledged offer and exact bed, unapproved, with its approval obligation open | {"status":"submitted"}
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] [J2] the Leasing desk loads for Mike after the application is submitted | {"status":200}
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] [J2] the desk retains this application, person, unit and tenancy identity after the application is submitted | {"count":1,"lease_id":null}
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] [J2] the desk still carries the earlier executed lease (J1) after the application is submitted | {"lease_id":"<id-35>"}
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] [J2] the conversation queue loads after the application is submitted | {"status":200}
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] [J2] Application Review loads after the application is submitted | {"status":200}
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] [J2] Application Review loads before any packet | {"status":200}
+  PASS  [J2 · Mike prepares, attests; applicant and guarantor apply] Application Review's next action is to prepare the signing package from the acknowledged offer (not to approve) | {"code":"prepare_lease_packet","label":"Prepare the signing package from the acknowledged offer."}
+
+== J2 · packet from the acknowledged offer (no approval, no reconfirmation) ==
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] application exists
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] Mike prepares the signing package while the application is still submitted | {"status":200,"receipt":"Lease package generated for TwoStep Prospect J2 51ed0622. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms."}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] the packet carries the authored offer, its hash and the exact bed | {"space_matches":true}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] the lineage record is SYSTEM-DERIVED from the acknowledged offer: named as such, actor = preparer (Mike), economics = the author's | {"source":"authored_offer_acknowledged","authority_basis":"authored_offer"}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] preparing the packet approved nothing: still submitted, no approval instant, no terms-review gate; terms attributed to their author | {"status":"submitted","term_source":"authored_offer_acknowledged"}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] no human decision was recorded by preparation (0 approvals, 0 operator confirmations) | {"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] the packet-generated audit names Mike as the actor | {"n":1}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] a prepared packet blocks a further offer change (changed terms need a new package, never a silent swap) | {"status":409}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] regenerating before issue returns the same draft (idempotent, one derived record) | {"status":200,"id":"<id-49>"}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] still exactly one derived lineage record
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] Mike issues the resident and guarantor links | {"status":200,"body":{"receipt":"Separate resident and guarantor signing links issued (expires in 14 days). Each presents the same retained governing form and exact deal terms as one package.","already_issued":false,"tenant_url":"http://127.0.0.1:3111/t/lease/<token>","guarantor_url":"http://127.0.0.1:3111/t/lease/<token>","signing_links":[{"sign
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] [J2] the Leasing desk loads for Mike after the links are issued | {"status":200}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] [J2] the desk retains this application, person, unit and tenancy identity after the links are issued | {"count":1,"lease_id":null}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] [J2] the desk still carries the earlier executed lease (J1) after the links are issued | {"lease_id":"<id-35>"}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] [J2] the conversation queue loads after the links are issued | {"status":200}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] [J2] Application Review loads after the links are issued | {"status":200}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] [J2] Application Review loads after issue | {"status":200}
+  PASS  [J2 · packet from the acknowledged offer (no approval, no reconfirmation)] review: awaiting the resident's signature, application still submitted | {"code":"await_resident_acknowledgment"}
+
+== J2 · signatures, then refusals before EXECUTE ==
+  PASS  [J2 · signatures, then refusals before EXECUTE] links exist
+  PASS  [J2 · signatures, then refusals before EXECUTE] KZ cannot execute before the resident and guarantor sign | {"status":409,"error":"resident_has_not_executed"}
+  PASS  [J2 · signatures, then refusals before EXECUTE] the guarantor signs | {"status":200}
+  PASS  [J2 · signatures, then refusals before EXECUTE] with the applicant still outstanding, Execute is refused and names who is outstanding | {"status":409,"outstanding":["TwoStep Prospect J2 51ed0622"]}
+  PASS  [J2 · signatures, then refusals before EXECUTE] the applicant signs and the package reads resident executed | {"status":200,"body":{"receipt":"Signed. Every required resident-side signature on the complete lease package is recorded. The authorized company signer may now countersign.","satisfied_obligation_inputs":[],"application_next":"Company countersignature required","note":"The resident side is complete. No tenancy is activated until the authorized company signer countersigns the same package.","packet":{"id":"98925e25-4
+  PASS  [J2 · signatures, then refusals before EXECUTE] the resident's acknowledgment evidence is frozen on the packet audit (obligation to be satisfied from it at Execute)
+  PASS  [J2 · signatures, then refusals before EXECUTE] signatures changed no application status and approved nothing
+  PASS  [J2 · signatures, then refusals before EXECUTE] [J2] the Leasing desk loads for Mike after both signatures | {"status":200}
+  PASS  [J2 · signatures, then refusals before EXECUTE] [J2] the desk retains this application, person, unit and tenancy identity after both signatures | {"count":1,"lease_id":null}
+  PASS  [J2 · signatures, then refusals before EXECUTE] [J2] the desk still carries the earlier executed lease (J1) after both signatures | {"lease_id":"<id-35>"}
+  PASS  [J2 · signatures, then refusals before EXECUTE] [J2] the conversation queue loads after both signatures | {"status":200}
+  PASS  [J2 · signatures, then refusals before EXECUTE] [J2] Application Review loads after both signatures | {"status":200}
+  PASS  [J2 · signatures, then refusals before EXECUTE] [J2] Application Review loads with both signatures | {"status":200}
+  PASS  [J2 · signatures, then refusals before EXECUTE] review: the one remaining act is Execute, labelled as approve + sign | {"next":"execute_lease","primary":"execute_lease","label":"Approve the application and sign for the company"}
+  PASS  [J2 · signatures, then refusals before EXECUTE] review names both remaining commercial decisions
+  PASS  [J2 · signatures, then refusals before EXECUTE] Mike (staff, preparation only): refused, holding neither approval authority nor signer standing | {"status":403,"error":"execute_not_authorized","missing":["application_approval","company_signature"]}
+  PASS  [J2 · signatures, then refusals before EXECUTE] Mike cannot use the released company-sign door either | {"status":403,"error":"company_signer_not_authorized"}
+  PASS  [J2 · signatures, then refusals before EXECUTE] a signer-list member WITHOUT approval authority cannot decide: signer-list entry alone confers no approval | {"status":403,"error":"application_approval_not_authorized"}
+  PASS  [J2 · signatures, then refusals before EXECUTE] an approver who is NOT a configured signer cannot execute: approval authority alone confers no signature | {"status":403,"error":"company_signer_not_authorized"}
+  PASS  [J2 · signatures, then refusals before EXECUTE] KZ's session at another property cannot execute this packet | {"status":403}
+  PASS  [J2 · signatures, then refusals before EXECUTE] Execute carries exactly one explicit decision; anything else is refused before any write | {"status":400}
+  PASS  [J2 · signatures, then refusals before EXECUTE] an empty body is not a decision | {"status":400}
+  PASS  [J2 · signatures, then refusals before EXECUTE] ALTERNATIVE ROUTE CLOSED: the released company-sign door refuses to sign an unapproved application and points at Execute | {"status":409,"error":"application_not_approved"}
+  PASS  [J2 · signatures, then refusals before EXECUTE] every refusal above wrote no approval, signature, confirmation, offer or lease | {"before":{"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0},"after":{"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0}}
+  PASS  [J2 · signatures, then refusals before EXECUTE] the application is still submitted after every refusal
+
+== J2 · EXECUTE (decision 2): approve + sign for the company, once ==
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] packet exists
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] exactly ONE of three concurrent Execute requests decides | {"statuses":[201,200,200],"errors":[null,null,null]}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] the other two are replays or refusals, never a second decision | {"replays":2,"conflicts":0}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] Execute returns the pending tenancy and the two decisions it recorded | {"body":{"decisions":[{"decision":"application_approved","actor_user_id":"<id-32>","authority_basis":"managed_role_override","event_id":"<id-50>","at":"2026-09-14T10:46:47.369Z","terms_review_obligation_id":"<id-51>"},{"decision":"company_signed","actor_user_id":"<id-32>","authority_basis":"configured_c
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] decision 1 · application approved by KZ under the governed override, with its own event | {"decision":"application_approved","actor_user_id":"<id-32>","authority_basis":"managed_role_override","event_id":"<id-50>","at":"2026-09-14T10:46:47.369Z","terms_review_obligation_id":"<id-51>"}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] decision 2 · company signature by KZ on this packet, with its own timestamp | {"decision":"company_signed","actor_user_id":"<id-32>","authority_basis":"configured_company_signer","at":"2026-09-14T10:46:47.369Z","packet_id":"<id-49>"}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] the approval instant precedes or equals the signature instant
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] server evidence counts exactly two commercial decisions for this lease: 1 approval + 1 company signature (0 operator confirmations) | {"approvals":1,"company_signatures":1,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":1}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] the application carries an approval instant and its terms-review gate | {"status":"active","approved_at":true}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] the terms-review obligation spawned by approval is complete with exactly one canonical frozen-acknowledgment event | {"gate":"complete","proof_rows":1}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] the approval obligation born at submission is closed by the decision | {"status":"complete"}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] the packet audit records the one decision act with both consequences
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] the tenancy is anchored to the exact bed at the authored rent | {"rent":"990.00","space_matches":true}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] execution leaves a PENDING lease: no economic activation, no possession | {"lease_status":"pending","move_in_events":0}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] Execute sent no text and called no model
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] a lost-response retry returns the recorded decisions and the same tenancy; nothing is decided twice | {"status":200}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] a different retry key on an executed packet still yields the one existing decision
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] the released company-sign door refuses the executed packet | {"status":409,"error":"packet_already_executed"}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] the released approve door reports the application already approved | {"status":409}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] a withdrawal after execution is refused | {"status":409}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] exactly one lease exists for this application and this bed
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] the selector read succeeds after execution | {"status":200}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] the leased bed leaves the selector
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] [J2] Application Review loads after execution | {"status":200}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] Application Review reads the same tenancy and bed with a truthful next action | {"next":"active","primary":"term_confirmed"}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] the Person Card reads the exact pending-bed tenancy | {"status":200}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] Person Card success conceals no leasing-standing read failure | {"uncertainty":[]}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] Ask Spine answers about this person after execution without a read failure | {"outcome":"unavailable","answer":"I couldn't reach the assistant just then. Try again in a moment."}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] [J2] the Leasing desk loads for Mike after execution | {"status":200}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] [J2] the desk retains this application, person, unit and tenancy identity after execution | {"count":1,"lease_id":"<id-52>"}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] [J2] the desk still carries the earlier executed lease (J1) after execution | {"lease_id":"<id-35>"}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] [J2] the conversation queue loads after execution | {"status":200}
+  PASS  [J2 · EXECUTE (decision 2): approve + sign for the company, once] [J2] Application Review loads after execution | {"status":200}
+
+== both leases stand ==
+  PASS  [both leases stand] both journeys executed
+  PASS  [both leases stand] two pending leases on two distinct beds; the first was never cancelled or reset
+  PASS  [both leases stand] exactly two leases for the two applications
+
+== J3 · inquiry, ownership, tour ==
+  PASS  [J3 · inquiry, ownership, tour] the website inquiry is captured (no consent, capture only) | {"status":200}
+  PASS  [J3 · inquiry, ownership, tour] no model call, no text
+  PASS  [J3 · inquiry, ownership, tour] Mike takes ownership | {"status":200}
+  PASS  [J3 · inquiry, ownership, tour] Mike records the email he already sent | {"status":200}
+  PASS  [J3 · inquiry, ownership, tour] a native slot is published | {"status":200,"body":{"receipt":"Tour time published.","slot":{"id":"<id-53>","property_id":"<id-2>","unit_id":"<id-54>","leasing_agent_id":"<id-19>","starts_at":"2026-09-19T10:46:47.647Z","ends_at":"2026-09-19T11:46:47.647Z","capacity":1,"status":"open","booked_tour_id":null,"created_by":"38fe6c42-8fa
+  PASS  [J3 · inquiry, ownership, tour] Mike books the tour | {"status":200,"body":{"receipt":"Tour booked. No confirmation message was sent.","tour_id":"<id-55>","slot_id":"<id-53>","scheduled_for":"2026-09-19T10:46:47.647Z","status":"scheduled","idempotent":false}}
+  PASS  [J3 · inquiry, ownership, tour] Mike records the outcome as ready to apply | {"status":200,"body":{"receipt":"Outcome recorded — tour given. Follow-up rail opened — outcome · owner set to the actual host.","tour_id":"<id-55>","conversion_id":"<id-56>"}}
+  PASS  [J3 · inquiry, ownership, tour] the conversion belongs to the same person
+
+== J3 · AUTHOR (decision 1) ==
+  PASS  [J3 · AUTHOR (decision 1)] conversion exists
+  PASS  [J3 · AUTHOR (decision 1)] the exact-home selector read succeeds | {"status":200}
+  PASS  [J3 · AUTHOR (decision 1)] C9-51ed0622 Bed A is offerable as an exact choice | {"marketing_state":"marketable_now","basis":"chosen_space"}
+  PASS  [J3 · AUTHOR (decision 1)] the earlier leased bed (J1) is still absent from the selector
+  PASS  [J3 · AUTHOR (decision 1)] the earlier leased bed (J2) is still absent from the selector
+  PASS  [J3 · AUTHOR (decision 1)] Mike cannot author terms (no override, no pricing grant) | {"status":403,"error":"NO_APPLICATION_OFFER_AUTHORITY"}
+  PASS  [J3 · AUTHOR (decision 1)] KZ authors the offer for the chosen bed | {"status":200,"body":{"application_offer_id":"<id-57>","application_terms":{"schema_version":1,"property_id":"<id-2>","person_id":"<id-58>","target":{"space_id":"<id-59>","unit_id":"<id-54>"},"rent":"935.00","security_deposit":"935.00","lease_start_date":"2026-10-14","lease
+  PASS  [J3 · AUTHOR (decision 1)] KZ corrects the unsent draft (explicit successor) | {"status":200,"body":{"application_offer_id":"<id-60>","application_terms":{"schema_version":1,"property_id":"<id-2>","person_id":"<id-58>","target":{"space_id":"<id-59>","unit_id":"<id-54>"},"rent":"1010.00","security_deposit":"1010.00","lease_start_date":"2026-10-14","lea
+  PASS  [J3 · AUTHOR (decision 1)] the authored offer carries KZ as author, its hash and its lineage | {"author_is_kz":true}
+  PASS  [J3 · AUTHOR (decision 1)] [J3] the Leasing desk loads for Mike after the authored offer exists | {"status":200}
+  PASS  [J3 · AUTHOR (decision 1)] [J3] the desk still carries the earlier executed lease (J1) after the authored offer exists | {"lease_id":"<id-35>"}
+  PASS  [J3 · AUTHOR (decision 1)] [J3] the desk still carries the earlier executed lease (J2) after the authored offer exists | {"lease_id":"<id-52>"}
+  PASS  [J3 · AUTHOR (decision 1)] [J3] the conversation queue loads after the authored offer exists | {"status":200}
+
+== J3 · Mike prepares, attests; applicant and guarantor apply ==
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] authored offer exists
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] Mike prepares the application link for email; nothing is sent | {"status":200,"body":{"prepared":true,"sent":false,"dispatched":false,"delivery_method":"manual_email","conversion_id":"<id-56>","invitation_id":"<id-61>","send_obligation_id":"<id-62>","prepare_obligation_id":"<id-63>","unit_id":"<id-54>","space_id":"9b1547bf-0af0-46c3-a224
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] preparation sent nothing and called no model
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] Mike attests that he emailed the link | {"status":200,"body":{"finalized":true,"invitation_id":"<id-61>","status":"manually_sent","send_obligation_id":"<id-62>","parent_obligation_id":"<id-64>","receipt":"Send attested. The post-tour follow-up is closed and the applicant follow-up is open."}}
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] the applicant sees the authored terms | {"status":200,"rent":"1010.00"}
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] the applicant submits against the acknowledged terms | {"status":200,"body":{"receipt":"Application submitted for TwoStep Prospect J3 51ed0622. Now with leasing_manager for approval.","application":{"id":"<id-65>","property_id":"<id-2>","unit_id":"<id-54>","person_id":"<id-58>","status":"submitted","applicant_name":"TwoStep Prospect J3 51ed0622","unit_labe
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] the application is submitted, bound to the acknowledged offer and exact bed, unapproved, with its approval obligation open | {"status":"submitted"}
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] [J3] the Leasing desk loads for Mike after the application is submitted | {"status":200}
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] [J3] the desk retains this application, person, unit and tenancy identity after the application is submitted | {"count":1,"lease_id":null}
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] [J3] the desk still carries the earlier executed lease (J1) after the application is submitted | {"lease_id":"<id-35>"}
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] [J3] the desk still carries the earlier executed lease (J2) after the application is submitted | {"lease_id":"<id-52>"}
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] [J3] the conversation queue loads after the application is submitted | {"status":200}
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] [J3] Application Review loads after the application is submitted | {"status":200}
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] [J3] Application Review loads before any packet | {"status":200}
+  PASS  [J3 · Mike prepares, attests; applicant and guarantor apply] Application Review's next action is to prepare the signing package from the acknowledged offer (not to approve) | {"code":"prepare_lease_packet","label":"Prepare the signing package from the acknowledged offer."}
+
+== J3 · packet from the acknowledged offer (no approval, no reconfirmation) ==
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] application exists
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] Mike prepares the signing package while the application is still submitted | {"status":200,"receipt":"Lease package generated for TwoStep Prospect J3 51ed0622. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms."}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] the packet carries the authored offer, its hash and the exact bed | {"space_matches":true}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] the lineage record is SYSTEM-DERIVED from the acknowledged offer: named as such, actor = preparer (Mike), economics = the author's | {"source":"authored_offer_acknowledged","authority_basis":"authored_offer"}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] preparing the packet approved nothing: still submitted, no approval instant, no terms-review gate; terms attributed to their author | {"status":"submitted","term_source":"authored_offer_acknowledged"}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] no human decision was recorded by preparation (0 approvals, 0 operator confirmations) | {"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] the packet-generated audit names Mike as the actor | {"n":1}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] a prepared packet blocks a further offer change (changed terms need a new package, never a silent swap) | {"status":409}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] regenerating before issue returns the same draft (idempotent, one derived record) | {"status":200,"id":"<id-66>"}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] still exactly one derived lineage record
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] Mike issues the resident and guarantor links | {"status":200,"body":{"receipt":"Separate resident and guarantor signing links issued (expires in 14 days). Each presents the same retained governing form and exact deal terms as one package.","already_issued":false,"tenant_url":"http://127.0.0.1:3111/t/lease/<token>","guarantor_url":"http://127.0.0.1:3111/t/lease/<token>","signing_links":[{"sign
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] [J3] the Leasing desk loads for Mike after the links are issued | {"status":200}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] [J3] the desk retains this application, person, unit and tenancy identity after the links are issued | {"count":1,"lease_id":null}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] [J3] the desk still carries the earlier executed lease (J1) after the links are issued | {"lease_id":"<id-35>"}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] [J3] the desk still carries the earlier executed lease (J2) after the links are issued | {"lease_id":"<id-52>"}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] [J3] the conversation queue loads after the links are issued | {"status":200}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] [J3] Application Review loads after the links are issued | {"status":200}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] [J3] Application Review loads after issue | {"status":200}
+  PASS  [J3 · packet from the acknowledged offer (no approval, no reconfirmation)] review: awaiting the resident's signature, application still submitted | {"code":"await_resident_acknowledgment"}
+
+== J3 · signatures, then refusals before EXECUTE ==
+  PASS  [J3 · signatures, then refusals before EXECUTE] links exist
+  PASS  [J3 · signatures, then refusals before EXECUTE] KZ cannot execute before the resident and guarantor sign | {"status":409,"error":"resident_has_not_executed"}
+  PASS  [J3 · signatures, then refusals before EXECUTE] the guarantor signs | {"status":200}
+  PASS  [J3 · signatures, then refusals before EXECUTE] with the applicant still outstanding, Execute is refused and names who is outstanding | {"status":409,"outstanding":["TwoStep Prospect J3 51ed0622"]}
+  PASS  [J3 · signatures, then refusals before EXECUTE] the applicant signs and the package reads resident executed | {"status":200,"body":{"receipt":"Signed. Every required resident-side signature on the complete lease package is recorded. The authorized company signer may now countersign.","satisfied_obligation_inputs":[],"application_next":"Company countersignature required","note":"The resident side is complete. No tenancy is activated until the authorized company signer countersigns the same package.","packet":{"id":"045ab206-8
+  PASS  [J3 · signatures, then refusals before EXECUTE] the resident's acknowledgment evidence is frozen on the packet audit (obligation to be satisfied from it at Execute)
+  PASS  [J3 · signatures, then refusals before EXECUTE] signatures changed no application status and approved nothing
+  PASS  [J3 · signatures, then refusals before EXECUTE] [J3] the Leasing desk loads for Mike after both signatures | {"status":200}
+  PASS  [J3 · signatures, then refusals before EXECUTE] [J3] the desk retains this application, person, unit and tenancy identity after both signatures | {"count":1,"lease_id":null}
+  PASS  [J3 · signatures, then refusals before EXECUTE] [J3] the desk still carries the earlier executed lease (J1) after both signatures | {"lease_id":"<id-35>"}
+  PASS  [J3 · signatures, then refusals before EXECUTE] [J3] the desk still carries the earlier executed lease (J2) after both signatures | {"lease_id":"<id-52>"}
+  PASS  [J3 · signatures, then refusals before EXECUTE] [J3] the conversation queue loads after both signatures | {"status":200}
+  PASS  [J3 · signatures, then refusals before EXECUTE] [J3] Application Review loads after both signatures | {"status":200}
+  PASS  [J3 · signatures, then refusals before EXECUTE] [J3] Application Review loads with both signatures | {"status":200}
+  PASS  [J3 · signatures, then refusals before EXECUTE] review: the one remaining act is Execute, labelled as approve + sign | {"next":"execute_lease","primary":"execute_lease","label":"Approve the application and sign for the company"}
+  PASS  [J3 · signatures, then refusals before EXECUTE] review names both remaining commercial decisions
+  PASS  [J3 · signatures, then refusals before EXECUTE] Mike (staff, preparation only): refused, holding neither approval authority nor signer standing | {"status":403,"error":"execute_not_authorized","missing":["application_approval","company_signature"]}
+  PASS  [J3 · signatures, then refusals before EXECUTE] Mike cannot use the released company-sign door either | {"status":403,"error":"company_signer_not_authorized"}
+  PASS  [J3 · signatures, then refusals before EXECUTE] a signer-list member WITHOUT approval authority cannot decide: signer-list entry alone confers no approval | {"status":403,"error":"application_approval_not_authorized"}
+  PASS  [J3 · signatures, then refusals before EXECUTE] an approver who is NOT a configured signer cannot execute: approval authority alone confers no signature | {"status":403,"error":"company_signer_not_authorized"}
+  PASS  [J3 · signatures, then refusals before EXECUTE] KZ's session at another property cannot execute this packet | {"status":403}
+  PASS  [J3 · signatures, then refusals before EXECUTE] Execute carries exactly one explicit decision; anything else is refused before any write | {"status":400}
+  PASS  [J3 · signatures, then refusals before EXECUTE] an empty body is not a decision | {"status":400}
+  PASS  [J3 · signatures, then refusals before EXECUTE] ALTERNATIVE ROUTE CLOSED: the released company-sign door refuses to sign an unapproved application and points at Execute | {"status":409,"error":"application_not_approved"}
+  PASS  [J3 · signatures, then refusals before EXECUTE] every refusal above wrote no approval, signature, confirmation, offer or lease | {"before":{"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0},"after":{"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0}}
+  PASS  [J3 · signatures, then refusals before EXECUTE] the application is still submitted after every refusal
+
+== J3 · withdrawal before EXECUTE ==
+  PASS  [J3 · withdrawal before EXECUTE] packet exists
+  PASS  [J3 · withdrawal before EXECUTE] the applicant's withdrawal is recorded through the existing disposition door | {"status":200,"body":{"receipt":"Application withdrawn.","application":{"id":"<id-65>","property_id":"<id-2>","unit_id":"<id-54>","person_id":"<id-58>","status":"withdrawn","applicant_name":"TwoStep Prospect J3 51ed0622","unit_label":null,"rent":"1010.00","deposit":"1010.00","guarantor_name":"Guarantor
+  PASS  [J3 · withdrawal before EXECUTE] a withdrawn application cannot be executed even with every signature and every authority | {"status":409,"error":"application_terminal"}
+  PASS  [J3 · withdrawal before EXECUTE] the retained company-sign door also refuses the withdrawn application | {"status":409,"error":"application_terminal"}
+  PASS  [J3 · withdrawal before EXECUTE] no approval, signature or lease resulted | {"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0}
+  PASS  [J3 · withdrawal before EXECUTE] the application reads withdrawn
+  PASS  [J3 · withdrawal before EXECUTE] [J3] the Leasing desk loads for Mike after the withdrawal | {"status":200}
+  PASS  [J3 · withdrawal before EXECUTE] [J3] the desk retains this application, person, unit and tenancy identity after the withdrawal | {"count":1,"lease_id":null}
+  PASS  [J3 · withdrawal before EXECUTE] [J3] the desk still carries the earlier executed lease (J1) after the withdrawal | {"lease_id":"<id-35>"}
+  PASS  [J3 · withdrawal before EXECUTE] [J3] the desk still carries the earlier executed lease (J2) after the withdrawal | {"lease_id":"<id-52>"}
+  PASS  [J3 · withdrawal before EXECUTE] [J3] the conversation queue loads after the withdrawal | {"status":200}
+  PASS  [J3 · withdrawal before EXECUTE] [J3] Application Review loads after the withdrawal | {"status":200}
+  PASS  [J3 · withdrawal before EXECUTE] [J3] Application Review loads after withdrawal | {"status":200}
+  PASS  [J3 · withdrawal before EXECUTE] review reads the closed application honestly | {"code":"closed"}
+  PASS  [J3 · withdrawal before EXECUTE] the bed returns to the selector: nothing was reserved | {"status":200}
+
+== J5 · inquiry, ownership, tour ==
+  PASS  [J5 · inquiry, ownership, tour] the website inquiry is captured (no consent, capture only) | {"status":200}
+  PASS  [J5 · inquiry, ownership, tour] no model call, no text
+  PASS  [J5 · inquiry, ownership, tour] Mike takes ownership | {"status":200}
+  PASS  [J5 · inquiry, ownership, tour] Mike records the email he already sent | {"status":200}
+  PASS  [J5 · inquiry, ownership, tour] a native slot is published | {"status":200,"body":{"receipt":"Tour time published.","slot":{"id":"<id-67>","property_id":"<id-2>","unit_id":"<id-68>","leasing_agent_id":"<id-19>","starts_at":"2026-09-21T10:46:48.574Z","ends_at":"2026-09-21T11:46:48.574Z","capacity":1,"status":"open","booked_tour_id":null,"created_by":"38fe6c42-8fa
+  PASS  [J5 · inquiry, ownership, tour] Mike books the tour | {"status":200,"body":{"receipt":"Tour booked. No confirmation message was sent.","tour_id":"<id-69>","slot_id":"<id-67>","scheduled_for":"2026-09-21T10:46:48.574Z","status":"scheduled","idempotent":false}}
+  PASS  [J5 · inquiry, ownership, tour] Mike records the outcome as ready to apply | {"status":200,"body":{"receipt":"Outcome recorded — tour given. Follow-up rail opened — outcome · owner set to the actual host.","tour_id":"<id-69>","conversion_id":"<id-70>"}}
+  PASS  [J5 · inquiry, ownership, tour] the conversion belongs to the same person
+
+== J5 · AUTHOR (decision 1) ==
+  PASS  [J5 · AUTHOR (decision 1)] conversion exists
+  PASS  [J5 · AUTHOR (decision 1)] the exact-home selector read succeeds | {"status":200}
+  PASS  [J5 · AUTHOR (decision 1)] E1-51ed0622 Bed A is offerable as an exact choice | {"marketing_state":"marketable_now","basis":"chosen_space"}
+  PASS  [J5 · AUTHOR (decision 1)] the earlier leased bed (J1) is still absent from the selector
+  PASS  [J5 · AUTHOR (decision 1)] the earlier leased bed (J2) is still absent from the selector
+  PASS  [J5 · AUTHOR (decision 1)] Mike cannot author terms (no override, no pricing grant) | {"status":403,"error":"NO_APPLICATION_OFFER_AUTHORITY"}
+  PASS  [J5 · AUTHOR (decision 1)] KZ authors the offer for the chosen bed | {"status":200,"body":{"application_offer_id":"<id-71>","application_terms":{"schema_version":1,"property_id":"<id-2>","person_id":"<id-72>","target":{"space_id":"<id-73>","unit_id":"<id-68>"},"rent":"950.00","security_deposit":"950.00","lease_start_date":"2026-10-14","lease
+  PASS  [J5 · AUTHOR (decision 1)] KZ corrects the unsent draft (explicit successor) | {"status":200,"body":{"application_offer_id":"<id-74>","application_terms":{"schema_version":1,"property_id":"<id-2>","person_id":"<id-72>","target":{"space_id":"<id-73>","unit_id":"<id-68>"},"rent":"1025.00","security_deposit":"1025.00","lease_start_date":"2026-10-14","lea
+  PASS  [J5 · AUTHOR (decision 1)] the authored offer carries KZ as author, its hash and its lineage | {"author_is_kz":true}
+  PASS  [J5 · AUTHOR (decision 1)] [J5] the Leasing desk loads for Mike after the authored offer exists | {"status":200}
+  PASS  [J5 · AUTHOR (decision 1)] [J5] the desk still carries the earlier executed lease (J1) after the authored offer exists | {"lease_id":"<id-35>"}
+  PASS  [J5 · AUTHOR (decision 1)] [J5] the desk still carries the earlier executed lease (J2) after the authored offer exists | {"lease_id":"<id-52>"}
+  PASS  [J5 · AUTHOR (decision 1)] [J5] the conversation queue loads after the authored offer exists | {"status":200}
+
+== J5 · Mike prepares, attests; applicant and guarantor apply ==
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] authored offer exists
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] Mike prepares the application link for email; nothing is sent | {"status":200,"body":{"prepared":true,"sent":false,"dispatched":false,"delivery_method":"manual_email","conversion_id":"<id-70>","invitation_id":"<id-75>","send_obligation_id":"<id-76>","prepare_obligation_id":"<id-77>","unit_id":"<id-68>","space_id":"df04b4af-58f9-4d25-bfd8
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] preparation sent nothing and called no model
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] Mike attests that he emailed the link | {"status":200,"body":{"finalized":true,"invitation_id":"<id-75>","status":"manually_sent","send_obligation_id":"<id-76>","parent_obligation_id":"<id-78>","receipt":"Send attested. The post-tour follow-up is closed and the applicant follow-up is open."}}
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] the applicant sees the authored terms | {"status":200,"rent":"1025.00"}
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] the applicant submits against the acknowledged terms | {"status":200,"body":{"receipt":"Application submitted for TwoStep Prospect J5 51ed0622. Now with leasing_manager for approval.","application":{"id":"<id-79>","property_id":"<id-2>","unit_id":"<id-68>","person_id":"<id-72>","status":"submitted","applicant_name":"TwoStep Prospect J5 51ed0622","unit_labe
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] the application is submitted, bound to the acknowledged offer and exact bed, unapproved, with its approval obligation open | {"status":"submitted"}
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] [J5] the Leasing desk loads for Mike after the application is submitted | {"status":200}
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] [J5] the desk retains this application, person, unit and tenancy identity after the application is submitted | {"count":1,"lease_id":null}
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] [J5] the desk still carries the earlier executed lease (J1) after the application is submitted | {"lease_id":"<id-35>"}
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] [J5] the desk still carries the earlier executed lease (J2) after the application is submitted | {"lease_id":"<id-52>"}
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] [J5] the conversation queue loads after the application is submitted | {"status":200}
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] [J5] Application Review loads after the application is submitted | {"status":200}
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] [J5] Application Review loads before any packet | {"status":200}
+  PASS  [J5 · Mike prepares, attests; applicant and guarantor apply] Application Review's next action is to prepare the signing package from the acknowledged offer (not to approve) | {"code":"prepare_lease_packet","label":"Prepare the signing package from the acknowledged offer."}
+
+== J5 · packet from the acknowledged offer (no approval, no reconfirmation) ==
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] application exists
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] Mike prepares the signing package while the application is still submitted | {"status":200,"receipt":"Lease package generated for TwoStep Prospect J5 51ed0622. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms."}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] the packet carries the authored offer, its hash and the exact bed | {"space_matches":true}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] the lineage record is SYSTEM-DERIVED from the acknowledged offer: named as such, actor = preparer (Mike), economics = the author's | {"source":"authored_offer_acknowledged","authority_basis":"authored_offer"}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] preparing the packet approved nothing: still submitted, no approval instant, no terms-review gate; terms attributed to their author | {"status":"submitted","term_source":"authored_offer_acknowledged"}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] no human decision was recorded by preparation (0 approvals, 0 operator confirmations) | {"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] the packet-generated audit names Mike as the actor | {"n":1}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] a prepared packet blocks a further offer change (changed terms need a new package, never a silent swap) | {"status":409}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] regenerating before issue returns the same draft (idempotent, one derived record) | {"status":200,"id":"<id-80>"}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] still exactly one derived lineage record
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] Mike issues the resident and guarantor links | {"status":200,"body":{"receipt":"Separate resident and guarantor signing links issued (expires in 14 days). Each presents the same retained governing form and exact deal terms as one package.","already_issued":false,"tenant_url":"http://127.0.0.1:3111/t/lease/<token>","guarantor_url":"http://127.0.0.1:3111/t/lease/<token>","signing_links":[{"sign
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] [J5] the Leasing desk loads for Mike after the links are issued | {"status":200}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] [J5] the desk retains this application, person, unit and tenancy identity after the links are issued | {"count":1,"lease_id":null}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] [J5] the desk still carries the earlier executed lease (J1) after the links are issued | {"lease_id":"<id-35>"}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] [J5] the desk still carries the earlier executed lease (J2) after the links are issued | {"lease_id":"<id-52>"}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] [J5] the conversation queue loads after the links are issued | {"status":200}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] [J5] Application Review loads after the links are issued | {"status":200}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] [J5] Application Review loads after issue | {"status":200}
+  PASS  [J5 · packet from the acknowledged offer (no approval, no reconfirmation)] review: awaiting the resident's signature, application still submitted | {"code":"await_resident_acknowledgment"}
+
+== J5 · signatures, then refusals before EXECUTE ==
+  PASS  [J5 · signatures, then refusals before EXECUTE] links exist
+  PASS  [J5 · signatures, then refusals before EXECUTE] KZ cannot execute before the resident and guarantor sign | {"status":409,"error":"resident_has_not_executed"}
+  PASS  [J5 · signatures, then refusals before EXECUTE] the guarantor signs | {"status":200}
+  PASS  [J5 · signatures, then refusals before EXECUTE] with the applicant still outstanding, Execute is refused and names who is outstanding | {"status":409,"outstanding":["TwoStep Prospect J5 51ed0622"]}
+  PASS  [J5 · signatures, then refusals before EXECUTE] the applicant signs and the package reads resident executed | {"status":200,"body":{"receipt":"Signed. Every required resident-side signature on the complete lease package is recorded. The authorized company signer may now countersign.","satisfied_obligation_inputs":[],"application_next":"Company countersignature required","note":"The resident side is complete. No tenancy is activated until the authorized company signer countersigns the same package.","packet":{"id":"f8e725c7-f
+  PASS  [J5 · signatures, then refusals before EXECUTE] the resident's acknowledgment evidence is frozen on the packet audit (obligation to be satisfied from it at Execute)
+  PASS  [J5 · signatures, then refusals before EXECUTE] signatures changed no application status and approved nothing
+  PASS  [J5 · signatures, then refusals before EXECUTE] [J5] the Leasing desk loads for Mike after both signatures | {"status":200}
+  PASS  [J5 · signatures, then refusals before EXECUTE] [J5] the desk retains this application, person, unit and tenancy identity after both signatures | {"count":1,"lease_id":null}
+  PASS  [J5 · signatures, then refusals before EXECUTE] [J5] the desk still carries the earlier executed lease (J1) after both signatures | {"lease_id":"<id-35>"}
+  PASS  [J5 · signatures, then refusals before EXECUTE] [J5] the desk still carries the earlier executed lease (J2) after both signatures | {"lease_id":"<id-52>"}
+  PASS  [J5 · signatures, then refusals before EXECUTE] [J5] the conversation queue loads after both signatures | {"status":200}
+  PASS  [J5 · signatures, then refusals before EXECUTE] [J5] Application Review loads after both signatures | {"status":200}
+  PASS  [J5 · signatures, then refusals before EXECUTE] [J5] Application Review loads with both signatures | {"status":200}
+  PASS  [J5 · signatures, then refusals before EXECUTE] review: the one remaining act is Execute, labelled as approve + sign | {"next":"execute_lease","primary":"execute_lease","label":"Approve the application and sign for the company"}
+  PASS  [J5 · signatures, then refusals before EXECUTE] review names both remaining commercial decisions
+  PASS  [J5 · signatures, then refusals before EXECUTE] Mike (staff, preparation only): refused, holding neither approval authority nor signer standing | {"status":403,"error":"execute_not_authorized","missing":["application_approval","company_signature"]}
+  PASS  [J5 · signatures, then refusals before EXECUTE] Mike cannot use the released company-sign door either | {"status":403,"error":"company_signer_not_authorized"}
+  PASS  [J5 · signatures, then refusals before EXECUTE] a signer-list member WITHOUT approval authority cannot decide: signer-list entry alone confers no approval | {"status":403,"error":"application_approval_not_authorized"}
+  PASS  [J5 · signatures, then refusals before EXECUTE] an approver who is NOT a configured signer cannot execute: approval authority alone confers no signature | {"status":403,"error":"company_signer_not_authorized"}
+  PASS  [J5 · signatures, then refusals before EXECUTE] KZ's session at another property cannot execute this packet | {"status":403}
+  PASS  [J5 · signatures, then refusals before EXECUTE] Execute carries exactly one explicit decision; anything else is refused before any write | {"status":400}
+  PASS  [J5 · signatures, then refusals before EXECUTE] an empty body is not a decision | {"status":400}
+  PASS  [J5 · signatures, then refusals before EXECUTE] ALTERNATIVE ROUTE CLOSED: the released company-sign door refuses to sign an unapproved application and points at Execute | {"status":409,"error":"application_not_approved"}
+  PASS  [J5 · signatures, then refusals before EXECUTE] every refusal above wrote no approval, signature, confirmation, offer or lease | {"before":{"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0},"after":{"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0}}
+  PASS  [J5 · signatures, then refusals before EXECUTE] the application is still submitted after every refusal
+
+== J5 · retained approval, packet generation and Execute coexist ==
+  PASS  [J5 · retained approval, packet generation and Execute coexist] retained approval creates the expected open terms-review gate
+  PASS  [J5 · retained approval, packet generation and Execute coexist] Execute waits on the application before taking the packet lock
+  PASS  [J5 · retained approval, packet generation and Execute coexist] a delayed signing-link issue also waits on the application before the packet
+  PASS  [J5 · retained approval, packet generation and Execute coexist] canonical generation completes its read while Execute waits; no inverted-lock deadlock
+  PASS  [J5 · retained approval, packet generation and Execute coexist] the delayed issue retry refuses the signed packet without deadlock, timeout or a new link
+  PASS  [J5 · retained approval, packet generation and Execute coexist] Execute preserves the separate earlier approval instead of claiming a new one
+  PASS  [J5 · retained approval, packet generation and Execute coexist] resident acknowledgment closes the gate even when approval used the retained door
+  PASS  [J5 · retained approval, packet generation and Execute coexist] completed resident work leaves no open terms/signature work for this application
+  PASS  [J5 · retained approval, packet generation and Execute coexist] coexisting commands produce exactly one pending lease
+
+== J4 · inquiry, ownership, tour ==
+  PASS  [J4 · inquiry, ownership, tour] the website inquiry is captured (no consent, capture only) | {"status":200}
+  PASS  [J4 · inquiry, ownership, tour] no model call, no text
+  PASS  [J4 · inquiry, ownership, tour] Mike takes ownership | {"status":200}
+  PASS  [J4 · inquiry, ownership, tour] Mike records the email he already sent | {"status":200}
+  PASS  [J4 · inquiry, ownership, tour] a native slot is published | {"status":200,"body":{"receipt":"Tour time published.","slot":{"id":"<id-81>","property_id":"<id-2>","unit_id":"<id-82>","leasing_agent_id":"<id-19>","starts_at":"2026-09-20T10:46:49.574Z","ends_at":"2026-09-20T11:46:49.574Z","capacity":1,"status":"open","booked_tour_id":null,"created_by":"38fe6c42-8fa
+  PASS  [J4 · inquiry, ownership, tour] Mike books the tour | {"status":200,"body":{"receipt":"Tour booked. No confirmation message was sent.","tour_id":"<id-83>","slot_id":"<id-81>","scheduled_for":"2026-09-20T10:46:49.574Z","status":"scheduled","idempotent":false}}
+  PASS  [J4 · inquiry, ownership, tour] Mike records the outcome as ready to apply | {"status":200,"body":{"receipt":"Outcome recorded — tour given. Follow-up rail opened — outcome · owner set to the actual host.","tour_id":"<id-83>","conversion_id":"<id-84>"}}
+  PASS  [J4 · inquiry, ownership, tour] the conversion belongs to the same person
+
+== J4 · AUTHOR (decision 1) ==
+  PASS  [J4 · AUTHOR (decision 1)] conversion exists
+  PASS  [J4 · AUTHOR (decision 1)] the exact-home selector read succeeds | {"status":200}
+  PASS  [J4 · AUTHOR (decision 1)] D1-51ed0622 Bed A is offerable as an exact choice | {"marketing_state":"marketable_now","basis":"chosen_space"}
+  PASS  [J4 · AUTHOR (decision 1)] the earlier leased bed (J1) is still absent from the selector
+  PASS  [J4 · AUTHOR (decision 1)] the earlier leased bed (J2) is still absent from the selector
+  PASS  [J4 · AUTHOR (decision 1)] Mike cannot author terms (no override, no pricing grant) | {"status":403,"error":"NO_APPLICATION_OFFER_AUTHORITY"}
+  PASS  [J4 · AUTHOR (decision 1)] KZ authors the offer for the chosen bed | {"status":200,"body":{"application_offer_id":"<id-85>","application_terms":{"schema_version":1,"property_id":"<id-2>","person_id":"<id-86>","target":{"space_id":"<id-87>","unit_id":"<id-82>"},"rent":"930.00","security_deposit":"930.00","lease_start_date":"2026-10-14","lease
+  PASS  [J4 · AUTHOR (decision 1)] KZ corrects the unsent draft (explicit successor) | {"status":200,"body":{"application_offer_id":"<id-88>","application_terms":{"schema_version":1,"property_id":"<id-2>","person_id":"<id-86>","target":{"space_id":"<id-87>","unit_id":"<id-82>"},"rent":"1005.00","security_deposit":"1005.00","lease_start_date":"2026-10-14","lea
+  PASS  [J4 · AUTHOR (decision 1)] the authored offer carries KZ as author, its hash and its lineage | {"author_is_kz":true}
+  PASS  [J4 · AUTHOR (decision 1)] [J4] the Leasing desk loads for Mike after the authored offer exists | {"status":200}
+  PASS  [J4 · AUTHOR (decision 1)] [J4] the desk still carries the earlier executed lease (J1) after the authored offer exists | {"lease_id":"<id-35>"}
+  PASS  [J4 · AUTHOR (decision 1)] [J4] the desk still carries the earlier executed lease (J2) after the authored offer exists | {"lease_id":"<id-52>"}
+  PASS  [J4 · AUTHOR (decision 1)] [J4] the conversation queue loads after the authored offer exists | {"status":200}
+
+== J4 · Mike prepares, attests; applicant and guarantor apply ==
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] authored offer exists
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] Mike prepares the application link for email; nothing is sent | {"status":200,"body":{"prepared":true,"sent":false,"dispatched":false,"delivery_method":"manual_email","conversion_id":"<id-84>","invitation_id":"<id-89>","send_obligation_id":"<id-90>","prepare_obligation_id":"<id-91>","unit_id":"<id-82>","space_id":"344d6a73-5cc1-466f-b387
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] preparation sent nothing and called no model
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] Mike attests that he emailed the link | {"status":200,"body":{"finalized":true,"invitation_id":"<id-89>","status":"manually_sent","send_obligation_id":"<id-90>","parent_obligation_id":"<id-92>","receipt":"Send attested. The post-tour follow-up is closed and the applicant follow-up is open."}}
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] the applicant sees the authored terms | {"status":200,"rent":"1005.00"}
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] the applicant submits against the acknowledged terms | {"status":200,"body":{"receipt":"Application submitted for TwoStep Prospect J4 51ed0622. Now with leasing_manager for approval.","application":{"id":"<id-93>","property_id":"<id-2>","unit_id":"<id-82>","person_id":"<id-86>","status":"submitted","applicant_name":"TwoStep Prospect J4 51ed0622","unit_labe
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] the application is submitted, bound to the acknowledged offer and exact bed, unapproved, with its approval obligation open | {"status":"submitted"}
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] [J4] the Leasing desk loads for Mike after the application is submitted | {"status":200}
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] [J4] the desk retains this application, person, unit and tenancy identity after the application is submitted | {"count":1,"lease_id":null}
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] [J4] the desk still carries the earlier executed lease (J1) after the application is submitted | {"lease_id":"<id-35>"}
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] [J4] the desk still carries the earlier executed lease (J2) after the application is submitted | {"lease_id":"<id-52>"}
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] [J4] the conversation queue loads after the application is submitted | {"status":200}
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] [J4] Application Review loads after the application is submitted | {"status":200}
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] [J4] Application Review loads before any packet | {"status":200}
+  PASS  [J4 · Mike prepares, attests; applicant and guarantor apply] Application Review's next action is to prepare the signing package from the acknowledged offer (not to approve) | {"code":"prepare_lease_packet","label":"Prepare the signing package from the acknowledged offer."}
+
+== J4 · packet from the acknowledged offer (no approval, no reconfirmation) ==
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] application exists
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] Mike prepares the signing package while the application is still submitted | {"status":200,"receipt":"Lease package generated for TwoStep Prospect J4 51ed0622. It binds the retained TEST-FIXTURE-FORM source to the exact confirmed unit, dates, rent, deposit, and property terms."}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] the packet carries the authored offer, its hash and the exact bed | {"space_matches":true}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] the lineage record is SYSTEM-DERIVED from the acknowledged offer: named as such, actor = preparer (Mike), economics = the author's | {"source":"authored_offer_acknowledged","authority_basis":"authored_offer"}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] preparing the packet approved nothing: still submitted, no approval instant, no terms-review gate; terms attributed to their author | {"status":"submitted","term_source":"authored_offer_acknowledged"}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] no human decision was recorded by preparation (0 approvals, 0 operator confirmations) | {"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] the packet-generated audit names Mike as the actor | {"n":1}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] a prepared packet blocks a further offer change (changed terms need a new package, never a silent swap) | {"status":409}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] regenerating before issue returns the same draft (idempotent, one derived record) | {"status":200,"id":"<id-94>"}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] still exactly one derived lineage record
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] Mike issues the resident and guarantor links | {"status":200,"body":{"receipt":"Separate resident and guarantor signing links issued (expires in 14 days). Each presents the same retained governing form and exact deal terms as one package.","already_issued":false,"tenant_url":"http://127.0.0.1:3111/t/lease/<token>","guarantor_url":"http://127.0.0.1:3111/t/lease/<token>","signing_links":[{"sign
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] [J4] the Leasing desk loads for Mike after the links are issued | {"status":200}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] [J4] the desk retains this application, person, unit and tenancy identity after the links are issued | {"count":1,"lease_id":null}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] [J4] the desk still carries the earlier executed lease (J1) after the links are issued | {"lease_id":"<id-35>"}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] [J4] the desk still carries the earlier executed lease (J2) after the links are issued | {"lease_id":"<id-52>"}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] [J4] the conversation queue loads after the links are issued | {"status":200}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] [J4] Application Review loads after the links are issued | {"status":200}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] [J4] Application Review loads after issue | {"status":200}
+  PASS  [J4 · packet from the acknowledged offer (no approval, no reconfirmation)] review: awaiting the resident's signature, application still submitted | {"code":"await_resident_acknowledgment"}
+
+== J4 · signatures, then refusals before EXECUTE ==
+  PASS  [J4 · signatures, then refusals before EXECUTE] links exist
+  PASS  [J4 · signatures, then refusals before EXECUTE] KZ cannot execute before the resident and guarantor sign | {"status":409,"error":"resident_has_not_executed"}
+  PASS  [J4 · signatures, then refusals before EXECUTE] the guarantor signs | {"status":200}
+  PASS  [J4 · signatures, then refusals before EXECUTE] with the applicant still outstanding, Execute is refused and names who is outstanding | {"status":409,"outstanding":["TwoStep Prospect J4 51ed0622"]}
+  PASS  [J4 · signatures, then refusals before EXECUTE] the applicant signs and the package reads resident executed | {"status":200,"body":{"receipt":"Signed. Every required resident-side signature on the complete lease package is recorded. The authorized company signer may now countersign.","satisfied_obligation_inputs":[],"application_next":"Company countersignature required","note":"The resident side is complete. No tenancy is activated until the authorized company signer countersigns the same package.","packet":{"id":"30eecc27-6
+  PASS  [J4 · signatures, then refusals before EXECUTE] the resident's acknowledgment evidence is frozen on the packet audit (obligation to be satisfied from it at Execute)
+  PASS  [J4 · signatures, then refusals before EXECUTE] signatures changed no application status and approved nothing
+  PASS  [J4 · signatures, then refusals before EXECUTE] [J4] the Leasing desk loads for Mike after both signatures | {"status":200}
+  PASS  [J4 · signatures, then refusals before EXECUTE] [J4] the desk retains this application, person, unit and tenancy identity after both signatures | {"count":1,"lease_id":null}
+  PASS  [J4 · signatures, then refusals before EXECUTE] [J4] the desk still carries the earlier executed lease (J1) after both signatures | {"lease_id":"<id-35>"}
+  PASS  [J4 · signatures, then refusals before EXECUTE] [J4] the desk still carries the earlier executed lease (J2) after both signatures | {"lease_id":"<id-52>"}
+  PASS  [J4 · signatures, then refusals before EXECUTE] [J4] the conversation queue loads after both signatures | {"status":200}
+  PASS  [J4 · signatures, then refusals before EXECUTE] [J4] Application Review loads after both signatures | {"status":200}
+  PASS  [J4 · signatures, then refusals before EXECUTE] [J4] Application Review loads with both signatures | {"status":200}
+  PASS  [J4 · signatures, then refusals before EXECUTE] review: the one remaining act is Execute, labelled as approve + sign | {"next":"execute_lease","primary":"execute_lease","label":"Approve the application and sign for the company"}
+  PASS  [J4 · signatures, then refusals before EXECUTE] review names both remaining commercial decisions
+  PASS  [J4 · signatures, then refusals before EXECUTE] Mike (staff, preparation only): refused, holding neither approval authority nor signer standing | {"status":403,"error":"execute_not_authorized","missing":["application_approval","company_signature"]}
+  PASS  [J4 · signatures, then refusals before EXECUTE] Mike cannot use the released company-sign door either | {"status":403,"error":"company_signer_not_authorized"}
+  PASS  [J4 · signatures, then refusals before EXECUTE] a signer-list member WITHOUT approval authority cannot decide: signer-list entry alone confers no approval | {"status":403,"error":"application_approval_not_authorized"}
+  PASS  [J4 · signatures, then refusals before EXECUTE] an approver who is NOT a configured signer cannot execute: approval authority alone confers no signature | {"status":403,"error":"company_signer_not_authorized"}
+  PASS  [J4 · signatures, then refusals before EXECUTE] KZ's session at another property cannot execute this packet | {"status":403}
+  PASS  [J4 · signatures, then refusals before EXECUTE] Execute carries exactly one explicit decision; anything else is refused before any write | {"status":400}
+  PASS  [J4 · signatures, then refusals before EXECUTE] an empty body is not a decision | {"status":400}
+  PASS  [J4 · signatures, then refusals before EXECUTE] ALTERNATIVE ROUTE CLOSED: the released company-sign door refuses to sign an unapproved application and points at Execute | {"status":409,"error":"application_not_approved"}
+  PASS  [J4 · signatures, then refusals before EXECUTE] every refusal above wrote no approval, signature, confirmation, offer or lease | {"before":{"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0},"after":{"approvals":0,"company_signatures":0,"operator_confirmations":0,"derived_confirmations":1,"offers":2,"leases":0}}
+  PASS  [J4 · signatures, then refusals before EXECUTE] the application is still submitted after every refusal
+  NOTE  [J4 · signatures, then refusals before EXECUTE] J4 left at resident_executed for the browser slice | {"handoff":"two_step_handoff.json"}
+
+== second property shape · incomplete setup refuses honestly ==
+  NOTE  [second property shape · incomplete setup refuses honestly] what the lease configuration read says for a property with no governing instrument | {"status":200,"body":"{\"configuration\":{\"property\":{\"id\":\"<id-95>\",\"name\":\"TwoStep Other 51ed0622\",\"address\":\"2 Scope Wall\"},\"terms\":{\"landlord_entity\":\"\",\"application_fee\":\"\",\"amenity_fee\":\"\",\"utility_responsibility\":\"\",\"late_fee\":\"\",\"notice_requirement\":\"\",\"rent_payment_location\":\"\",\"insura"}
+  PASS  [second property shape · incomplete setup refuses honestly] the configuration read answers rather than failing | {"status":200}
+  PASS  [second property shape · incomplete setup refuses honestly] a property whose setup is incomplete names the missing input instead of publishing a tour time | {"status":422,"error":"property_operating_timezone_not_configured"}
+  PASS  [second property shape · incomplete setup refuses honestly] the other property's session cannot execute the first property's packet | {"status":403}
+  PASS  [completion] two journeys each completed with exactly two commercial decisions and one pending lease | {"leases":["J1","J2"]}
+
+two-step leasing: 508 passed, 0 failed, 4 observations

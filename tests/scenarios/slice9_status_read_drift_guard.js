@@ -51,7 +51,11 @@ const PASS_2 = [];
 
 const read = (f) => fs.readFileSync(path.join(REPO, f), "utf8");
 // Strip comments so documentation naming a defect is not mistaken for the defect.
-const code = (f) => read(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+//  One alternation, not two chained replaces: a `/*` inside a `//`
+//  comment (server.js prose says `/operator/*`) would otherwise open a
+//  block comment that closes 569 lines later. See
+//  tests/unit/shared_conversational_path.test.js for the full account.
+const code = (f) => read(f).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
 
 section("A  dead 'denied' vocabulary stays gone");
 for (const f of GUARDED) {

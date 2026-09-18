@@ -6,7 +6,7 @@ const path = require("path");
 const contracts = require("../../src/asset/compliance_contracts.js");
 const facts = require("../../src/asset/compliance_fact_contracts.js");
 const semantics = require("../../src/asset/compliance_semantics.js");
-const solo = require("./fixtures/compliance/solo_license_periods.js");
+const solo = require("../fixtures/compliance/solo_license_periods.js");
 
 const EXPECTED_ASSERTIONS = 24;
 let pass = 0, fail = 0;

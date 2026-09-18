@@ -29,33 +29,19 @@ module.exports = function followupRunner(deps) {
   const { pool, commBoundary } = deps;
   if (!pool) throw new Error("followup_runner requires { pool }");
 
-  // Layout → the tour we actually have. Verified links only; a layout that
-  // is absent (the two-bedroom) must fall through to null, never substitute.
-  const TOURS = {
-    studio: "https://my.matterport.com/show/?m=H5qs9j6vYc5",
-    one_bedroom: "https://my.matterport.com/show/?m=CbvpwiPGRah",
-    one_bedroom_furnished: "https://my.matterport.com/show/?m=CVU7qPMehm9",
-    one_bedroom_den: "https://my.matterport.com/show/?m=QmzDAeTLUmK",
-    three_bedroom: "https://my.matterport.com/show/?m=tBSRwYtiTMU",
-    // two_bedroom: intentionally absent. No tour exists. Do not substitute.
-  };
+  const leasingKnowledge = require("./leasing_knowledge");
 
   const firstName = (n) => String(n || "").trim().split(/\s+/)[0] || "there";
 
   // One short message per rung. No markdown, no dashes, no invented facts.
-  function composeRung(rung, { name, layout }) {
+  function composeRung(rung, { name, virtualTourText }) {
     const who = firstName(name);
     switch (rung) {
       case 1:
         return `Hey ${who}, just circling back on your question about the apartment. Still happy to help if you're weighing options.`;
       case 2: {
-        const url = layout ? TOURS[layout] : null;
-        if (url) {
-          return `Hey ${who}, here's a 3D walkthrough of that layout so you can look around without coming in: ${url}`;
-        }
-        // No tour for their layout. Offer the live option rather than the
-        // wrong apartment.
-        return `Hey ${who}, if it's easier than coming in, we do live video tours over FaceTime or WhatsApp, weekdays 9 to 4:30. Want me to set one up?`;
+        if (virtualTourText) return `Hey ${who}, here are the property's recorded virtual tours. These may show representative layouts:\n${virtualTourText}`;
+        return `Hey ${who}, would you like help arranging a tour?`;
       }
       // RUNG 3 CARRIES NO ECONOMICS (owner decision, 2026-07-27). This rung
       // used to state a dated financial promise as a string literal: "a month
@@ -150,7 +136,18 @@ module.exports = function followupRunner(deps) {
         : { allowed: false, reason: "no_boundary" };
       if (!win.allowed) { results.skipped.push({ name: row.name, reason: win.reason }); continue; }
 
-      const body = composeRung(d.rung, { name: row.name, layout: d.layout });
+      let virtualTourText = null;
+      if (d.rung === 2) {
+        try {
+          const facts = await leasingKnowledge.readActive(pool, propertyId);
+          const tour = facts.find(f => f.fact_key === "virtual_tours");
+          virtualTourText = tour && tour.rendered_text;
+        } catch (_) {
+          results.failed.push({name:row.name, rung:d.rung, reason:"leasing_knowledge_unavailable"});
+          continue;
+        }
+      }
+      const body = composeRung(d.rung, { name: row.name, virtualTourText });
       if (!body) { results.skipped.push({ name: row.name, reason: "no_body_for_rung" }); continue; }
 
       if (dryRun) { results.sent.push({ name: row.name, rung: d.rung, job: d.job, body, dryRun: true }); continue; }
@@ -176,5 +173,5 @@ module.exports = function followupRunner(deps) {
     return results;
   }
 
-  return { runFollowups, composeRung, decideFor, TOURS };
+  return { runFollowups, composeRung, decideFor };
 };

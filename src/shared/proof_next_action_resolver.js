@@ -8,9 +8,11 @@
 //   Three proof groups:
 //     A. LEGACY LOCK — every two-arg call must return action_code + label
 //        BYTE-IDENTICAL to the pre-slice resolver (inline oracle below),
-//        with ONE documented exception: packet status 'tenant_in_progress'
+//        with documented exceptions: packet status 'tenant_in_progress'
 //        previously fell through to send_terms_for_review (vocabulary
 //        drift); it now correctly reads awaiting_acknowledgment.
+//        An active APPLICATION now says "Tenant file open." because its
+//        tenancy may still be pending; it does not establish lease activation.
 //     B. REFINED MATRIX — the buddy-spec acceptance matrix, three-arg.
 //     C. POSITION STABILITY — applicationPosition unchanged everywhere.
 //
@@ -94,12 +96,13 @@ const legacyGrid = [
 for (const [name, app, gate] of legacyGrid) {
   const got = applicationNext(app, gate);
   const want = oracleNext(app, gate);
-  check(`A · ${name}`, got, { action_code: want.action_code, label: want.label,
+  const expectedLabel = app.status === "active" ? "Tenant file open." : want.label;
+  check(`A · ${name}`, got, { action_code: want.action_code, label: expectedLabel,
     obligation_id: want.obligation_id, packet_id: want.packet_id, blocked_reason: null });
   // #2: action_code is the LEGACY alias (== old value), group_code legacy, code mirrors, blocker null
   check(`A · ${name} — legacy aliases`, got, { action_code: want.action_code, group_code: want.action_code, code: got.action_code, blocker_code: null });
 }
-// the ONE documented legacy change — drift kill:
+// The packet-vocabulary exception — drift kill:
 {
   const got = applicationNext(APP("lease_ready", { terms_review_obligation_id: "ob-T" }), TR_GATE({ packet: { id: "pk-1", status: "tenant_in_progress" } }));
   check("A · DRIFT FIX — tenant_in_progress now awaits (was send_terms_for_review)", got,

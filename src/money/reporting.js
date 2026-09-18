@@ -57,6 +57,7 @@
 
 const express = require("express");
 const { computeExposure } = require("./exposure"); // ONE exposure computation, reused
+const { byPropertyId, byCanonical } = require("../onboarding/deal_registry");
 
 // money the same way the rest of the system does: Number, fixed(2), gross.
 const money = (n) => Number(Number(n || 0).toFixed(2));
@@ -85,8 +86,10 @@ module.exports = function reportingModule({ pool }) {
     const propertyId = req.params.id;
     try {
       const prop = (await pool.query(
-        "select id, name, canonical_key from properties where id=$1", [propertyId])).rows[0];
+        "select id, name, display_name, canonical_key from properties where id=$1", [propertyId])).rows[0];
       if (!prop) return res.status(404).json({ error: "property not found" });
+      const deal = byPropertyId(propertyId) || byCanonical(prop.canonical_key) || null;
+      const model = deal?.model || null;
 
       // ── PROVEN: EXPENSES (money_events report_ready × category_report_map) ──
       // Only report_ready rows are truth. Join to the map to split mapped
@@ -289,7 +292,7 @@ module.exports = function reportingModule({ pool }) {
       return res.json({
         // ── what the shell reads as backend.* ──
         source: "Backend report read (proven rungs only)",
-        property: { id: prop.id, name: prop.name, canonical_key: prop.canonical_key },
+        property: { id: prop.id, name: prop.display_name || prop.name, canonical_key: prop.canonical_key, model },
         period: currentPeriod(),
         status,
         ready,

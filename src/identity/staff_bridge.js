@@ -122,7 +122,7 @@ module.exports = function buildStaffBridge({ pool }) {
     user_id, person_id = null, create_staff_person = null,
     reason_code, reason_detail = null,
     evidence_type = "operator_attestation", evidence_reference = null,
-    performed_by_user_id, request_id = null,
+    performed_by_user_id, request_id = null, context_property_id = null,
   }) {
     if (!reason_code) throw httpErr(400, "reason_code is required — every bridge answers WHY");
     if (!person_id && !create_staff_person) throw httpErr(400, "supply person_id or create_staff_person");
@@ -199,8 +199,9 @@ module.exports = function buildStaffBridge({ pool }) {
       // Linking an EXISTING person as staff: ensure the additive staff
       // context exists (idempotent — the partial unique index guards it).
       await client.query(
-        `insert into person_contexts (person_id, context_type, created_by_user_id)
-         values ($1, 'staff', $2) on conflict do nothing`, [targetPersonId, performed_by_user_id]);
+        `insert into person_contexts (person_id, context_type, property_id, created_by_user_id)
+         values ($1, 'staff', $2, $3) on conflict do nothing`,
+        [targetPersonId, context_property_id, performed_by_user_id]);
     }
 
     const isRelink = !!u.person_id;
@@ -315,6 +316,39 @@ module.exports = function buildStaffBridge({ pool }) {
       reason_detail: reason_detail || null,
       receipt: `${person.name} is now entitled to operate at ${property.name}. ` +
                `This is entitlement only — it confers no pricing or approval authority.`,
+    };
+  }
+
+  // Staff onboarding may be the first deliberate act that makes an already
+  // linked person staff. Keep that context write in this canonical module;
+  // callers must classify the account and establish the bridge separately.
+  async function establishStaffContext(client, {
+    person_id, property_id, performed_by_user_id,
+  } = {}) {
+    if (!person_id) throw httpErr(400, "person_id is required");
+    if (!property_id) throw httpErr(400, "property_id is required");
+    if (!performed_by_user_id) throw httpErr(400, "performed_by_user_id is required");
+
+    const person = (await client.query(
+      `select id, name from persons where id = $1 for update`, [person_id])).rows[0];
+    if (!person) throw httpErr(404, "person not found");
+    const property = (await client.query(
+      `select id, name from properties where id = $1`, [property_id])).rows[0];
+    if (!property) throw httpErr(404, "property not found");
+
+    const ctx = (await client.query(
+      `insert into person_contexts (person_id, context_type, property_id, created_by_user_id)
+       values ($1, 'staff', $2, $3)
+       on conflict do nothing
+       returning id`, [person_id, property_id, performed_by_user_id])).rows[0];
+    return {
+      replayed: !ctx,
+      context_id: ctx?.id || null,
+      person_id,
+      property_id,
+      receipt: ctx
+        ? `${person.name} is now staff at ${property.name}.`
+        : `${person.name} already has staff context at ${property.name}.`,
     };
   }
 
@@ -486,7 +520,8 @@ module.exports = function buildStaffBridge({ pool }) {
   });
 
   // service layer exposed for the proof harness + the audited demo seed
-  router._service = { classifyAccount, createStaffPerson, linkBridge, unlinkBridge, grantStaffContext,
+  router._service = { classifyAccount, createStaffPerson, linkBridge, unlinkBridge,
+                      grantStaffContext, establishStaffContext,
                       bridgeCandidates, coverageReport };
   router._internal = { resolveAdmin, requireBridgeAdmin };
   return router;

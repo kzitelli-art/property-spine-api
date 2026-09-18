@@ -1,0 +1,19 @@
+{
+ "api": "1320c2c",
+ "app": "4fd0af8",
+ "database": "fresh owned (before the journey)",
+ "results": {
+  "tour": {
+   "pass_lines": 2,
+   "tail": "  operator: '==',\n  diff: 'simple'\n}"
+  },
+  "application_send": {
+   "pass_lines": 34,
+   "tail": "HTTP 403 /operator/leasing/conversions/<uuid>/application-offer {\"error\":\"NO_APPLICATION_OFFER_AUTHORITY\",\"receipt\":\"application terms require server-established pricing authority or can_manage_roles.\"}\nHTTP 409 /operator/leasing/conversions/<uuid>/send-application {\"error\":\"APPLICATION_LINK_ALREADY_PREPARED\",\"receipt\":\"The application link was already prepared and is returned only once. Use its e"
+  },
+  "external_email": {
+   "pass_lines": 36,
+   "tail": "RESULT 36/36 actual external-email browser checks; no external email sent"
+  }
+ }
+}

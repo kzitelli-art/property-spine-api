@@ -1,0 +1,76 @@
+{
+  "mode": "successor",
+  "evidence": [
+    {
+      "tally_established": 4,
+      "positions": 10,
+      "not_established": 9,
+      "open": 1,
+      "unknowns": {
+        "occupied_positions_with_no_recorded_rent": 0,
+        "positions_with_unresolved_occupancy_evidence": 9,
+        "positions_with_overlapping_lease_claims": 0,
+        "occupied_positions_proven_only_by_the_opening_import": 0,
+        "occupied_positions_with_no_linked_resident": 0,
+        "confirmed_source_rows_not_attached_to_a_position": 3,
+        "held_source_rows_not_attached_to_a_position": 0
+      },
+      "unattached": [
+        {
+          "source_key": "201",
+          "status": "promoted"
+        },
+        {
+          "source_key": "202|Room4",
+          "status": "promoted"
+        },
+        {
+          "source_key": "203",
+          "status": "promoted"
+        }
+      ],
+      "rent_roll_totals": {
+        "units": 4,
+        "rentable_positions": 10,
+        "occupied": 0,
+        "activation_pending": 0,
+        "open": 1,
+        "needs_review": 0,
+        "not_established": 9,
+        "established": 1,
+        "unclassified": 0,
+        "with_next_known": 0,
+        "rent_not_in_source": 0,
+        "confirmed_rows_not_attached": 3,
+        "held_rows_not_attached": 0
+      },
+      "availability": {
+        "marketable_now": 1,
+        "occupancy_unknown": 9
+      },
+      "ask_unknowns": {
+        "occupied_positions_with_no_recorded_rent": 0,
+        "positions_with_unresolved_occupancy_evidence": 9,
+        "positions_with_overlapping_lease_claims": 0,
+        "occupied_positions_proven_only_by_the_opening_import": 0,
+        "occupied_positions_with_no_linked_resident": 0,
+        "confirmed_source_rows_not_attached_to_a_position": 3,
+        "held_source_rows_not_attached_to_a_position": 0
+      },
+      "ask_unattached": [
+        {
+          "source_key": "201",
+          "status": "promoted"
+        },
+        {
+          "source_key": "202|Room4",
+          "status": "promoted"
+        },
+        {
+          "source_key": "203",
+          "status": "promoted"
+        }
+      ]
+    }
+  ]
+}

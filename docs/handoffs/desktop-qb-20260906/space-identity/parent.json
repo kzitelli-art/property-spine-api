@@ -1,0 +1,36 @@
+{
+  "mode": "positive_defect_witness",
+  "evidence": [
+    {
+      "case": "occupied_first",
+      "rent_roll_rows": 1,
+      "rent_roll_statuses": [
+        "current"
+      ],
+      "canonical_states": {
+        "Room1": "occupied",
+        "Room2": "use_not_configured"
+      }
+    },
+    {
+      "case": "vacant_first",
+      "rent_roll_rows": 1,
+      "rent_roll_statuses": [
+        "vacant"
+      ],
+      "canonical_states": {
+        "Room1": "occupied",
+        "Room2": "use_not_configured"
+      }
+    },
+    {
+      "case": "ambiguous_vacancy",
+      "confirm_status": 200,
+      "rent_roll_contractual_open": true,
+      "canonical_states": {
+        "Room1": "occupied",
+        "Room2": "use_not_configured"
+      }
+    }
+  ]
+}

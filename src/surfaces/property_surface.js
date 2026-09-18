@@ -68,10 +68,11 @@ module.exports = function propertySurface(deps) {
     const client = await pool.connect();
     try {
       // identity from registry (model is fixed here)
-      const propRow = (await client.query("select id, name, canonical_key from properties where id=$1", [propertyId])).rows[0];
+      const propRow = (await client.query("select id, name, display_name, canonical_key from properties where id=$1", [propertyId])).rows[0];
       const deal = byPropertyId(propertyId) || (propRow && byCanonical(propRow.canonical_key)) || null;
       const model = deal?.model || null;   // NEVER inferred — if unknown, say so
-      const displayName = deal?.name || propRow?.name || "Property";
+      const displayName = propRow?.display_name || propRow?.name || "Property";
+      const canonicalKey = propRow?.canonical_key || null;
 
       // the snapshot batch for this property
       const batch = (await client.query(
@@ -82,7 +83,7 @@ module.exports = function propertySurface(deps) {
 
       if (!batch) {
         return res.json({
-          property_id: propertyId, name: displayName, model,
+          property_id: propertyId, name: displayName, canonical_key: canonicalKey, model,
           loaded: false,
           truth_state: "Historical snapshot not loaded yet",
           where_am_i: { name: displayName, snapshot: null, source: null, as_of: null },
@@ -147,6 +148,7 @@ module.exports = function propertySurface(deps) {
       res.json({
         property_id: propertyId,
         name: displayName,
+        canonical_key: canonicalKey,
         model,
         loaded: true,
         truth_state: "Historical Snapshot",

@@ -172,7 +172,7 @@ module.exports = function contractedServiceRoutes(deps = {}) {
     async (req, res) => {
       try {
         const artifact = await artifacts.read(pool, req.params.artifactId);
-        if (!artifact || artifact.scope_type !== "property"
+        if (!artifact || !EVIDENCE_KINDS.includes(artifact.artifact_kind) || artifact.scope_type !== "property"
             || String(artifact.scope_id) !== String(req.operator.property_id)) {
           return res.status(404).json({ error: "contracted_service_evidence_not_found" });
         }

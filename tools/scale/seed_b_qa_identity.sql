@@ -45,6 +45,41 @@
 --  The property id is the same one production serves as Solo on Chestnut.
 --  These rows are synthetic stand-ins carrying those ids so the guard can
 --  find its one row. They describe nothing real.
+
+-- ════════════════════════════════════════════════════════════════════
+--  SELF-GUARD — THIS FILE PROTECTS ITSELF
+--
+--  Every other guard on this harness lives in the RUNNER:
+--    activation_proof.js:36   SCALE_DATABASE_URL, localhost default, and
+--                             deliberately NO fallback to DATABASE_URL
+--    setup_baseline.sh:60     overwrites DATABASE_URL with localhost
+--    assert_isolated_environment.sql  refuses outside 'r0scale'
+--
+--  `psql -f` on this file bypasses all three. That matters here more than
+--  in its siblings, because this file INSERTS THE PRODUCTION PROPERTY UUID
+--  a50fbdd0-… under a different name — see the note below, which has said
+--  so for a long time without anything enforcing it.
+--
+--  The sentinel table cannot be checked here: setup_baseline.sh creates
+--  release_0_scale_harness_guard AFTER these seeds run. So this guards on
+--  database identity, and additionally on the sentinel WHEN it exists —
+--  which is the strongest check available at this point in the sequence.
+-- ════════════════════════════════════════════════════════════════════
+do $selfguard$
+declare p text;
+begin
+  if current_database() <> 'r0scale' then
+    raise exception 'REFUSED: this seed runs only against the isolated scale database, not %',
+      current_database();
+  end if;
+  if to_regclass('public.release_0_scale_harness_guard') is not null then
+    select purpose into p from public.release_0_scale_harness_guard where id = true;
+    if p is distinct from 'ISOLATED RELEASE 0 SCALE HARNESS — NEVER PRODUCTION' then
+      raise exception 'REFUSED: harness sentinel present but wrong';
+    end if;
+  end if;
+end $selfguard$;
+
 insert into properties (id, name)
   values ('a50fbdd0-3642-431e-b532-0dcd6ab8a4fe', 'SCALE HARNESS PROPERTY')
   on conflict (id) do nothing;

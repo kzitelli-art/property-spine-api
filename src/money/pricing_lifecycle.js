@@ -117,13 +117,23 @@ async function saveDraft(pool, { property_id, person_id, user_id = null, proposa
       // NEVER inherited from a prior version. A type absent from this proposal
       // is absent from this draft — silently carrying a previous number
       // forward is how a stale price outlives the decision that made it.
+      //
+      // The lease term is part of the decision, not a default. A term that
+      // names none is refused here rather than stored as 12 — a stored 12 is
+      // a decision nobody made, and it publishes like one.
+      const months = Number(t.lease_term_months);
+      if (t.lease_term_months == null || !Number.isInteger(months) || months < 1 || months > 36) {
+        throw e("term_without_lease_term",
+          `Each term must name its lease term in whole months (1–36). The term for ${t.legacy_label || t.unit_type_id || "a unit type"} ` +
+          `named ${t.lease_term_months == null ? "none" : JSON.stringify(t.lease_term_months)}; 12 is not assumed. Nothing was saved.`, 400);
+      }
       await client.query(
         `insert into pricing_terms
            (pricing_version_id, property_id, unit_type_id, unit_type, lease_term_months,
             base_rent, renewal_rent, offer_state)
          values ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [versionId, property_id, t.unit_type_id, t.legacy_label || null,
-         t.lease_term_months || 12,
+         months,
          t.offer_state === "offered" ? t.base_rent : (t.base_rent ?? null),
          t.renewal_rent ?? null, t.offer_state || "offered"]);
     }

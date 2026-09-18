@@ -38,6 +38,62 @@ select u.id, v.label, 'residential'
  where u.unit_number = '3B'
    and not exists (select 1 from spaces s where s.unit_id = u.id and s.space_label = v.label);
 
+--  ── THE OPENING BASIS FOR THE BED ────────────────────────────────
+--  A bed nobody has established is not an offer: canonical availability
+--  refuses a position with no occupancy basis (occupancy_unknown), the Rent
+--  Roll refuses to bucket it and Ask Spine counts it not established.
+--  Until 2026-09-06 this fixture's Bed B read marketable only because the
+--  classifier never asked the prior question, and the tour → application
+--  → lease proof leaned on that. So the fixture now establishes what the
+--  proof needs, the way the product does: one confirmed vacancy for
+--  "3B|Bed B" under an established opening position, with the lineage a
+--  confirmation writes (import_source_rows.produced_unit_id /
+--  produced_space_id). The whole-unit placeholder beside the bed is
+--  deliberately left with no claim: a placeholder beside a real bed is an
+--  inventory inconsistency, and this fixture keeps it so the readers'
+--  refusal of it stays exercised. Invented figures; not Skyline's data.
+insert into import_batches (property_id, source_type, source_file, source_as_of_date, leasing_model, confidence, status)
+select p.id, 'rent_roll_ledger', 'skyline-e2e-fixture.csv', date '2026-07-31', 'bed', 'confirmed', 'committed'
+  from properties p
+ where p.name = 'Skyline E2E'
+   and not exists (select 1 from import_batches b where b.property_id = p.id and b.source_file = 'skyline-e2e-fixture.csv');
+
+insert into activations (property_id, status, source_as_of_date, import_batch_id, source_label)
+select p.id, 'activated', date '2026-07-31', b.id, 'skyline-e2e-fixture.csv'
+  from properties p
+  join import_batches b on b.property_id = p.id and b.source_file = 'skyline-e2e-fixture.csv'
+ where p.name = 'Skyline E2E'
+   and not exists (select 1 from activations a where a.import_batch_id = b.id);
+
+insert into import_source_rows (import_batch_id, row_index, raw, parse_note, produced_unit_id, produced_space_id)
+select b.id, 1, '{"unit_number":"3B","space_label":"Bed B","is_vacant":true}'::jsonb, 'fixture: confirmed vacancy', u.id, s.id
+  from properties p
+  join import_batches b on b.property_id = p.id and b.source_file = 'skyline-e2e-fixture.csv'
+  join units u on u.property_id = p.id and u.unit_number = '3B'
+  join spaces s on s.unit_id = u.id and s.space_label = 'Bed B'
+ where p.name = 'Skyline E2E'
+   and not exists (select 1 from import_source_rows r where r.import_batch_id = b.id and r.row_index = 1);
+
+insert into proposed_records (activation_id, property_id, module, target_type, natural_key, normalized_json, status, status_reason, import_source_row_id, confirmed_at)
+select a.id, p.id, 'leasing', 'lease', '3B|Bed B',
+       '{"section":"current","unit_number":"3B","space_label":"Bed B","is_vacant":true}'::jsonb,
+       'promoted', 'Fixture: confirmed as a vacant rentable position. No lease was created.', r.id, now()
+  from properties p
+  join import_batches b on b.property_id = p.id and b.source_file = 'skyline-e2e-fixture.csv'
+  join activations a on a.import_batch_id = b.id
+  join import_source_rows r on r.import_batch_id = b.id and r.row_index = 1
+ where p.name = 'Skyline E2E'
+   and not exists (select 1 from proposed_records pr where pr.activation_id = a.id and pr.natural_key = '3B|Bed B');
+
+insert into opening_tenancy_positions (property_id, activation_id, import_batch_id, as_of_date,
+        positions_established, positions_unresolved, source_rows_read, authority_basis, status)
+select p.id, a.id, b.id, date '2026-07-31', 1, 0, 1, 'fixture:property_fixture.sql', 'established'
+  from properties p
+  join import_batches b on b.property_id = p.id and b.source_file = 'skyline-e2e-fixture.csv'
+  join activations a on a.import_batch_id = b.id
+ where p.name = 'Skyline E2E'
+   and not exists (select 1 from opening_tenancy_positions o where o.activation_id = a.id);
+
 --  The operator the harness signs in as.
 insert into users (name, role, is_active, status, account_kind)
 select 'Mike Grivna', 'property_manager', true, 'active', 'human_staff'
@@ -74,5 +130,7 @@ update properties
 
 select 'property fixture' as fixture,
        (select count(*) from properties where name='Skyline E2E') as properties,
+       (select count(*) from opening_tenancy_positions o join properties p on p.id=o.property_id
+         where p.name='Skyline E2E' and o.status='established') as opening_positions,
        (select count(*) from spaces s join units u on u.id=s.unit_id
           join properties p on p.id=u.property_id and p.name='Skyline E2E') as spaces;

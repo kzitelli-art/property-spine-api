@@ -1,0 +1,46 @@
+{
+  "api_base": "139e6968f14bf43c944c3b2c2fdfd1a3535f6a4a",
+  "app_base": "8d1da846c7954036325afc0e30ea63e026f4c36c",
+  "files": [
+    {
+      "repo": "api",
+      "file": "src/leasing/leasing_occupancy_facts.js",
+      "sha256": "7cadb2ffc42e55f5bc627472f39bb8232f72334cddcb825a3cc5a46100927f8e"
+    },
+    {
+      "repo": "api",
+      "file": "src/surfaces/desks.js",
+      "sha256": "64baea93482150a654a33e0631a80b9e3346cc5475198f0ce854d4fb803c97c9"
+    },
+    {
+      "repo": "api",
+      "file": "tests/proofs/leasing_occupancy_retirement.db.js",
+      "sha256": "02750192adf0d4f230cb5723e470675428359353a20924593b882ae053c0087a"
+    },
+    {
+      "repo": "api",
+      "file": "tests/e2e/onboarding_review_local.js",
+      "sha256": "65b2eaa3a07cb23c9bd03538be4b8e6cd5cd0113058341f0447ce7bf77c2ab69"
+    },
+    {
+      "repo": "api",
+      "file": "tests/e2e/onboarding_review_local.ps1",
+      "sha256": "7c94c0a983c25645725443fdb91199feae02920964c3967aac6efcab5f86e0d4"
+    },
+    {
+      "repo": "api",
+      "file": "tests/e2e/verify_all.sh",
+      "sha256": "31c899e3d9115cae17eb9d726cb2178326852216af5f8b2f7350ce5a5f60e18e"
+    },
+    {
+      "repo": "app",
+      "file": "canonical_onboarding_review.browser.js",
+      "sha256": "c27c930842d3cdaf1e796d37d19690628c7e16dc7933ce3d239f38fcdb7a908f"
+    },
+    {
+      "repo": "app",
+      "file": "index.html",
+      "sha256": "2aa4ad9e03b9ff145f2fbb850251e8889448892db5c432df5ffbd75939bff1ba"
+    }
+  ]
+}

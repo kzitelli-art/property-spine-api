@@ -1,0 +1,14 @@
+{
+  "api": {
+    "head": "aef0d10372e110a86f28c0fb321ac4504642b44c",
+    "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "working_tree_clean": true,
+    "changed_file_sha256": {}
+  },
+  "app": {
+    "head": "0785cf8ea3e3344e53dcf3a77765021ca383a99b",
+    "tracked_diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "working_tree_clean": true,
+    "changed_file_sha256": {}
+  }
+}

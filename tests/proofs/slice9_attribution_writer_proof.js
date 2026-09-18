@@ -19,7 +19,7 @@ const path = require("path");
 const fs = require("fs");
 const { Pool } = require("pg");
 const REPO = path.resolve(__dirname, "..", "..");
-const { seedJourney } = require("./fixtures/slice9_journey_fixture");
+const { seedJourney } = require("../fixtures/slice9_journey_fixture");
 const A = require(path.join(REPO, "src/leasing/appointment_attribution"));
 
 let pass = 0, fail = 0;

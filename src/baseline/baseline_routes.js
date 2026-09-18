@@ -4,7 +4,17 @@
 const express = require("express");
 const propertyCreation = require("../identity/property_creation_service"); // Build 1A-1: THE property write
 
-module.exports = function baselineRoutes({ pool, spawnObligationFromEvent }) {
+module.exports = function baselineRoutes({ pool, spawnObligationFromEvent, staffSessions }) {
+  //  THE BINDING THIS FILE LOST WHEN IT WAS EXTRACTED. `POST /properties`
+  //  below resolves its actor through `staffSessions`, which server.js held
+  //  as a module-level constant; the extraction moved the route and not the
+  //  binding, so the name was undefined here. Its `try` caught the
+  //  ReferenceError and answered 500 where the route intends 401. The
+  //  resolver is now injected, and its absence fails at construction —
+  //  at boot, loudly — never at the first request.
+  if (!staffSessions || typeof staffSessions.resolveStaffSession !== "function") {
+    throw new Error("baselineRoutes requires staffSessions (the ONE session resolver): POST /properties records who created the property from it");
+  }
   const router = express.Router();
 // ── health: confirms server is up AND can reach the database ──
 //  ── WHAT EXACT CODE IS RUNNING ──────────────────────────────────────
@@ -39,8 +49,16 @@ router.get("/health", async (_req, res) => {
 
 //  The full record — including the untruncated commit — behind the
 //  operator gate, for anyone reconciling a deployment against a branch.
-router.get("/operator/build", (_req, res) => {
+//  The key gate in server.js skips /operator/* because every route there
+//  resolves its own staff session; this one must too, or it is public.
+router.get("/operator/build", async (req, res) => {
   res.set("Cache-Control", "no-store");
+  try {
+    const session = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+    if (!session) return res.status(401).json({ error: "No valid operator session. Sign in." });
+  } catch (e) {
+    return res.status(500).json({ error: "session resolution failed" });
+  }
   res.json({ build: buildIdentity() });
 });
 

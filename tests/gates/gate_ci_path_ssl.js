@@ -37,7 +37,11 @@ const ok = (label, cond, why) => {
 
 //  Comments are where this defect's history is written down, so a check
 //  that counted them would fail on the very files that explain it.
-const live = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+//  One alternation, not two chained replaces: a `/*` inside a `//`
+//  comment (server.js prose says `/operator/*`) would otherwise open a
+//  block comment that closes 569 lines later. See
+//  tests/unit/shared_conversational_path.test.js for the full account.
+const live = (src) => src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, "");
 
 console.log("\n── what the CI path executes ──");
 
