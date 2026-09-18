@@ -1,5 +1,37 @@
 # CURRENT STATE — what exists, and at what proof level
 
+## ⛔ CANONICAL INVENTORY — OWNER-DECLARED. DO NOT DERIVE, DO NOT ARGUE WITH IT.
+
+```text
+SKYLINE   (1417,      bed model)    160 beds   ·  72 units
+GREENERY  (1325-N-15, bed model)    105 beds   ·  64 units
+```
+
+**Declared by the owner, 2026-09-18.** These are the physical facts of the two
+live buildings. They are not a count Spine computed and they are not up for
+rederivation by a thread that found a different number in a comment, a fixture,
+an archive trace or a stale import.
+
+**Why this block exists.** Before it, Skyline's 160/72 appeared exactly ONCE in
+this file, inside a dated snapshot paragraph, and Greenery's counts appeared
+NOWHERE. So every thread re-derived them from whatever it happened to read
+first, got a different answer, and asked the owner again. That is the failure
+this file exists to end, and it had been happening on the single most important
+number in the product.
+
+**If a number you find disagrees with this block, the number is wrong.** Say so
+and fix it at the source; do not quietly adopt it and do not re-ask.
+
+⚠ ONE KNOWN DISAGREEMENT, UNFIXED: `src/surfaces/rent_roll_institutional.js`
+line 13 states *"ONE ROW PER CANONICAL RENTABLE POSITION — 283 positions, never
+the 386 imported source rows."* The 386 is real and traceable to Skyline's
+2026-08-16 import (`docs/archive/LEASING_CYCLE_AND_PACE_TRACE.md`: 385 live
+leases, all created that day, 384 of 386 typed `historical_snapshot`). **283 is
+not Skyline's position count and never was** — Skyline is 160. That comment
+names no property and should either name one or be marked illustrative. It is a
+comment, not runtime behaviour, so nothing computes from it.
+
+
 **September 16, 21:26 UTC — production property navigation and address presentation:** unchanged API `cd7279ebb23865f4e3e7f9c827dd4b5cc52d475f` remains live at schema 187/199; app `610439db2c7df6a1aad3a2e9dcf1fb26752b843d` is live at Render deployment `dep-dalgimbl550s73b6up1g`. The current property name and an explicit `All properties` action now open the existing server-authorized picker from Home and every desk; Home also exposes `Switch property`. Chooser addresses use one display formatter, so retained Skyline shorthand `1417 n 15 phily` presents as `1417 N 15th St, Philadelphia` and Greenery presents as `1325 N 15th St, Philadelphia`; the underlying property records are unchanged. The sanctioned app suite passed 72 harnesses / 2,427 assertions / 0 failures, the focused real-Chromium navigation proof passed 31/31, Render checked out the exact commit, and every served first-party asset byte-matched it. No property identity, access, inventory, pricing, lease, knowledge, provider, API or schema write occurred. See [release receipt](handoffs/new-hp/property-navigation-polish/RECEIPT.md).
 
 **September 16, 12:39 UTC — production property identity cleanup:** API `cd7279ebb23865f4e3e7f9c827dd4b5cc52d475f` is live at Render deployment `dep-dal8l9tg1s2s73eju130`; unchanged app `3607b3d5891a4a96b6b5183ead875b974863aef9` remains live. Exact full CI `35095230370` succeeded, `/health` identifies `cd7279e`, and production has 187 applied migrations through ceiling 199. Migration 199 adds the governed, immutable display-name command. The production chooser now distinguishes `Property Spine Demo — Solo Shape` from the one real `Solo on Chestnut`, and also shows `Skyline Apartments`, `Greenery Apartments`, and `Uno on Chestnut`. Skyline canonical identity is `1417`; Greenery is `1325-N-15`; registry model remains bed for both. Greenery operating `leasing_basis` remains honestly `unknown`. Real Chromium switched Skyline → Management and Greenery → Leasing through the server-authorized picker with no page errors; screenshots and element hit tests are retained. Existing KZ/Mike/John access was not changed. Whether KZ's demo assignment should remain visible is still an owner decision. See [production receipt](handoffs/new-hp/property-identity-cleanup/RECEIPT.md).
