@@ -39,6 +39,9 @@ const { spacePosition, loadSpaceRows, loadPersonNames, openingBaselineAsOf } =
   require("./space_position");
 //  Same imported predicate as the loader — the attrs read must describe the
 //  same row set, or a retired unit contributes attributes to nothing.
+//  "Today" for a dated read is the BUILDING's day (migration 123), not the
+//  server's UTC calendar day. See shared/property_timezone.js.
+const { propertyOperatingToday } = require("../shared/property_timezone");
 const { NOT_RETIRED_SQL, retiredExclusion } = require("./inventory_retirement");
 //  The interval question is a CLASSIFICATION, so it lives with every other
 //  classification — pure, beside classifyPosition, sharing rangesOverlap and
