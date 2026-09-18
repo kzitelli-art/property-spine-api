@@ -11,6 +11,11 @@ Student housing, leased **by the bed**, not by the unit. A unit is a physical
 apartment holding two or three bedrooms. The thing a resident signs for, pays
 for and lives in is one bed. Leases run an annual cycle starting 1 August.
 
+**THE RENT ROLL IS ALWAYS THE FULL UNIT AND BED MIX. It is a snapshot of
+exactly what exists.** Every bed is a row because the bed exists. Occupied,
+vacant, notice, down, model, staff unit — that is the row's STATE. It is never
+whether the row appears. Nothing is filtered out of a rent roll.
+
 **So the rent roll is 160 rows for Skyline and 105 rows for Greenery. Every
 month. That row count does not move unless the building is physically changed.**
 
