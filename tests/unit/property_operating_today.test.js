@@ -115,6 +115,38 @@ const poolWith = (tz) => ({ query: async () => ({ rows: [{ operating_timezone: t
     assert.equal(ymdInZone(TURNOVER_NIGHT, "Europe/Berlin"), "2026-08-02");
   });
 
+  await test("the canonical read actually EXECUTES the resolver, not just mentions it", async () => {
+    //  THIS TEST EXISTS BECAUSE THE ONE BELOW WAS NOT ENOUGH.
+    //
+    //  The source scan below passed for five commits against a
+    //  dated_positions.js that called propertyOperatingToday with NOTHING
+    //  IMPORTING IT. Every dated read threw ReferenceError on its first
+    //  real line, and a test asserting the string was present said so
+    //  cheerfully. A source scan proves a string exists; only running the
+    //  code proves the code runs.
+    //
+    //  So: drive the real datedPropertyPositions with a pool that answers
+    //  the timezone lookup and then throws a sentinel. Reaching the
+    //  sentinel proves control got PAST the call with the binding
+    //  resolved. A ReferenceError here is the regression.
+    const { datedPropertyPositions } = require("../../src/tenancy/dated_positions.js");
+    const SENTINEL = "PAST_THE_TIMEZONE_CALL";
+    const pool = {
+      query: async (text) => {
+        if (/operating_timezone/.test(text)) return { rows: [{ operating_timezone: "America/New_York" }] };
+        throw new Error(SENTINEL);
+      },
+    };
+    let caught = null;
+    try { await datedPropertyPositions(pool, { property_id: "p1" }); }
+    catch (e) { caught = e; }
+    assert.ok(caught, "the stub pool must stop the read somewhere");
+    assert.ok(!/is not defined/.test(caught.message),
+      `datedPropertyPositions cannot resolve its own imports: ${caught.message}`);
+    assert.equal(caught.message, SENTINEL,
+      "control must reach past the operating-day resolution");
+  });
+
   await test("the canonical dated reads no longer default to the UTC day", () => {
     //  SCOPE, stated: the two reads that answer "what is true now" for a
     //  property. Other surfaces have their own clocks and their own reasons.
