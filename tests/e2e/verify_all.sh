@@ -250,10 +250,15 @@ git worktree add --detach "$PARENT_WORKTREE" "$ONBOARDING_PARENT" >"$RUN_DIR/onb
 ln -s "$ROOT/node_modules" "$PARENT_WORKTREE/node_modules" || exit 1
 # The parent onboarding witnesses intentionally run against the exact physical
 # 197 claim index. The normal chain is already beyond 198 here, so reconstruct
-# that historical index/ledger state for the parent run. Temporarily remove the
-# later ledger entries as well: the canonical runner refuses a ledger whose
-# ceiling is 199 while 198 is missing. Restore the whole numbered suffix through
-# the migration runner immediately afterwards; do not hand-author successor DDL.
+# that historical index/ledger state for the parent run. Temporarily remove
+# every later ledger entry as well, whatever the chain has grown to since —
+# the canonical runner refuses a ledger with a gap below its ceiling (198
+# missing while a higher version sits at the top). Restore the whole numbered
+# suffix through the migration runner immediately afterwards; do not
+# hand-author successor DDL. This block was extended once already, 198→199
+# (commit 3b92d652); it now also covers 200 for the same reason — reuse this
+# same mechanism again the next time a migration lands above it, rather than
+# re-deriving one.
 step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
   do \$\$ begin
     if not exists (select 1 from schema_migrations where version='198' and name in ('proposed_source_claim_identity','198_proposed_source_claim_identity.sql')) then
@@ -267,8 +272,12 @@ step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR
                    and name in ('property_display_name_command','199_property_display_name_command.sql')) then
       raise exception 'expected numbered 199 ledger row before parent witness';
     end if;
+    if not exists (select 1 from schema_migrations where version='200'
+                   and name in ('unresolved_inquiry_evidence','200_unresolved_inquiry_evidence.sql')) then
+      raise exception 'expected numbered 200 ledger row before parent witness';
+    end if;
   end \$\$;
-  delete from schema_migrations where version in ('198','199');
+  delete from schema_migrations where version in ('198','199','200');
   drop index uq_proposed_natural;
   create unique index uq_proposed_natural
     on proposed_records (activation_id, target_type, natural_key)
@@ -277,7 +286,7 @@ step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR
 step "parent onboarding source defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_source.db.js
 step "parent onboarding lifecycle defect" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_lifecycle.db.js
 step "parent onboarding snapshot defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_snapshot.db.js
-step "restore numbered 198 and successor ledger" env DATABASE_URL="$E2E_DATABASE_URL" MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=197 node migrations/migrate.js --apply
+step "restore numbered 198-200 ledger" env DATABASE_URL="$E2E_DATABASE_URL" MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=197 node migrations/migrate.js --apply
 step "verify restored 198 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
   do \$\$ begin
     if not exists (select 1 from schema_migrations where version='198' and name in ('proposed_source_claim_identity','198_proposed_source_claim_identity.sql')) then
@@ -286,6 +295,10 @@ step "verify restored 198 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_S
     if not exists (select 1 from schema_migrations where version='199'
                    and name in ('property_display_name_command','199_property_display_name_command.sql')) then
       raise exception 'numbered 199 ledger row was not restored';
+    end if;
+    if not exists (select 1 from schema_migrations where version='200'
+                   and name in ('unresolved_inquiry_evidence','200_unresolved_inquiry_evidence.sql')) then
+      raise exception 'numbered 200 ledger row was not restored';
     end if;
     if (select pg_get_indexdef(i.indexrelid) from pg_index i
        where i.indexrelid=to_regclass('public.uq_proposed_natural')) is distinct from
