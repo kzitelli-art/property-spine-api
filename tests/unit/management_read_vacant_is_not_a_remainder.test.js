@@ -181,6 +181,69 @@ console.log("\n== an all-committed building reads 0% now and 100% upcoming, neve
     JSON.stringify((b.focus || []).map(f => f.kind)));
 }
 
+console.log("\n== the canonical occupancy rides alongside, and a disagreement is VISIBLE ==");
+{
+  /*  TWO DERIVATIONS — AND MEASURING THEM DISPROVED MY OWN FRAMING.
+   *
+   *  I expected a contradiction: this read counts `cur_lease_id` presence,
+   *  the canonical reader counts `tenancy_state`, so surely they disagree.
+   *  Measured on the governed Greenery establishment over real HTTP:
+   *
+   *      management-read   occupied 95
+   *      canonical         occupied 95   ->  agrees_with_canonical: true
+   *                        occupied_contractual 94
+   *                        occupied_terms_not_established 1
+   *
+   *  THEY AGREE on the coarse count. What I had called "a disagreement of
+   *  one bed" was me comparing `occupied` against `contractually_occupied`
+   *  — the exact category error `occupied != contractually occupied` names,
+   *  committed in my own description of the defect while fixing it
+   *  elsewhere. Recorded because it is the whole reason the truth wall
+   *  exists: the two words are so easy to slide between that they slid in
+   *  the sentence explaining why they must not.
+   *
+   *  So this is NOT a contradictory second definition. It is a MISSING
+   *  DISTINCTION: the surface had no contractual number at all. Row 142 measured the lender-facing report
+   *  already doing this correctly — it passes the canonical number through
+   *  under `confirmed_contractual_occupancy` and reports the coarser bucket
+   *  beside it under `positions_occupied_all_bases`. Same move here rather
+   *  than a new one: NO existing number changes, the canonical answer is
+   *  published beside it, and when the two disagree the payload SAYS SO
+   *  instead of leaving a reader to discover it.
+   *
+   *  A failed canonical read is `null` with a reason, never a silent
+   *  omission and never zero (§40.7: READ_FAILED is not NOT_ESTABLISHED).  */
+  const b = await read([LEASED("101"), COMMITTED("102"), OPEN("103")]);
+  const o = b.occupancy || {};
+  ok(Object.prototype.hasOwnProperty.call(o, "canonical"),
+    "the payload carries a `canonical` block, present or explicitly null", JSON.stringify(Object.keys(o)));
+  ok(Object.prototype.hasOwnProperty.call(o, "agrees_with_canonical"),
+    "and says whether the two derivations agree", JSON.stringify(Object.keys(o)));
+  //  The stub pool answers the canonical reader's queries with the same
+  //  space rows, which is not a canonical position set — so the read cannot
+  //  establish one. That must read as UNAVAILABLE with a reason, not as 0
+  //  and not as silent agreement.
+  ok(o.canonical === null || typeof o.canonical === "object",
+    "canonical is an object or null — never undefined", JSON.stringify(o.canonical));
+  //  Guarded so an ABSENT block reports red instead of throwing: a harness
+  //  error is a worse outcome than a failing assertion, because it stops the
+  //  remaining checks from running at all.
+  if (o.canonical === undefined) {
+    ok(false, "canonical block absent — nothing further can be checked", "undefined");
+  } else if (o.canonical === null) {
+    ok(typeof o.canonical_unavailable_reason === "string" && o.canonical_unavailable_reason.length > 0,
+      "an unavailable canonical read NAMES why, rather than disappearing", JSON.stringify(o.canonical_unavailable_reason));
+    ok(o.agrees_with_canonical === null,
+      "and agreement is null, not true — Spine did not compare anything (READ_FAILED is not agreement)",
+      JSON.stringify(o.agrees_with_canonical));
+  } else {
+    ok(typeof o.canonical.occupied_contractual === "number",
+      "a canonical block carries the contractual count", JSON.stringify(o.canonical));
+    ok(typeof o.agrees_with_canonical === "boolean",
+      "and agreement is a decided boolean", JSON.stringify(o.agrees_with_canonical));
+  }
+}
+
 console.log("\n== " + pass + " passed, " + fail + " failed ==\n");
 process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error("HARNESS ERROR:", e && e.stack || e); process.exit(2); });

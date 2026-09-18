@@ -39,6 +39,11 @@ module.exports = function managementRead(deps) {
   const router = express.Router();
   const { pool, spacePosition } = deps;
   const { leasingGrain, grainCountLabel } = require("../tenancy/leasing_grain");
+  /*  THE CANONICAL DATED READER, so this surface can publish the answer the
+   *  Rent Roll, the lender report and Ask Spine publish — rather than only
+   *  its own. See the `canonical` block below for why it rides alongside
+   *  instead of replacing the counts.  */
+  const { datedPropertyPositions, rentRollBuckets } = require("../tenancy/dated_positions");
   if (!pool) throw new Error("management_read requires a pool");
 
   router.get("/properties/:id/management-read", async (req, res) => {
@@ -168,6 +173,40 @@ module.exports = function managementRead(deps) {
           vacant++;
           vacantList.push({ unit: r.unit_number, market: Number(r.market_rent || 0) });
         }
+      }
+
+      /*  THE CANONICAL OCCUPANCY, read once, beside this surface's own.
+       *
+       *  Wrapped because a presentation layer must not become the thing that
+       *  decides a contract is broken: if the canonical read throws or the
+       *  property has no established positions, this block is null WITH A
+       *  REASON and the rest of the payload is served unchanged. Silently
+       *  omitting it, or substituting zeros, would be the worse failure —
+       *  `occupied: 0` reads as a building nobody lives in.                */
+      let canonicalOccupancy = null;
+      let canonicalReason = null;
+      try {
+        const dp = await datedPropertyPositions(pool, { property_id: req.params.id, as_of: null });
+        const positions = (dp && Array.isArray(dp.positions)) ? dp.positions : [];
+        if (!positions.length) {
+          canonicalReason = "no canonical rentable positions are established for this property";
+        } else {
+          const t = rentRollBuckets(positions);
+          canonicalOccupancy = {
+            as_of: dp.as_of || null,
+            rentable_positions: t.total,
+            occupied: t.occupied,
+            occupied_contractual: t.occupied_contractual,
+            occupied_terms_not_established: t.occupied_terms_not_established,
+            occupied_state_unknown: t.occupied_state_unknown,
+            open: t.open,
+            activation_pending: t.activation_pending,
+            needs_review: t.needs_review,
+            not_established: t.not_established,
+          };
+        }
+      } catch (e) {
+        canonicalReason = "the canonical dated read was unavailable: " + (e && e.message ? e.message : "unknown");
       }
 
       const revenueSpaces = totalSpaces - down - model;   // leasable
@@ -311,6 +350,42 @@ module.exports = function managementRead(deps) {
           //  Classified, not left over. occupied + committed + vacant +
           //  commercial + down + model === total_spaces, by construction.
           committed,
+          /*  ── TWO DERIVATIONS, AND THE DISAGREEMENT IS NOW VISIBLE ─────
+           *  (CURRENT_STATE 146; the pattern is row 142's, not a new one)
+           *
+           *  The counts above come from `cur_lease_id` presence, the canonical
+           *  reader from `tenancy_state`, so a contradiction looked certain.
+           *  Measured on the governed Greenery establishment over real HTTP:
+           *
+           *      here        occupied 95
+           *      canonical   occupied 95            -> they AGREE
+           *                  occupied_contractual 94
+           *                  occupied_terms_not_established 1
+           *
+           *  They agree on the coarse count. Describing the gap as "a
+           *  disagreement of one bed" was comparing `occupied` against
+           *  `contractually_occupied` — the very category error this whole
+           *  line of work exists to stop, made while making it. So row 138
+           *  item (3)'s "second definition" is really a MISSING DISTINCTION:
+           *  this surface had no contractual number at all.
+           *
+           *  The lender-facing report already solves this correctly and was
+           *  measured doing so (row 142): it passes the canonical number
+           *  through under a name that says CONFIRMED CONTRACTUAL and reports
+           *  the coarser bucket beside it under `positions_occupied_all_bases`.
+           *  Same move here. NO number above changes, so nothing that reads
+           *  this surface moves; the canonical answer is published beside it
+           *  and a disagreement is stated rather than discovered.
+           *
+           *  A failed or unestablished canonical read is `null` with a named
+           *  reason, and `agrees_with_canonical` is then `null` too — never
+           *  `true`, because Spine compared nothing. READ_FAILED is not
+           *  agreement and it is not NOT_ESTABLISHED (§40.7).            */
+          canonical: canonicalOccupancy,
+          canonical_unavailable_reason: canonicalOccupancy ? null : canonicalReason,
+          agrees_with_canonical: canonicalOccupancy
+            ? (canonicalOccupancy.occupied === occupied + commercial)
+            : null,
           leasable: revenueSpaces,
           total_spaces: totalSpaces,
           down, model,
