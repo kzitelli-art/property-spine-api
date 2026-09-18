@@ -190,6 +190,7 @@ step "terms attribution model boundary" node tests/unit/terms_attribution_model_
 step "leasing knowledge coverage" node tests/unit/leasing_knowledge_coverage.test.js
 step "prospect first response question grounding" node tests/unit/first_response_conversation.test.js
 step "leasing grain not established refuses" node tests/unit/leasing_grain_not_established.test.js
+step "property operating day is the building's" node tests/unit/property_operating_today.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
 step "institutional rent projection" node tests/unit/rent_roll_institutional_projection.test.js
 step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js

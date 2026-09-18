@@ -62,6 +62,52 @@ async function loadPropertyOperatingTimeZone(pool, propertyId) {
   return configured || resolvePropertyOperatingTimeZone(propertyId);
 }
 
+
+/*  ── WHAT "TODAY" MEANS FOR A BUILDING ──────────────────────────────
+ *  The canonical dated reads defaulted an absent as_of with
+ *
+ *      new Date().toISOString().slice(0, 10)
+ *
+ *  which is the UTC calendar day. UTC runs 4–5 hours ahead of
+ *  America/New_York, so from roughly 8pm Philadelphia time onward
+ *  "today's rent roll" silently answered for TOMORROW — across lease
+ *  commencements, expirations, notice dates and the August 1 turnover,
+ *  which is exactly when a student-housing building changes hands.
+ *
+ *  Migration 123 already records each property's operating timezone and
+ *  this module already resolves it. The dated reads simply never asked.
+ *
+ *  NOT A REFUSAL. An unconfigured property still gets an answer — the
+ *  UTC day, as before — but the answer now SAYS which basis produced it,
+ *  so "why does this read disagree with the board at 9pm" is answerable
+ *  instead of invisible. Refusing here would take today's rent roll away
+ *  from every property that has not set a zone, which is a bigger harm
+ *  than the one being fixed.  */
+function ymdInZone(instant, timeZone) {
+  //  en-CA formats as YYYY-MM-DD, which is the shape every date column
+  //  and every caller already expects.
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(instant);
+}
+
+/*  The operating date for one property, and the basis that produced it.
+ *    { date, basis: 'property_local' | 'utc_fallback', timezone }  */
+async function propertyOperatingToday(pool, propertyId, now = new Date()) {
+  let tz = null;
+  try { tz = await loadPropertyOperatingTimeZone(pool, propertyId); }
+  catch (_) { tz = null; }          //  a read that cannot resolve is not a crash
+  if (tz) {
+    try {
+      return { date: ymdInZone(now, tz), basis: "property_local", timezone: tz };
+    } catch (_) {
+      //  A stored zone Intl rejects is a data problem, not a reason to
+      //  fail the rent roll. Fall through and say the basis was UTC.
+    }
+  }
+  return { date: ymdInZone(now, "UTC"), basis: "utc_fallback", timezone: null };
+}
+
 // ONE vocabulary for an unconfigured property, so every surface refuses in the
 // same words instead of inventing its own phrasing.
 const TZ_UNAVAILABLE = Object.freeze({
@@ -72,5 +118,7 @@ const TZ_UNAVAILABLE = Object.freeze({
 module.exports = {
   resolvePropertyOperatingTimeZone,
   loadPropertyOperatingTimeZone,
+  propertyOperatingToday,
+  ymdInZone,
   TZ_UNAVAILABLE,
 };

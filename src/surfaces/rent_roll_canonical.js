@@ -59,10 +59,14 @@ const money = (n) => Math.round(Number(n || 0) * 100) / 100;
  *
  *  The rule now lives in one module with that measurement as its test.  */
 const { dateColumnToIso: isoDate } = require("../shared/date_column");
+const { propertyOperatingToday } = require("../shared/property_timezone");
 
 async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
   const dp = await datedPropertyPositions(pool, { property_id, as_of });
-  const today = new Date().toISOString().slice(0, 10);
+  //  The SAME clock the positions were read on. This compared dp.as_of to the
+  //  UTC day, so after ~8pm Philadelphia time a read genuinely of today was
+  //  judged historical and silently dropped every resident balance.
+  const today = (await propertyOperatingToday(pool, property_id)).date;
   const isToday = dp.as_of === today;
 
   // BALANCE — visible read-only context, owned by Money. Every correction,

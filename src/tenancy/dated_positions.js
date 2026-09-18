@@ -774,7 +774,18 @@ async function unattachedOpeningClaims(pool, baseline, rawPositions) {
 
 async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) {
   if (!property_id) throw new Error("datedPropertyPositions requires property_id");
-  const asOf = as_of || new Date().toISOString().slice(0, 10);
+  //  "TODAY" IS THE BUILDING'S DAY, NOT THE SERVER'S. This defaulted to
+  //  `new Date().toISOString().slice(0,10)` — the UTC calendar day — while
+  //  migration 123 had been recording each property's operating timezone
+  //  all along. UTC leads America/New_York by 4–5 hours, so from about 8pm
+  //  in Philadelphia the rent roll answered for TOMORROW: lease starts,
+  //  expirations, notice dates and the August 1 turnover all one day out.
+  //  An explicit as_of is untouched, and a property with no zone still gets
+  //  the UTC day — but the read now names which basis produced it.
+  const day = as_of
+    ? { date: as_of, basis: "explicit", timezone: null }
+    : await propertyOperatingToday(pool, property_id);
+  const asOf = day.date;
 
   const sp = await spacePosition(pool, { property_id, as_of: asOf });
 
@@ -930,6 +941,10 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
   return {
     property_id,
     as_of: asOf,
+    //  Which clock produced as_of, so a read that disagrees with the board
+    //  late in the evening is answerable rather than merely puzzling.
+    as_of_basis: day.basis,
+    as_of_timezone: day.timezone,
     count: positions.length,
     //  A READ THAT EXCLUDES ROWS SAYS SO. The loader drops retired
     //  inventory, and a silently shortened row set is the same defect class
