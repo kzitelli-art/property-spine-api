@@ -198,6 +198,13 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
       //  is a number that looks more precise than it is.
       rentable_positions: u.positions.length,
       occupied: t.occupied,
+      //  `occupied` is a COLLAPSING word: it holds both a position with
+      //  established contractual terms and one where somebody is there and
+      //  the terms are not established. Carried here so a unit that reads
+      //  "3 occupied" can say whether that means 3 leases (§40.5).
+      occupied_contractual: t.occupied_contractual,
+      occupied_terms_not_established: t.occupied_terms_not_established,
+      occupied_state_unknown: t.occupied_state_unknown,
       activation_pending: t.activation_pending,
       open: t.open,
       needs_review: t.needs_review,
@@ -267,6 +274,28 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
       units: units.length,
       rentable_positions: positions.length,
       occupied: totals.occupied,
+      /*  THE SPLIT INSIDE `occupied`, AND WHY IT IS NOT DECORATION.
+       *
+       *  CURRENT_STATE 134 and 138 recorded this read as "not a dated read"
+       *  because occupied stayed 95 at every as_of. The number was measured
+       *  right and the diagnosis was wrong: the read IS dated, and the two
+       *  sub-states always sum to 95, so the split moves while the total
+       *  does not. On the governed Greenery establishment —
+       *
+       *      2026-09-18   occupied 95 = 94 contractual +  1 without terms
+       *      2027-02-01   occupied 95 = 85 contractual + 10 without terms
+       *      2027-08-01   occupied 95 =  0 contractual + 95 without terms
+       *
+       *  — a reader at the last date was told 95 beds are occupied when
+       *  Spine cannot stand behind a single term on the building. True
+       *  number, wrong word. `occupied != contractually occupied` (§40.5).
+       *
+       *  `unknown` is a real answer, not padding: a projection that drops
+       *  `tenancy_state` lands there rather than being counted as having or
+       *  lacking terms, because either claim would be invented (§5).  */
+      occupied_contractual: totals.occupied_contractual,
+      occupied_terms_not_established: totals.occupied_terms_not_established,
+      occupied_state_unknown: totals.occupied_state_unknown,
       //  Committed and awaiting economic activation. Spoken for, and never
       //  Open — offering one of these to a prospect is the expensive
       //  mistake the subtraction used to make silently.

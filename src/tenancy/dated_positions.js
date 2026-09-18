@@ -562,7 +562,41 @@ const NOT_ESTABLISHED_LABEL = "Occupancy Unconfirmed";
 function rentRollBuckets(positions) {
   const t = { occupied: 0, activation_pending: 0, open: 0, needs_review: 0,
               not_established: 0, unclassified: 0,
-              established: 0, total: positions.length };
+              established: 0, total: positions.length,
+              /*  ── `occupied` IS A COLLAPSING WORD, SO THE COLLAPSE IS COUNTED ──
+               *  CURRENT_STATE 134 and 138 recorded that /operator/rent-roll/units
+               *  "is not a dated read" because it reports occupied 95 / open 10 at
+               *  every as_of. The numbers were right; THE DIAGNOSIS WAS WRONG, and
+               *  wrong in the most ordinary way — a frozen number looks exactly
+               *  like a read that ignores its date.
+               *
+               *  It is dated. Measured on the governed Greenery establishment:
+               *
+               *      as_of        occupied  contractual  terms_not_established
+               *      2026-09-18      95         94                1
+               *      2027-02-01      95         85               10
+               *      2027-08-01      95          0               95
+               *
+               *  The bucket sits at 95 because THE TWO SUB-STATES ALWAYS SUM TO 95.
+               *  The split moves; the total does not.
+               *
+               *  That is worse than a stale read, not better: it is a TRUE number
+               *  under a word that means something else. At 2027-08-01 not one
+               *  position has established contractual terms and the read says
+               *  "occupied: 95" — a lender is told the building is full when Spine
+               *  cannot stand behind a single term on it. §40.5's truth wall, in
+               *  the rent roll's own vocabulary:
+               *
+               *      occupied  !=  contractually occupied
+               *
+               *  So the coarse count is left EXACTLY as it was — every existing
+               *  consumer and total is unchanged — and the distinction it collapses
+               *  is tallied beside it from `tenancy_state`, a field the canonical
+               *  position already carries. This is still a tally of a recorded
+               *  decision, not a second interpreter.  */
+              occupied_contractual: 0,
+              occupied_terms_not_established: 0,
+              occupied_state_unknown: 0 };
   for (const p of positions) {
     /*  TALLY THE DECISION, do not re-make it. A caller may hand us the
      *  canonical positions or a surface's projection of them; either way
@@ -582,6 +616,23 @@ function rentRollBuckets(positions) {
     if (b === "occupied" || b === "activation_pending"
         || b === "open" || b === "needs_review") t[b]++;
     else t.unclassified++;
+
+    /*  Only describes the occupied ones, and never promotes or demotes: the
+     *  bucket above already decided, and a row whose recorded bucket
+     *  disagrees with its own tenancy_state keeps the bucket.
+     *
+     *  A projection that dropped `tenancy_state` counts as UNKNOWN, never as
+     *  zero. This is the hazard the comment above already records — the Rent
+     *  Roll once handed this function projected rows with `basis_state`
+     *  dropped — and "0 lack terms" is a claim the data cannot support (§5).
+     *  `notice` and any state a later build introduces are unknown here too,
+     *  rather than quietly contractual.  */
+    if (b === "occupied") {
+      const ts = p.tenancy_state;
+      if (ts === "contractually_occupied") t.occupied_contractual++;
+      else if (ts === "occupied_terms_not_established") t.occupied_terms_not_established++;
+      else t.occupied_state_unknown++;
+    }
   }
   return t;
 }

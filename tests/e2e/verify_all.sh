@@ -237,6 +237,7 @@ step "leasing grain not established refuses" node tests/unit/leasing_grain_not_e
 step "property operating day is the building's" node tests/unit/property_operating_today.test.js
 step "management-read reads the grain, never infers it" node tests/unit/management_read_grain_label.test.js
 step "a resident identifier is never a rent-roll status" node tests/unit/rent_roll_status_not_identity.test.js
+step "occupied is not contractually occupied" node tests/unit/rent_roll_occupied_is_not_contractual.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
 step "rent roll source totals reconcile" node tests/unit/rent_roll_source_totals.test.js
 step "institutional rent projection" node tests/unit/rent_roll_institutional_projection.test.js
