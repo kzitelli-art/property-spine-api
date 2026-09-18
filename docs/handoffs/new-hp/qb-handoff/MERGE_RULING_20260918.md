@@ -56,15 +56,26 @@ it is worse than a visible breakage because nothing looks wrong.
 
 1. **Compute the offset at merge time**, from the integration line's actual
    highest row — not from 110, which will move if another merge lands first.
-   Deployed rows 85-90 become `top+1 … top+6`.
+   Deployed rows 84-90 become `top+1 … top+7`.
 2. **Rewrite every reference inside the moved block by the same offset**, in all
    its spellings: `row N`, `Row N`, `ROW N`, `rows N-M`, `rows N–M` (en dash and
    hyphen both occur).
-3. **Do NOT offset a reference to a row ≤ 84.** Rows 1-84 are shared lineage and
-   still carry the same content in the integration line, so those references are
-   already correct. Row 90's `rows 84-89` is a range that **spans the boundary**
-   and cannot be offset mechanically — rewrite it as prose naming row 84 and the
-   moved range separately.
+3. **Do NOT offset a reference to a row ≤ 83. THE BOUNDARY IS 83, NOT 84 —
+   an earlier version of this rule said 84 and was wrong.** Corrected by
+   comparing content rather than trusting the number: row 83 is identical on
+   both lineages, but **row 84 is not**. The integration line's row 84 is the
+   production revert of the row-82 protection; the deployed line's row 84 is
+   the leasing context resolver. Two different rows that collided on one
+   number. So the deployed line's own block is **84-90, seven rows**, and
+   `rows 84-89` in its last row lies **wholly inside** the moved block — it
+   offsets with everything else, and the "spans the boundary" worry in the
+   earlier draft was an artifact of the wrong boundary, not a real hazard.
+
+   **The general lesson, which is the reusable part:** a row number is not an
+   identity. Two branches editing the same append-only table will reuse the
+   same next number for unrelated work, and the collision is invisible unless
+   you diff the row's *text*. Never establish a merge boundary from where the
+   numbers stop agreeing; establish it from where the content stops agreeing.
 4. **`ledger_rows 188` in row 90 is NOT a row reference.** It is a ledger row
    count (`ceiling 200 · ledger_rows 188 · column 1 · constraint 1 · index 1`).
    A regex sweep for `rows \d+` matches it. Leave it alone.
@@ -211,3 +222,71 @@ one edit apart in an access path. It touches who may do what, so it does **not**
 get merged on the strength of its commit subject. The owner reads that diff
 before it lands anywhere, per the standing note that the QB may not decide an
 authority change alone.
+
+---
+
+## EXECUTED — 2026-09-18, integration branch at `d202d632`
+
+Two merges landed on `claude/main-integration-20260918`, in this order and for
+this reason: the deployed line first, the ledger-ceiling fix second. That order
+is not arbitrary. The ledger branch never touches `CURRENT_STATE.md`, so putting
+the deployed line first confines the whole state-file argument to one commit and
+leaves the second merge conflict-free. Reversing them would have produced the
+same conflict twice.
+
+**`7eb6b76a` — deployed line, `claude/leasing-context-resolver-20260916 @ 628ca1f5`.**
+The head moved from `9f92af41` while this ruling was being written, so the merge
+was re-planned against the new head rather than the one the dry run used. That
+mattered: `628ca1f5` is docs-only and its whole content is the leasing thread
+rewriting those eleven cross-references to read **by date and subject** — "the
+2026-09-17 retention row" — which made part 2 of the rule above almost entirely
+unnecessary. Two numeric references survived, both in the moved block, and were
+offset with it. Rows 84-90 became 111-117; the state gate reads 117 rows,
+numbered 1..117, no gaps or duplicates.
+
+The app pin moved forward to `2e8199a`. Checked in the app repo before adopting
+rather than inferred from the branch name: `312a999` is an ancestor of
+`2e8199a`, so the pin gained two commits and dropped none.
+
+**`d202d632` — ledger-ceiling fix, `claude/ci-ledger-200-20260918 @ 31caeede`.**
+Conflict-free as predicted. Both fixed sites were re-read after the auto-merge
+instead of being trusted: no hardcoded successor version survives in either, and
+`EXPECTED_LEDGER_CEILING=197` in the restore step is correct **by derivation** —
+the block deletes 198 upward, so 197 is what the ledger reads at that instant.
+
+**THE MUST-REPEAT CHECK, REPEATED.** `statusLabel` in
+`src/surfaces/rent_roll_institutional.js` auto-merged with no conflict, which is
+exactly the case this ruling flagged as dangerous. Re-read on the real merge: it
+still opens with `if (r.bucket == null) return "Occupancy Unconfirmed"`, so a bed
+with no established basis is still named as unconfirmed on the lender surface
+instead of inheriting a bucket label. The deployed lineage had that guard
+*second*, where it never ran. Nothing was reintroduced.
+
+**WHAT THE BRANCH NOW CONTAINS, verified by ancestry rather than asserted.**
+Production `ecfc9af4` is an ancestor. So is github `main` (`ed66d65a`). Those two
+facts together are the point of the morning fast-forward: **`main` has never
+carried production.** The deployed line was released to Render without ever
+being merged, so the fast-forward is what finally makes `main` a superset of
+what is live, rather than a branch that quietly lags it.
+
+Gates run bare with exit codes read, on the final tree: current-state 8/8,
+ask-spine readers 161/161, source governance 59/59, migration release gate
+33/33.
+
+## STILL THE OWNER'S — two glances this session cannot make
+
+Both were asked for and neither is refusable by a session under these standing
+constraints, so they are named rather than quietly dropped.
+
+1. **Confirm the app service serves `2e8199a`.** Not verifiable from here, and
+   not merely for lack of permission: a static site exposes no build identity,
+   so there is nothing to read even with access. The Render dashboard's deployed
+   commit for the static site is the only direct answer. There *is* a harness
+   that would settle it byte-for-byte if the host were reachable — the app repo's
+   served-asset check at `595e8653`, which diffs served bytes against the git
+   blob for a pinned commit — but the proxy refuses the production origin, and a
+   production read is outside what this session may do.
+2. **The Skyline carrier test.** Needs the Twilio console. A configured line is
+   still no evidence of provider control, registration, consent or arrival, and
+   nothing in this merge changes that: delivery remains the untested edge.
+
