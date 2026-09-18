@@ -236,6 +236,7 @@ step "prospect first response question grounding" node tests/unit/first_response
 step "leasing grain not established refuses" node tests/unit/leasing_grain_not_established.test.js
 step "property operating day is the building's" node tests/unit/property_operating_today.test.js
 step "management-read reads the grain, never infers it" node tests/unit/management_read_grain_label.test.js
+step "management-read vacancy is a classification, not a remainder" node tests/unit/management_read_vacant_is_not_a_remainder.test.js
 step "a resident identifier is never a rent-roll status" node tests/unit/rent_roll_status_not_identity.test.js
 step "occupied is not contractually occupied" node tests/unit/rent_roll_occupied_is_not_contractual.test.js
 #  Found unregistered while working row 143: DB-free, green, and it guards

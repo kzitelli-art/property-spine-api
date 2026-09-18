@@ -108,6 +108,23 @@ module.exports = function managementRead(deps) {
       // ── classify each space ──
       const NON_REV_LABEL = /model|down|offline/i;
       let occupied = 0, vacant = 0, commercial = 0, down = 0, model = 0;
+      /*  COMMITTED IS A CLASSIFICATION, BECAUSE VACANT MUST NOT BE A
+       *  REMAINDER (§42, CURRENT_STATE 146).
+       *
+       *  This loop used to end `else { vacant++; vacantList.push(...) }`, so
+       *  every space that was not detectably occupied became vacant — which
+       *  is the subtraction the canonical reader was corrected for, in its own
+       *  words: "That subtraction was the defect: it swept committed,
+       *  contested and unreconciled beds into Open because they were not
+       *  Occupied."
+       *
+       *  A bed with a future lease and no current one is SPOKEN FOR. Counting
+       *  it vacant put it in the "Empty beds are the fastest revenue to
+       *  recover" card and added its market rent to the money that card says
+       *  is recoverable — pointing an operator at beds somebody has already
+       *  signed for. An all-committed building raised that card with every
+       *  bed in it.  */
+      let committed = 0;
       let currentRentRoll = 0;          // sum of actual rent on current (occupied) leases
       let marketIfFull = 0;             // sum of market rent across all revenue spaces
       const balances = [];              // {unit, tenant, balance}
@@ -143,6 +160,10 @@ module.exports = function managementRead(deps) {
           occupied++;
           currentRentRoll += Number(r.cur_rent || 0);
           if (Number(r.cur_balance || 0) !== 0) balances.push({ unit: r.unit_number, tenant: r.cur_tenant || "—", balance: Number(r.cur_balance) });
+        } else if (r.fut_lease_id) {
+          //  Spoken for and not yet in. Never Open, never in the vacancy
+          //  card, and never in the recoverable-rent total.
+          committed++;
         } else {
           vacant++;
           vacantList.push({ unit: r.unit_number, market: Number(r.market_rent || 0) });
@@ -287,6 +308,9 @@ module.exports = function managementRead(deps) {
           residential_occupied: occupied,
           commercial,
           vacant,
+          //  Classified, not left over. occupied + committed + vacant +
+          //  commercial + down + model === total_spaces, by construction.
+          committed,
           leasable: revenueSpaces,
           total_spaces: totalSpaces,
           down, model,
