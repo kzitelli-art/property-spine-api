@@ -13,11 +13,24 @@
 //       upcoming:  { future_leases, preleasing_pct, risk:{level,reason} },
 //       noi: { trailing:null, trending:null, missing_source },
 //       focus: [ ranked alerts by dollars/lost-revenue/urgency ],
-//       basis: 'bed'|'unit'
+//       basis: 'bed'|'unit'|null, basis_state, unit_label
 //     }
 //
-// Leasing model is inferred from the data: if a unit has >1 space, it's
-// by-bed; else by-unit. (Matches how the snapshot wrote it.)
+// LEASING GRAIN IS READ, NOT INFERRED. This file used to compute
+//   const basis = maxSpaces > 1 ? "bed" : "unit";
+// which is the guess migration 026 created 'unknown' to prevent — "instead
+// of silently guessing from row patterns". A by-the-bed building whose beds
+// are not materialized yet has maxSpaces === 1, so it was labelled "units"
+// in contradiction of its own properties.leasing_basis, with nothing saying
+// so. The grain now comes from the property, and when the property has not
+// answered, this read SAYS SO (basis null, basis_state
+// 'not_established', unit_label 'spaces') rather than picking a noun.
+//
+// The counts themselves are counts of SPACES and always were — no total,
+// percentage or classification in this file depends on the basis. Only the
+// noun did. So this is a labelling correction, not an occupancy change, and
+// it deliberately does NOT refuse the read: the space counts are true
+// whether or not anybody has declared what a leasable position is here.
 // lease_status: 'active' = current, 'pending' = future, 'commercial' = comm.
 // ============================================================
 
@@ -25,6 +38,7 @@ module.exports = function managementRead(deps) {
   const express = require("express");
   const router = express.Router();
   const { pool, spacePosition } = deps;
+  const { leasingGrain, grainCountLabel } = require("../tenancy/leasing_grain");
   if (!pool) throw new Error("management_read requires a pool");
 
   router.get("/properties/:id/management-read", async (req, res) => {
@@ -75,12 +89,21 @@ module.exports = function managementRead(deps) {
         });
       }
 
-      // ── infer basis: by-bed if any unit has >1 space ──
-      const spacesPerUnit = new Map();
-      for (const r of rows) spacesPerUnit.set(r.unit_id, (spacesPerUnit.get(r.unit_id) || 0) + 1);
-      const maxSpaces = Math.max(...spacesPerUnit.values());
-      const basis = maxSpaces > 1 ? "bed" : "unit";
-      const unitLabel = basis === "bed" ? "beds" : "units";
+      /*  ── GRAIN IS THE PROPERTY'S ANSWER, NOT A PATTERN IN THE ROWS ──
+       *  What stood here was
+       *      const basis = maxSpaces > 1 ? "bed" : "unit";
+       *  a guess from row shape, which is the one thing migration 026
+       *  wrote 'unknown' to stop. It could contradict the property's own
+       *  declared basis and could never say "not established". Reading the
+       *  column costs one query and makes this route agree with every
+       *  other reader of the grain (src/tenancy/leasing_grain.js). */
+      const basisRow = (await client.query(
+        `select leasing_basis from properties where id = $1`, [propertyId])).rows[0];
+      const basis = leasingGrain(basisRow && basisRow.leasing_basis);
+      const basisState = basis ? "declared" : "not_established";
+      //  'spaces' when nobody has answered. Not a softer 'units' — the
+      //  honest noun for a count whose position meaning is undeclared.
+      const unitLabel = grainCountLabel(basis);
 
       // ── classify each space ──
       const NON_REV_LABEL = /model|down|offline/i;
@@ -248,6 +271,13 @@ module.exports = function managementRead(deps) {
         property_id: propertyId,
         has_data: true,
         basis,
+        //  basis_state distinguishes "the property declared this" from "nobody
+        //  has answered, so the noun below is 'spaces'". A consumer that reads
+        //  `basis` alone must not treat null as 'unit'.
+        basis_state: basisState,
+        basis_receipt: basis ? null
+          : "This property has not been established as leasing by bed or by unit, "
+          + "so these are counts of spaces. Choose the property grain to count beds or units.",
         position_status,
         position_exceptions,
         unit_label: unitLabel,

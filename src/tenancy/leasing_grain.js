@@ -82,10 +82,30 @@ function resolveLeasingGrain({ supplied = null, property = null } = {}) {
   return leasingGrain(supplied) || leasingGrain(property) || null;
 }
 
+/*  What a COUNT of positions is called, in the operator's words. Three
+ *  answers, because the column has three states and a count over an
+ *  unestablished grain is a count of spaces and nothing more. 'spaces' is
+ *  not a softer 'units' — it is the honest noun for "we have rows but
+ *  nobody has said what a leasable position IS here", which is exactly
+ *  what migration 026 refused to let the system guess from row patterns.
+ *
+ *  This exists because /management-read inferred the noun instead:
+ *      const basis = maxSpaces > 1 ? "bed" : "unit";
+ *  A by-the-bed building whose beds are not materialized yet reads
+ *  maxSpaces === 1 and gets labelled "units", contradicting its own
+ *  properties.leasing_basis with nothing anywhere saying so. */
+function grainCountLabel(grain) {
+  const g = leasingGrain(grain);
+  if (g === "bed") return "beds";
+  if (g === "unit") return "units";
+  return "spaces";
+}
+
 module.exports = {
   ESTABLISHED_GRAINS,
   GRAIN_NOT_ESTABLISHED,
   GRAIN_REFUSAL_MESSAGE,
   leasingGrain,
   resolveLeasingGrain,
+  grainCountLabel,
 };
