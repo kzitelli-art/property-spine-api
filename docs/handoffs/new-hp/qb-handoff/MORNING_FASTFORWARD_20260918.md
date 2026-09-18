@@ -15,9 +15,23 @@ git push origin main
 `--ff-only` is deliberate: if it refuses, something landed on `main` after this
 was prepared and the refusal is the signal to re-read rather than force.
 
-Head: `31342910` · **CI run 670 green** on `f81b8278`, which carries every
-product change below; `5c22b604` and `31342910` on top of it are documentation
-only.
+**CI runs 670, 671 and 672 all green**, covering every commit on this branch
+that existed when the runs fired: 670 on `f81b8278`, which carries every
+product change below, then 671 and 672 on the two documentation commits above
+it.
+
+Two commits are therefore not named by a run here — this file's own commit, and
+the one that added this sentence. Both are documentation on top of a green
+tree, and their runs appear as 673 and higher on this branch. Recording a CI
+result is itself a commit, so that regress has no end; better to say where it
+stops than to imply total coverage.
+
+Read the head from git rather than from this line, which any later commit makes
+stale:
+
+```bash
+git rev-parse --short origin/claude/main-integration-20260918
+```
 
 ## Why this fast-forward matters more than the usual one
 
