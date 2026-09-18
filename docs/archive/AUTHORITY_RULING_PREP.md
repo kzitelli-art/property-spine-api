@@ -25,7 +25,7 @@ authority grant is not a weaker grant, it is an invalid one that looks fine.
 | 6 | `no_silent_overwrite` | a conflicting assignment or in-window grant exists |
 | 7 | `person_is_not_a_counterparty` | lead/applicant/tenant/resident/vendor, **or used as a demo tenant** |
 | 8 | `effective_window_valid` | a grant without a start |
-| 9 | `reviewed_and_not_name_based` | no named reviewer, no reason |
+| 9 | `reviewed_by_distinct_authorized_human` | no reason; reviewer is missing, self-reviewing, unclassified, not active staff for the property, or lacks `may_manage_concession_authority` |
 
 **Staffness is a governed fact, not a name.** `person_contexts.context_type =
 'staff'` is the marker written when a human classifies someone. Every genuine

@@ -1,0 +1,51 @@
+GREEN — same lane, after the change. Owned nonce database (name scrubbed), ledger 198.
+current_rent_roll_reconciliation.db.js: 78 passed, 0 failed (63 original unchanged + 15 new in section I)
+
+
+=== Demo Building · basis=unknown · as_of 2026-09-14 ===
+  TENANCY   {"contractually_occupied":0,"vacant":0,"occupied_terms_not_established":0,"unresolved":0,"activation_pending":0,"contested":0,"total":0}
+  buckets sum 0 vs total 0   BALANCES
+  trusted   null positions 0
+  claimed_rent_unverified null count 0
+  first contested claim dates: (none)
+  tenancy_state counts {}
+
+=== Skyline E2E · basis=unknown · as_of 2026-09-14 ===
+  TENANCY   {"contractually_occupied":0,"vacant":1,"occupied_terms_not_established":0,"unresolved":1,"activation_pending":0,"contested":0,"total":2}
+  buckets sum 2 vs total 2   BALANCES
+  trusted   null positions 0
+  claimed_rent_unverified null count 0
+  first contested claim dates: (none)
+  tenancy_state counts {"unresolved":1,"vacant":1}
+
+=== CRR_<nonce> skyline · basis=bed · as_of 2026-09-14 ===
+  TENANCY   {"contractually_occupied":0,"vacant":0,"occupied_terms_not_established":0,"unresolved":160,"activation_pending":0,"contested":0,"total":160}
+  buckets sum 160 vs total 160   BALANCES
+  trusted   null positions 0
+  claimed_rent_unverified null count 0
+  first contested claim dates: (none)
+  tenancy_state counts {"unresolved":160}
+
+=== CRR_<nonce> other · basis=unit · as_of 2026-09-14 ===
+  TENANCY   {"contractually_occupied":0,"vacant":0,"occupied_terms_not_established":0,"unresolved":3,"activation_pending":0,"contested":0,"total":3}
+  buckets sum 3 vs total 3   BALANCES
+  trusted   null positions 0
+  claimed_rent_unverified null count 0
+  first contested claim dates: (none)
+  tenancy_state counts {"unresolved":3}
+
+=== CRR_<nonce> skyline · basis=bed · as_of 2026-09-14 ===
+  TENANCY   {"contractually_occupied":31,"vacant":0,"occupied_terms_not_established":92,"unresolved":10,"activation_pending":14,"contested":13,"total":160}
+  buckets sum 160 vs total 160   BALANCES
+  trusted   26350 positions 31
+  claimed_rent_unverified 78200 count 92
+  first contested claim dates: {"start":"2026-08-01","end":"2027-07-26"}
+  tenancy_state counts {"contractually_occupied":31,"contested":13,"occupied_terms_not_established":92,"activation_pending":14,"unresolved":10}
+
+=== CRR_<nonce> other · basis=unit · as_of 2026-09-14 ===
+  TENANCY   {"contractually_occupied":1,"vacant":1,"occupied_terms_not_established":1,"unresolved":0,"activation_pending":0,"contested":0,"total":3}
+  buckets sum 3 vs total 3   BALANCES
+  trusted   1200 positions 1
+  claimed_rent_unverified 1150 count 1
+  first contested claim dates: (none)
+  tenancy_state counts {"contractually_occupied":1,"occupied_terms_not_established":1,"vacant":1}

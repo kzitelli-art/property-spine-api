@@ -133,6 +133,62 @@ function marketingState(p, liveOk) {
     return { state: "turnover_required", reason: "turnover_in_progress" };
 
   // ══════════════════════════════════════════════════════════════════
+  //  OCCUPANCY BASIS — THE PRIOR QUESTION, ASKED BEFORE ANY OFFER
+  //
+  //  Everything above this line is a fact Spine HOLDS about the position:
+  //  a contest, a lease, a commitment, possession, a turn in progress.
+  //  Everything below is what a position with none of those may be
+  //  offered as. That step is only valid when Spine has an ESTABLISHED
+  //  occupancy basis for the position (dated_positions.positionBasis).
+  //
+  //  `not_established` is not a fifth tenancy state. It is the statement
+  //  that Spine cannot say whether anyone lives here — no accepted opening
+  //  claim, no lease, no possession. The Rent Roll already refuses to
+  //  bucket such a position (rentRollBucketOf: "no basis, no bucket") and
+  //  Ask Spine counts it as not_established. This classifier did neither:
+  //  a bed no source ever established, a configured use type and no
+  //  turnover row fell through to `marketable_now`. Exercised through real
+  //  HTTP on 2026-09-06: two rooms under a historical bare-unit vacancy
+  //  claim read Ask open=0 and canonical marketable_now=2. Offering a room
+  //  Spine cannot establish is the confident-wrong answer in its purest
+  //  form (§5), and the read that could have caught it was silent because
+  //  cross-surface checks summed states without asking about the basis.
+  //
+  //  Two silences, kept apart (§40.7): NO basis at all, versus an opening
+  //  claim that reached the reader and could not be reconciled to this
+  //  bed. Neither is absence of tenancy; neither is an offer.
+  //
+  //  Deliberately STRICT: a position that does not carry an established
+  //  basis is unknown, whether the field says so or is missing. A caller
+  //  that built a position without asking the prior question has not
+  //  answered it.
+  //
+  //  Deliberately BELOW the operative-lease, commitment, possession and
+  //  turnover guards: a weak or missing opening claim never hides an
+  //  authoritative lease or a commitment Spine holds. Deliberately ABOVE
+  //  the triage overlay and the use-type guards: a certification settles
+  //  physical readiness and nothing else, and a use type is configuration,
+  //  not occupancy. Neither may turn an unknown into an offer.
+  // ══════════════════════════════════════════════════════════════════
+  if (p.basis_state !== "established")
+    return { state: "occupancy_unknown", reason: "no_established_occupancy_basis" };
+  if (p.evidence_state === "unreconciled")
+    return { state: "evidence_unreconciled", reason: "opening_position_unreconciled" };
+
+  //  AN ACCEPTED OPENING CLAIM THAT SAYS OCCUPIED, WITH NO OPERATIVE LEASE.
+  //  The dated position classifies it as evidence_state 'uncorroborated'
+  //  (dated_positions.evidenceState); the Rent Roll buckets it occupied and
+  //  standing counts it occupied. Consumed here so it cannot fall through to
+  //  marketable_now (tests/proofs/availability_uncorroborated_claim.db.js).
+  //  Uncorroborated is not contradictory: `disagrees` keeps its own state
+  //  above. The claim supports treating the position as occupied; nothing
+  //  supports an offer, so the state is `occupied` and the reason names the
+  //  basis. Below the lease, commitment, possession, turnover, unknown-basis
+  //  and unreconciled guards; above the triage overlay.
+  if (p.evidence_state === "uncorroborated")
+    return { state: "occupied", reason: "opening_claim_occupied_uncorroborated" };
+
+  // ══════════════════════════════════════════════════════════════════
   //  BUILD 1 TRIAGE OVERLAY — SCOPED TO TRIAGE EVIDENCE, NOTHING ELSE
   //
   //  THIS PROTECTS THE NEW SLICE. IT DOES NOT REPAIR THE HISTORICAL
@@ -234,6 +290,13 @@ function availableFrom(p, state, asOf) {
     return { available_from: asOf, availability_confidence: "confirmed", blocking_fact: null };
   }
   if (state === "upcoming") {
+    if (p.turnover && p.turnover.expected_ready_date) {
+      return {
+        available_from: ymd(p.turnover.expected_ready_date),
+        availability_confidence: "expected",
+        blocking_fact: "turnover_plan_in_progress",
+      };
+    }
     // Notice gives a governed move-out date. What happens between move-out
     // and marketable is the turn, and its duration is not governed.
     const d = p.available_from || (p.lease ? p.lease.end_date : null);
@@ -244,6 +307,13 @@ function availableFrom(p, state, asOf) {
     };
   }
   if (state === "turnover_required") {
+    if (p.turnover && p.turnover.expected_ready_date) {
+      return {
+        available_from: ymd(p.turnover.expected_ready_date),
+        availability_confidence: "expected",
+        blocking_fact: "turnover_in_progress",
+      };
+    }
     return { available_from: null, availability_confidence: "incomplete", blocking_fact: "turnover_completion_not_scheduled" };
   }
   // Both BUILD 1 states refuse a date, for different honest reasons: one has
@@ -265,12 +335,21 @@ function availableFrom(p, state, asOf) {
         : "detailed_inspection_not_completed",
     };
   }
+  //  Neither silence carries a date. An unknown is not "available later";
+  //  it is a question a person has to answer before any date exists.
+  if (state === "occupancy_unknown") {
+    return { available_from: null, availability_confidence: "incomplete", blocking_fact: "occupancy_basis_not_established" };
+  }
+  if (state === "evidence_unreconciled") {
+    return { available_from: null, availability_confidence: "incomplete", blocking_fact: "opening_evidence_unreconciled" };
+  }
   if (state === "occupied") {
     const d = p.lease ? ymd(p.lease.end_date) : null;
     return {
       available_from: null,   // an expiration is not an availability date
       availability_confidence: "incomplete",
-      blocking_fact: d ? "lease_runs_to_" + d : "no_lease_end_date",
+      blocking_fact: d ? "lease_runs_to_" + d
+        : (p.evidence_state === "uncorroborated" ? "opening_claim_occupied_uncorroborated" : "no_lease_end_date"),
     };
   }
   return { available_from: null, availability_confidence: "incomplete", blocking_fact: "position_not_available" };
@@ -281,6 +360,8 @@ const HUMAN = {
   down: "Out of service",
   not_marketable_use: "Not marketable in its current operating designation",
   evidence_disagrees: "Occupancy evidence disagrees — confirm whether this is occupied",
+  occupancy_unknown: "Occupancy not established — confirm whether this position is empty before it is marketed",
+  evidence_unreconciled: "Opening evidence unresolved — reconcile the source rows for this position",
   successor_locked: "Committed to a future resident",
   successor_pending: "Successor pending — not yet executed and funded",
   occupied: "Occupied",
@@ -294,6 +375,34 @@ const HUMAN = {
   marketable_now: "Marketable now",
   unavailable: "Live read failed",
 };
+
+// ── THE READINESS AXIS, FROM ITS OWNERS ───────────────────────────────
+//  The classifier's `physical_readiness` says `turning` when a turn is in
+//  progress and `ready` otherwise — "ready" meaning no turn is open, not
+//  that anyone looked. Every availability row relayed that default, so a
+//  unit this same read called not_ready_confirmed or readiness_unknown
+//  still said `physical_readiness: ready`, and a unit nobody ever walked,
+//  or whose certification was revoked, read "Ready" on the page (observed
+//  2026-09-06, tests/proofs/availability_readiness_axis.db.js).
+//
+//  Readiness has owners, and this read already loads them per unit: a live
+//  certification (BUILD 4), a confirmed triage (BUILD 1, deriveReadiness),
+//  an assigned-but-unfinished walk, a turn in progress. The row now says
+//  what they say, and names which one answered. Where none has spoken the
+//  honest answer is `unknown` — the same answer deriveReadiness gives with
+//  no confirmation, and the same label the unit-turn read already shows.
+//
+//  THIS CHANGES NO OFFER. marketing_state is decided above, exactly as
+//  before; whether a never-walked or revoked unit should still be offered
+//  is a product ruling and is recorded as one, not taken here.
+function readinessAxis(p) {
+  if (p.physical_readiness === "turning") return { physical_readiness: "turning", readiness_basis: "turnover_in_progress" };
+  const t = p.triage;
+  if (t && t.certified_ready) return { physical_readiness: "ready", readiness_basis: "certification" };
+  if (t && t.pending_walk) return { physical_readiness: "unknown", readiness_basis: "walk_assigned_not_done" };
+  if (t && t.readiness) return { physical_readiness: t.readiness, readiness_basis: "initial_triage" };
+  return { physical_readiness: "unknown", readiness_basis: "none" };
+}
 
 async function availabilityRead(pool, { property_id, as_of = null, horizon_days = 90 } = {}) {
   const dp = await datedPropertyPositions(pool, { property_id, as_of });
@@ -410,11 +519,40 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
   const horizonEnd = new Date(new Date(`${asOf}T00:00:00Z`).getTime() + horizon_days * 86400000)
     .toISOString().slice(0, 10);
 
+  // The active turn plan is the only place a future ready date can be governed.
+  // A lease expiration by itself cannot stand in for this operating commitment.
+  const turnoverByUnit = new Map((await pool.query(
+    `select distinct on (t.unit_id)
+            t.unit_id, t.id as turnover_id, t.ready_date as expected_ready_date,
+            t.outgoing_lease_id, l.end_date as outgoing_lease_end_date,
+            l.space_id as outgoing_space_id
+       from turnovers t
+       left join leases l on l.id = t.outgoing_lease_id and l.property_id = t.property_id
+         and exists (select 1 from spaces ls where ls.id = l.space_id and ls.unit_id = t.unit_id)
+      where t.property_id = $1 and t.status = 'in_progress' and t.unit_id is not null
+      order by t.unit_id, t.created_at desc, t.id desc`,
+    [property_id]
+  )).rows.map((r) => [String(r.unit_id), r]));
+
+  const unitPositionCounts = new Map();
+  for (const p of dp.positions) {
+    const key = String(p.unit_id);
+    unitPositionCounts.set(key, (unitPositionCounts.get(key) || 0) + 1);
+  }
   const rows = dp.positions.map((p) => {
+    const unitTurn = turnoverByUnit.get(String(p.unit_id));
+    // A unit holds the turn, but an outgoing lease names its exact home.
+    // Its expected date cannot certify a sibling's future availability.
+    // A legacy turn without an outgoing lease retains only the unambiguous
+    // whole-unit meaning. Missing scope in shared housing stays unknown.
+    const turnApplies = unitTurn && (unitTurn.outgoing_lease_id
+      ? String(unitTurn.outgoing_space_id) === String(p.space_id)
+      : unitPositionCounts.get(String(p.unit_id)) === 1 && p.position_kind === 'unit');
     const withOps = {
       ...p,
       operating_use: ops.get(String(p.space_id)) || null,
       triage: triageByUnit.get(String(p.unit_id)) || null,
+      turnover: turnApplies ? unitTurn : null,
     };
     const m = marketingState(withOps, true);
     const dates = availableFrom(withOps, m.state, asOf);
@@ -435,8 +573,16 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
 
       // Availability's OWN context
       possession_state: p.possession_state,
-      physical_readiness: p.physical_readiness,
+      //  From the readiness owners, never the classifier's "no turn open".
+      physical_readiness: readinessAxis(withOps).physical_readiness,
+      readiness_basis: readinessAxis(withOps).readiness_basis,
       turnover_in_progress: p.physical_readiness === "turning",
+      turnover: withOps.turnover ? {
+        turnover_id: withOps.turnover.turnover_id,
+        expected_ready_date: ymd(withOps.turnover.expected_ready_date),
+        outgoing_lease_id: withOps.turnover.outgoing_lease_id || null,
+        outgoing_lease_end_date: ymd(withOps.turnover.outgoing_lease_end_date),
+      } : null,
       operating_use: withOps.operating_use,
 
       // ── WHY, not just THAT (BUILD 1) ──
@@ -488,6 +634,12 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       evidence_state: p.evidence_state,
       tenancy_state: p.tenancy_state,
       proof_basis: p.proof_basis,
+      //  THE PRIOR QUESTION, relayed not recomputed (dated_positions decided
+      //  it). A consumer can tell "Spine knows nothing here" apart from
+      //  "Spine knows two things and they fight" without reading English.
+      basis_state: p.basis_state,
+      basis_type: p.basis_type,
+      basis_ref: p.basis_ref || null,
       is_down: p.is_down,
       use_type: p.use_type,
     };
@@ -507,6 +659,10 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       expected_within_horizon: withinHorizon.length,
       blocked_by_evidence: inState("evidence_disagrees").length,
       contested: inState("contested").length,
+      //  Positions Spine cannot offer because it cannot establish them.
+      //  Reported in the headline so an unknown is never a quiet remainder.
+      occupancy_unknown: inState("occupancy_unknown").length,
+      evidence_unreconciled: inState("evidence_unreconciled").length,
     },
 
     // Each position appears in exactly one state.
@@ -524,6 +680,8 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       down: inState("down").length,
       evidence_disagrees: inState("evidence_disagrees").length,
       contested: inState("contested").length,
+      occupancy_unknown: inState("occupancy_unknown").length,
+      evidence_unreconciled: inState("evidence_unreconciled").length,
       use_not_configured: inState("use_not_configured").length,
       not_marketable_use: inState("not_marketable_use").length,
     },
@@ -532,4 +690,4 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
   };
 }
 
-module.exports = { availabilityRead, marketingState, availableFrom, HUMAN };
+module.exports = { availabilityRead, marketingState, availableFrom, readinessAxis, HUMAN };

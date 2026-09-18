@@ -26,6 +26,8 @@ const staffSessions = require("../identity/staff_session_service.js"); // BRICK 
 const staffIdentity = require("../identity/staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const { recordPersonFact } = require("../identity/person_facts.js"); // 092: the ONE person × property fact write
 const crypto = require("crypto");
+const { recordInboundCapture } = require("../agent/inbound_capture");
+const { resolveDemoProperty, resolveDemoPropertyRow } = require("../shared/demo_property_identity.js");
 const aiLeasingStrategy = require("./ai_leasing_strategy");
 // Slice 9 attribution foundation: the ONE place an appointment binds to an opportunity.
 const attribution = require("./appointment_attribution");
@@ -40,8 +42,10 @@ const AI_FIRST_RESPONSE_PROMPT_REVISION = "leasing-first-response-v2";
 const SOURCE_UNATTRIBUTED = "Unattributed"; // caller supplied no source
 const SOURCE_UNMAPPED     = "Unmapped";     // caller supplied a source we don't recognize
 
-module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices, commitmentLedger = null, commBoundary }) {
+module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices, commitmentLedger = null, commBoundary, tourAvailabilityService = null }) {
   const router = express.Router();
+  const nativeTourAvailability = tourAvailabilityService ||
+    require("./tour_availability_service").makeTourAvailabilityService({ pool });
 
   // ── PHASE B: signed public booking continuation (tour_booking_links, mig 056) ──
   // Store ONLY the digest; the raw token lives solely in the /demo/intake receipt.
@@ -455,7 +459,14 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // the AI opening response with NO transport call and NO sent claim
   // ('ai_response_prepared', not 'ai_text_sent').
   // Returns a result object; throws { httpStatus, publicReceipt } on known failures.
-  async function intakeProspect(b) {
+  function stableIntakeJson(value) {
+    if (Array.isArray(value)) return '[' + value.map(stableIntakeJson).join(',') + ']';
+    if (value && typeof value === 'object') return '{' + Object.keys(value).sort()
+      .map(key => JSON.stringify(key) + ':' + stableIntakeJson(value[key])).join(',') + '}';
+    return JSON.stringify(value);
+  }
+
+  async function intakeProspect(b, { authenticatedRealIntake = false, deliveryKey } = {}) {
     const propertyId = b.property_id;
     if (!propertyId) { const e = new Error("property_id is required."); e.httpStatus = 400; e.publicReceipt = e.message; throw e; }
 
@@ -463,16 +474,77 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     const email = normalizeEmail(b.email);
     if (!phone && !email) { const e = new Error("A phone or email is required to identify the prospect."); e.httpStatus = 400; e.publicReceipt = e.message; throw e; }
     const sourceName = b.source || b.source_name || null;
-    const attemptSms = b.attempt_sms !== false;   // default true (authenticated path unchanged)
+    const attemptSms = b.attempt_sms !== false;   // omitted flag retains the existing response-requested mode
+    // Authenticated capture-only intake records the inquiry for staff. Phone
+    // presence is not a request to draft an outbound message. The public demo's
+    // deliberate preparation-only mode remains a separate existing contract.
+    const captureOnly = authenticatedRealIntake && !attemptSms;
+
+    // source_lead_id identifies a provider's lead, NOT necessarily a delivery.
+    // Only the authenticated HTTP header opts into replay protection. Preserve
+    // legacy repeat touches and all raw source provenance unchanged.
+    let delivery = null;
+    if (authenticatedRealIntake && deliveryKey !== undefined) {
+      if (typeof deliveryKey !== 'string' || !/^[\x21-\x7e]{1,256}$/.test(deliveryKey)
+          || (sourceName !== null && typeof sourceName !== 'string')) {
+        const e = new Error('Idempotency-Key must contain 1–256 printable non-space characters.');
+        e.httpStatus = 400; e.publicReceipt = e.message; throw e;
+      }
+      const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+      delivery = {
+        key_digest: digest(stableIntakeJson([String(propertyId).toLowerCase(), (sourceName || '').trim().toLowerCase(), deliveryKey])),
+        fingerprint: digest(stableIntakeJson(b)),
+      };
+    }
 
     let conversationId = null;
     const client = await pool.connect();
-    let person, createdPerson, lead, reusedOpportunity, prop, strategyEnvelope = null;
+    let person, createdPerson, lead, reusedOpportunity, prop, capturedEvent, strategyEnvelope = null;
+    let responseRequested = !!phone && !captureOnly;
     try {
       await client.query("begin");
 
       prop = (await client.query(`select id, name, coalesce(display_name, name) as display_name from properties where id=$1`, [propertyId])).rows[0];
       if (!prop) { await client.query("rollback"); const e = new Error("No property with that id."); e.httpStatus = 404; e.publicReceipt = e.message; throw e; }
+
+      if (delivery) {
+        // Transaction-owned lock: concurrent retries cannot both capture. The
+        // committed lead_received event is the durable anchor after a crash;
+        // retry never re-runs capture, drafting or transport once it exists.
+        await client.query('select pg_advisory_xact_lock(hashtextextended($1,0))', ['leasing-intake:' + delivery.key_digest]);
+        const prior = (await client.query(
+          `select e.id, e.lead_id, e.metadata, l.person_id, l.status,
+                  (select c.id from conversations c where c.property_id=l.property_id and c.person_id=l.person_id limit 1) conversation_id
+             from lead_events e join leasing_leads l on l.id=e.lead_id
+            where l.property_id=$1 and e.event_type='lead_received'
+              and e.metadata->'intake_delivery'->>'key_digest'=$2
+            order by e.created_at limit 1`, [propertyId, delivery.key_digest])).rows[0];
+        if (prior) {
+          if (prior.metadata.intake_delivery.fingerprint !== delivery.fingerprint) {
+            const e = new Error('This Idempotency-Key was already used for a different intake payload.');
+            e.httpStatus = 409; e.publicReceipt = e.message; throw e;
+          }
+          const completion = (await client.query(
+            `select event_type, metadata from lead_events where lead_id=$1
+              and event_type in ('ai_response_prepared','ai_text_sent')
+              and metadata->'intake_delivery'->>'key_digest'=$2
+              order by created_at desc limit 1`, [prior.lead_id, delivery.key_digest])).rows[0];
+          const responseState = completion ? (completion.event_type === 'ai_response_prepared' ? 'prepared' : completion.metadata.sent ? 'sent' : 'not_sent')
+            : prior.metadata.intake_delivery.response_requested ? 'not_established' : 'not_required';
+          await client.query('commit');
+          return {
+            receipt: responseState === 'not_established'
+              ? 'Inquiry already captured. Automatic response completion is not established; check the conversation before sending. No new response was attempted by this retry.'
+              : 'Inquiry already captured; returning its existing response state. No new response was attempted by this retry.',
+            person_id: prior.person_id, lead_id: prior.lead_id, conversation_id: prior.conversation_id,
+            new_person: prior.metadata.intake_delivery.new_person,
+            reused_opportunity: prior.metadata.repeat,
+            first_response_sent: responseState === 'not_established' ? null : responseState === 'sent',
+            status: prior.status, property_name: prop.name, replayed: true,
+            capture: { state: 'captured', lead_event_id: prior.id, response_state: responseState },
+          };
+        }
+      }
 
       let sourceId = null;
       let claimedButUnmapped = false;
@@ -524,15 +596,10 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       }
 
       // every arrival is a touch (attribution).
-      await client.query(
+      const sourceTouch = (await client.query(
         `insert into lead_source_touches (lead_id, person_id, source_id, source_lead_id, source_listing_id, raw_payload)
-         values ($1,$2,$3,$4,$5,$6)`,
-        [lead.id, person.id, sourceId, b.source_lead_id || null, b.source_listing_id || null, JSON.stringify(b)]);
-
-      await recordLeadEvent(client, {
-        leadId: lead.id, type: "lead_received", actorType: "prospect", actorId: person.id,
-        metadata: { source: sourceName, repeat: reusedOpportunity },
-      });
+         values ($1,$2,$3,$4,$5,$6) returning id`,
+        [lead.id, person.id, sourceId, b.source_lead_id || null, b.source_listing_id || null, JSON.stringify(b)])).rows[0];
 
       // ── PROSPECT ACTIVATION (Path A) — write the two facts the comms boundary
       //    requires for a customer_care autonomous send, IFF this property is on
@@ -540,8 +607,9 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       //    writes are INSIDE this transaction (reclassify accepts our client), so
       //    activation is atomic with the person/lead — a lead is never left
       //    half-activated. Append-only (reclassify supersedes prior class; consent
-      //    upserts the one canonical row). Unlisted property or no consent → skip
-      //    entirely (honest: captured, not textable). A STOP later still lands in
+      //    upserts the one canonical row). Unlisted property or no consent → no
+      //    opt-in write. Source classification at birth is decided separately
+      //    below. A STOP later still lands in
       //    contact_preferences and overrides this, exactly as the boundary expects.
       const _activated = propertyIsActivated(propertyId);
       const _consentSignal = extractConsentSignal(b);
@@ -596,12 +664,17 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           where person_id=$1 and property_id=$2 and superseded_at is null limit 1`,
         [person.id, propertyId])).rows[0];
       if (!_existingClass) {
+        // Real inquiry classification and permission to text are separate facts.
+        // Only the authenticated, property-bound intake route supplies this
+        // server-side provenance; public/demo bodies cannot grant it. This is
+        // birth only: an existing operator classification remains authoritative.
+        const realBirth = authenticatedRealIntake && _activated;
         await commBoundary.reclassify(
-          { person_id: person.id, property_id: propertyId, record_class: "internal_qa",
-            actor_user_id: null, reason: "birth_default_outside_activation" },
+          { person_id: person.id, property_id: propertyId, record_class: realBirth ? "production" : "internal_qa",
+            actor_user_id: null, reason: realBirth ? "authenticated_property_bound_intake" : "birth_default_outside_activation" },
           client
         );
-        console.log(`[intake] birth-guard classified person=${person.id} property=${propertyId} internal_qa (outside activation perimeter)`);
+        console.log(`[intake] birth-guard classified person=${person.id} property=${propertyId} ${realBirth ? "production (authenticated activated source; consent independent)" : "internal_qa (outside activation perimeter)"}`);
       }
 
       // ── THREAD IT (memo §2.2: never an orphaned event). The conversation-queue
@@ -620,6 +693,29 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         actorUserId: null,
       });
       strategyEnvelope = strategyAssignment.envelope || null;
+
+      // A website question is an inbound communication even without a phone.
+      // Its source touch and the canonical communication commit together. The
+      // shared capture owner invalidates stale drafts, retaining human control;
+      // no agent run, offer interpretation, model call or transport happens here.
+      let inquiryEvent = null;
+      if (authenticatedRealIntake && b.response_channel === "website"
+          && typeof b.message === "string" && b.message.trim()) {
+        const captured = await recordInboundCapture(client, {
+          conversation: { id: conversationId, property_id: propertyId,
+            person_id: person.id, unit_id: lead.unit_id || null },
+          body: b.message, channel: "website", provider: "leasing_intake",
+          providerEventId: sourceTouch.id, leasingLifecycle,
+        });
+        inquiryEvent = captured.inbound;
+        if (["human_takeover", "awaiting_review", "paused", "closed"].includes(captured.state.mode)) responseRequested = false;
+      }
+      capturedEvent = await recordLeadEvent(client, {
+        leadId: lead.id, type: "lead_received", actorType: "prospect", actorId: person.id,
+        commEventId: inquiryEvent?.id || null,
+        metadata: { source: sourceName, repeat: reusedOpportunity,
+          ...(delivery ? { intake_delivery: { ...delivery, new_person: createdPerson, response_requested: responseRequested } } : {}) },
+      });
 
       await client.query("commit");
 
@@ -669,10 +765,14 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       }
 
       // ── Immediate AI first response (outside the txn; lead is durable). ──
-      let responseReceipt = "Opportunity saved. No phone on file, so no text sent — the team can follow up by email.";
+      let responseReceipt = captureOnly
+        ? "Inquiry saved for staff follow-up. No automated reply was generated or sent."
+        : phone
+        ? "Inquiry saved. Existing conversation control is preserved; no automated reply was generated or sent."
+        : "Opportunity saved. No phone on file, so no text sent — the team can follow up by email.";
       let firstResponseSent = false;
       let draftBody = null;
-      if (phone) {
+      if (responseRequested) {
         let unitLabel = null, rent = null;
         if (lead.unit_id) {
           const u = (await pool.query(`select unit_number, market_rent from units where id=$1`, [lead.unit_id])).rows[0];
@@ -732,6 +832,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
               leadId: lead.id, type: "ai_text_sent", actorType: "ai", commEventId: commEvent.id,
               metadata: {
                 sent: wire.sent, reason: wire.reason || null,
+                ...(delivery ? { intake_delivery: delivery } : {}),
                 ai_operating_context_hash: drafted.operatingContextHash || null,
                 ai_operating_context_applied: !!drafted.operatingContextApplied,
                 ai_operating_context_unavailable: !!drafted.operatingContextUnavailable,
@@ -756,6 +857,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
               leadId: lead.id, type: "ai_response_prepared", actorType: "ai", commEventId: commEvent.id,
               metadata: {
                 sent: false, prepared: true, channel: b.response_channel || "demo_browser",
+                ...(delivery ? { intake_delivery: delivery } : {}),
                 ai_operating_context_hash: drafted.operatingContextHash || null,
                 ai_operating_context_applied: !!drafted.operatingContextApplied,
                 ai_operating_context_unavailable: !!drafted.operatingContextUnavailable,
@@ -776,6 +878,8 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         new_person: createdPerson, reused_opportunity: reusedOpportunity,
         first_response_sent: firstResponseSent, status: lead.status, draft_body: draftBody,
         property_name: prop.name,
+        ...(delivery ? { replayed: false, capture: { state: 'captured', lead_event_id: capturedEvent.id,
+          response_state: !responseRequested ? 'not_required' : firstResponseSent ? 'sent' : attemptSms ? 'not_sent' : 'prepared' } } : {}),
       };
     } catch (e) {
       try { await client.query("rollback"); } catch {}
@@ -786,11 +890,13 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // ── 1. AUTHENTICATED INTAKE (unchanged contract) — thin wrapper on the service. ──
   router.post("/leasing/intake", requireIntakeSecret, async (req, res) => {
     try {
-      const out = await intakeProspect(req.body || {});
+      const out = await intakeProspect(req.body || {}, { authenticatedRealIntake: true, deliveryKey: req.get('Idempotency-Key') });
       return res.json({
         receipt: out.receipt, person_id: out.person_id, lead_id: out.lead_id,
         new_person: out.new_person, reused_opportunity: out.reused_opportunity,
         first_response_sent: out.first_response_sent, status: out.status,
+        conversation_id: out.conversation_id,
+        ...(out.capture ? { replayed: out.replayed, capture: out.capture } : {}),
       });
     } catch (e) {
       if (e.httpStatus) return res.status(e.httpStatus).json({ receipt: e.publicReceipt || e.message });
@@ -804,7 +910,8 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //  A constrained public door into the SAME intakeProspect service — not a
   //  second implementation. Fail-closed controls:
   //    • DEMO_MODE=true required (absent/false → 403, same as /demo/operator-session)
-  //    • property is SERVER-DERIVED: always the property named DEMO_INTAKE_PROP_NAME
+  //    • property is SERVER-DERIVED: the one demo identity module resolves it,
+  //      and REFUSES on ambiguity rather than taking the oldest of three
   //      (the identical constant operator.js uses to mint the door's session, so the
   //      form and the door are guaranteed to agree). A client-supplied property_id
   //      is IGNORED — an env typo cannot redirect public lead creation into a live
@@ -820,7 +927,6 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //    • attempt_sms=false: the AI opening response is PREPARED, never claimed sent
   //      ('ai_response_prepared'). No transport call is made.
   // ════════════════════════════════════════════════════════════════════
-  const DEMO_INTAKE_PROP_NAME = "Property Spine Demo Building"; // MUST match operator.js DEMO_PROP_NAME
   const DEMO_INTAKE_SOURCE = "boardroom_demo";
   const _demoRate = { ip: new Map(), phone: new Map() };
   function _rateOk(map, key, max, windowMs) {
@@ -833,8 +939,14 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   }
 
   // TEMP DIAGNOSTIC — GET status page, viewable in a normal browser.
+  // Same wall as POST /demo/intake: outside the demo it answers nothing —
+  // this page reads database reachability, a constraint definition and the
+  // self-heal outcome (which can carry a raw database error).
   router.get("/demo/intake/health", async (req, res) => {
     res.set("Cache-Control", "no-store");
+    if (String(process.env.DEMO_MODE || "").toLowerCase() !== "true") {
+      return res.status(403).json({ receipt: "The live demo is not enabled on this deployment." });
+    }
     let db = "unknown", checkdef = null;
     try {
       await pool.query("select 1");
@@ -894,12 +1006,14 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       }
 
       // ── SERVER-DERIVED demo property (client property_id ignored entirely) ──
-      const prop = (await pool.query(
-        "select id, name, coalesce(display_name, name) as display_name from properties where name=$1 order by created_at asc limit 1",
-        [DEMO_INTAKE_PROP_NAME]
-      )).rows[0];
+      //  "Server-derived" was true and still insufficient: the server derived
+      //  it with `order by created_at asc limit 1` over a name three rows
+      //  share, so it derived the OLDEST rather than the right one.
+      const { res: demoRes, row: prop } = await resolveDemoPropertyRow(pool);
       if (!prop) {
-        return res.status(409).json({ receipt: "The demo property is not seeded yet — start the demo first." });
+        return res.status(409).json({ receipt: demoRes.status === "ambiguous"
+          ? demoRes.receipt
+          : "The demo property is not seeded yet — start the demo first." });
       }
 
       // ── ensure the tagging source exists (demo-scope only; the authenticated
@@ -1019,7 +1133,6 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     if (!rawToken) return res.status(400).json({ receipt: "A booking token is required." });
     if (!slotId)   return res.status(400).json({ receipt: "A slot_id is required to book." });
 
-    const DEMO_INTAKE_PROP_NAME = "Property Spine Demo Building"; // MUST match /demo/intake + operator.js
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -1044,10 +1157,26 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         return res.status(409).json({ receipt: "This booking link has expired." });
       }
 
-      // 3) SCOPE WALL: the link's property must be the Demo Building. Re-verify by
-      //    name, so a tampered property_id can't aim a booking at a live property.
-      const demoProp = (await client.query(`select id, name from properties where name=$1`, [DEMO_INTAKE_PROP_NAME])).rows[0];
-      if (!demoProp || demoProp.id !== link.property_id) {
+      // 3) SCOPE WALL: the link's property must be the Demo Building.
+      //
+      //    This re-verified BY NAME, with no `limit`, taking rows[0] — to stop
+      //    a tampered property_id aiming a booking at a live property. Three
+      //    rows share that name, so the wall compared the link against
+      //    whichever of three the database happened to return first. A guard
+      //    that guesses is worse than one that fails, because the failure is
+      //    visible (§5).
+      //
+      //    Ambiguity is now a REFUSAL. It is never resolved to a best guess,
+      //    and the candidates are logged so a human can see what was seen.
+      const demoRes = await resolveDemoProperty(client);
+      if (demoRes.status !== "resolved") {
+        await client.query("rollback");
+        console.warn("[booking scope wall] REFUSED — demo property identity not established:",
+          JSON.stringify({ status: demoRes.status, receipt: demoRes.receipt,
+                           candidates: (demoRes.candidates || []).map((c) => c.property_id) }));
+        return res.status(409).json({ receipt: "This booking link is not valid for this property." });
+      }
+      if (demoRes.property_id !== link.property_id) {
         await client.query("rollback");
         return res.status(409).json({ receipt: "This booking link is not valid for this property." });
       }
@@ -1178,12 +1307,9 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       if (link.status === "revoked" || (link.expires_at && new Date(link.expires_at).getTime() < Date.now())) {
         return res.status(409).json({ receipt: "This booking link is no longer active.", slots: [] });
       }
-      // only OPEN, FUTURE slots at THIS (demo) property.
-      const slots = (await pool.query(
-        `select id, starts_at, ends_at, unit_id from tour_availability
-          where property_id=$1 and status='open' and starts_at > now()
-          order by starts_at asc limit 24`,
-        [link.property_id])).rows;
+      // The public booking page and the conversational agent consume the same
+      // offerable-slot reader, including the property's minimum-notice rule.
+      const slots = await readOfferableSlots(pool, { propertyId: link.property_id, limit: 24 }) || [];
       return res.json({ receipt: `${slots.length} open time(s).`, slots });
     } catch (e) {
       console.error("demo slots:", e);
@@ -1485,9 +1611,9 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //  SHARED CANONICAL BOOKING SERVICE — bookTourIntoSlot
   //
   //  The ONE transaction that turns an eligible slot into a live tour in
-  //  leasing_tours (the Tours module's table). BOTH the public /demo/book link
-  //  route AND the agent's book_tour tool call this — one code path, one
-  //  double-booking wall, one funnel advance. No caller may reimplement it.
+  //  leasing_tours (the Tours module's table). The public /demo/book link,
+  //  agent book_tour tool, and legacy staff adapter all call this — one code
+  //  path, one double-booking wall, one funnel advance. No caller may reimplement it.
   //
   //  GOVERNED WRITE (not a consequence of being allowed to converse). Every
   //  authority fact is re-verified HERE, server-side, under lock — a model- or
@@ -1519,12 +1645,15 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   async function bookTourIntoSlot(client, {
     leadId,
     slotId,
+    existingTourId = null,      // promote a legacy requested tour through this same transaction
     subjectPersonId = null,     // the prospect who confirmed (subject, NOT executor)
     sourceCommEventId = null,   // the inbound comm_event that carried the confirmation
     sourceAgentRunId = null,    // the agent run that caused the booking (if any)
     idempotencyKey = null,      // per-ACTION key (agent: the MessageSid)
     via = "agent_book_tour",    // provenance label
     requireAgentBookingCapability = false, // when true, property must be agent-booking-enabled
+    executionActorType = "system",
+    executionActorId = null,
   }) {
     if (!leadId || !slotId) {
       const e = new Error("leadId and slotId are required."); e.httpStatus = 400; e.publicMessage = e.message; throw e;
@@ -1555,10 +1684,24 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     // ── SLOT authority: RE-READ + LOCK. Never trust a slot id from the model. ──
     const slot = (await client.query(`select * from tour_availability where id=$1 for update`, [slotId])).rows[0];
     if (!slot) { const e = new Error("No slot with that id."); e.httpStatus = 404; e.publicMessage = e.message; throw e; }
-    if (slot.status !== "open") { const e = new Error("That time was just taken. Please pick another."); e.httpStatus = 409; e.publicMessage = e.message; throw e; }
+    if (slot.status !== "open") {
+      if (existingTourId && slot.status === "booked" && String(slot.booked_tour_id) === String(existingTourId)) {
+        const priorTour = (await client.query(
+          `select * from leasing_tours where id=$1 and lead_id=$2 and property_id=$3`,
+          [existingTourId, lead.id, lead.property_id])).rows[0];
+        if (priorTour) return { tour: priorTour, alreadyBooked: true };
+      }
+      const e = new Error("That time was just taken. Please pick another."); e.httpStatus = 409; e.publicMessage = e.message; throw e;
+    }
     // CROSS-PROPERTY WALL: the slot must belong to the lead's property.
     if (slot.property_id !== lead.property_id) {
       const e = new Error("That slot isn't at this property."); e.httpStatus = 409; e.publicMessage = e.message; throw e;
+    }
+    const schedule = await nativeTourAvailability.getSchedulePolicy({ propertyId: lead.property_id, client });
+    const minimumNotice = Number(schedule.policy?.minimum_notice_minutes || 0);
+    if (new Date(slot.starts_at).getTime() < Date.now() + (minimumNotice * 60 * 1000)) {
+      const e = new Error("That tour time is inside the property's minimum notice window. Please pick another.");
+      e.httpStatus = 409; e.publicMessage = e.message; throw e;
     }
 
     // ── soft-closed conversation guard (when the lifecycle service is present) ──
@@ -1566,36 +1709,57 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       await leasingLifecycle.assertNotSoftClosedForLead(client, { leadId: lead.id });
     }
 
-    // ── create the tour on this slot (status 'scheduled'). Execution is SYSTEM;
-    //    the confirming prospect + originating cause are recorded, not conflated.
-    const tour = (await client.query(
-      `insert into leasing_tours
-         (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status, booking_idempotency_key)
-       values ($1,$2,$3,$4,$5,$6,'scheduled',$7) returning *`,
-      [lead.id, lead.property_id, slot.unit_id, slot.leasing_agent_id, slotId, slot.starts_at, idempotencyKey || null])).rows[0];
+    // ── create the tour on this slot (status 'scheduled'). Execution attribution
+    //    comes from the adapter; prospect subject + originating cause stay separate.
+    let tour;
+    if (existingTourId) {
+      const requested = (await client.query(
+        `select * from leasing_tours where id=$1 and lead_id=$2 and property_id=$3 for update`,
+        [existingTourId, lead.id, lead.property_id])).rows[0];
+      if (!requested) {
+        const e = new Error("Could not find that requested tour for this inquiry."); e.httpStatus = 404; e.publicMessage = e.message; throw e;
+      }
+      if (requested.status !== "requested" || requested.slot_id) {
+        const e = new Error("That tour request is no longer waiting for a time."); e.httpStatus = 409; e.publicMessage = e.message; throw e;
+      }
+      tour = (await client.query(
+        `update leasing_tours
+            set unit_id=coalesce(unit_id,$2), leasing_agent_id=coalesce(leasing_agent_id,$3),
+                slot_id=$4, scheduled_for=$5,
+                booking_idempotency_key=coalesce(booking_idempotency_key,$6), updated_at=now()
+          where id=$1 returning *`,
+        [existingTourId, slot.unit_id, slot.leasing_agent_id, slotId, slot.starts_at, idempotencyKey || null])).rows[0];
+    } else {
+      tour = (await client.query(
+        `insert into leasing_tours
+           (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status, booking_idempotency_key)
+         values ($1,$2,$3,$4,$5,$6,'scheduled',$7) returning *`,
+        [lead.id, lead.property_id, slot.unit_id, slot.leasing_agent_id, slotId, slot.starts_at, idempotencyKey || null])).rows[0];
+    }
 
     // flip the slot to booked (partial unique index is the concurrent backstop)
     await client.query(
       `update tour_availability set status='booked', booked_tour_id=$1, updated_at=now() where id=$2`,
       [tour.id, slotId]);
 
-    // tour_events: EXECUTION actor is 'system'; the prospect is the SUBJECT
-    // (recorded in metadata), the originating comm_event/run is the CAUSE.
+    // tour_events: the adapter's EXECUTION actor, the prospect SUBJECT, and the
+    // originating comm_event/run CAUSE remain separate facts.
     await recordTourEvent(client, {
       tourId: tour.id, leadId: lead.id, type: "scheduled",
-      actorType: "system", actorId: null, slotId,
+      actorType: executionActorType, actorId: executionActorId, slotId,
       metadata: {
         scheduled_for: slot.starts_at, slot_id: slotId, via,
         subject_person_id: subjectPersonId || lead.person_id,
         source_comm_event_id: sourceCommEventId,
         source_agent_run_id: sourceAgentRunId,
-        execution_actor: "system",
+        execution_actor: executionActorType,
+        execution_actor_id: executionActorId,
       },
     });
 
     // funnel advance — SAME recordLeadEvent the operator/link paths use.
     await recordLeadEvent(client, {
-      leadId: lead.id, type: "tour_scheduled", actorType: "system",
+      leadId: lead.id, type: "tour_scheduled", actorType: executionActorType,
       commEventId: sourceCommEventId || null,
       metadata: {
         tour_id: tour.id, slot_id: slotId, scheduled_for: slot.starts_at, via,
@@ -1641,20 +1805,25 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   async function readOfferableSlots(client, { propertyId, limit = 4 }) {
     const tz = await loadPropertyOperatingTimezone(propertyId);
     if (!tz) return null; // unconfigured tz → no offer set (honest)
+    const schedule = await nativeTourAvailability.getSchedulePolicy({ propertyId, client: client || pool });
+    const minimumNotice = Number(schedule.policy?.minimum_notice_minutes || 0);
     const rows = (await (client || pool).query(
       `select id, starts_at, ends_at, unit_id
          from tour_availability
-        where property_id=$1 and status='open' and starts_at > now()
+        where property_id=$1 and status='open'
+          and starts_at >= now() + ($3::int * interval '1 minute')
         order by starts_at
-        limit $2`, [propertyId, limit])).rows;
+        limit $2`, [propertyId, limit, minimumNotice])).rows;
     const fmt = new Intl.DateTimeFormat("en-US", {
       timeZone: tz, weekday: "short", month: "short", day: "numeric",
       hour: "numeric", minute: "2-digit",
     });
     return rows.map(r => ({
+      id: r.id,
       slot_id: r.id,
       unit_id: r.unit_id,
       starts_at: r.starts_at,
+      ends_at: r.ends_at,
       label: fmt.format(new Date(r.starts_at)), // e.g. "Thu, Jul 16, 2:00 PM"
     }));
   }
@@ -1754,38 +1923,76 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //  The AI later offers ONLY rows this creates. property-scoped; agent optional.
   router.post("/leasing/availability", requireOperator, async (req, res) => {
     const b = req.body || {};
-    if (!b.property_id || !b.starts_at || !b.ends_at) {
-      return res.status(400).json({ receipt: "property_id, starts_at and ends_at are required to open a slot." });
+    const hasInstantWindow = b.starts_at && b.ends_at;
+    const hasLocalWindow = b.starts_local && b.ends_local;
+    if (!b.property_id || (!hasInstantWindow && !hasLocalWindow)) {
+      return res.status(400).json({ receipt: "property_id and one complete tour time window are required." });
     }
     try {
-      const slot = (await pool.query(
-        `insert into tour_availability (property_id, unit_id, leasing_agent_id, starts_at, ends_at, capacity, created_by)
-         values ($1,$2,$3,$4,$5,coalesce($6,1),$7) returning *`,
-        [b.property_id, b.unit_id || null, b.leasing_agent_id || null, b.starts_at, b.ends_at, b.capacity || null, b.created_by || null])).rows[0];
-      return res.json({ receipt: `Slot opened ${b.starts_at} → ${b.ends_at}.`, slot });
-    } catch (e) { console.error("leasing availability open:", e); return res.status(500).json({ receipt: "Could not open the slot.", error: e.message }); }
+      const actorUserId = await resolveRecorderUserId(req);
+      const out = await nativeTourAvailability.publishSlot({
+        propertyId: b.property_id,
+        startsAt: b.starts_at,
+        endsAt: b.ends_at,
+        startsLocal: b.starts_local || null,
+        endsLocal: b.ends_local || null,
+        unitId: b.unit_id || null,
+        leasingAgentId: b.leasing_agent_id || null,
+        capacity: b.capacity,
+        actorUserId,
+        actorType: actorUserId ? "human_staff" : "operator_key",
+        reason: b.reason || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+      });
+      return res.json({
+        receipt: out.created ? "Tour time published." : "That exact slot is already published.",
+        slot: out.slot,
+        created: out.created,
+      });
+    } catch (e) {
+      console.error("leasing availability open:", e);
+      return res.status(e.httpStatus || 500).json({ receipt: e.publicMessage || "Could not open the slot.", error: e.code || e.message });
+    }
   });
 
   // ── LIST OPEN SLOTS — what the AI is allowed to offer, and what the dash shows
   router.get("/properties/:propertyId/leasing/availability", requireOperator, async (req, res) => {
     try {
-      const r = await pool.query(
-        `select * from tour_availability
-          where property_id=$1 and status='open' and starts_at > now()
-          order by starts_at`, [req.params.propertyId]);
-      return res.json({ receipt: `${r.rows.length} open slot(s).`, slots: r.rows });
-    } catch (e) { console.error("leasing availability list:", e); return res.status(500).json({ receipt: "Could not load availability.", error: e.message }); }
+      const out = await nativeTourAvailability.listSlots({
+        propertyId: req.params.propertyId,
+        statuses: ["open"],
+        to: req.query.to || "2100-01-01T00:00:00Z",
+        limit: req.query.limit || 500,
+      });
+      return res.json({ receipt: `${out.slots.length} open slot(s).`, slots: out.slots, operating_timezone: out.operating_timezone });
+    } catch (e) {
+      console.error("leasing availability list:", e);
+      return res.status(e.httpStatus || 500).json({ receipt: e.publicMessage || "Could not load availability.", error: e.code || e.message });
+    }
   });
 
   // ── BLOCK / REOPEN a slot (operator housekeeping) ──
   router.post("/leasing/availability/:slotId/block", requireOperator, async (req, res) => {
     try {
-      const r = await pool.query(
-        `update tour_availability set status='blocked', updated_at=now()
-          where id=$1 and status='open' returning *`, [req.params.slotId]);
-      if (!r.rows.length) return res.status(409).json({ receipt: "Slot is not open (already booked or blocked)." });
-      return res.json({ receipt: "Slot blocked.", slot: r.rows[0] });
-    } catch (e) { console.error("leasing availability block:", e); return res.status(500).json({ receipt: "Could not block the slot.", error: e.message }); }
+      const b = req.body || {};
+      const propertyId = b.property_id || (await pool.query(
+        "select property_id from tour_availability where id=$1", [req.params.slotId]
+      )).rows[0]?.property_id;
+      const actorUserId = await resolveRecorderUserId(req);
+      const out = await nativeTourAvailability.changeSlotStatus({
+        propertyId,
+        slotId: req.params.slotId,
+        action: "block",
+        actorUserId,
+        actorType: actorUserId ? "human_staff" : "operator_key",
+        reason: b.reason || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+      });
+      return res.json({ receipt: "Slot blocked.", slot: out.slot });
+    } catch (e) {
+      console.error("leasing availability block:", e);
+      return res.status(e.httpStatus || 500).json({ receipt: e.publicMessage || "Could not block the slot.", error: e.code || e.message });
+    }
   });
 
   // ── BOOK A TOUR ONTO A REAL SLOT — the CLAIM ──────────────────────────
@@ -1802,62 +2009,30 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     const client = await pool.connect();
     try {
       await client.query("begin");
-      // lock the slot row; only book if STILL open — this is the wall
-      const slot = (await client.query(
-        `select * from tour_availability where id=$1 for update`, [slotId])).rows[0];
-      if (!slot) { await client.query("rollback"); return res.status(404).json({ receipt: "No slot with that id." }); }
-      if (slot.status !== "open") { await client.query("rollback"); return res.status(409).json({ receipt: "That slot is no longer open." }); }
-
-      const lead = (await client.query(`select * from leasing_leads where id=$1`, [b.lead_id])).rows[0];
-      if (!lead) { await client.query("rollback"); return res.status(404).json({ receipt: "No opportunity with that id." }); }
-
-      // create or promote the tour onto this slot
-      let tour;
-      if (b.tour_id) {
-        tour = (await client.query(
-          `update leasing_tours set slot_id=$1, scheduled_for=$2, unit_id=coalesce(unit_id,$3),
-                  leasing_agent_id=coalesce(leasing_agent_id,$4), updated_at=now()
-            where id=$5 returning *`,
-          [slotId, slot.starts_at, slot.unit_id, slot.leasing_agent_id, b.tour_id])).rows[0];
-        if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id to promote." }); }
-      } else {
-        tour = (await client.query(
-          `insert into leasing_tours (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status)
-           values ($1,$2,$3,$4,$5,$6,'scheduled') returning *`,
-          [b.lead_id, lead.property_id, slot.unit_id, slot.leasing_agent_id, slotId, slot.starts_at])).rows[0];
-      }
-
-      // flip the slot to booked, pointed at this tour (the wall: partial unique
-      // index guarantees one booking; the for-update + status check guarantee
-      // we got here first)
-      await client.query(
-        `update tour_availability set status='booked', booked_tour_id=$1, updated_at=now() where id=$2`,
-        [tour.id, slotId]);
-
-      // tour_events: scheduled (the claim)
-      await recordTourEvent(client, {
-        tourId: tour.id, leadId: b.lead_id, type: "scheduled",
-        actorType: b.actor_type || "human", actorId: b.actor_id || null, slotId,
-        metadata: { scheduled_for: slot.starts_at, slot_id: slotId },
+      const recorderUserId = await resolveRecorderUserId(req);
+      const out = await bookTourIntoSlot(client, {
+        leadId: b.lead_id,
+        slotId,
+        existingTourId: b.tour_id || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+        via: "operator_key_booking_adapter",
+        executionActorType: recorderUserId ? "human" : "system",
+        executionActorId: recorderUserId,
       });
-
-      // SEAM → funnel advances. Reuse 038's recordLeadEvent so leasing_leads.status
-      // projects 'tour_scheduled' exactly as the confirm path does.
-      await recordLeadEvent(client, {
-        leadId: b.lead_id, type: "tour_scheduled", actorType: "system",
-        metadata: { tour_id: tour.id, slot_id: slotId, scheduled_for: slot.starts_at },
-        statusPatch: { tour_scheduled_at: slot.starts_at },
-      });
-
       await client.query("commit");
-      return res.json({ receipt: `Tour scheduled for ${slot.starts_at}. Slot booked; funnel advanced to tour_scheduled.`, tour_id: tour.id, slot_id: slotId });
+      return res.json({
+        receipt: `Tour scheduled for ${out.tour.scheduled_for}. Slot booked; funnel advanced to tour_scheduled.`,
+        tour_id: out.tour.id,
+        slot_id: slotId,
+        idempotent: out.alreadyBooked,
+      });
     } catch (e) {
       try { await client.query("rollback"); } catch {}
       // the partial unique index is the backstop if two requests race past the
       // status check (shouldn't, with for-update, but the wall is structural)
       if (e.code === "23505") return res.status(409).json({ receipt: "That slot was just booked by someone else." });
       console.error("leasing slot book:", e);
-      return res.status(500).json({ receipt: "Could not book the slot.", error: e.message });
+      return res.status(e.httpStatus || 500).json({ receipt: e.publicMessage || "Could not book the slot.", error: e.code || e.message });
     } finally { client.release(); }
   });
 
@@ -2059,6 +2234,8 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           actual_tour_host_name_claim: actualHostNameClaim,    // #3: free-text only, never dereferenced
           recorded_by_user_id: recordedByUserId,               // #4: SERVER-DERIVED from the session
           outcome: v2outcome,
+          // Notes belong to this capture even when no legacy v2 fields were supplied.
+          notes: fb.notes || null,
           // ── v3 standing, recorded on the immutable event ──────────────
           //  The event is the record; conversions and the board are
           //  projections of it. When the standing could NOT be resolved the

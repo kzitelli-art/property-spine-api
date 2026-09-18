@@ -1,0 +1,45 @@
+{
+  "proof": "canonical_onboarding_review",
+  "phase": "relay",
+  "mode": "server_interpreted_retained_source",
+  "app_source": "successor_index_html",
+  "api_origin": "literal_loopback",
+  "external_requests_blocked_before_egress": 0,
+  "confirmations_attempted": 0,
+  "sources": [
+    {
+      "source": "retained_claims",
+      "confirmed_count": 0,
+      "visible_rows": 0,
+      "truncated": false,
+      "current_positions": 1,
+      "visible_at_paint": true
+    },
+    {
+      "source": "retained_claims",
+      "confirmed_count": 1,
+      "visible_rows": 1,
+      "truncated": false,
+      "current_positions": 0,
+      "visible_at_paint": true
+    },
+    {
+      "source": "retained_claims",
+      "confirmed_count": 51,
+      "visible_rows": 50,
+      "truncated": true,
+      "current_positions": 51,
+      "visible_at_paint": true
+    },
+    {
+      "source": "retained_claims_read_failure",
+      "unavailable": true,
+      "retry_visible": true,
+      "stale_claims_absent": true
+    },
+    {
+      "source": "retained_claims_retry",
+      "read_recovered": true
+    }
+  ]
+}

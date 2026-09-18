@@ -53,7 +53,9 @@ const FIELD_SPELLINGS = Object.freeze({
   name:        ["tenant", "tenantname", "resident", "residentname", "lessee", "occupant",
                 "primaryresident", "residentfullname", "name"],
   resident_id: ["residentid", "tenantid", "tcode", "tenantcode", "residentcode"],
-  status:      ["status", "unitstatus", "leasestatus", "occupancystatus", "occupancy"],
+  //  "signedpending" is the leasing tracker's status column ("Signed/Pending").
+  status:      ["status", "unitstatus", "leasestatus", "occupancystatus", "occupancy",
+                "signedpending", "signedstatus"],
   sqft:        ["sqft", "squarefeet", "squarefootage", "sf", "unitsqft", "rentablesqft", "area"],
   market_rent: ["marketrent", "market", "mktrent", "askingrent", "marketrate", "gpr",
                 "grosspotentialrent", "scheduledrent"],
@@ -85,6 +87,10 @@ const KNOWN_UNUSED = Object.freeze(new Set([
   //  row per bed and states "Total Beds 1.00" on each; the bed count is the
   //  row itself, so mapping it would store the same fact twice.
   "totalbeds", "beds",
+  //  Leasing-tracker columns. A cohort label is not a term; a key pickup
+  //  cell is evidence of possession that only a possession record may
+  //  assert; new/renewal is history. Read, shown, never interpreted.
+  "semester", "keypickup", "newrenewal",
 ]));
 
 function squash(s) {
@@ -214,7 +220,11 @@ function mapRows(rows) {
   const plan = planFor(list);
 
   const mapped = list.map((row, i) => {
-    const out = { row_index: Number(row && row.__row_number) || i + 1 };
+    const section = String(row && row.__section || "current").trim().toLowerCase();
+    const out = {
+      row_index: Number(row && row.__row_number) || i + 1,
+      section: section === "future" ? "future" : "current",
+    };
     for (const [field, header] of Object.entries(plan.mapped)) {
       out[field] = (SHAPE[field] || TEXT)(row ? row[header] : null);
     }
@@ -261,11 +271,9 @@ function mapRows(rows) {
       }
     }
 
-    //  The ledger's shaping layer reads `rent`/`market` too; give it the
-    //  same value under the name it looks for rather than teaching it a
-    //  new one.
-    if (out.actual_rent == null && out.market_rent != null) out.rent = out.market_rent;
-    else if (out.actual_rent != null) out.rent = out.actual_rent;
+    //  `rent` is the contractual fact consumed by the ledger. Market rent
+    //  is an asking fact and cannot fill an absent contract value.
+    out.rent = out.actual_rent == null ? null : out.actual_rent;
     out._raw = row || {};
     return out;
   });

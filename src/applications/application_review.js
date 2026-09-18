@@ -28,6 +28,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 const { applicationTermsComplete, structuredTerms } = require("./application_terms");
+const { readBoundApplicationOffer, readCurrentTermsConfirmation } = require("./proposed_terms_service");
 
 // Pure compute functions — operator.js owns the two thin session-scoped routes
 // and calls these (same pattern as turn_priority.js). Keeps operator.js session
@@ -110,6 +111,8 @@ async function latestPacket(client, applicationId) {
             sent_at, tenant_token_expires_at, tenant_submitted_at,
             voided_at, void_reason, superseded_at,
             instrument_form_code, instrument_body_sha256,
+            instrument_source_artifact_id, instrument_terms_sha256,
+            instrument_package_sha256,
             resident_executed_at, company_executed_at,
             proposed_terms_confirmation_id, created_at, updated_at
        from lease_packets
@@ -117,19 +120,97 @@ async function latestPacket(client, applicationId) {
         and superseded_at is null
       order by version desc
       limit 1`, [applicationId]);
-  return q.rows[0] || null;
+  const packet = q.rows[0] || null;
+  if (!packet) return null;
+  const signerRows = await client.query(
+    `select s.signer_role, s.display_name, s.link_issued_at,
+            s.token_expires_at, s.submitted_at,
+            sf.completed_at as signature_completed_at
+       from lease_packet_signers s
+       left join lease_packet_fields sf
+         on sf.lease_packet_id=s.lease_packet_id
+        and sf.signer_role=s.signer_role
+        and sf.field_type='signature'
+      where s.lease_packet_id=$1
+      order by case s.signer_role when 'tenant' then 1 else 2 end`,
+    [packet.id]);
+  packet.signing_parties = signerRows.rows.map((s) => ({
+    signer_role: s.signer_role,
+    display_name: s.display_name,
+    link_issued_at: s.link_issued_at || null,
+    token_expires_at: s.token_expires_at || null,
+    submitted_at: s.submitted_at || null,
+    signature_completed_at: s.signature_completed_at || null,
+    complete: !!(s.submitted_at && s.signature_completed_at),
+  }));
+  return packet;
+}
+
+// One application-signing projection, derived only from the packet facts this
+// canonical review already loads. It adds no lifecycle vocabulary: resident
+// parties are outstanding only after their links are issued and before their
+// own required signature evidence is complete; the company signer is
+// outstanding only in the existing `resident_executed` packet state.
+function packetSigningStanding(packet) {
+  if (!packet || packet.voided_at || packet.superseded_at) {
+    return {
+      signing_started: false,
+      resident_executed_at: packet ? (packet.resident_executed_at || null) : null,
+      company_executed_at: packet ? (packet.company_executed_at || null) : null,
+      outstanding_signers: [],
+    };
+  }
+
+  const parties = Array.isArray(packet.signing_parties) ? packet.signing_parties : [];
+  const residentSigningStarted = !!packet.sent_at || parties.some((party) => !!party.link_issued_at);
+  const outstanding = residentSigningStarted
+    ? parties.filter((party) => !party.complete).map((party) => ({
+        signer_role: party.signer_role,
+        display_name: party.display_name ||
+          (party.signer_role === "guarantor" ? "Guarantor" : "Resident"),
+      }))
+    : [];
+
+  if (packet.status === "resident_executed" && !packet.company_executed_at) {
+    outstanding.push({ signer_role: "company", display_name: "Authorized company signer" });
+  }
+
+  return {
+    signing_started: residentSigningStarted || !!packet.resident_executed_at,
+    resident_executed_at: packet.resident_executed_at || null,
+    company_executed_at: packet.company_executed_at || null,
+    outstanding_signers: outstanding,
+  };
 }
 
 // The proposed-terms confirmation the application currently points at.
 async function loadConfirmation(client, app) {
-  const cid = app && app.proposed_terms_confirmation_id;
-  if (!cid) return null;
-  const q = await client.query(
-    `select id, source, rent, security_deposit, lease_start_date, lease_end_date,
-            concession_status, actor_user_id, created_at
-       from application_proposed_terms_confirmations
-      where id = $1`, [cid]);
-  return q.rows[0] || null;
+  return readCurrentTermsConfirmation(client, app);
+}
+
+async function loadExecutionDecision(client, packet, app) {
+  if (!packet) return null;
+  const row = (
+    await client.query(
+      `select e.id, e.lease_packet_id, e.created_at, e.event_json
+       from lease_packet_audit_events e
+       join lease_packets p on p.id=e.lease_packet_id
+      where e.lease_packet_id=$1 and p.application_id=$2 and p.property_id=$3
+        and p.superseded_at is null and e.event_type='executed_by_decision'
+      order by e.created_at desc, e.id desc limit 1`,
+      [packet.id, app.id, app.property_id],
+    )
+  ).rows[0];
+  if (!row) return null;
+  const event = row.event_json || {};
+  return {
+    packet_id: row.lease_packet_id,
+    event_id: row.id,
+    actor_user_id: event.actor_user_id || null,
+    at: row.created_at,
+    application_decision: event.application_decision || null,
+    decisions: Array.isArray(event.decisions) ? event.decisions : null,
+  };
 }
 
 function mainBlocker(complete, missing, currency) {
@@ -159,6 +240,7 @@ async function buildReviewList(client, propertyId) {
     const verdict = await applicationTermsComplete(app, client);
     const packet = await latestPacket(client, app.id);
     const currency = packetCurrency(app, packet);
+    const signing = packetSigningStanding(packet);
     rows.push({
       application_id: app.id, applicant_name: app.applicant_name || null,
       unit_label: app.unit_label || null, status: app.status,
@@ -166,9 +248,28 @@ async function buildReviewList(client, propertyId) {
       missing_count: verdict.missing.length, packet_status: currency.status,
       concession_status: app.concession_status || "unknown",
       main_blocker: mainBlocker(verdict.complete, verdict.missing, currency),
+      signing,
     });
   }
-  return { property_id: propertyId, count: rows.length, applications: rows };
+  const outstandingSigners = rows.flatMap((row) =>
+    row.signing.outstanding_signers.map((signer) => ({
+      application_id: row.application_id,
+      applicant_name: row.applicant_name,
+      unit_label: row.unit_label,
+      signer_role: signer.signer_role,
+      display_name: signer.display_name,
+    })));
+  return {
+    property_id: propertyId,
+    count: rows.length,
+    applications: rows,
+    signing: {
+      applications_waiting_on_signature_count:
+        new Set(outstandingSigners.map((signer) => String(signer.application_id))).size,
+      outstanding_signer_count: outstandingSigners.length,
+      outstanding_signers: outstandingSigners,
+    },
+  };
 }
 
 // Build the DETAIL payload for one scoped application (or a scope error).
@@ -235,18 +336,52 @@ function executionPrimaryAction(app, exec, leaseId, packet) {
   //  the execution as staff_attestation when spine_instrument is the truth.
   //  Found by driving a resident signature and reading what the surface
   //  then told the operator to do.
-  if (!leaseId && packet && packet.status === "resident_executed") {
+  //  ── TWO-STEP LEASING (195) ─────────────────────────────────────────
+  //  The application is still `submitted`: nobody has approved it. The
+  //  resident-side signatures are complete on a packet prepared from the
+  //  acknowledged authored offer. The one remaining act is EXECUTE — the
+  //  authorized human approves the application and signs for the company in
+  //  one deliberate action. Offering "Sign for the Company" here would
+  //  either fail (no approval) or hide the approval inside a signature.
+  if (!leaseId && packet && packet.status === "resident_executed"
+      && app.status === "submitted" && app.application_offer_id
+      && app.application_terms_acknowledged_at
+      && packet.instrument_source_artifact_id
+      && packet.instrument_terms_sha256 && packet.instrument_package_sha256) {
+    return { action: "execute_lease", label: "Approve the application and sign for the company",
+      reason: "The applicant and any guarantor have signed the governing instrument. Executing approves this application and signs for the company in one action; both authorities are required.",
+      method: "POST",
+      endpoint: `/operator/leasing/lease-packets/${packet.id}/execute`,
+      body: { application_decision: "approve" },
+      commercial_decisions_remaining: ["application_approval", "company_signature"] };
+  }
+  if (!leaseId && packet && packet.status === "resident_executed"
+      && packet.instrument_source_artifact_id
+      && packet.instrument_terms_sha256 && packet.instrument_package_sha256) {
     return { action: "company_execute_lease", label: "Sign for the Company",
       reason: "The resident has executed the governing instrument. The authorised company signer signs to complete it.",
       method: "POST",
       endpoint: `/operator/leasing/lease-packets/${packet.id}/company-sign` };
   }
+  // A draft package has not reached a signer. The canonical application
+  // action already offers issuance, so a second execution panel would falsely
+  // describe signing as underway before any secure link exists.
+  if (!leaseId && packet && packet.status === "draft"
+      && packet.instrument_source_artifact_id
+      && packet.instrument_terms_sha256 && packet.instrument_package_sha256) {
+    return null;
+  }
   //  Awaiting the resident on an instrument Spine holds — nothing for the
   //  company to do yet, and nothing to attest to.
-  if (!leaseId && packet && packet.instrument_body_sha256
-      && ["sent", "in_progress", "tenant_in_progress", "draft"].includes(packet.status)) {
-    return { action: "await_resident_execution", label: "Awaiting the Resident",
-      reason: "The resident has not yet executed the governing instrument.",
+  if (!leaseId && packet && packet.instrument_source_artifact_id
+      && packet.instrument_terms_sha256 && packet.instrument_package_sha256
+      && ["sent", "in_progress", "tenant_in_progress"].includes(packet.status)) {
+    const waiting = (packet.signing_parties || []).filter((s) => !s.complete);
+    const names = waiting.map((s) => s.display_name ||
+      (s.signer_role === "guarantor" ? "the guarantor" : "the resident"));
+    const waitingLabel = names.length ? names.join(" and ") : "the resident";
+    return { action: "await_resident_execution", label: "Signing in Progress",
+      reason: `The governing instrument is waiting for ${waitingLabel}.`,
       method: null, endpoint: null };
   }
   // A lease already exists for this application: confirm-term has run and the
@@ -285,12 +420,25 @@ function executionPrimaryAction(app, exec, leaseId, packet) {
 async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
   const { app } = await loadScopedApp(client, applicationId, propertyId);
   if (!app) return { notInScope: true };
+  //  The property wall above is the boundary for every downstream read. For
+  //  offer-bound applications, use the same immutable, hash-checked reader
+  //  that confirmation and packet generation use. Do not reconstruct an
+  //  offer from lease_applications, and do not turn a missing/corrupt offer
+  //  into a legacy-looking review. Applications without an offer preserve
+  //  the historic review shape with a null application_offer.
+  //  A review is a projection: it never binds, confirms or supersedes the
+  //  offer, so it takes no row lock. The Leasing desk reads this detail
+  //  inside a READ ONLY transaction, where a lock is refused outright.
+  const offerState = await readBoundApplicationOffer(client, app, { allowHistorical: true, lock: false });
+  const boundOffer = offerState && offerState.id ? offerState : null;
+  const pendingOffer = offerState && offerState.pending_review ? offerState.pending_review : null;
   const verdict = await applicationTermsComplete(app, client);
   const terms = structuredTerms(app);
   const packet = await latestPacket(client, app.id);
   const currency = packetCurrency(app, packet);
   const concession = await concessionDetail(client, app);
   const confirmation = await loadConfirmation(client, app);
+  const execution_decision = await loadExecutionDecision(client, packet, app);
   const executed_lease = await loadExecutedLease(client, app);
 
   // 089: the lease this application produced, if confirm-term has run. The
@@ -342,6 +490,11 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
       next_action = resolvers.resolveNext(app, gate, {
         confirmation,
         packet,
+        //  Two-step (195): the resolver needs to know whether the applicant
+        //  acknowledged an authored offer to answer a submitted application
+        //  with "prepare / issue / execute" instead of "approve".
+        application_offer: boundOffer ? { id: boundOffer.id, terms_hash: boundOffer.hash,
+          acknowledged_at: app.application_terms_acknowledged_at || null } : null,
         currency_status: currency.status,
         lineage_matches_current_confirmation: packet ? lineageMatches : null,
         //  THE EXECUTION SEAM, ALREADY LOADED HERE.
@@ -356,8 +509,23 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
       next_action = null;
     }
   }
+  const application_offer = boundOffer ? {
+    id: boundOffer.id,
+    terms_hash: boundOffer.hash,
+    acknowledged_at: app.application_terms_acknowledged_at || null,
+    terms: boundOffer.terms,
+  } : pendingOffer ? {
+    id: null,
+    terms_hash: null,
+    acknowledged_at: null,
+    terms: null,
+  } : null;
+  if (application_offer && pendingOffer) {
+    application_offer.pending_review = pendingOffer;
+  }
   return {
     application_id: app.id,
+    conversion_id: app.conversion_id || null,
     applicant: { name: app.applicant_name || null, person_id: app.person_id || null },
     unit: { unit_id: app.unit_id || null,
             unit_label: app.unit_label || app.inventory_unit_label || null },
@@ -382,6 +550,7 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
       term_source: terms.term_source || null, terms_completed_at: terms.terms_completed_at || null,
     },
     completeness: { complete: verdict.complete, missing: verdict.missing },
+    application_offer,
     concession,
     proposed_terms_confirmation: confirmation ? {
       id: confirmation.id,
@@ -391,9 +560,15 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
       lease_start_date: nDate(confirmation.lease_start_date),
       lease_end_date: nDate(confirmation.lease_end_date),
       concession_status: confirmation.concession_status || null,
-      confirmed_by: confirmation.actor_user_id || null,
-      confirmed_at: confirmation.created_at || null,
+      confirmed_by: confirmation.confirmed_by,
+      confirmed_at: confirmation.confirmed_at,
+      prepared_by: confirmation.prepared_by,
+      prepared_at: confirmation.prepared_at,
+      offer_author: confirmation.offer_author,
+      application_offer_id: confirmation.application_offer_id || null,
+      application_terms_hash: confirmation.application_terms_hash || null,
     } : null,
+    execution_decision,
     packet: {
       id: packet ? packet.id : null,
       version: packet ? packet.version : null,
@@ -406,12 +581,19 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
       sent_at: packet ? (packet.sent_at || null) : null,
       tenant_token_expires_at: packet ? (packet.tenant_token_expires_at || null) : null,
       tenant_submitted_at: packet ? (packet.tenant_submitted_at || null) : null,
+      signing_parties: packet ? (packet.signing_parties || []) : [],
       //  WHO HAS EXECUTED THE INSTRUMENT. 184 records both acts on the
       //  packet and this read already loads them; not projecting them meant
       //  the operator's review screen could not say whether the resident had
       //  signed, while three other surfaces could.
-      carries_governing_instrument: packet ? !!packet.instrument_body_sha256 : null,
+      carries_governing_instrument: packet
+        ? !!(packet.instrument_source_artifact_id
+             && packet.instrument_body_sha256
+             && packet.instrument_terms_sha256
+             && packet.instrument_package_sha256)
+        : null,
       instrument_form_code: packet ? (packet.instrument_form_code || null) : null,
+      instrument_package_sha256: packet ? (packet.instrument_package_sha256 || null) : null,
       resident_executed_at: packet ? (packet.resident_executed_at || null) : null,
       company_executed_at: packet ? (packet.company_executed_at || null) : null,
       voided_at: packet ? (packet.voided_at || null) : null,
@@ -424,4 +606,7 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
   };
 }
 
-module.exports = { buildReviewList, buildReviewDetail, packetCurrency, concessionDetail, mainBlocker };
+module.exports = {
+  buildReviewList, buildReviewDetail, packetCurrency, concessionDetail, mainBlocker,
+  packetSigningStanding, loadExecutionDecision,
+};

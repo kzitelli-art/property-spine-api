@@ -1,0 +1,4 @@
+
+COMBINED MIGRATION 194-198 PREDEPLOY REFUSED: migrations/195_two_step_leasing_authored_offer_basis.sql differs from the reviewed source.
+expected <hash>
+actual   <hash>

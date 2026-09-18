@@ -1,0 +1,71 @@
+{
+  "mode": "positive_defect_witness",
+  "product_base": "77d61569cf184720eea5af9f88e339c0ba2c0779",
+  "evidence": [
+    {
+      "case": "historical_unbound",
+      "positions": 2,
+      "not_established": 2,
+      "ask_open": 0,
+      "marketable_now": 2,
+      "occupancy_unknown": null,
+      "marketing_states": {
+        "Room1": "marketable_now",
+        "Room2": "marketable_now"
+      },
+      "evidence_states": [
+        "inconclusive",
+        "inconclusive"
+      ],
+      "readiness": [
+        "ready",
+        "ready"
+      ],
+      "certifications": 0,
+      "proposal_unchanged": true
+    },
+    {
+      "case": "unconfirmed_source",
+      "positions": 1,
+      "not_established": 1,
+      "ask_open": 0,
+      "marketable_now": 1,
+      "occupancy_unknown": null,
+      "marketing_states": {
+        "Room1": "marketable_now"
+      },
+      "evidence_states": [
+        "inconclusive"
+      ],
+      "readiness": [
+        "ready"
+      ],
+      "certifications": 0,
+      "proposal_unchanged": true
+    },
+    {
+      "case": "valid_single_position",
+      "positions": 1,
+      "not_established": 0,
+      "ask_open": 1,
+      "marketable_now": 1,
+      "occupancy_unknown": null,
+      "marketing_states": {
+        "Room1": "marketable_now"
+      },
+      "evidence_states": [
+        "confirmed"
+      ],
+      "readiness": [
+        "ready"
+      ],
+      "certifications": 0,
+      "proposal_unchanged": true
+    }
+  ],
+  "actual_source_confirmations": 0,
+  "limits": [
+    "No browser or production proof",
+    "Replacement inventory and missing named-room witnesses not exercised"
+  ]
+}

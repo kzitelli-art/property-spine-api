@@ -20,16 +20,14 @@
 # ════════════════════════════════════════════════════════════════════
 port_busy () {  # $1 = port
   local p="${1:-3000}"
-  if command -v ss >/dev/null 2>&1 && ss -lntH "sport = :$p" 2>/dev/null | grep -q .; then return 0; fi
-  if curl -sf -o /dev/null --max-time 2 --noproxy '*' "http://127.0.0.1:$p/health" 2>/dev/null; then return 0; fi
-  return 1
+  node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/proof_boundary.js" port-free "$p" >/dev/null 2>&1 && return 1
+  return 0
 }
 
 port_busy_message () {  # $1 = port
   local p="${1:-3000}"
   echo "  Something is already listening on port $p."
   echo "  A test server must be the one WE started, or a green proves"
-  echo "  nothing about the database under test. Stop it first:"
-  echo "    for d in /proc/[0-9]*; do tr '\\0' ' ' < \$d/cmdline 2>/dev/null \\"
-  echo "      | grep -q '^node server\\.js' && kill \${d#/proc/}; done"
+  echo "  nothing about the database under test. Identify its owner first;"
+  echo "  this runner will not kill or adopt that process."
 }

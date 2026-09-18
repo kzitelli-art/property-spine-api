@@ -1,0 +1,13 @@
+# Missing possession is not proved vacancy
+
+2026-09-10. API base09ae5d43fc815c4b46587902e505ba3efbdf5c8a, appf2eda58544b1650f123735f4105c750a47eba081. Current source, state and operating instructions inspected; complete governing philosophy retained, hash unchanged977B30A4C41B0F8C1511DA3521D030E031AB13B9D1897EEA5970F011F487FC28. Base full CI34441607011 succeeded.
+
+The preceding repair preserved recorded live siblings, but no live move-in is not evidence that a sibling is vacant. An owned HTTP first red added a sibling with an active lease and no recorded move-in: after the other bed moved out, the compatibility label still became vacant rather than unknown. No actual imported data or confirmation was involved; this is a synthetic lease-only evidence shape.
+
+The existing spacePosition loader now carries possession event and lease IDs; its existing classifier exposes last_possession_end only when that effective end is not followed by current possession. The turnover owner reads this canonical evidence in its existing transaction. On shared units it preserves occupied when any bed is possessed, says vacant when every bed has a recorded end matching any current lease, and otherwise keeps the label unknown. Single-position move-out semantics remain unchanged. No new possession write, table, status vocabulary or parallel loader.
+
+Correction to our own prior proof: the future-arrival control previously expected vacant solely because the future arrival was not current. That expectation was too strong. It now expects unknown, while preserving the original prohibition against treating the future arrival as current occupancy. Recorded last-bed release still expects vacant and passes.
+
+Successor: the same owned HTTP proof passes live sibling, lease-only sibling, future arrival, future departure and recorded last-bed release. Exact outgoing event identity, no extra sibling event, sibling lease status and dated possession are asserted. Both failed and successor runtimes applied the real migration chain and verified owned DB drop/cluster cleanup. Eight date/provenance unit assertions pass; all54 source gates pass after cleanup. No product edits followed the successor.
+
+Limits: this is a compatibility-label repair, not an authoritative occupancy or readiness model. No actual import pipeline, browser, concurrent activation, multiple overlapping rights, provider or deployment proof. Canonical readers still determine rentable availability; uncertainty cannot authorize an application. Prospective work still needs explicit scope identity and accountable expected readiness; no work deadline is converted here.

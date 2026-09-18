@@ -103,6 +103,10 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
       due_at:      dueFromNow(cfg.window),
       related_id:  conversion.id,
       related_type:"leasing_conversion",
+      assigned_user_id: owner_user_id || null,
+      ownership_origin: owner_user_id ? (ownership_origin || null) : null,
+      owner_eligibility_state: owner_user_id
+        ? (owner_eligibility_state || "eligible_assignment") : "unassigned",
     });
 
     const link = (await client.query(
@@ -405,11 +409,20 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     // Move only OPEN conversation rungs to the new owner. (Gate rungs and any
     // closed rung are untouched — gates belong to roles; closed = history.)
     await client.query(
-      `update leasing_conversion_obligations lco
-         set owner_user_id=$1
-       from leasing_conversions c
-       where lco.conversion_id=$2 and lco.outcome is null
-         and lco.rung in ('tour_followup','applicant_followup','lease_signature_followup')`,
+      `with moved as (
+         update leasing_conversion_obligations
+            set owner_user_id=$1
+          where conversion_id=$2 and outcome is null
+            and rung in ('tour_followup','applicant_followup','lease_signature_followup')
+          returning obligation_id
+       )
+       update obligations o
+          set assigned_user_id=$1,
+              owner_eligibility_state='eligible_assignment',
+              ownership_origin='manual_reassignment',
+              updated_at=now()
+         from moved
+        where o.id=moved.obligation_id`,
       [to_user_id, conversion_id]
     );
 

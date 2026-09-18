@@ -58,6 +58,9 @@ const RULINGS = [
   {
     receipt: "reviewed_mapping_receipt_2026-07-27",
     note: "Eight residential floorplan codes plus commercial. See header.",
+    //  Structural grain is part of the reviewed ruling. A source-code map
+    //  without this field is incomplete and must refuse before any write.
+    position_kind: "unit",
     //  This property's source codes ARE its canonical codes — that is how it
     //  was approved and nothing here changes it. source_code is stated
     //  explicitly so the two roles are visible even where they coincide.
@@ -96,7 +99,10 @@ const RULINGS = [
     //  mistake it for one. If the distinction ever needs to be defended from
     //  evidence, the evidence is not in the rent roll.
     receipt: "skyline_owner_statement_2026-08-20_source_silent_on_bath_distinction",
-    note: "Skyline (1417 N 15th), bed-grained. Room grain corroborated by source; bath distinction is owner knowledge, not in the source.",
+    note: "Skyline (1417 N 15th), bed-grained. Room grain corroborated by source; bath distinction CONTRADICTS the source and comes from physical inspection.",
+    //  The reviewed Skyline property leases by the bed. Keep this beside the
+    //  mapping so the tool cannot silently turn a bed ruling into unit grain.
+    position_kind: "bed",
     //  ── OUR VOCABULARY, NOT THE VENDOR'S ──────────────────────────
     //  STU00015/16/17 are Yardi's "Unit/Room Type" strings. They are how the
     //  SOURCE names a floorplan; they are not how Spine should. A canonical
@@ -116,7 +122,44 @@ const RULINGS = [
     codes: [
       { source_code: "STU00016", code: "2BR",       label: "2 Bedroom",            sort: 10, use: "residential" },
       { source_code: "STU00015", code: "3BR-1BA",   label: "3 Bedroom / 1 Bath",   sort: 20, use: "residential" },
-      { source_code: "STU00017", code: "3BR-1.5BA", label: "3 Bedroom / 1.5 Bath", sort: 30, use: "residential" },
+      //  ⛔ STU00017 IS NOT A BATH COUNT. It maps to 3BR-1BA like STU00015.
+      //  This line used to say 3BR-1.5BA. Physical inspection by Mike Grivna
+      //  established that only 116 and 416 are 1.5 bath, while STU00017 sits
+      //  on FIVE units in the May 2026 rent roll (116, 216, 316, 405, 416)
+      //  and four in the April import batch. Applying the code as a bath
+      //  count would have given three units a bathroom they do not have, and
+      //  then published pricing against it.
+      //
+      //  The first receipt recorded that the source was SILENT on the bath
+      //  distinction. It is now known to CONTRADICT it, which is stronger: a
+      //  silence invites a careful inference, a contradiction forbids one.
+      { source_code: "STU00017", code: "3BR-1BA",   label: "3 Bedroom / 1 Bath",   sort: 20, use: "residential" },
+    ],
+
+    //  ── A TYPE NO SOURCE CODE PRODUCES ────────────────────────────
+    //  3BR-1.5BA exists physically and is derivable from nothing in the
+    //  export. It is created here so pricing has something to attach to,
+    //  and populated only by the named list below.
+    extra_types: [
+      { code: "3BR-1.5BA", label: "3 Bedroom / 1.5 Bath", sort: 30, use: "residential" },
+    ],
+
+    //  ── THE ONLY 1.5-BATH UNITS, BY NAME ──────────────────────────
+    //  Confirmed by physical inspection, not derived. Every entry must
+    //  match a real unit or the whole run refuses — a unit_number typo'd
+    //  here would otherwise leave that unit silently typed 1BA, which is
+    //  the exact failure this list exists to prevent.
+    //
+    //  THE PREFIX IS NOT DECORATION. Production carries `1417-116` for the
+    //  real apartment AND separate rows named `116 - A`, `116 - B`,
+    //  `116 - C` — legacy units shaped like beds, 159 of them across the
+    //  property, each with a null bed and no source code. Matching on a
+    //  bare "116" found none of them and would have been ambiguous if it
+    //  had. The match is exact, against the prefixed number, so a bed-shaped
+    //  leftover can never receive a bathroom.
+    unit_overrides: [
+      { unit_number: "1417-116", code: "3BR-1.5BA", why: "physical inspection 2026-08-20 (M. Grivna)" },
+      { unit_number: "1417-416", code: "3BR-1.5BA", why: "physical inspection 2026-08-20 (M. Grivna)" },
     ],
   },
 ];
@@ -125,6 +168,9 @@ const RULINGS = [
 //  same as it always did.
 let MAPPING = null;
 let RECEIPT = null;
+//  The whole selected ruling — extra_types and unit_overrides live on it,
+//  not on the codes array.
+let RULING = null;
 
 function arg(name) {
   const i = process.argv.indexOf(name);
@@ -156,7 +202,8 @@ function arg(name) {
 
   // ── what the source deterministically says, via the durable relationship ──
   const src = (await c.query(
-    `select r.raw->>'unit_type' as code, s.id as space_id, u.id as unit_id, u.unit_number
+    `select r.raw->>'unit_type' as code, s.id as space_id, s.space_label,
+            u.id as unit_id, u.unit_number
        from import_source_rows r
        join import_batches b on b.id = r.import_batch_id
        join spaces s on s.id = r.produced_space_id
@@ -190,8 +237,9 @@ function arg(name) {
     covering.forEach((r) => console.error("  " + r.receipt));
     await c.end(); process.exit(1);
   }
-  MAPPING = covering[0].codes;
-  RECEIPT = covering[0].receipt;
+  RULING  = covering[0];
+  MAPPING = RULING.codes;
+  RECEIPT = RULING.receipt;
   console.log(`ruling: ${RECEIPT}`);
   console.log(`        ${covering[0].note}\n`);
 
@@ -208,8 +256,40 @@ function arg(name) {
   }
 
   const allSpaces = (await c.query(
-    `select s.id, u.unit_number, u.bedrooms from spaces s join units u on u.id=s.unit_id where u.property_id=$1`,
+    `select s.id, s.space_label, s.position_kind, s.use_type,
+            u.unit_number, u.bedrooms
+       from spaces s join units u on u.id=s.unit_id where u.property_id=$1`,
     [propertyId])).rows;
+
+  //  A source-code coverage match is not enough to establish physical grain.
+  //  The approved ruling must say which kind it governs, and the source shape
+  //  must be compatible with that ruling. Refuse before the first write when
+  //  the ruling is incomplete or the rows contradict it.
+  const approvedKind = RULING.position_kind;
+  if (!["unit", "bed"].includes(approvedKind)) {
+    console.error("\nREFUSING: the selected ruling has no approved position_kind (unit or bed). Grain is unreviewed; nothing was written.");
+    await c.end(); process.exit(1);
+  }
+  const sourceSpaceIds = new Set(src.map((r) => String(r.space_id)));
+  const sourceUnitSpaces = new Map();
+  for (const r of src) {
+    const key = String(r.unit_id);
+    if (!sourceUnitSpaces.has(key)) sourceUnitSpaces.set(key, new Set());
+    sourceUnitSpaces.get(key).add(String(r.space_id));
+  }
+  if (approvedKind === "unit") {
+    const contradictory = [...sourceUnitSpaces.entries()].filter(([, spaces]) => spaces.size > 1);
+    if (contradictory.length) {
+      console.error(`\nREFUSING: ruling declares unit grain but ${contradictory.length} unit(s) carry multiple coded positions. Grain is contradictory; nothing was written.`);
+      await c.end(); process.exit(1);
+    }
+  } else {
+    const unlabeled = src.filter((r) => !String(r.space_label || "").trim());
+    if (unlabeled.length) {
+      console.error(`\nREFUSING: ruling declares bed grain but ${unlabeled.length} coded position(s) have no source position label. Grain is incomplete; nothing was written.`);
+      await c.end(); process.exit(1);
+    }
+  }
   const unmapped = allSpaces.filter((s) => !bySpace.has(s.id));
 
   for (const m of MAPPING) {
@@ -219,6 +299,13 @@ function arg(name) {
   console.log(`\n  positions with a deterministic code : ${bySpace.size}`);
   console.log(`  positions left "Not configured"      : ${unmapped.length}`
     + (unmapped.length ? "  → " + unmapped.map((u) => `${u.unit_number} (${u.bedrooms} bed)`).join(", ") : ""));
+  const proposedDiff = allSpaces.filter((s) => {
+    if (!sourceSpaceIds.has(String(s.id))) return false;
+    const code = [...bySpace.get(s.id)][0];
+    return s.position_kind !== approvedKind || s.use_type !== MAPPING.find((m) => m.source_code === code)?.use;
+  });
+  console.log(`  approved structural grain            : ${approvedKind}`);
+  console.log(`  proposed position_kind changes       : ${proposedDiff.filter((s) => s.position_kind !== approvedKind).length}`);
 
   // The model unit: reported, never auto-classified from its status string.
   const model = (await c.query(
@@ -231,6 +318,52 @@ function arg(name) {
     console.log( "  marked 'model' in the opening source. They follow their floorplan use_type here;");
     console.log( "  whether a model unit is a durable non-revenue use is an open question and is NOT");
     console.log( "  decided from the status string.");
+  }
+
+  //  ── THE NAMED OVERRIDES, PREVIEWED AND CHECKED BEFORE ANY WRITE ──
+  //  These are the rows that do NOT follow from a source code — the whole
+  //  reason the run can be right about 70 units and wrong about two. Showing
+  //  them only inside --apply would mean the operator approves the mapping
+  //  without ever seeing its least derivable part. Each is resolved against
+  //  real inventory here, so a unit_number that matches nothing is visible
+  //  now rather than as an abort halfway through the write.
+  if ((RULING.unit_overrides || []).length) {
+    console.log("\n  ── named overrides (not derived from any source code) ──");
+    let missing = 0;
+    for (const o of RULING.unit_overrides) {
+      const hit = (await c.query(
+        `select unit_number from units where property_id=$1 and unit_number=$2`,
+        [propertyId, o.unit_number])).rows;
+      if (hit.length === 1) {
+        console.log(`     ✓ unit ${o.unit_number.padEnd(8)} → ${o.code.padEnd(11)} ${o.why}`);
+      } else {
+        missing++;
+        console.log(`     ✗ unit ${o.unit_number.padEnd(8)} → ${o.code.padEnd(11)} MATCHES ${hit.length} UNITS — the named list and inventory disagree`);
+        //  A refusal that only says "no" leaves the operator to go hunting in
+        //  a database for the spelling this tool wanted. It already knows the
+        //  property, so it can show what IS there and let the difference be
+        //  read directly. Suggesting is not guessing: nothing is written on
+        //  the strength of a near match.
+        const near = (await c.query(
+          `select unit_number from units
+            where property_id = $1 and unit_number like '%' || $2 || '%'
+            order by unit_number limit 8`, [propertyId, o.unit_number])).rows;
+        if (near.length) {
+          console.log(`        inventory has: ${near.map((r) => JSON.stringify(r.unit_number)).join(", ")}`);
+        } else {
+          const any = (await c.query(
+            `select unit_number from units where property_id=$1 order by unit_number limit 5`,
+            [propertyId])).rows;
+          console.log(`        nothing contains "${o.unit_number}". unit_number looks like: ${any.map((r) => JSON.stringify(r.unit_number)).join(", ")}`);
+        }
+      }
+    }
+    if (missing) {
+      console.error(`\nREFUSING: ${missing} named override(s) match no unit. Nothing was written.`);
+      console.error("  The list is physical truth; if inventory disagrees, one of them is wrong");
+      console.error("  and guessing which would put a bathroom on the wrong apartment.\n");
+      await c.end(); process.exit(1);
+    }
   }
 
   if (!apply) { console.log("\nDry run only. Re-run with --apply to write.\n"); await c.end(); return; }
@@ -255,6 +388,19 @@ function arg(name) {
       typeIdByCode.set(m.source_code, r.rows[0].id);
     }
 
+    //  Types with no source code still need their row.
+    for (const t of (RULING.extra_types || [])) {
+      const r = await c.query(
+        `insert into property_unit_types (property_id, code, label, sort_order, source_note, created_by_user_id)
+         values ($1,$2,$3,$4,$5,$6)
+         on conflict (property_id, code) do update
+           set label = excluded.label, sort_order = excluded.sort_order,
+               source_note = excluded.source_note, updated_at = now()
+         returning id`,
+        [propertyId, t.code, t.label, t.sort, `${RECEIPT}: not derivable from any source code`, actor]);
+      typeIdByCode.set("code:" + t.code, r.rows[0].id);
+    }
+
     let assigned = 0, kinded = 0, used = 0;
     for (const [code, rows] of byCode) {
       const typeId = typeIdByCode.get(code);
@@ -266,18 +412,58 @@ function arg(name) {
             where id=$4 and (unit_type_id is distinct from $1)`,
           [typeId, `${RECEIPT}: ${code}`, actor, row.unit_id]);
         assigned += u.rowCount;
-        // position_kind: structural receipt — one canonical space per unit and
-        // no bed labels anywhere in the source.
+        // position_kind: the explicit structural grain in the approved ruling.
         const s = await c.query(
-          `update spaces set position_kind='unit', use_type=$1,
-                             classification_source=$2, classified_by_user_id=$3, classified_at=now()
-            where id=$4 and (position_kind is distinct from 'unit' or use_type is distinct from $1)`,
-          [use, `${RECEIPT}: ${code}`, actor, row.space_id]);
+          `update spaces set position_kind=$1, use_type=$2,
+                             classification_source=$3, classified_by_user_id=$4, classified_at=now()
+            where id=$5 and (position_kind is distinct from $1 or use_type is distinct from $2)`,
+          [RULING.position_kind, use, `${RECEIPT}: ${code}`, actor, row.space_id]);
         kinded += s.rowCount; used += s.rowCount;
       }
     }
+
+    //  ── NAMED EXCEPTIONS WIN, AND MUST ALL LAND ───────────────────
+    //  Applied after the source-code pass so they override it. The count is
+    //  asserted: an override that matched no unit means the list disagrees
+    //  with inventory, and continuing would leave a unit typed by a code
+    //  that is known not to describe it.
+    let overridden = 0;
+    for (const o of (RULING.unit_overrides || [])) {
+      const typeId = typeIdByCode.get("code:" + o.code);
+      if (!typeId) throw new Error(`override names type ${o.code}, which this ruling does not create`);
+      const u = await c.query(
+        `update units set unit_type_id=$1, unit_type_source=$2,
+                          unit_type_assigned_by_user_id=$3, unit_type_assigned_at=now()
+          where property_id=$4 and unit_number=$5 returning id`,
+        [typeId, `${RECEIPT}: ${o.why}`, actor, propertyId, o.unit_number]);
+      if (u.rowCount !== 1) {
+        throw new Error(
+          `override for unit ${o.unit_number} matched ${u.rowCount} units, expected exactly 1 — ` +
+          `the named list and the inventory disagree, so nothing is written`);
+      }
+      overridden += u.rowCount;
+      console.log(`  override unit ${o.unit_number.padEnd(6)} → ${o.code.padEnd(10)} ${o.why}`);
+    }
+    if (overridden !== (RULING.unit_overrides || []).length) {
+      throw new Error("not every named override landed — refusing to commit a partial mapping");
+    }
+
     await c.query("commit");
-    console.log(`\nAPPLIED — ${typeIdByCode.size} governed unit types, ${assigned} units assigned, ${kinded} positions classified.`);
+    //  ── COUNT THE ROWS, NOT THE LOOKUP KEYS ────────────────────────
+    //  This printed typeIdByCode.size, which is a routing table and not an
+    //  inventory: STU00015 and STU00017 both resolve to 3BR-1BA, so three
+    //  source codes plus one extra_type make four keys pointing at three
+    //  rows. The production run reported "4 governed unit types" when it had
+    //  created three, and the only reason that was caught is that the e2e
+    //  counts the table instead and disagreed.
+    //
+    //  A receipt that overstates by one is a small lie in the exact place a
+    //  reader is trusting the tool most — the line they screenshot. So it
+    //  asks the table.
+    const typeCount = (await c.query(
+      "select count(*)::int n from property_unit_types where property_id = $1",
+      [propertyId])).rows[0].n;
+    console.log(`\nAPPLIED — ${typeCount} governed unit types, ${assigned} units assigned, ${kinded} positions classified.`);
     console.log(`Provenance recorded on every row: ${RECEIPT}\n`);
   } catch (e) {
     await c.query("rollback");

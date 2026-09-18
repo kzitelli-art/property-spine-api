@@ -202,12 +202,18 @@ try {
        `      facts.NOTHING = { read_state: state, standing: null, position: null, unknowns: null };`]),
     "tenancy declared registered AND gathered");
 
+  /*  The two mutations below rewrite the gate's STANDING_READ_DIRS line by
+   *  exact text, so the anchor must track that line. src/leasing joined it
+   *  on 2026-09-14; both mutations keep their original MEANING — one drops
+   *  src/tenancy (the historical defect), the other adds src/surfaces (the
+   *  exclusion turned off) — and neither weakens because src/leasing is
+   *  carried through both sides of each rewrite.  */
   /*  ── 4. THE SCAN DIRECTORY REMOVED ──────────────────────────────
    *  THE ACTUAL HISTORICAL DEFECT. This is the state the gate shipped
    *  in: tenancy invisible, gate green. It must never be quiet again.  */
   falsify("src/tenancy is dropped from the scanned directories",
-    () => mutate(GATE, [`const STANDING_READ_DIRS = ["src/asset", "src/tenancy"];`,
-                        `const STANDING_READ_DIRS = ["src/asset"];`]),
+    () => mutate(GATE, [`const STANDING_READ_DIRS = ["src/asset", "src/tenancy", "src/leasing"];`,
+                        `const STANDING_READ_DIRS = ["src/asset", "src/leasing"];`]),
     "registry entry tenancy corresponds to a real standing read");
 
   /*  ── 5. THE EXCLUSION TURNED OFF ────────────────────────────────
@@ -216,11 +222,32 @@ try {
    *  entries they can never honestly earn. The exclusion is a real
    *  boundary, and this proves removing it is loud rather than free.   */
   falsify("src/surfaces is scanned as though it held domains",
-    () => mutate(GATE, [`const STANDING_READ_DIRS = ["src/asset", "src/tenancy"];`,
-                        `const STANDING_READ_DIRS = ["src/asset", "src/tenancy", "src/surfaces"];`]),
+    () => mutate(GATE, [`const STANDING_READ_DIRS = ["src/asset", "src/tenancy", "src/leasing"];`,
+                        `const STANDING_READ_DIRS = ["src/asset", "src/tenancy", "src/leasing", "src/surfaces"];`]),
     "is declared in the Ask Spine registry");
 
-  /*  ── 6. THE TREE IS EXACTLY AS IT WAS FOUND ─────────────────────
+  /*  ── 6. THE BRANCH NOBODY CAN REACH ─────────────────────────────
+   *  THE SECOND HISTORICAL DEFECT, and the one this gate could not see
+   *  for two CI runs. prospect_match shipped guarded by
+   *  `subject === "leasing" || subject === "match"`; questionSubject
+   *  yields neither, so the branch was unreachable, the registry said
+   *  `registered`, and the gate passed it. `facts.<domain> =` existing in
+   *  source is not the same claim as a question reaching it, and only the
+   *  reachability check can tell them apart — which is why this mutation
+   *  must be loud.                                                        */
+  falsify("a registered domain's gather branch is guarded by a subject nothing yields",
+    () => mutate(COMPOSER, [`  if (subject === "leasing_person") {`,
+                            `  if (subject === "leasing" || subject === "match") {`]),
+    "is reached by");
+
+  /*  The other direction: a declaration that names no question is a
+   *  registration nobody can exercise, and must not pass either.          */
+  falsify("a registered domain declares no reached_by question",
+    () => mutate(GATE, [`    reached_by: [\n      "how many beds are open",`,
+                        `    reached_by_disabled: [\n      "how many beds are open",`]),
+    "declares reached_by questions");
+
+  /*  ── 7. THE TREE IS EXACTLY AS IT WAS FOUND ─────────────────────
    *  Byte-identical, asserted rather than assumed. A harness that
    *  mutates production source owes the next reader this.              */
   for (const f of FILES) {
@@ -246,5 +273,5 @@ if (fail) {
   console.log("\n  ✗ FAIL — the coverage gate cannot detect a broken registration chain.\n");
   process.exit(1);
 }
-console.log("\n  ✓ PASS — the gate goes red six ways and green again. It is measuring something.\n");
+console.log("\n  ✓ PASS — the gate goes red 8 ways and green again. It is measuring something.\n");
 process.exit(exitCode);

@@ -1,0 +1,18 @@
+FIRST RED — the gate cannot see an unreachable gather branch
+board 7dbfd5a9, gate_ask_spine_readers.js BEFORE the reachability detector
+
+THROWAWAY MUTATION (never committed as product): prospect_match's gather
+branch re-guarded with the dead shape questionSubject never yields —
+  674:  if (subject === "leasing" || subject === "match") {
+
+questionSubject can yield none of those; measured:
+  "which homes fit this prospect" -> leasing_person
+  "what can we offer a prospect with a 900 budget" -> leasing_person
+
+THE GATE, UNCHANGED, ON THAT TREE:
+    ok    prospect_match declared registered AND gathered in src/agent/ask_spine_answer.js
+    ASSERTIONS COMPLETE · 115 run · 115 passed · 0 failed
+    ✓ PASS — every domain with standing truth is classified.
+  GATE EXIT = 0
+
+The branch is unreachable. The gate calls it gathered, and passes.

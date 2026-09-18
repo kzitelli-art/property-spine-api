@@ -1,0 +1,13 @@
+FIRST RED — already pinned on the board at f680a365.
+The entitlement matrix records the defect as today's behaviour rather than letting it pass.
+command: node tests/proofs/ask_spine_entitlement_matrix.test.js
+
+  ── FOUND · §40.7 · NOT_AUTHORIZED still reads as BLIND ──
+  ok    leasing_person refuses an unentitled session with an inner envelope
+  ok    FOUND (open): that envelope still makes composite_silence read BLIND
+  ok    FOUND (open): and the stated reason is false for an entitlement refusal
+143/143 passed
+
+-- the envelope and the verdict, read directly --
+leasing_person    = {"read_state":"NOT_AUTHORIZED","note":"This session does not hold the leasing or management entitlement at this property."}
+composite_silence = {"state":"BLIND","unread":[{"domain":"leasing_person","read_state":"NOT_AUTHORIZED"}],"why":"at least one required reader did not return, so silence cannot mean health"}

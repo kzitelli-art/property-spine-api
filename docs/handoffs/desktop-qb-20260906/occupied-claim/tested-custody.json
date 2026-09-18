@@ -1,0 +1,25 @@
+{
+  "api": {
+    "head": "f73e69eddd1382fb7d14396a0962b7e999730ae3",
+    "tracked_diff_sha256": "4a2e1d6366f36913135b87e08efdc5c052e3dd691c5ccc38486ddfbf23023944",
+    "working_tree_clean": false,
+    "changed_file_sha256": {
+      "docs/handoffs/desktop-qb-20260906/occupied-claim/RECEIPT.md": "31eb80a5a274a05996190266efcde9491b5065234989abd3590dd281d651d996",
+      "src/surfaces/availability_read.js": "e04e632392357a50ac57d9094e09e79c72350f036d5dd98d4842abdf46dfca93",
+      "tests/e2e/onboarding_review_local.js": "456f273a21830ff5c1a9fe5655630a9b5af89e125c6cacc5c0cad59994759584",
+      "tests/e2e/verify_all.sh": "515819a52b8c63ca704e2b30d554e4ebe2967b7993feeae78cce1ee9ee4641f5",
+      "tests/proofs/availability_uncorroborated_claim.db.js": "c7b2bd739e663752a021a460b05b7419179c534c42d0533a5344451d66f4c052",
+      "tests/unit/availability_occupancy_basis.test.js": "46e635c1e659876eea7c0bcfae397df3778655993b6e21d3657fbf8ca214ee26"
+    }
+  },
+  "app": {
+    "head": "6c8346609bf373fea4b8e495b4c18a1a92e98d39",
+    "tracked_diff_sha256": "c3586c1a5a9500c3efa109a39b9ae09992f78b57aa1ac6ede8578db72db92462",
+    "working_tree_clean": false,
+    "changed_file_sha256": {
+      "canonical_onboarding_review.browser.js": "9401310dfcb637ede16e1acabb3cdcedaa85d4ab82476f83ea06d80b544839a4",
+      "index.html": "9dc6f1d3f422f7641aebfa275b9d0663bdf7b937eefcc3e0b0d7c62e85a38e33",
+      "rent_roll_server_classification.test.js": "3e44271ae21fe6921d0bdc3f40d8eb14eac31ee431026ce7dea27d835ab2ce2e"
+    }
+  }
+}

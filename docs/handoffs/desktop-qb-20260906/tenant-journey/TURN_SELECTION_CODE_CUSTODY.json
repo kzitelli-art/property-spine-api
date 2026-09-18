@@ -1,0 +1,20 @@
+{
+  "head": "9f2acff97af311e6ebdcd5e2219f8cf873894748",
+  "state": "local_uncommitted_turn_window_repair",
+  "checks": {
+    "full_tenant_path": 163,
+    "focused_db_http": 11,
+    "source_governance": 50
+  },
+  "source_sha256": {
+    "src/applications/application_target_authority.js": "D57432F2926BDC777F23E8ABA7CABD629E85020AA48EAC5AD6F7BCD6912F5334",
+    "src/applications/application_target_read.js": "56DD8C644B50C8361CCB82A92C2C74500EF3CC836D0C519511C99F3A74C3D359",
+    "src/applications/application_submission.js": "8D84D2FF4C36D20EC574F0A4B8312F827258A146276D1E9F833D23CA1FDD9848",
+    "src/identity/operator.js": "22ED8C7A196B65C3F4865DA3AEF8E7826270BE7C8C79909B36837BB48E1CC6B6",
+    "tests/proofs/application_turn_window.db.js": "240CEA7B188BBA4478BF51252945206B9E6C413843410B608D251381DBE9F540",
+    "tests/proofs/application_future_target.db.js": "FB8E0DE9B1AB4D81A3684BA8C5E55C266A47D8635C1E23C7CEB862500FD3EA8F",
+    "tests/e2e/tour_application_lease.e2e.js": "5F491D428B73E963E72C8E39D01C31D16D9D084179FE0E9412665E4488178FEB",
+    "tests/unit/application_future_target.test.js": "A3900C233DE222BF5AEEE16401BDBD796C255ECAA2D77DCDB797FCD137507B00"
+  },
+  "deployment": "not_deployed"
+}

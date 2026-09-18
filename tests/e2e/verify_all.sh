@@ -12,52 +12,287 @@
 #  significant defect found in the leasing work was invisible in source
 #  and obvious the moment something ran.
 #
-#      ./tests/e2e/verify_all.sh
-#      E2E_DATABASE_URL=postgres://... ./tests/e2e/verify_all.sh
+#      E2E_DISPOSABLE_POSTGRES=1 E2E_DATABASE_URL=postgres://... ./tests/e2e/verify_all.sh
+#  The target must be a separately provisioned disposable loopback instance;
+#  the existing CI PostgreSQL service meets this contract. No ambient DB is reset.
 #
 #  Requires a reachable Postgres. The browser rung additionally needs
 #  Chromium; when it is absent the rung is reported SKIPPED — loudly, and
 #  named in the summary — never silently passed.
 # ════════════════════════════════════════════════════════════════════
-set -u
+set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT" || exit 1
 export E2E_DATABASE_URL="${E2E_DATABASE_URL:-postgres://postgres:spineproof@127.0.0.1:5432/spine_verify}"
-ADMIN="${E2E_DATABASE_URL%/*}/postgres"
+RUN_DIR=$(mktemp -d "${RUNNER_TEMP:-/tmp}/spine-proof-XXXXXXXX") || exit 1
+if [ -n "${GITHUB_ENV:-}" ]; then echo "SPINE_PROOF_LOG_DIR=$RUN_DIR" >> "$GITHUB_ENV"; fi
+export E2E_PROOF_MANIFEST="$RUN_DIR/ownership.json"
+export E2E_SMS_LOG="$RUN_DIR/sms.log" E2E_ANTHROPIC_LOG="$RUN_DIR/anthropic.log" E2E_EGRESS_LOG="$RUN_DIR/egress.log"
+export E2E_SESSION_LOG="$RUN_DIR/sessions.log"
+SERVER_PID=""
+PARENT_WORKTREE=""
+stop_owned_server () {
+  local result=0
+  if [ -n "$SERVER_PID" ]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    for _ in $(seq 1 50); do kill -0 "$SERVER_PID" 2>/dev/null || break; sleep .1; done
+    if kill -0 "$SERVER_PID" 2>/dev/null; then kill -KILL "$SERVER_PID" 2>/dev/null; result=1; fi
+    wait "$SERVER_PID" 2>/dev/null || true
+    SERVER_PID=""
+    node tests/e2e/proof_boundary.js port-free "${PORT:-3000}" || result=1
+  fi
+  return "$result"
+}
+cleanup () {
+  local result=$?
+  trap - EXIT INT TERM
+  stop_owned_server || result=1
+  if [ -n "$PARENT_WORKTREE" ] && [ -e "$PARENT_WORKTREE/.git" ]; then
+    git worktree remove --force "$PARENT_WORKTREE" || result=1
+    PARENT_WORKTREE=""
+  fi
+  if [ -f "$E2E_PROOF_MANIFEST" ]; then
+    node tests/e2e/proof_boundary.js cleanup || result=1
+  fi
+  if [ -s "$E2E_EGRESS_LOG" ]; then echo "FAIL: attempted nonloopback proof egress"; result=1; fi
+  node tests/e2e/proof_boundary.js port-free "${PORT:-3000}" || result=1
+  if [ "$result" != 0 ]; then echo "Verification incomplete/failed; owned-run evidence: $RUN_DIR"; fi
+  exit "$result"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 FAILED=0; SKIPPED=""
 step () {  # $1 = label, rest = command
   local label="$1"; shift
   printf '── %-34s ' "$label"
-  if "$@" >/tmp/verify_step.log 2>&1; then echo "PASS"; else
+  if "$@" >"$RUN_DIR/step.log" 2>&1; then echo "PASS"; cat "$RUN_DIR/step.log"; else
     echo "FAIL"; FAILED=1
-    sed 's/^/      /' /tmp/verify_step.log | tail -25
+    sed 's/^/      /' "$RUN_DIR/step.log" | tail -40
+    exit 1
+  fi
+}
+
+# ── THE OPERATOR APP PIN ────────────────────────────────────────────
+#  tests/e2e/app_pin.txt is the ONE declared statement of which
+#  property-spine-app commit these proofs may assume. It is read here and
+#  by .github/workflows/verify.yml; nothing else infers an app version.
+#
+#  THE POINT OF THE COMPARISON: a browser rung that runs against an app
+#  commit the API never declared reports green about a surface nobody
+#  pinned. That is worse than the SKIPPED line it replaces. So a present
+#  checkout whose HEAD differs from the pin is a FAILURE that names both
+#  commits, and a checkout whose HEAD cannot be read is a failure too —
+#  "I could not tell" is not "it matched".
+APP_PIN_FILE="$ROOT/tests/e2e/app_pin.txt"
+APP_PIN_SHA=""; APP_PIN_BRANCH=""
+if [ -f "$APP_PIN_FILE" ]; then
+  APP_PIN_SHA=$(awk '$1=="sha"{print $2; exit}' "$APP_PIN_FILE")
+  APP_PIN_BRANCH=$(awk '$1=="branch"{print $2; exit}' "$APP_PIN_FILE")
+fi
+APP_ROOT="${E2E_APP_ROOT:-$ROOT/../property-spine-app}"
+APP_PIN_STATE="no_checkout"; APP_OBSERVED_SHA=""
+if [ -f "$APP_ROOT/index.html" ]; then
+  APP_OBSERVED_SHA=$(git -C "$APP_ROOT" rev-parse HEAD 2>/dev/null || true)
+  if   [ -z "$APP_PIN_SHA" ];                        then APP_PIN_STATE="no_pin_declared"
+  elif [ -z "$APP_OBSERVED_SHA" ];                   then APP_PIN_STATE="unreadable"
+  elif [ "$APP_OBSERVED_SHA" = "$APP_PIN_SHA" ];     then APP_PIN_STATE="matched"
+  else                                                    APP_PIN_STATE="drifted"; fi
+fi
+APP_PIN_SHORT="${APP_PIN_SHA:0:7}"
+export APP_ROOT APP_PIN_SHA APP_PIN_BRANCH APP_PIN_STATE
+
+#  Every rung that needs the shipped app asks THIS, so the three call
+#  sites cannot drift apart from each other either.
+app_rung_ready () {
+  [ -x "${CHROMIUM:-/opt/pw-browsers/chromium-1194/chrome-linux/chrome}" ] || return 1
+  [ "$APP_PIN_STATE" = "matched" ] || return 1
+  return 0
+}
+app_rung_skip_reason () {
+  if [ ! -x "${CHROMIUM:-/opt/pw-browsers/chromium-1194/chrome-linux/chrome}" ]; then
+    echo "no Chromium"
+  elif [ "$APP_PIN_STATE" = "no_checkout" ]; then
+    echo "no E2E_APP_ROOT checkout of the pinned app"
+  else
+    echo "app pin $APP_PIN_STATE"
   fi
 }
 
 echo "════════════════════════════════════════════════════════════"
 echo "  PROPERTY SPINE — FULL VERIFICATION"
-echo "  database: ${E2E_DATABASE_URL%%\?*}"
+echo "  database: fresh owned disposable target (credentials omitted)"
 echo "════════════════════════════════════════════════════════════"
 
+printf '── %-34s ' "operator app pin"
+case "$APP_PIN_STATE" in
+  matched)
+    echo "$APP_PIN_SHORT ($APP_PIN_BRANCH) — checkout agrees" ;;
+  no_checkout)
+    echo "$APP_PIN_SHORT declared; no checkout on this runner (app rungs will skip by name)" ;;
+  drifted)
+    echo "FAIL"
+    echo "      THE APP CHECKOUT IS NOT THE COMMIT THIS REPOSITORY DECLARED."
+    echo "      declared (tests/e2e/app_pin.txt): $APP_PIN_SHA"
+    echo "      checked out at $APP_ROOT:         $APP_OBSERVED_SHA"
+    echo "      Move the pin deliberately, or check the app out at the pin."
+    exit 1 ;;
+  unreadable)
+    echo "FAIL"
+    echo "      An app checkout is present at $APP_ROOT but its HEAD could not be read,"
+    echo "      so the declared pin $APP_PIN_SHA could not be confirmed. Not proven is not passed."
+    exit 1 ;;
+  no_pin_declared)
+    echo "FAIL"
+    echo "      An app checkout is present at $APP_ROOT but tests/e2e/app_pin.txt declares no sha."
+    exit 1 ;;
+esac
+
 # ── proofs that need no database ────────────────────────────────────
+step "proof boundary refusal checks" node tests/e2e/proof_boundary.test.js
 step "source governance gates"   node tests/verify_source_governance.js
 step "next-action oracle"        node src/shared/proof_next_action_resolver.js
+step "application review actions" node tests/unit/application_review_action_contract.test.js
+step "application offer writer and read locks" node tests/unit/application_offer_terms.test.js
+step "application review offer projection" node tests/unit/application_review_offer.test.js
+step "historical pending offer read locks" node tests/unit/proposed_terms_read_lock.test.js
+step "two-step packet eligibility basis" node tests/unit/two_step_packet_eligibility.test.js
+step "migration 194-198 release contract" node tests/unit/migration_194_198_predeploy_contract.test.js
+step "debt vocabulary subject routing" node tests/unit/debt_vocabulary_subject.test.js
+step "compliance ask spine projection" node tests/unit/compliance_ask_spine.test.js
+step "ask spine entitlement matrix" node tests/proofs/ask_spine_entitlement_matrix.test.js
+step "migration 194-198 reviewed hashes are the git blobs" node tests/unit/migration_194_198_reviewed_hashes.test.js
+step "inventory correction door contract" node tests/unit/inventory_correction_contract.test.js
+step "terms preparation attribution" node tests/unit/terms_confirmation_attribution.test.js
+step "current packet execution decision attribution" node tests/unit/execution_decision_read.test.js
+step "terms attribution model boundary" node tests/unit/terms_attribution_model_boundary.test.js
+step "leasing knowledge coverage" node tests/unit/leasing_knowledge_coverage.test.js
+step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
+step "institutional rent projection" node tests/unit/rent_roll_institutional_projection.test.js
+step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js
+step "availability occupancy basis" node --test tests/unit/availability_occupancy_basis.test.js
 
 # ── build the schema from the REAL chain ────────────────────────────
-psql "$ADMIN" -q -c "drop database if exists $(basename "${E2E_DATABASE_URL%%\?*}")" >/dev/null 2>&1
-psql "$ADMIN" -q -c "create database $(basename "${E2E_DATABASE_URL%%\?*}")"        >/dev/null 2>&1
+node tests/e2e/proof_boundary.js create >"$RUN_DIR/env.sh" || exit 1
+. "$RUN_DIR/env.sh"
 step "schema from the migration chain"  ./tests/e2e/apply_migrations.sh
+step "negative contract rent unavailable" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_HTTP_PORT=3353 node tests/proofs/negative_contract_rent_unavailable.db.js
 step "property fixture"     psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/property_fixture.sql
 step "pricing fixture"      psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/fixtures.sql
 step "instrument fixture"   node tests/e2e/instrument_fixture.js
+
+# Same new behavioral oracles, unchanged defective server source. Source is
+# archived from the pinned git object; only the test preloads come from here.
+BASELINE=f95344977b6c7cacacd40f503bed452f501227a0
+mkdir "$RUN_DIR/baseline" || exit 1
+git archive "$BASELINE" | tar -x -C "$RUN_DIR/baseline" || exit 1
+ln -s "$ROOT/node_modules" "$RUN_DIR/baseline/node_modules" || exit 1
+E2E_SERVER_ROOT="$RUN_DIR/baseline" E2E_EXPECT_SERVER_COMMIT="$BASELINE" ./tests/e2e/boot.sh >"$RUN_DIR/baseline-server.log" 2>&1 &
+SERVER_PID=$!
+if ! node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID"; then
+  tail -40 "$RUN_DIR/baseline-server.log"
+  exit 1
+fi
+step "parent notice defect observed" env PROOF_EXPECT_DEFECT=1 E2E_EXPECT_SERVER_COMMIT="$BASELINE" node tests/e2e/notice_supersede_space_identity.e2e.js
+step "parent deposit defect observed" env PROOF_EXPECT_DEFECT=1 node tests/e2e/deposit_attribution_serialized.e2e.js
+step "parent comparison defect observed" env PROOF_EXPECT_DEFECT=1 node tests/e2e/shadow_other_property_entitled.e2e.js
+stop_owned_server || exit 1
+
+# Retirement is an owner-authorized contract change after the reviewed repairs.
+# Witness the immediate unchanged parent, not a crash in an older dependency.
+RETIREMENT_PARENT=1283f40ed058d78ec271e2b05f077cc7fb618502
+mkdir "$RUN_DIR/retirement-parent" || exit 1
+git archive "$RETIREMENT_PARENT" | tar -x -C "$RUN_DIR/retirement-parent" || exit 1
+ln -s "$ROOT/node_modules" "$RUN_DIR/retirement-parent/node_modules" || exit 1
+E2E_SERVER_ROOT="$RUN_DIR/retirement-parent" E2E_EXPECT_SERVER_COMMIT="$RETIREMENT_PARENT" ./tests/e2e/boot.sh >"$RUN_DIR/retirement-parent-server.log" 2>&1 &
+SERVER_PID=$!
+if ! node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID"; then
+  tail -40 "$RUN_DIR/retirement-parent-server.log"
+  exit 1
+fi
+step "parent legacy ingestion open" env PROOF_EXPECT_LEGACY_OPEN=1 E2E_EXPECT_SERVER_COMMIT="$RETIREMENT_PARENT" node tests/e2e/legacy_ingestion_retired.e2e.js
+stop_owned_server || exit 1
+
+# The onboarding witnesses inspect the real git identity and cleanliness of
+# the business source they load. Keep the pinned parent as a detached worktree
+# rather than an archive so those checks remain meaningful.
+ONBOARDING_PARENT=e09c5411e2c072c3452e48b434a9f8a8250ce1bb
+PARENT_WORKTREE="$RUN_DIR/onboarding-parent"
+git worktree add --detach "$PARENT_WORKTREE" "$ONBOARDING_PARENT" >"$RUN_DIR/onboarding-parent-worktree.log" 2>&1 || {
+  tail -40 "$RUN_DIR/onboarding-parent-worktree.log"
+  exit 1
+}
+ln -s "$ROOT/node_modules" "$PARENT_WORKTREE/node_modules" || exit 1
+# The parent onboarding witnesses intentionally run against the exact physical
+# 197 claim index. The normal chain is already at 198 here, so reconstruct only
+# that historical index/ledger state for the parent run. Restore 198 through
+# the numbered migration runner immediately afterwards; do not hide successor
+# DDL in this compatibility witness.
+step "reconstruct exact 197 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
+  do \$\$ begin
+    if not exists (select 1 from schema_migrations where version='198' and name in ('proposed_source_claim_identity','198_proposed_source_claim_identity.sql')) then
+      raise exception 'expected numbered 198 ledger row before parent witness';
+    end if;
+    if not exists (select 1 from pg_indexes where schemaname='public' and indexname='uq_proposed_natural'
+                   and indexdef = 'CREATE UNIQUE INDEX uq_proposed_natural ON public.proposed_records USING btree (activation_id, target_type, natural_key) WHERE ((natural_key IS NOT NULL) AND (import_source_row_id IS NULL))') then
+      raise exception 'expected exact 198 natural-key index before parent witness';
+    end if;
+  end \$\$;
+  delete from schema_migrations where version='198';
+  drop index uq_proposed_natural;
+  create unique index uq_proposed_natural
+    on proposed_records (activation_id, target_type, natural_key)
+    where natural_key is not null;
+"
+step "parent onboarding source defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_source.db.js
+step "parent onboarding lifecycle defect" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_lifecycle.db.js
+step "parent onboarding snapshot defects" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" PROOF_BUSINESS_ROOT="$PARENT_WORKTREE" PROOF_EXPECT_DEFECT=1 node tests/proofs/canonical_onboarding_snapshot.db.js
+step "restore numbered 198 claim index" env DATABASE_URL="$E2E_DATABASE_URL" MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=197 node migrations/migrate.js --apply
+step "verify restored 198 claim index" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -c "
+  do \$\$ begin
+    if not exists (select 1 from schema_migrations where version='198' and name in ('proposed_source_claim_identity','198_proposed_source_claim_identity.sql')) then
+      raise exception 'numbered 198 ledger row was not restored';
+    end if;
+    if (select pg_get_indexdef(i.indexrelid) from pg_index i
+       where i.indexrelid=to_regclass('public.uq_proposed_natural')) is distinct from
+       'CREATE UNIQUE INDEX uq_proposed_natural ON public.proposed_records USING btree (activation_id, target_type, natural_key) WHERE ((natural_key IS NOT NULL) AND (import_source_row_id IS NULL))' then
+      raise exception 'restored 198 index definition is not exact';
+    end if;
+  end \$\$;
+"
+git worktree remove --force "$PARENT_WORKTREE" || exit 1
+PARENT_WORKTREE=""
+
+# Migration 198 owns the claim-index policy in the numbered chain. Its witness
+# reconstructs 197 only inside this nonce database, then drives the real runner
+# through lock-failure, apply and repeat branches. No pending schema is applied.
+step "numbered source claim-index migration" node tests/proofs/onboarding_claim_index_dependency.db.js
+
+# ── lease / guarantor database proofs ───────────────────────────────
+# These use the repository's production-refusing harness boundary. CI's
+# E2E database is disposable and becomes the explicit harness target;
+# there is no fallback to DATABASE_URL.
+step "canonical onboarding source" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_source.db.js
+step "canonical onboarding ledger" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_ledger.db.js
+step "canonical onboarding lifecycle" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_lifecycle.db.js
+step "canonical onboarding snapshot" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_snapshot.db.js
+step "governing lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/governing_lease_execution.db.js
+step "canonical lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/spine_lease_execution.db.js
+step "lease guarantor signing"   env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/lease_guarantor_signing.db.js
+step "pricing authority grants union" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/pricing_authority_grants_union.db.js
+step "opening claim identity"     node tests/proofs/opening_claim_identity.db.js
+step "opening claim relay edges"  node tests/proofs/opening_claim_relay_edges.db.js
+step "opening claim unattached"   node tests/proofs/opening_claim_unattached.db.js
+step "availability readiness axis" node tests/proofs/availability_readiness_axis.db.js
+step "canonical Deal Setup HTTP" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/deal_setup_http.db.js
 
 # ── the real server, the real HTTP door ─────────────────────────────
 #  ASK BEFORE LAUNCHING. Polling /health afterwards cannot distinguish
 #  our server from a stale one — see tests/e2e/port_guard.sh.
 . ./tests/e2e/port_guard.sh
-if port_busy 3000; then
-  echo "── server                             FAIL (port 3000 already in use)"
-  port_busy_message 3000 | sed 's/^/      /'
+if port_busy "$PORT"; then
+  echo "── server                             FAIL (proof port already in use)"
+  port_busy_message "$PORT" | sed 's/^/      /'
   FAILED=1; SERVER_PID=""
 else
 ./tests/e2e/boot.sh > /tmp/verify_server.log 2>&1 &
@@ -69,21 +304,47 @@ SERVER_PID=$!
 #  an occupied port; this loop's job is to notice that it did, instead of
 #  polling happily against the impostor.
 UP=0
-for _ in $(seq 1 30); do
-  if ! kill -0 "$SERVER_PID" 2>/dev/null; then break; fi
-  [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/health 2>/dev/null)" = "200" ] && { UP=1; break; }
-  sleep 1
-done
+node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID" && UP=1
 if [ "$UP" != "1" ]; then
   echo "── server                             FAIL (did not become healthy)"
   tail -25 /tmp/verify_server.log | sed 's/^/      /'
   FAILED=1
 else
-  echo "── server                             UP  ($(curl -s http://localhost:3000/health | head -c 120))"
+  echo "── server                             UP (owned PID, run nonce, database marker)"
+  step "mixed-grain onboarding writer" node tests/proofs/mixed_grain_writer_challenge.db.js
+  step "retained source authority" node tests/proofs/retained_source_authority_observation.db.js
+  step "leasing occupancy retirement" node tests/proofs/leasing_occupancy_retirement.db.js
+  step "canonical occupancy under holds" node tests/proofs/canonical_occupancy_holds.db.js
+  step "Management reconciled zero" node tests/proofs/management_zero_counts.db.js
+  step "availability uncorroborated claim" node tests/proofs/availability_uncorroborated_claim.db.js
   step "authority chain"             node tests/e2e/authority_chain.e2e.js
+  step "extracted route bindings"    node tests/e2e/extracted_route_bindings.e2e.js
+  step "ingest property authority"   node tests/e2e/ingest_property_authority.e2e.js
+  step "legacy ingestion retired" env E2E_EXPECT_SERVER_COMMIT="$(git rev-parse HEAD)" node tests/e2e/legacy_ingestion_retired.e2e.js
+  step "work order person columns"   node tests/e2e/work_order_person_columns.e2e.js
+  step "read ai connection authority" node tests/e2e/read_ai_connection_authority.e2e.js
+  step "notice space column"         node tests/e2e/notice_space_column.e2e.js
+  step "notice correction identity" node tests/e2e/notice_supersede_space_identity.e2e.js
+  step "move-in lease on unit"       node tests/e2e/movein_lease_on_unit.e2e.js
+  step "org roster scope"            node tests/e2e/org_roster_scope.e2e.js
+  step "operator build gate"         node tests/e2e/operator_build_gate.e2e.js
+  step "read ai webhook empty body"  node tests/e2e/read_ai_webhook_empty_body.e2e.js
+  step "demo intake health gate"     node tests/e2e/demo_intake_health_gate.e2e.js
+  step "deposit attribution bound"   node tests/e2e/deposit_attribution_bound.e2e.js
+  step "deposit attribution serialized" node tests/e2e/deposit_attribution_serialized.e2e.js
+  step "authority grants union"      node tests/e2e/authority_grants_union.e2e.js
+  step "pricing term names its months" node tests/e2e/pricing_term_requires_months.e2e.js
+  step "shadow comparison removed" node tests/e2e/shadow_other_property_entitled.e2e.js
+  step "evidence upload name key"    node tests/e2e/evidence_upload_name_key.e2e.js
+  step "outbound text approval instant" node tests/e2e/outbound_text_approval_instant.e2e.js
   step "skyline unit-type mapping"   node tests/e2e/skyline_unit_type_mapping.e2e.js
   step "governed pricing publication" node tests/e2e/skyline_pricing_publication.e2e.js
   step "agent pricing wall"          node tests/e2e/agent_pricing_wall.e2e.js
+  step "inventory date boundaries"   node tests/unit/prospect_inventory_dates.test.js
+  step "explicit prospect unit confirmation" node tests/unit/prospect_confirmation.test.js
+  step "prospect confirmation agent persistence" node tests/proofs/prospect_confirmation.db.js
+  step "possession effective dates"   node tests/unit/possession_as_of.test.js
+  step "agent inventory dates"       node tests/proofs/prospect_inventory_dates.db.js
   step "leasing clean path"          node tests/e2e/leasing_path.e2e.js
   step "hostile falsifications"      node tests/e2e/leasing_hostile.e2e.js
   step "cross-surface reconciliation" node tests/e2e/leasing_reconciliation.e2e.js
@@ -91,17 +352,145 @@ else
   step "ask spine facts"             node tests/e2e/leasing_ask_spine.e2e.js
 
   if [ -x "${CHROMIUM:-/opt/pw-browsers/chromium-1194/chrome-linux/chrome}" ]; then
+    step "browser: staff invite accepts" node tests/e2e/staff_invite_acceptance.browser.js
     step "browser: resident signs"   node tests/e2e/resident_signing.browser.js
   else
     echo "── browser: resident signs            SKIPPED (no Chromium)"
     SKIPPED="browser rung"
+    FAILED=1
   fi
-  kill "$SERVER_PID" 2>/dev/null
+  step "invite-to-guarantor lease"  env E2E_DISPOSABLE_DATABASE=true node tests/e2e/tour_application_lease.e2e.js
+  step "turnover sibling occupancy" node tests/proofs/turnover_sibling_cache.db.js
+  step "required work standing" node tests/unit/required_work_standing.test.js
+  step "required work target" node tests/proofs/triage_work_scope.db.js
+  step "turn expected date stays on its exact home" node tests/proofs/availability_turn_date_scope.db.js
+  step "legacy decision writes closed" node tests/e2e/legacy_decision_writes_disabled.e2e.js
+  step "greenery staff onboarding" node tests/proofs/greenery_staff_onboarding.db.js
+  step "source-to-home identity review and Greenery inventory contract" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/source_home_identity_review.db.js
+  step "current rent-roll reconciliation into an onboarded property" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/current_rent_roll_reconciliation.db.js
+  #  Matching is retrieval on a declared basis (MATCHING_BASIS_RULING_20260914,
+  #  MB-1..MB-9). It establishes its OWN governed inventory and its own
+  #  published pricing, so it does not depend on the Skyline fixture or on
+  #  anything an earlier step left behind — an earlier version did, and went
+  #  red in CI the moment the rent-roll proof above consumed Skyline's one
+  #  eligible target. It runs here because it needs the owned server for its
+  #  staff door and its Ask Spine composer call.
+  step "prospect match basis" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/prospect_match_basis.db.js
+  #  ── THE SAME RECONCILIATION, THROUGH THE SHIPPED OPERATOR UI ──────
+  #  The step above proves the API. This one proves the screen a person
+  #  actually touches, against the SAME owned server — and it had only
+  #  ever been run by hand, which is why both of this week's first reds
+  #  (the "Choose a property" layer above Deal Setup) were of a class CI
+  #  could not see.
+  #
+  #  The app's proof is NOT edited and NOT copied here. It is loaded
+  #  through the app's own transport runner with `node --require`, on the
+  #  env contract that runner documents: SP (playwright), APP_ROOT, API,
+  #  TLS_PORT, SHOTS — plus API_ROOT and CHROME, which the app proof
+  #  itself reads. SP and API_ROOT are both this checkout: the app proof
+  #  borrows this repository's playwright and pg.
+  #
+  #  TLS_PORT is derived from the nonce-allocated proof port so two runs
+  #  on one machine cannot collide on 8443.
+  if app_rung_ready; then
+    COUPLED_SHOTS="$RUN_DIR/coupled-rent-roll"
+    mkdir -p "$COUPLED_SHOTS"
+    step "browser: coupled rent-roll (app $APP_PIN_SHORT)" \
+      env SP="$ROOT" API_ROOT="$ROOT" APP_ROOT="$APP_ROOT" \
+          API="$E2E_API_BASE" TLS_PORT="${E2E_COUPLED_TLS_PORT:-$((PORT + 5000))}" \
+          CHROME="${CHROMIUM:-}" SHOTS="$COUPLED_SHOTS" \
+          E2E_DATABASE_URL="$E2E_DATABASE_URL" \
+      node --require "$APP_ROOT/tools/coupled_browser_runner.cjs" \
+           "$APP_ROOT/current_rent_roll_reconciliation.browser.js"
+    step "coupled transport receipt (app $APP_PIN_SHORT)" node tests/e2e/coupled_runner_receipt.js "$COUPLED_SHOTS"
+  else
+    echo "── browser: coupled rent-roll         SKIPPED ($(app_rung_skip_reason))"
+    SKIPPED="coupled app browser rung"
+    FAILED=1
+  fi
+  stop_owned_server || exit 1
 fi
 fi
 
+if [ "$FAILED" = "0" ]; then
+  E2E_WITHOUT_OPERATOR_KEY=1 ./tests/e2e/boot.sh >"$RUN_DIR/unconfigured-key-server.log" 2>&1 &
+  SERVER_PID=$!
+  node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID" || exit 1
+  step "legacy ingestion key unconfigured" env E2E_WITHOUT_OPERATOR_KEY=1 E2E_EXPECT_SERVER_COMMIT="$(git rev-parse HEAD)" node tests/e2e/legacy_ingestion_retired.e2e.js
+  stop_owned_server || exit 1
+fi
+
+# Separate server configuration: do not prospect-activate the shared fixture
+# while the earlier historical/internal-QA proofs are running.
+if [ "$FAILED" = "0" ]; then
+  step "real intake inactive property fixture" psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f tests/e2e/real_intake_fixture.sql
+  E2E_INTAKE_INACTIVE_PROPERTY_ID=$(psql "$E2E_DATABASE_URL" -tAX -v ON_ERROR_STOP=1 -c "select id from properties where name='Real Intake Inactive E2E'") || exit 1
+  export E2E_INTAKE_INACTIVE_PROPERTY_ID
+  REAL_INTAKE_ACTIVE_ID=$(psql "$E2E_DATABASE_URL" -tAX -v ON_ERROR_STOP=1 -c "select id from properties where name='Skyline E2E'") || exit 1
+  [ -n "$E2E_INTAKE_INACTIVE_PROPERTY_ID" ] && [ -n "$REAL_INTAKE_ACTIVE_ID" ] || exit 1
+  E2E_PROSPECT_ACTIVATION_PROPERTY_IDS="$REAL_INTAKE_ACTIVE_ID" ./tests/e2e/boot.sh >"$RUN_DIR/real-intake-server.log" 2>&1 &
+  SERVER_PID=$!
+  node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID" || exit 1
+  step "real inquiry classification without consent" node tests/proofs/real_intake_classification.db.js
+  step "authenticated intake delivery replay" node tests/proofs/intake_delivery_idempotency.db.js
+  step "website inquiry visibility" node tests/proofs/website_inquiry_visibility.db.js
+  step "website inquiry state and authority" node tests/proofs/website_inquiry_state.db.js
+  step "website capture-only intake" node tests/proofs/website_capture_only.db.js
+  step "attributed external email reply" node tests/proofs/external_email_reply.db.js
+  step "staff inquiry ownership and response" node tests/proofs/conversation_takeover_owner.db.js
+  step "staff inquiry native tour booking" node tests/proofs/staff_conversation_tour.db.js
+  step "unsent application draft correction" node tests/e2e/draft_offer_correction.e2e.js
+  step "canonical application draft recovery" node tests/proofs/application_draft_recovery.db.js
+  step "manual email application preparation" node tests/proofs/manual_email_application.db.js
+  step "staff-assisted journey (Skyline shape)" env JOURNEY_SHAPE=skyline node tests/e2e/staff_assisted_journey.e2e.js
+  step "historical application projections" node tests/proofs/proposed_terms_read_lock.db.js
+  step "no-consent two-person journey" node tests/e2e/no_consent_two_person_journey.e2e.js
+  step "two-step leasing: author and execute" node tests/e2e/two_step_leasing.e2e.js
+  step "governed inventory correction" node tests/e2e/inventory_correction.e2e.js
+  step "inventory relationship policy coverage" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/gates/gate_inventory_relationship_policy.db.js
+  step "inventory correction hardening" node tests/e2e/inventory_correction_hardening.e2e.js
+  if app_rung_ready; then
+    step "browser: inventory correction (app $APP_PIN_SHORT)" node tests/e2e/inventory_correction.browser.js
+  else
+    echo "── browser: inventory correction      SKIPPED ($(app_rung_skip_reason))"
+    SKIPPED="app browser rungs"
+    FAILED=1
+  fi
+  step "two-step preparation and execution attribution" node tests/proofs/two_step_attribution_read.db.js
+  #  The operator app is a separate repository. CI now checks it out at the
+  #  commit tests/e2e/app_pin.txt declares, so this rung RUNS in CI instead
+  #  of printing SKIPPED in every run. Where no checkout exists (a laptop
+  #  without one) it still skips by name — and the label carries the app
+  #  commit, so a log line can never be read as covering an app version it
+  #  did not run against.
+  if app_rung_ready; then
+    step "browser: two-step execute (app $APP_PIN_SHORT)"  node tests/e2e/two_step_execute.browser.js
+  else
+    echo "── browser: two-step execute          SKIPPED ($(app_rung_skip_reason))"
+    SKIPPED="app browser rungs"
+    FAILED=1
+  fi
+  stop_owned_server || exit 1
+  unset E2E_INTAKE_INACTIVE_PROPERTY_ID
+fi
+
+# Greenery deliberately has no eligible home. Use its own synthetic property
+# ID and server allowlists; never copy Skyline inventory/configuration into it.
+# The preceding server is stopped before boot, and the same nonce-owned run
+# boundary and EXIT cleanup cover this separate phase.
+if [ "$FAILED" = "0" ]; then
+  GREENERY_JOURNEY_ID=$(node -e 'console.log(require("node:crypto").randomUUID())') || exit 1
+  [ -n "$GREENERY_JOURNEY_ID" ] || exit 1
+  E2E_INTAKE_INACTIVE_PROPERTY_ID="$GREENERY_JOURNEY_ID" E2E_PROSPECT_ACTIVATION_PROPERTY_IDS="$GREENERY_JOURNEY_ID" ./tests/e2e/boot.sh >"$RUN_DIR/greenery-journey-server.log" 2>&1 &
+  SERVER_PID=$!
+  node tests/e2e/proof_boundary.js wait "$E2E_API_BASE" "$SERVER_PID" || exit 1
+  step "staff-assisted journey (empty Greenery shape)" env JOURNEY_SHAPE=greenery PROOF_GREENERY_ID="$GREENERY_JOURNEY_ID" PROOF_EVIDENCE_LABEL="greenery-$GREENERY_JOURNEY_ID" node tests/e2e/staff_assisted_journey.e2e.js
+  stop_owned_server || exit 1
+fi
+
 echo "════════════════════════════════════════════════════════════"
+echo "  operator app: $APP_PIN_STATE at ${APP_PIN_SHA:-<none declared>}"
 [ -n "$SKIPPED" ] && echo "  ⚠ NOT RUN: $SKIPPED — this is not a pass."
-if [ "$FAILED" = "0" ]; then echo "  ALL PROOFS PASSED"; else echo "  ✗ VERIFICATION FAILED"; fi
+if [ "$FAILED" = "0" ]; then echo "  ALL REQUIRED ASSERTIONS PASSED — cleanup must also succeed"; else echo "  ✗ VERIFICATION FAILED"; fi
 echo "════════════════════════════════════════════════════════════"
 exit $FAILED

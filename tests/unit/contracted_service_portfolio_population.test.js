@@ -2,7 +2,7 @@
 
 const assert = require("assert");
 const projection = require("../../src/asset/contracted_service_projection.js");
-const portfolio = require("./support/contracted_service_portfolio_snapshots.js");
+const portfolio = require("../support/contracted_service_portfolio_snapshots.js");
 
 function read(factory) {
   return projection.project(factory(), { as_of: "2026-08-14" });

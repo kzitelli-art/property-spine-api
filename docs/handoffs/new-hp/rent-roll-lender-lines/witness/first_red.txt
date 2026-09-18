@@ -1,0 +1,36 @@
+FIRST RED — board bf99e5c8, owned nonce database (name scrubbed), ledger 198
+current_rent_roll_reconciliation.db.js: 63 passed, 0 failed
+then currentRentRoll(pool,{property_id}) as of today:
+
+
+=== Demo Building · basis=unknown · as_of 2026-09-14 ===
+  TENANCY   {"contractually_occupied":0,"vacant":0,"unresolved":0,"contested":0,"total":0}
+  buckets sum 0 vs total 0   BALANCES
+  trusted   null positions 0
+  claimed_rent_unverified undefined count undefined
+  first contested claim dates: (none)
+  tenancy_state counts {}
+
+=== Skyline E2E · basis=unknown · as_of 2026-09-14 ===
+  TENANCY   {"contractually_occupied":0,"vacant":1,"unresolved":1,"contested":0,"total":2}
+  buckets sum 2 vs total 2   BALANCES
+  trusted   null positions 0
+  claimed_rent_unverified undefined count undefined
+  first contested claim dates: (none)
+  tenancy_state counts {"unresolved":1,"vacant":1}
+
+=== CRR_<nonce> skyline · basis=bed · as_of 2026-09-14 ===
+  TENANCY   {"contractually_occupied":31,"vacant":0,"unresolved":102,"contested":13,"total":160}
+  buckets sum 146 vs total 160   DOES NOT BALANCE (missing 14)
+  trusted   26350 positions 31
+  claimed_rent_unverified undefined count undefined
+  first contested claim dates: {"start":"Sat Aug 01","end":"Mon Jul 26"}
+  tenancy_state counts {"contractually_occupied":31,"contested":13,"unresolved":102,"activation_pending":14}
+
+=== CRR_<nonce> other · basis=unit · as_of 2026-09-14 ===
+  TENANCY   {"contractually_occupied":1,"vacant":1,"unresolved":1,"contested":0,"total":3}
+  buckets sum 3 vs total 3   BALANCES
+  trusted   1200 positions 1
+  claimed_rent_unverified undefined count undefined
+  first contested claim dates: (none)
+  tenancy_state counts {"contractually_occupied":1,"unresolved":1,"vacant":1}

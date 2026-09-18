@@ -1,0 +1,83 @@
+OWNED_API_READY
+
+════════════════════════════════════════════════════════════════
+  HARNESS   deal_setup_opening_tenancy.db.js
+  COMMIT    <hash>
+  BRANCH    HEAD
+  DATABASE  <proof-db>  @  127.0.0.1:5432  (user spine)
+  ENDPOINT  (not a Neon endpoint host)
+  ISOLATED  yes — target differs from DATABASE_URL (which is unset here)
+  EXPECTED  69 assertions
+════════════════════════════════════════════════════════════════
+  ASSERTIONS STARTED
+
+── A · DEAL AUTHORITY ──────────────────────────────────────
+  ok    A1  no actor is refused  → no_authenticated_actor
+  ok    A2  a member may not open a deal  → insufficient_platform_role
+  ok    A3  super_admin must name the organization  → organization_required
+  ok    A4  an org_admin's organization comes from the login
+  ok    A5  an org_admin naming a sibling org is refused  → organization_scope_violation
+  ok    A6  the created deal carries an owner
+  ok    A7  one creation event, both identities, authority recorded
+  ok    A8  the creation event cannot be updated  → SQLSTATE 23001
+  ok    A9  the creation event cannot be deleted  → SQLSTATE 23001
+  ok    A10 org → org reparenting refused by the database  → SQLSTATE 23001
+  ok    A11 org → null orphaning refused by the database  → SQLSTATE 23001
+  ok    A12 a bare INSERT is repaired with a stated reason
+
+── B · MEMBERSHIP ──────────────────────────────────────────
+  ok    B1  membership recorded through deal_intake_properties
+  ok    B2  another client's property is refused  → property_belongs_to_another_client
+  ok    B3  a property already in a current deal is refused  → property_already_in_a_current_deal
+  ok    B4  release keeps the row, marks it released with a time
+  ok    B5  after release the property may join a new deal
+  ok    B6  the released membership is still readable — history survives
+  ok    B7  two CURRENT memberships refused by the database  → SQLSTATE 23505
+
+── C · RETAINED ARTIFACT ───────────────────────────────────
+  ok    C1  bytes, digest, size and time stored together
+  ok    C2  the digest is of the real bytes
+  ok    C3  identical bytes into the same scope return the SAME artifact
+  ok    C4  the bytes come back byte-identical
+  ok    C5  an artifact about a nonexistent scope is refused  → SQLSTATE 23503
+  ok    C6  the bytes cannot be rewritten  → SQLSTATE 23001
+  ok    C7  the artifact cannot be deleted  → SQLSTATE 23001
+  ok    C8  a workbook renamed .csv is refused  → content_does_not_match_extension
+
+── D · ACTIVATION ──────────────────────────────────────────
+  ok    D1  an activation with no property is refused at creation  → SQLSTATE 23502
+  ok    D2  reading the rent roll wrote an import_batch
+  ok    D3  the batch names the retained artifact
+  ok    D4  one source row per row the file contained
+  ok    D5  the row with no unit number is EVIDENCE, not silently dropped
+  FAIL  D6  a proposal exists for every row read
+        expected 5, found 9
+  FAIL  D7  every proposal points at its source row by FOREIGN KEY
+  ok    D8  a row with no rent is needs_review, not staged
+  ok    D9  a vacant row is staged, not flagged for a missing tenant
+  ok    D10 re-reading the same file for the same property is refused  → already_established_from_this_file
+  FAIL  D11 a rent roll with no unit column is refused  → unsupported_rent_roll_header
+        expected 'no_unit_column', got 'unsupported_rent_roll_header'
+  ok    D12 an artifact belonging to another property is refused  → artifact_out_of_scope
+  FAIL  D13 a second, different source into one setup is refused  → artifact_out_of_scope
+        expected 'setup_already_read_a_source', got 'artifact_out_of_scope'
+
+── E · CONFIRMATION ────────────────────────────────────────
+  ok    E1  confirming wrote a person and a lease
+  ok    E2  the lease is stamped with the import batch
+  ok    E3  the evidence row now names the lease it produced
+  ok    E4  …and the person it produced
+  ok    E5  a vacant row confirms WITHOUT inventing a lease
+  ok    E6  confirming twice is refused  → already_promoted
+  ok    E7a a second open() on the same property RESUMES rather than forking
+Error: The submitted rows disagree with the retained file. Nothing was changed.
+    at refusal (<scratchpad>/api-baseline-5765357/src/onboarding/activation_service.js:72:13)
+    at Object.prepareSource (<scratchpad>/api-baseline-5765357/src/onboarding/source_home_identity_review.js:80:11)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Object.previewRentRoll (<scratchpad>/api-baseline-5765357/src/onboarding/activation_service.js:261:20)
+    at async reviewedIngest (<scratchpad>/api-baseline-5765357/tests/helpers/reviewed_source.js:7:19)
+    at async <scratchpad>/api-baseline-5765357/tests/proofs/deal_setup_opening_tenancy.db.js:505:3 {
+  httpStatus: 409,
+  reason: 'source_rows_mismatch',
+  receipt: 'The submitted rows disagree with the retained file. Nothing was changed.'
+}

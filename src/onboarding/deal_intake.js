@@ -8,15 +8,14 @@
 //    2. RESOLVES identity read-only via the registry (identify ≠ commit).
 //    3. Returns the found / missing / confidence summary the front end shows.
 //    4. CAPTURES corrections as data (no self-modifying behavior).
-//    5. Routes a confirmed rent roll into the EXISTING ingest pipeline —
-//       it never reimplements extraction, candidates, or promotion.
+//    5. Legacy run-rentroll is retired; canonical Deal Setup owns source review.
 //
 //  ROUTES:
 //    POST /deal-intakes                          — start an intake {onboarding_type}
 //    POST /deal-intakes/:id/files                — multipart batch upload + classify
 //    GET  /deal-intakes/:id/summary              — found/missing/confidence object
 //    POST /deal-intakes/:id/files/:fileId/correct— record a human correction
-//    POST /deal-intakes/:id/run-rentroll         — {file_id, property_id} → real ingest
+//    POST /deal-intakes/:id/run-rentroll         — retired (410); use canonical Deal Setup
 //    GET  /deal-intakes                          — recent intakes (newest first)
 //
 //  Mount in server.js (AFTER pool, registryInstance, fileToText, runIngestAuto):
@@ -331,9 +330,9 @@ module.exports = function dealIntake(deps) {
 
       const next_actions = [];
       const rentRollFile = files.find(f => effType(f) === "rent_roll");
-      if (rentRollFile && identity.status === "resolved" && !rentRollFile.ingest_run_id)
-        next_actions.push({ action: "run_rentroll", file_id: rentRollFile.id, property_id: identity.property_id,
-                            note: "Rent roll found and property recognized — run it through ingest." });
+      if (rentRollFile && identity.status === "resolved")
+        next_actions.push({ action: "open_deal_setup", file_id: rentRollFile.id, property_id: identity.property_id,
+                            note: "Open Deal Setup in the signed-in property to review source files. Historical intake evidence is retained; it is not canonical confirmation." });
       if (identity.status === "ambiguous")
         next_actions.push({ action: "resolve_identity", note: `"${identity.label}" matches more than one property — needs a human call.` });
       if (identity.status === "unknown")
@@ -382,39 +381,8 @@ module.exports = function dealIntake(deps) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // hand a rent roll into the REAL ingest pipeline (existing candidates,
-  // existing human gate, existing promotion). This module adds nothing to it.
-  router.post("/deal-intakes/:id/run-rentroll", async (req, res) => {
-    const { file_id, property_id } = req.body || {};
-    if (!file_id || !property_id) return res.status(400).json({ error: "file_id and property_id are required" });
-    try {
-      const f = await pool.query(
-        "select * from deal_intake_files where id=$1 and intake_id=$2", [file_id, req.params.id]
-      );
-      if (f.rows.length === 0) return res.status(404).json({ error: "file not found in this intake" });
-      const row = f.rows[0];
-      const effType = row.corrected_document_type || row.detected_document_type;
-      if (effType !== "rent_roll")
-        return res.status(409).json({ error: `file is classified as '${effType}', not rent_roll. Correct it first if that's wrong.` });
-      if (!row.extracted_text || !row.extracted_text.trim())
-        return res.status(409).json({ error: "no stored text for this file — re-upload it." });
-      const prop = await pool.query("select id from properties where id=$1", [property_id]);
-      if (prop.rows.length === 0) return res.status(404).json({ error: "property not found" });
-      if (["unit","bed","unknown"].includes(req.body?.leasing_basis)) {
-        await pool.query("update properties set leasing_basis=$1 where id=$2",
-          [req.body.leasing_basis, property_id]);
-      }
-
-      const result = await runIngestAuto(property_id, row.extracted_text, "deal_intake");
-      const runId = result && (result.run_id || result.id) || null;
-      if (runId) await pool.query("update deal_intake_files set ingest_run_id=$1 where id=$2", [runId, file_id]);
-      res.json({ ...result, source_filename: row.original_filename, intake_file_id: file_id });
-    } catch (e) {
-      if (e.truncated) return res.status(413).json({ error: e.message, truncated: true });
-      if (e.unparseable) return res.status(502).json({ error: e.message, raw: e.raw });
-      res.status(500).json({ error: e.message });
-    }
-  });
+  // This alternate producer is retired with the legacy ingest HTTP workflow.
+  router.post("/deal-intakes/:id/run-rentroll", require("./legacy_ingestion_retired.js"));
 
   // ══════════════════════════════════════════════════════════════════
   //  DEAL ↔ PROPERTIES (migration 025) — the deal holds what you BOUGHT.
@@ -646,9 +614,9 @@ module.exports = function dealIntake(deps) {
         else if (s.rent_roll_state === "missing") next = { action: "upload_missing", note: "Upload: Rent roll (the required gate — nothing onboards without it)." };
         else if (s.identity.status === "unknown") next = { action: "create_or_link_property", note: `"${s.identity.label}" is not a recognized property — link or create it.` };
         else if (s.identity.status === "no_identity_found") next = { action: "identify", note: "No property string found in any file yet — upload an identity-bearing doc (rent roll, T12, OM)." };
-        else if (s.rent_roll_state === "uploaded") next = { action: "run_rentroll", file_id: s.rentRollFile.id, property_id: s.identity.property_id, note: "Rent roll + recognized property — run it through ingest." };
+        else if (s.rent_roll_state === "uploaded") next = { action: "open_deal_setup", file_id: s.rentRollFile.id, property_id: s.identity.property_id, note: "Open Deal Setup in the signed-in property to review source files." };
         else if (s.missing.length) next = { action: "upload_missing", note: `Upload: ${s.missing.join(", ")}` };
-        else next = { action: "review_candidates", note: "Rent roll ingested — review and promote candidates." };
+        else next = { action: "open_deal_setup", note: "Historical ingestion is retained. Open Deal Setup to review source files; historical ingestion is not canonical confirmation." };
 
         return {
           intake_id: i.id,
@@ -672,7 +640,7 @@ module.exports = function dealIntake(deps) {
         d.files === 0 ? "empty"
         : d.rent_roll === "missing" ? "no_rent_roll"
         : d.identity.status !== "resolved" ? "identity_open"
-        : d.rent_roll === "uploaded" ? "ready_to_ingest"
+        : d.rent_roll === "uploaded" ? "deal_setup_review"
         : "ingested";
       const stages = {};
       for (const d of deals) stages[stage(d)] = (stages[stage(d)] || 0) + 1;
@@ -681,7 +649,7 @@ module.exports = function dealIntake(deps) {
         deals: deals.length,
         stages,
         board: deals,
-        note: "READ-ONLY. Stages are honest counts, never blended: empty → no_rent_roll → identity_open → ready_to_ingest → ingested. The rent roll is the gate; identity resolves per file through the registry, never from the deal name.",
+        note: "READ-ONLY. Stages: empty, no_rent_roll, identity_open, deal_setup_review, ingested. Ingested describes retained historical work, not canonical confirmation. Use Deal Setup for source review; property identity comes from the registry.",
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

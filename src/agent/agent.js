@@ -23,6 +23,7 @@
 //          spawnObligationFromEvent, completeObligation }));
 
 const crypto = require("crypto");
+const externalEmailReply = require("../leasing/external_email_reply");
 // The ONE governed-charge language producer. Every quotable surface uses it;
 // there is no second wording helper anywhere in a call path.
 //  THE ONLY ROUTE TO A QUOTABLE PRICE. Never units.market_rent, never the
@@ -38,8 +39,9 @@ const { compareEconomicSources, staleReasonForOperator } =
 const aiLeasingStrategy = require("../leasing/ai_leasing_strategy");
 const aiLeasingStrategyRuntime = require("../leasing/ai_leasing_strategy_runtime");
 const aiLeasingOperatingContext = require("../leasing/ai_leasing_operating_context"); // GOVERNED OPERATING CONTEXT LEASING v1
+const { loadThreadState, recordInboundCapture } = require("./inbound_capture");
 
-const PROMPT_REVISION = "stage-a-v8"; // v8: voice tuning from AI_VOICE_TUNING.md cases 1-5 — one-sentence default, no reflexive trailing question, no unowned follow-up promises ("I'm on it" removed from approved language), always AFFIRM a protected class before helping, no markdown in SMS (new deterministic strip), no self-deprecating apology, low-rate apostrophe-drop humanization.
+const PROMPT_REVISION = "stage-a-v12"; // v12: exact-space informational matching with published pricing and explicit pricing term. v10: linked-unit rent uses governed pricing.
 // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
 const POLICY_REVISION = "stage-a-v1";
 
@@ -227,7 +229,7 @@ module.exports = function agentModule(deps) {
   // When the output floor blocks a reply, we NEVER go dark — we send one of
   // these. Kept as constants so they're auditable and in the founder's voice.
   const FALLBACK_FAIRHOUSING =
-    "I can give you the practical stuff, SOLO has controlled access, cameras, package lockers, and key-fob entry. For the neighborhood, I can point you to current public data so you can make your own call.";
+    "I can give you the practical building details we have on file. For the neighborhood, I can point you to current public data so you can make your own call.";
   // An assistance-animal reply that got blocked for quoting a pet charge. Says
   // the true thing (no pet fee) and routes, without claiming a filing.
   const FALLBACK_ESA =
@@ -270,25 +272,6 @@ module.exports = function agentModule(deps) {
     return c;
   }
 
-  // ensure a thread-state row for a conversation; returns it (locked if forUpdate)
-  async function loadThreadState(client, conversation_id, forUpdate) {
-    const lock = forUpdate ? " for update" : "";
-    let s = (await client.query(
-      `select * from agent_thread_state where conversation_id=$1${lock}`, [conversation_id]
-    )).rows[0];
-    if (!s) {
-      // create then re-select (so we can lock it consistently)
-      await client.query(
-        "insert into agent_thread_state (conversation_id) values ($1) on conflict (conversation_id) do nothing",
-        [conversation_id]
-      );
-      s = (await client.query(
-        `select * from agent_thread_state where conversation_id=$1${lock}`, [conversation_id]
-      )).rows[0];
-    }
-    return s;
-  }
-
   // ── the curated fact resolver + the LIVE unit read ─────────────────────────
   // Returns { facts:[{fact_key,category,rendered_text,source}], unit:{...}|null }.
   // Curated facts come from agent_facts (active). Unit truth is read LIVE from units.
@@ -301,13 +284,7 @@ module.exports = function agentModule(deps) {
     // exactly the dated things. A fact is quotable only while it is still true.
     // No live fact sets effective_until today, so this changes nothing now and
     // guards everything later.
-    const facts = (await client.query(
-      `select fact_key, category, rendered_text, source_type, source_record_id, confirmed_at
-         from agent_facts
-        where property_id=$1 and status='active' and (space_id is null)
-          and (effective_until is null or effective_until > now())`,
-      [property_id]
-    )).rows.map(r => ({
+    const facts = (await require("../leasing/leasing_knowledge").readActive(client, property_id)).map(r => ({
       fact_key: r.fact_key, category: r.category, rendered_text: r.rendered_text,
       source: r.source_type, confirmed_at: r.confirmed_at,
     }));
@@ -498,6 +475,41 @@ module.exports = function agentModule(deps) {
     return { decision: "safe", code: null };
   }
 
+  function directPricingReply({ inboundText, unit } = {}) {
+    const text = String(inboundText || "").toLowerCase();
+    const pricing = unit && unit.pricing;
+    if (!pricing) return null;
+
+    // Mixed economic questions stay on the composition path. This shortcut
+    // owns only the one clear question its canonical reader can fully answer.
+    if (/\b(application|admin(?:istration)?|amenity|utility|deposit|fee|parking|pet|move[- ]?in|concession|special|discount)\b/.test(text)) {
+      return null;
+    }
+    const asksRent = /\b(rent|pricing|lease rate|monthly rate)\b/.test(text)
+      || /\b(?:what(?:'s| is)|how much)[^?.!]{0,40}\b(?:cost|price)\b/.test(text)
+      || /\b(?:cost|price)\b[^?.!]{0,30}\b(?:per month|monthly|unit|apartment|bedroom|studio)\b/.test(text);
+    if (!asksRent) return null;
+
+    if (!pricing.quotable) {
+      return pricing.say
+        ? { body: pricing.say, code: "pricing_direct_refusal" }
+        : null;
+    }
+    // A live advertised concession changes how a quote must be presented. Let
+    // the composed prompt handle that until the reader owns its full sentence.
+    if (Array.isArray(pricing.concessions) && pricing.concessions.length) return null;
+
+    const rent = Number(pricing.rent);
+    const months = Number(pricing.lease_term_months);
+    if (!Number.isFinite(rent) || !Number.isFinite(months)) return null;
+    const rentText = rent.toLocaleString("en-US", { maximumFractionDigits: 2 });
+    const subject = unit.unit_number ? `Unit ${unit.unit_number}` : "This unit";
+    return {
+      body: `${subject} is $${rentText}/month on a ${months}-month lease.`,
+      code: "pricing_direct_quote",
+    };
+  }
+
   // ── build the model context in STRICT AUTHORITY ORDER ──────────────────────
   // (1) safety/fair-housing rules (2) curated facts (3) live unit truth
   // (4) thread history (5) persona. Lead messages are UNTRUSTED content.
@@ -519,8 +531,34 @@ module.exports = function agentModule(deps) {
       ? `Unit ${unit.unit_number || "(unnamed)"}: ${unit.bedrooms ?? "?"}bd/${unit.bathrooms ?? "?"}ba` + rentPart
       : "(no specific unit is linked to this inquiry yet)";
 
+    const propertyLabel = String(propertyName || "").trim() || "this property";
+    const isSoloProperty = /(^|\b)(solo|4233 chestnut)(\b|$)/i.test(propertyLabel);
+    const localDistanceRule = isSoloProperty
+      ? "Compare street numbers to ours before calling anything close. 1907 Chestnut is twenty-three blocks from 4233. Not nearby."
+      : "Use only the verified address for this property when judging what is nearby. Do not carry over an address or distance from another building.";
+    const moveInSpeedRule = isSoloProperty
+      ? `Solo has sometimes moved people in within a few days when the unit is ready and the application, approval, lease, and payment are completed.
+
+You may communicate that possibility, but never promise an exact date until readiness is confirmed.`
+      : "Do not claim a fast-move-in precedent for this property. Discuss timing only from verified facts, live readiness, and the actual application and lease steps.";
+    const safetyExample = isSoloProperty
+      ? "I can give you the practical stuff, SOLO has controlled access, cameras, package lockers, and key-fob entry. For the neighborhood, I can point you to current public data so you can make your own call."
+      : "I can give you the practical building details we have on file. For the neighborhood, I can point you to current public data so you can make your own call.";
+    const approvedPropertyProfile = isSoloProperty
+      ? `APPROVED PROPERTY PROFILE (stable building facts you may use directly):
+- SOLO on Chestnut is at 4233 Chestnut Street in University City.
+- Layouts: studio, one-bedroom, one-bedroom-with-den, two-bedroom, three-bedroom.
+- Furnished and unfurnished options exist.
+- Apartments include in-unit laundry and kitchen appliances.
+- Amenities: coworking and study spaces, fitness facilities, rooftop space, recreation areas, an indoor golf simulator, package lockers, controlled access, underground parking.
+- The fitness center is open 24/7. The GOLF SIMULATOR IS NOT: it keeps separate hours. Never fold the simulator into a 24/7 statement. If asked its hours specifically and you do not have them verified, say you are checking.
+- Solo is pet friendly, but current restrictions and charges must come from VERIFIED PROPERTY FACTS below.
+- Assistance animals (service animals and ESAs) are NOT pets and are NOT charged pet fees or pet rent. The documented process is a valid ESA letter from a licensed mental health professional sent to the leasing team. Never quote a pet charge against an assistance animal.`
+      : `APPROVED PROPERTY PROFILE:
+(no separate stable profile is approved for ${propertyLabel}; use only VERIFIED PROPERTY FACTS and LIVE UNIT DATA below)`;
+
     const system =
-`You are SOLO on Chestnut's leasing contact. You text like a smart, upbeat leasing person helping someone find a place, not like a brochure or support bot. Be warm, informal, lightly witty, and proactive. Never claim to be human.
+`You are the leasing contact for ${propertyLabel}. You text like a smart, upbeat leasing person helping someone find a place, not like a brochure or support bot. Be warm, informal, lightly witty, and proactive. Never claim to be human.
 
 THE GOAL
 
@@ -548,7 +586,7 @@ Property-specific facts are strict. Exact units, rents, square footage, availabi
 
 Never guess from general leasing knowledge.
 
-Use the APPROVED SOLO PROFILE only for stable building facts.
+Use the APPROVED PROPERTY PROFILE only for stable building facts.
 
 Use web search for current local questions such as grocery stores, restaurants, transit time, walking distance, and nearby services.
 
@@ -556,7 +594,7 @@ For a local question, give one or two concrete, current recommendations, then as
 
 Search before naming a place, address, or travel time. Never from memory.
 
-Compare street numbers to ours before calling anything close. 1907 Chestnut is twenty-three blocks from 4233. Not nearby.
+${localDistanceRule}
 
 If you say you'll check, check. Never announce a check and answer in the same message.
 
@@ -668,9 +706,7 @@ If the prospect clearly declines or says to stop asking, stop asking and keep an
 
 MOVE-IN SPEED
 
-Solo has sometimes moved people in within a few days when the unit is ready and the application, approval, lease, and payment are completed.
-
-You may communicate that possibility, but never promise an exact date until readiness is confirmed.
+${moveInSpeedRule}
 
 Example:
 
@@ -732,7 +768,7 @@ You may discuss objective information such as controlled access, cameras, key-fo
 
 For "Is it safe?":
 
-"I can give you the practical stuff, SOLO has controlled access, cameras, package lockers, and key-fob entry. For the neighborhood, I can point you to current public data so you can make your own call."
+"${safetyExample}"
 
 For "What kind of people live there?":
 
@@ -801,15 +837,7 @@ Before sending, confirm:
 13. I did not promise to personally chase, push, or follow up on anything.
 14. I did not apologize more than briefly, and I did not put myself down.
 
-APPROVED SOLO PROFILE (stable building facts you may use directly):
-- SOLO on Chestnut is at 4233 Chestnut Street in University City.
-- Layouts: studio, one-bedroom, one-bedroom-with-den, two-bedroom, three-bedroom.
-- Furnished and unfurnished options exist.
-- Apartments include in-unit laundry and kitchen appliances.
-- Amenities: coworking and study spaces, fitness facilities, rooftop space, recreation areas, an indoor golf simulator, package lockers, controlled access, underground parking.
-- The fitness center is open 24/7. The GOLF SIMULATOR IS NOT: it keeps separate hours. Never fold the simulator into a 24/7 statement. If asked its hours specifically and you do not have them verified, say you are checking.
-- Solo is pet friendly, but current restrictions and charges must come from VERIFIED PROPERTY FACTS below.
-- Assistance animals (service animals and ESAs) are NOT pets and are NOT charged pet fees or pet rent. The documented process is a valid ESA letter from a licensed mental health professional sent to the leasing team. Never quote a pet charge against an assistance animal.
+${approvedPropertyProfile}
 
 CONCESSIONS. If a concession is in VERIFIED PROPERTY FACTS and applies to the lease term being discussed, SAY IT whenever you quote rent. A prospect weighing your price against another building is comparing the wrong number if you only give them gross. Quote the rent, then what it comes to with the concession applied. Never invent a concession, never state one that is not in the facts, and never imply a special is available after it has expired. If a prospect is hesitating on price and a real concession exists, that is the moment to say it, not a discount you are inventing to save the conversation.
 
@@ -951,27 +979,10 @@ Reply with ONLY the message text.`;
               actorUserId: null,
             })
           : { assigned: false, created: false, reason: "no_open_leasing_opportunity", envelope: null };
-        const state = await loadThreadState(client, conv.id, true); // FOR UPDATE
-
-        // persist the canonical inbound comm_event (the real record). sms_sid is
-        // stamped when present (SMS door) — the unique idempotency anchor.
-        const inbound = (await client.query(
-          `insert into comm_events
-             (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, sender_role, sms_sid)
-           values ($1,$2,$3,$4,'text','inbound',$5,'leasing','prospect',$6) returning id`,
-          [b.property_id, b.person_id, b.unit_id || null, conv.id, b.body, b.sms_sid || null]
-        )).rows[0];
-        await client.query("update conversations set last_message_at = now() where id=$1", [conv.id]);
-
-        // GENUINE-INBOUND REOPEN: a qualifying prospect inbound persisted above. If this
-        // conversation's latest-relevant lifecycle state is closed_not_fit, reopen it in
-        // THIS transaction (source_comm_event_id = this inbound). No-op when not closed;
-        // idempotent under the conversation lock. (Foundation 054 lifecycle rail.)
-        if (leasingLifecycle && b.body && String(b.body).trim() !== "") {
-          await leasingLifecycle.maybeReopenOnQualifyingInbound(client, {
-            conversationId: conv.id, sourceCommEventId: inbound.id,
-          });
-        }
+        const { state, inbound, newVersion } = await recordInboundCapture(client, {
+          conversation: { ...conv, unit_id: b.unit_id || null }, body: b.body,
+          channel: "text", smsSid: b.sms_sid || null, leasingLifecycle,
+        });
 
         // ── OFFERED → SELECTED (funnel-flow Build 2) ────────────────────
         // If the last DISPATCHED draft carried a real offered-unit set,
@@ -1026,16 +1037,6 @@ Reply with ONLY the message text.`;
         } catch (e) { console.error("[agent/inbound] selection check failed (non-fatal):", e.message); }
 
         const mode = state.mode;
-        const newVersion = Number(state.thread_version) + 1;
-
-        // supersede any prior ready draft on this conversation (new inbound invalidates it)
-        await client.query(
-          `update agent_drafts d set status='superseded', superseded_at=now(), updated_at=now()
-             from agent_runs r
-            where d.agent_run_id=r.id and r.conversation_id=$1 and d.status='ready'`,
-          [conv.id]
-        );
-
         // NO SILENT AI RE-ENTRY: in human_takeover / paused / closed, persist the
         // inbound and refresh the human obligation, but DO NOT create an agent run.
         if (mode === "human_takeover" || mode === "paused" || mode === "closed") {
@@ -1130,6 +1131,7 @@ Reply with ONLY the message text.`;
 
       // ── model call OUTSIDE any transaction ──
       let generated = null, providerReqId = null, genErr = null, factSnapshot = [], snapshotHash = "";
+      let deterministicReplyCode = null;
       let operatingContextSnapshot = [], operatingContextHash = null;
       let strategyApplied = false;
       let runtimeStrategyEnvelope = null;
@@ -1156,19 +1158,26 @@ Reply with ONLY the message text.`;
         try {
           history = (await client1.query(
             `select direction, body from (
-               select direction, body, occurred_at, id from comm_events
-                where conversation_id=$1 and channel='text' and body is not null
+               select direction, case when ${externalEmailReply.predicateSql("ce")}
+                 then '[Staff recorded an external email; delivery unverified] ' || body else body end as body,
+                 occurred_at, id from comm_events ce
+                where conversation_id=$1 and channel in ('text','website','email') and body is not null
                 order by occurred_at desc nulls last, id desc limit 40
              ) t order by occurred_at asc nulls last, id asc`,
             [tx1.conversation_id]
           )).rows;
         } finally { client1.release(); }
 
+        const pricingReply = pre.decision === "safe"
+          ? directPricingReply({ inboundText: tx1.inboundText, unit: ctx.unit }) : null;
         if (pre.decision === "requires_handoff") {
           // Hard-gate category (§5): do NOT generate leasing copy. Send the
           // category's pre-approved ack. The review obligation was already born
           // in TX1, so promising "getting this to the team" is honest here.
           generated = pre.ack || "Yep, I'll get someone from the team on this.";
+        } else if (pricingReply) {
+          generated = pricingReply.body;
+          deterministicReplyCode = pricingReply.code;
         } else if (anthropic) {
           const propName = (await (async () => {
             const c = await pool.connect();
@@ -1197,13 +1206,16 @@ Reply with ONLY the message text.`;
           // criteria, never the property.
           const INVENTORY_TOOL = {
             name: "find_available_units",
-            description: "Search THIS property's real available units (vacant, not out of service) when the prospect asks what's available or states preferences (bedrooms, budget). Returns real units only. If the result is empty, say so honestly — NEVER invent or imply a unit that is not in the result.",
+            description: "Check THIS property's inventory for the prospect's stated lease dates and preferences. Pass exact dates only when stated; never invent a year, end date or default term. Missing or invalid dates require clarification, not a claim that nothing is available. Follow the returned qualification and may_promise: contractual dates alone do not establish physical readiness. Never invent a home or promise an informational result.",
             input_schema: {
               type: "object",
               properties: {
                 bedrooms: { type: "integer", description: "exact bedroom count if stated" },
                 bathrooms: { type: "number", description: "minimum bathrooms if stated" },
                 max_rent: { type: "number", description: "budget ceiling in dollars if stated" },
+                lease_term_months: { type: "integer", description: "Explicitly chosen published pricing term in months; omit if unknown. Never round lease dates into a pricing term." },
+                requested_start: { type: "string", description: "Prospect's explicitly stated lease start, YYYY-MM-DD; omit if unknown." },
+                requested_end: { type: "string", description: "Prospect's explicitly stated lease end, YYYY-MM-DD; omit if unknown." },
               },
             },
           };
@@ -1284,7 +1296,7 @@ Reply with ONLY the message text.`;
               built.system += `\n\nTOUR SCHEDULING: booking is enabled. Below are the real open tour times you MAY present (property local timezone). To offer times, FIRST call offer_tour_slots with ONLY the slot_ids you will actually state, THEN state those exact times to the prospect. When the prospect confirms one you presented, call book_tour with that slot_id. Never state or book a time not in this list:\n` +
                 offerableSlots.map(s => `  - ${s.label}  [slot_id: ${s.slot_id}]`).join("\n");
             } else {
-              built.system += `\n\nTOUR SCHEDULING: booking is enabled but there are NO open tour slots right now. If the prospect asks to tour, say you'll have someone follow up with times — do NOT invent a time and do NOT call any tour tool.`;
+              built.system += `\n\nTOUR SCHEDULING: booking is enabled but there are NO open tour slots right now. If the prospect asks to tour, explain that no open tour times are available and that the requested time is not booked. Do not promise staff follow-up unless a durable handoff was actually recorded. Do not invent a time and do not call any tour tool.`;
             }
           }
 
@@ -1342,76 +1354,25 @@ Reply with ONLY the message text.`;
             try {
               found = await inventory.availableUnits({
                 property_id: tx1.property_id,
+                discovery_mode: "exact_spaces",
+                lease_term_months: invUse.input && invUse.input.lease_term_months,
                 bedrooms: invUse.input && invUse.input.bedrooms,
                 bathrooms: invUse.input && invUse.input.bathrooms,
                 max_rent: invUse.input && invUse.input.max_rent,
+                requested_start: invUse.input && invUse.input.requested_start,
+                requested_end: invUse.input && invUse.input.requested_end,
               }, qc);
             } finally { qc.release(); }
-            //  ── THE SECOND LEAK, AND THE WORSE ONE ──────────────────
-            //  This carried market_rent per unit into the tool result at the
-            //  `units:` line below, which strips only `id` — so a LIST of
-            //  legacy rents reached the model. Same defect as the unit line,
-            //  multiplied by however many units matched.
-            //
-            //  The governed picture is loaded ONCE and passed to the adapter
-            //  via opts.picture — the seam the adapter exposes for exactly
-            //  this, so one refusal path serves both callers rather than a
-            //  copy of it per caller.
-            let picture = null;
-            try { picture = await effectivePropertyPricing(pool, { property_id: tx1.property_id }); }
-            catch (e) { console.error("[agent] pricing picture failed", e && e.message); }
-            const typeByUnit = new Map();
-            if (found.units.length) {
-              const qt = await pool.connect();
-              try {
-                const rows = (await qt.query(
-                  "select id, unit_type_id from units where id = any($1)",
-                  [found.units.map((u) => u.id)])).rows;
-                for (const r of rows) typeByUnit.set(String(r.id), r.unit_type_id);
-              } finally { qt.release(); }
-            }
-            offeredUnits = [];
-            for (const u of found.units) {
-              let q = null;
-              try {
-                q = await quotablePricing(pool, {
-                  property_id: tx1.property_id,
-                  unit_type_id: typeByUnit.get(String(u.id)) || null,
-                  //  Said out loud rather than left to the adapter's default:
-                  //  new-lease and renewal are different prices and this list
-                  //  goes to a prospect.
-                  intent: "new_lease",
-                }, picture ? { picture } : {});
-              } catch (e) { console.error("[agent] quotablePricing (inventory) failed", e && e.message); }
-              offeredUnits.push({
-                id: u.id, unit_number: u.unit_number, bedrooms: u.bedrooms,
-                bathrooms: u.bathrooms, square_feet: u.square_feet,
-                //  Governed rent or an explicit refusal. Never the legacy column.
-                rent: q && q.quotable ? q.rent : null,
-                lease_term_months: q && q.quotable ? q.lease_term_months : null,
-                pricing_status: q && q.quotable ? "governed_published_pricing"
-                                                : `not_quotable:${(q && q.reason) || "pricing_read_failed"}`,
-              });
-            }
-            /*  ⚠ "NO UNITS MATCH" IS AN ANSWER ABOUT INVENTORY. A refusal
-             *  is not. This hardcoded an inventory answer for every empty
-             *  result, so the containment in leasing_inventory — which
-             *  fails closed when the prospect has given no dates, and when
-             *  the term check itself could not run — would have been
-             *  reported to a real person as "nothing is available." Those
-             *  are different facts and conflating them is the exact
-             *  failure this path exists to prevent.
-             *
-             *  The inventory door now says what it means. The agent
-             *  carries its sentence rather than inventing one, and
-             *  may_promise travels so the model is told, in the facts,
-             *  that it may not describe a unit as available — readiness by
-             *  a future date is not governed anywhere in Spine yet.  */
+            // Exact-space and pricing authority are resolved by the existing
+            // inventory projection. Keep durable IDs/provenance out of model
+            // context; labels and declared rent basis are the public projection.
+            offeredUnits = found.units.map(u => ({ ...u, selection_eligible: false }));
             const toolResultText = JSON.stringify({
               qualification: found.qualification,
               term: found.term || null,
               may_promise: found.may_promise === true,
-              units: offeredUnits.map(({ id, ...pub }) => pub),
+              units: offeredUnits.map(({ id, space_id, authority, ...pub }) => pub),
+              pricing_unresolved: found.pricing_unresolved || [],
               note: found.note
                 || (offeredUnits.length ? undefined
                     : "No units match. Tell the prospect honestly; offer to note their preferences."),
@@ -1733,7 +1694,7 @@ Reply with ONLY the message text.`;
       }
 
       // post-generation policy (only if we have text)
-      let policyDecision = pre.decision, policyCode = pre.code;
+      let policyDecision = pre.decision, policyCode = pre.code || deterministicReplyCode;
       if (generated && policyDecision === "safe") {
         const post = postGenerationPolicy(generated);
         if (post.decision !== "safe") { policyDecision = post.decision; policyCode = post.code; }
@@ -2027,10 +1988,21 @@ Reply with ONLY the message text.`;
       if (!conv) return { exists: false, messages: [], draft: null, mode: null };
 
       const state = (await client.query("select * from agent_thread_state where conversation_id=$1", [conv.id])).rows[0] || null;
+      const humanOwner = state && state.mode === "human_takeover" && state.current_review_obligation_id
+        ? (await client.query(
+          `select o.id as obligation_id, o.assigned_user_id as user_id, u.name, o.status,
+                  o.label, o.type, o.due_at
+             from obligations o left join users u on u.id=o.assigned_user_id
+            where o.id=$1 and o.property_id=$2 and o.status in ('open','in_progress','blocked','escalated')
+              and (o.person_id is null or o.person_id=$3)
+              and (o.related_id is null or (o.related_type='conversation' and o.related_id=$4))`,
+          [state.current_review_obligation_id, conv.property_id, conv.person_id, conv.id])).rows[0] || null
+        : null;
       const messages = (await client.query(
-        `select id, direction, body, sender_role, ai_drafted_at, sent_by_user_id, occurred_at,
-                provider_status, provider_status_updated_at
-           from comm_events where conversation_id=$1 and channel='text' and body is not null
+        `select id, channel, direction, body, sender_role, ai_drafted_at, sent_by_user_id, actor_user_id, occurred_at,
+                provider_status, provider_status_updated_at,
+                ${externalEmailReply.evidenceSql("ce")} as external_email_reply
+           from comm_events ce where conversation_id=$1 and channel in ('text','website','email') and body is not null
            order by occurred_at asc nulls last, id asc`,
         [conv.id]
       )).rows;
@@ -2089,6 +2061,7 @@ Reply with ONLY the message text.`;
         property_id: conv.property_id || null,
         unit_id: conv.unit_id || null,
         mode: state ? state.mode : "ai_active",
+        human_owner: humanOwner,
         thread_version: state ? Number(state.thread_version) : 0,
         messages, draft,
       };
@@ -2137,6 +2110,7 @@ Reply with ONLY the message text.`;
 
       const run = (await client.query("select * from agent_runs where id=$1", [d.agent_run_id])).rows[0];
       const state = await loadThreadState(client, run.conversation_id, true); // FOR UPDATE
+      if (state.mode === "human_takeover") await assertHumanWorkOwner(client, state, actorUserId);
 
       // ── STALENESS IS DERIVED, NOT STORED (ruling, 2026-07-28) ─────
       // Both freshness guards below compare durable facts that already exist:
@@ -2300,6 +2274,24 @@ Reply with ONLY the message text.`;
   // ── SHARED ACTION SERVICE: takeOverConversation ──────────────────────────
   // thread → human_takeover; discards ready draft; redirects obligation. AI stops.
   // Caller resolves+authorizes the conversation; actor supplied server-side.
+  async function assertHumanWorkOwner(client, state, actorUserId) {
+    if (!state.current_review_obligation_id) return null;
+    const work = (await client.query(
+      `select o.*, c.property_id as thread_property_id, c.person_id as thread_person_id
+         from obligations o join conversations c on c.id=$2
+        where o.id=$1 for update of o`,
+      [state.current_review_obligation_id, state.conversation_id])).rows[0];
+    if (work && (work.property_id !== work.thread_property_id
+      || (work.person_id && work.person_id !== work.thread_person_id)
+      || (work.related_id && (work.related_type !== 'conversation' || work.related_id !== state.conversation_id)))) {
+      throw httpErr(409, "The linked work does not belong to this conversation.");
+    }
+    if (work && work.status !== 'complete' && work.assigned_user_id && String(work.assigned_user_id) !== String(actorUserId)) {
+      throw httpErr(409, "This conversation is assigned to another staff member.");
+    }
+    return work;
+  }
+
   async function takeOverConversationService({ conversationId, actorUserId }) {
     if (!actorUserId) throw httpErr(400, "actorUserId is required (server-derived).");
     return tx(async (client) => {
@@ -2307,21 +2299,42 @@ Reply with ONLY the message text.`;
       if (!conv) throw httpErr(404, "No conversation.");
       const state = await loadThreadState(client, conv.id, true);
       const mgrId = actorUserId;
+      let work = await assertHumanWorkOwner(client, state, mgrId);
+      if (!work || work.status === 'complete') {
+        if (!spawnObligationFromEvent) throw httpErr(503, "Conversation work is unavailable.");
+        work = await spawnObligationFromEvent(client, {
+          property_id: conv.property_id, person_id: conv.person_id, unit_id: conv.unit_id,
+          module: "leasing", type: "human_thread_reply", label: "Respond to prospect inquiry",
+          owner_type: "human", assigned_user_id: mgrId, status: "in_progress",
+          related_type: "conversation", related_id: conv.id,
+        });
+      } else {
+        // Same self-claim rule as the operator obligation door: never steal.
+        work = (await client.query(
+          `update obligations set assigned_user_id=$2, module='leasing',
+             status=case when status='open' then 'in_progress' else status end, updated_at=now()
+            where id=$1 returning *`, [work.id, mgrId])).rows[0];
+      }
 
       await client.query(
         `update agent_drafts d set status='discarded', discarded_at=now(), updated_at=now()
            from agent_runs r where d.agent_run_id=r.id and r.conversation_id=$1 and d.status='ready'`,
         [conv.id]
       );
-      if (state.current_review_obligation_id) {
-        await client.query(
-          "update obligations set label='Human takeover — leasing manager owns this thread', updated_at=now() where id=$1",
-          [state.current_review_obligation_id]
-        ).catch(() => {});
-      }
-      await client.query("update agent_thread_state set mode='human_takeover', updated_at=now() where conversation_id=$1", [conv.id]);
+      await client.query("update agent_thread_state set mode='human_takeover', current_review_obligation_id=$2, updated_at=now() where conversation_id=$1", [conv.id, work.id]);
       return { ok: true, mode: "human_takeover", by: mgrId };
     });
+  }
+
+  // Recording an external reply neither completes takeover custody nor hands
+  // control back to AI. The existing owner check and state lock serialize work.
+  async function assertExternalReplyOwner(client, { conversationId, actorUserId }) {
+    const state = await loadThreadState(client, conversationId, true);
+    if (state.mode !== "human_takeover") throw httpErr(409, "Take ownership of this conversation before recording an external reply.");
+    const work = await assertHumanWorkOwner(client, state, actorUserId);
+    if (!work || !['open','in_progress','blocked','escalated'].includes(work.status)
+      || String(work.assigned_user_id) !== String(actorUserId)) throw httpErr(409, "An active conversation assignment to you is required.");
+    return work;
   }
 
   // HAND BACK: thread human_takeover -> ai_active. The EXPLICIT counterpart to
@@ -2339,6 +2352,7 @@ Reply with ONLY the message text.`;
       const state = await loadThreadState(client, conv.id, true);
       if (state.mode !== "human_takeover") throw httpErr(409, "Thread is '" + state.mode + "', not in human takeover.");
       const mgrId = actorUserId;
+      await assertHumanWorkOwner(client, state, mgrId);
       if (state.current_review_obligation_id && completeObligation) {
         await completeObligation(client, { obligation_id: state.current_review_obligation_id, completed_by: mgrId })
           .catch(e => { if (e.code !== "ALREADY_COMPLETE") throw e; });
@@ -2429,6 +2443,7 @@ Reply with ONLY the message text.`;
       // model OUTSIDE txn (reuse the same generation path)
       const pre = preGenerationPolicy(prep.inboundText);
       let generated = null, providerReqId = null, genErr = null, factSnapshot = [], snapshotHash = "";
+      let deterministicReplyCode = null;
       let operatingContextSnapshot = [], operatingContextHash = null;
       let strategyApplied = false;
       let runtimeStrategyEnvelope = null;
@@ -2446,13 +2461,20 @@ Reply with ONLY the message text.`;
         let history;
         try {
           history = (await c1.query(
-            `select direction, body from (select direction, body, occurred_at, id from comm_events where conversation_id=$1 and channel='text' and body is not null order by occurred_at desc nulls last, id desc limit 40) t order by occurred_at asc nulls last, id asc`,
+            `select direction, body from (select direction,
+              case when ${externalEmailReply.predicateSql("ce")} then '[Staff recorded an external email; delivery unverified] ' || body else body end as body,
+              occurred_at, id from comm_events ce where conversation_id=$1 and channel in ('text','website','email') and body is not null order by occurred_at desc nulls last, id desc limit 40) t order by occurred_at asc nulls last, id asc`,
             [prep.conv.id]
           )).rows;
         } finally { c1.release(); }
 
+        const pricingReply = pre.decision === "safe"
+          ? directPricingReply({ inboundText: prep.inboundText, unit: ctx.unit }) : null;
         if (pre.decision === "requires_handoff") {
           generated = pre.ack || "Yep, I'll get someone from the team on this.";
+        } else if (pricingReply) {
+          generated = pricingReply.body;
+          deterministicReplyCode = pricingReply.code;
         } else if (anthropic) {
           const c2 = await pool.connect();
           let propName;
@@ -2487,7 +2509,7 @@ Reply with ONLY the message text.`;
         const mh = generated.match(/\[\[HANDOFF:\s*([^\]]*)\]\]/i);
         if (mh) { modelHandoff = (mh[1] || "unspecified").trim(); generated = generated.replace(mh[0], "").trim(); }
       }
-      let policyDecision = pre.decision, policyCode = pre.code;
+      let policyDecision = pre.decision, policyCode = pre.code || deterministicReplyCode;
       if (generated && policyDecision === "safe") {
         const post = postGenerationPolicy(generated);
         if (post.decision !== "safe") { policyDecision = post.decision; policyCode = post.code; }
@@ -2556,9 +2578,9 @@ Reply with ONLY the message text.`;
   // removed, so there is exactly one door to each action and it is authenticated.
   // (editAndSend = sendDraftService with editedBody.)
   router._service = {
-    preGenerationPolicy, postGenerationPolicy, resolveContext, buildMessages,
+    preGenerationPolicy, postGenerationPolicy, directPricingReply, resolveContext, buildMessages,
     sendDraftService, getConversationStateService, takeOverConversationService,
-    handBackConversationService,
+    handBackConversationService, assertExternalReplyOwner,
     regenerateDraftService, resolveConversationByPair,
     processInbound,
   };

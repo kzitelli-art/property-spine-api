@@ -6,9 +6,10 @@
    authority ceiling. The sender's identity may LOWER what is appropriate.
    It may never RAISE the ceiling the line established.
 
-   This module is the only thing that reads line storage. Per doctrine
-   Ruling 3 nothing else may: callers ask it to resolve an inbound line,
-   resolve an outbound line for a purpose, or state a line's authority.
+   This runtime module is the only thing that reads or changes line storage. Per
+   doctrine Ruling 3 nothing else may: callers ask it to resolve an inbound
+   line, resolve an outbound line for a purpose, state a line's authority,
+   or perform governed activation and transfer of an operations line.
 
    ── THE BOUNDARY THIS MODULE EXISTS TO HOLD ─────────────────────────
 
@@ -77,6 +78,15 @@ const LINE_COLUMNS = `
  *  that cannot exist. This vocabulary must stay identical to the check
  *  constraint's; if either changes, both change in the same commit. */
 const OUTBOUND_POLICIES = ["disabled", "reply_only", "proactive"];
+
+function activationRefusal(httpStatus, reason, receipt, detail = {}) {
+  const error = new Error(receipt);
+  error.httpStatus = httpStatus;
+  error.refusalReason = reason;
+  error.publicMessage = receipt;
+  error.detail = detail;
+  return error;
+}
 
 /*  lineAuthority — pure. What this line permits, stated from the line
  *  itself and from nothing else. Never consults the sender. */
@@ -183,6 +193,294 @@ async function resolveOutboundLine(
   return { line, refusal: null, policy };
 }
 
+/*  readOperationsLineForOrganization — display uses the same line owner as
+ *  routing and activation. Zero, one and many stay explicit; a screen never
+ *  gets permission to choose one row from an ambiguous configuration. */
+async function readOperationsLineForOrganization(q, organizationId) {
+  if (!organizationId) return { outcome: "not_connected", line: null, candidates: [] };
+  const { rows } = await q.query(
+    `select ${LINE_COLUMNS}, created_at
+       from communication_lines
+      where organization_id = $1 and line_type = 'operations' and status = $2
+      order by created_at, id`,
+    [organizationId, ACTIVE]
+  );
+  if (rows.length === 1) return { outcome: "connected", line: rows[0], candidates: rows };
+  if (rows.length > 1) return { outcome: "ambiguous", line: null, candidates: rows };
+  return { outcome: "not_connected", line: null, candidates: [] };
+}
+
+/*  activateOperationsLine — the one governed first write.
+ *
+ *  This deliberately cannot replace, transfer, suspend or retire a line. Those
+ *  are different operating events with different history and consent questions.
+ *  The narrow command makes only the posture the database already permits:
+ *
+ *      organization-owned · operational · staff · inbound · reply_only
+ *
+ *  The actor is re-read inside the transaction. The super-admin HTTP boundary
+ *  is not treated as a permanent fact after it has run once. */
+async function activateOperationsLine(pool, {
+  organizationId = null, phoneNumber = null, actorUserId = null,
+} = {}) {
+  if (!organizationId) {
+    throw activationRefusal(400, "organization_required", "Organization is required.");
+  }
+  if (!actorUserId) {
+    throw activationRefusal(401, "actor_required", "A live super-admin actor is required.");
+  }
+  const e164 = normalizePropertyLine(phoneNumber);
+  if (!e164) {
+    throw activationRefusal(400, "invalid_staff_line",
+      "Enter a valid US phone number for the staff text line.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+
+    const actor = (await client.query(
+      `select id, platform_role, status from users where id = $1 for share`,
+      [actorUserId])).rows[0];
+    if (!actor || actor.status !== "active" || actor.platform_role !== "super_admin") {
+      throw activationRefusal(403, "super_admin_required",
+        "Only an active super admin can connect a staff text line.");
+    }
+
+    const organization = (await client.query(
+      `select o.id, o.name, o.status,
+              exists(select 1 from properties p where p.organization_id = o.id) as has_property
+         from organizations o
+        where o.id = $1
+        for update`, [organizationId])).rows[0];
+    if (!organization) {
+      throw activationRefusal(404, "organization_not_found", "Organization not found.");
+    }
+    if (organization.status !== "active") {
+      throw activationRefusal(409, "organization_not_active",
+        "Staff texting can only be connected for an active organization.");
+    }
+    if (!organization.has_property) {
+      throw activationRefusal(409, "organization_has_no_property",
+        "Assign at least one property before connecting staff texting.");
+    }
+
+    const existing = (await client.query(
+      `select ${LINE_COLUMNS}, created_at
+         from communication_lines
+        where organization_id = $1 and line_type = 'operations' and status = $2
+        for update`, [organizationId, ACTIVE])).rows;
+    if (existing.length > 1) {
+      throw activationRefusal(409, "ambiguous_operations_line",
+        "More than one active staff line exists. Nothing changed.");
+    }
+    if (existing.length === 1) {
+      if (existing[0].e164 === e164) {
+        await client.query("rollback");
+        return Object.freeze({ line: existing[0], already: true,
+          receipt: `${organization.name} staff texting is already connected.` });
+      }
+      throw activationRefusal(409, "operations_line_already_active",
+        "This organization already has a staff text line. Replacement requires a separate governed change.",
+        { active_line_id: existing[0].id });
+    }
+
+    const collision = (await client.query(
+      `select id, line_type, property_id, organization_id
+         from communication_lines
+        where e164 = $1 and status = $2
+        for update`, [e164, ACTIVE])).rows[0];
+    if (collision) {
+      throw activationRefusal(409, "phone_number_already_active",
+        "That phone number already belongs to an active communication line. Nothing changed.",
+        { active_line_id: collision.id, active_line_type: collision.line_type });
+    }
+
+    const note = `Activated by ${actor.id}; authority=platform_role:super_admin`;
+    const line = (await client.query(
+      `insert into communication_lines
+         (e164, line_type, organization_id, authority_ceiling, permitted_audience,
+          inbound_enabled, outbound_enabled, outbound_policy, status, notes)
+       values ($1, 'operations', $2, 'operational', 'staff', true, true,
+               'reply_only', 'active', $3)
+       returning ${LINE_COLUMNS}, created_at`,
+      [e164, organizationId, note])).rows[0];
+
+    await client.query("commit");
+    return Object.freeze({ line, already: false,
+      receipt: `${organization.name} staff texting is connected.` });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error && error.code === "23505") {
+      throw activationRefusal(409, "communication_line_collision",
+        "That staff line conflicts with an active communication line. Nothing changed.");
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/*  transferOperationsLine — one number changes organization ownership.
+ *
+ *  The old row is retired and the new row is activated in one transaction.
+ *  Historical comm_events keep their original line identity; new inbound
+ *  resolution sees only the target organization's row. A retry naming the
+ *  retired source returns the already-created target row instead of creating
+ *  another line. */
+async function transferOperationsLine(pool, {
+  sourceLineId = null, targetOrganizationId = null, actorUserId = null,
+} = {}) {
+  if (!sourceLineId) {
+    throw activationRefusal(400, "source_line_required", "The current staff line is required.");
+  }
+  if (!targetOrganizationId) {
+    throw activationRefusal(400, "organization_required", "The target organization is required.");
+  }
+  if (!actorUserId) {
+    throw activationRefusal(401, "actor_required", "A live super-admin actor is required.");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+
+    const actor = (await client.query(
+      `select id, platform_role, status from users where id = $1 for share`,
+      [actorUserId])).rows[0];
+    if (!actor || actor.status !== "active" || actor.platform_role !== "super_admin") {
+      throw activationRefusal(403, "super_admin_required",
+        "Only an active super admin can transfer a staff text line.");
+    }
+
+    const target = (await client.query(
+      `select o.id, o.name, o.status,
+              exists(select 1 from properties p where p.organization_id = o.id) as has_property
+         from organizations o
+        where o.id = $1
+        for update`, [targetOrganizationId])).rows[0];
+    if (!target) {
+      throw activationRefusal(404, "organization_not_found", "Target organization not found.");
+    }
+    if (target.status !== "active") {
+      throw activationRefusal(409, "organization_not_active",
+        "Staff texting can only be transferred to an active organization.");
+    }
+    if (!target.has_property) {
+      throw activationRefusal(409, "organization_has_no_property",
+        "Assign at least one property before transferring staff texting.");
+    }
+
+    const source = (await client.query(
+      `select ${LINE_COLUMNS}, notes, created_at, superseded_at
+         from communication_lines
+        where id = $1
+        for update`, [sourceLineId])).rows[0];
+    if (!source) {
+      throw activationRefusal(404, "source_line_not_found", "Current staff line not found.");
+    }
+    if (source.line_type !== "operations") {
+      throw activationRefusal(409, "source_line_not_operations",
+        "Only an operations line can be transferred.");
+    }
+
+    const activeForNumber = (await client.query(
+      `select ${LINE_COLUMNS}, created_at
+         from communication_lines
+        where e164 = $1 and status = $2
+        order by created_at, id
+        for update`, [source.e164, ACTIVE])).rows;
+
+    if (source.status !== ACTIVE) {
+      const current = activeForNumber.length === 1 ? activeForNumber[0] : null;
+      if (current && current.organization_id === targetOrganizationId) {
+        await client.query("rollback");
+        return Object.freeze({
+          line: current,
+          retiredLineId: source.id,
+          already: true,
+          receipt: `${target.name} staff texting already owns this number.`,
+        });
+      }
+      throw activationRefusal(409, "source_line_not_active",
+        "The named source line is not active, and no completed transfer to this organization was found.");
+    }
+
+    if (source.organization_id === targetOrganizationId) {
+      await client.query("rollback");
+      return Object.freeze({
+        line: source,
+        retiredLineId: null,
+        already: true,
+        receipt: `${target.name} staff texting already owns this number.`,
+      });
+    }
+
+    const targetLines = (await client.query(
+      `select ${LINE_COLUMNS}, created_at
+         from communication_lines
+        where organization_id = $1 and line_type = 'operations' and status = $2
+        order by created_at, id
+        for update`, [targetOrganizationId, ACTIVE])).rows;
+    if (targetLines.length) {
+      throw activationRefusal(409, "target_operations_line_already_active",
+        "The target organization already has a staff text line. Nothing changed.",
+        { active_line_ids: targetLines.map((line) => line.id) });
+    }
+    if (activeForNumber.length !== 1 || activeForNumber[0].id !== source.id) {
+      throw activationRefusal(409, "source_number_ambiguous",
+        "The source number does not resolve only to the named line. Nothing changed.");
+    }
+
+    const transferNote = `Transferred by ${actor.id} to organization ${target.id}; source_line=${source.id}`;
+    const retired = (await client.query(
+      `update communication_lines
+          set status = 'retired', superseded_at = now(), updated_at = now(),
+              notes = concat_ws(E'\n', nullif(notes, ''), $2::text)
+        where id = $1 and status = $3
+        returning id, status, superseded_at`,
+      [source.id, transferNote, ACTIVE])).rows[0];
+    if (!retired || retired.status !== "retired" || !retired.superseded_at) {
+      throw new Error("operations-line transfer failed to retire the source row");
+    }
+
+    const line = (await client.query(
+      `insert into communication_lines
+         (e164, line_type, organization_id, authority_ceiling, permitted_audience,
+          inbound_enabled, outbound_enabled, outbound_policy, status, notes)
+       values ($1, 'operations', $2, 'operational', 'staff', true, true,
+               'reply_only', 'active', $3)
+       returning ${LINE_COLUMNS}, created_at`,
+      [source.e164, target.id, transferNote])).rows[0];
+
+    const inbound = await resolveInboundLine(client, source.e164);
+    const targetStanding = await readOperationsLineForOrganization(client, target.id);
+    const sourceStanding = await readOperationsLineForOrganization(client, source.organization_id);
+    if (inbound.outcome !== "one" || !inbound.line || inbound.line.id !== line.id
+        || targetStanding.outcome !== "connected" || targetStanding.line.id !== line.id
+        || sourceStanding.outcome !== "not_connected") {
+      throw new Error("operations-line transfer could not prove the new routing owner");
+    }
+
+    await client.query("commit");
+    return Object.freeze({
+      line,
+      retiredLineId: source.id,
+      already: false,
+      receipt: `${target.name} staff texting now owns ${source.e164}.`,
+    });
+  } catch (error) {
+    await client.query("rollback").catch(() => {});
+    if (error && error.code === "23505") {
+      throw activationRefusal(409, "communication_line_collision",
+        "The transfer conflicted with another active communication line. Nothing changed.");
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 /*  resolveStaffSenderForOrganization — is this sender staff of THIS
  *  organization?
  *
@@ -236,7 +534,8 @@ async function resolveStaffSenderForOrganization(q, { organizationId, fromNumber
  *  it would make the organization number choose a building, which it must
  *  never do. An organization with one property travels this same path. */
 async function resolvePropertyContextForStaff(
-  q, { organizationId, userId, workOrderId = null, obligationId = null } = {}
+  q, { organizationId, userId, workOrderId = null, obligationId = null,
+       messageText = null } = {}
 ) {
   if (!organizationId || !userId) {
     return { outcome: "none", propertyId: null, candidates: [], source: null };
@@ -265,7 +564,7 @@ async function resolvePropertyContextForStaff(
 
   //  2. The sender's own active assignments, inside this organization.
   const { rows } = await q.query(
-    `select distinct p.id as property_id, p.name
+    `select distinct p.id as property_id, p.name, pta.allowed_modules, pta.primary_for_modules
        from property_team_assignments pta
        join properties p
          on p.id = pta.property_id and p.organization_id = $2
@@ -275,8 +574,36 @@ async function resolvePropertyContextForStaff(
   );
 
   if (rows.length === 0) return { outcome: "none", propertyId: null, candidates: [], source: "assignment" };
-  if (rows.length > 1) return { outcome: "many", propertyId: null, candidates: rows, source: "assignment" };
-  return { outcome: "one", propertyId: rows[0].property_id, candidates: rows, source: "assignment" };
+  if (rows.length > 1) {
+    const words = ` ${String(messageText || "").toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ").trim()} `;
+    const named = rows.filter((row) => {
+      const name = String(row.name || "").toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ").trim();
+      return name && words.includes(` ${name} `);
+    });
+    // Exact normalized names only. If one property name contains another,
+    // both match and this remains ambiguous rather than picking the longer.
+    if (named.length === 1) {
+      return {
+        outcome: "one",
+        propertyId: named[0].property_id,
+        allowedModules: named[0].allowed_modules || [],
+        primaryForModules: named[0].primary_for_modules || [],
+        candidates: rows,
+        source: "message_property_name",
+      };
+    }
+    return { outcome: "many", propertyId: null, candidates: rows, source: "assignment" };
+  }
+  return {
+    outcome: "one",
+    propertyId: rows[0].property_id,
+    allowedModules: rows[0].allowed_modules || [],
+    primaryForModules: rows[0].primary_for_modules || [],
+    candidates: rows,
+    source: "assignment",
+  };
 }
 
 /*  clarificationFor — the smallest useful question, and nothing else.
@@ -305,6 +632,9 @@ function clarificationFor(context) {
 module.exports = {
   resolveInboundLine,
   resolveOutboundLine,
+  readOperationsLineForOrganization,
+  activateOperationsLine,
+  transferOperationsLine,
   lineAuthority,
   resolveStaffSenderForOrganization,
   resolvePropertyContextForStaff,

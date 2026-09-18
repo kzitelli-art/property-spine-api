@@ -96,6 +96,7 @@ const receipt = require("../_run_receipt.js");
 const dealService = require("../../src/onboarding/deal_service.js");
 const activation  = require("../../src/onboarding/activation_service.js");
 const artifacts   = require("../../src/onboarding/source_artifact_service.js");
+const { reviewedIngest } = require("../helpers/reviewed_source.js");
 const propertyCreation = require("../../src/identity/property_creation_service.js");
 
 const URL = receipt.harnessConnectionString();
@@ -361,7 +362,7 @@ function parseCsvLikeTheApp(text) {
     user_id: adminA, deal_intake_id: dealA2.id, property_id: propA.id })).activation;
 
   const rows = parseCsvLikeTheApp(csv);
-  const ingest = await activation.ingestRentRoll(pool, {
+  const ingest = await reviewedIngest(activation, pool, {
     user_id: adminA, deal_intake_id: dealA2.id, property_id: propA.id,
     activation_id: act.id, rows, source_artifact_id: art.id,
     source_as_of_date: "2026-04-30" });
@@ -501,7 +502,7 @@ function parseCsvLikeTheApp(text) {
     buffer: Buffer.from("Unit #,Resident\n201,x"), uploaded_by_user_id: adminA });
   const twinAct = (await activation.openActivation(pool, {
     user_id: adminA, deal_intake_id: dealA2.id, property_id: propT.id })).activation;
-  await activation.ingestRentRoll(pool, {
+  await reviewedIngest(activation, pool, {
     user_id: adminA, deal_intake_id: dealA2.id, property_id: propT.id,
     activation_id: twinAct.id, rows: twinRows, source_artifact_id: twinArt.id,
     source_as_of_date: "2026-05-31" });
@@ -519,7 +520,7 @@ function parseCsvLikeTheApp(text) {
     `select id from units where property_id=$1 and unit_number='102'`, [propA.id])).rows[0];
   await pool.query(`insert into spaces (unit_id, space_label) values ($1,'B')`, [u102.id]);
   const p102 = props.find((p) => p.natural_key === "102");
-  await refused("E8  a by-the-bed unit refuses to guess which bed", "ambiguous_bed", () =>
+  await refused("E8  confirmation refuses sibling inventory drift after the reviewed target", "source_review_stale_target", () =>
     activation.confirmProposal(pool, { user_id: adminA, proposed_id: p102.id }));
 
   console.log("\n── F · OPENING POSITION ────────────────────────────────────");
@@ -536,7 +537,7 @@ function parseCsvLikeTheApp(text) {
     buffer: Buffer.from("Unit #,Resident,Mkt Rent\n900,Someone,"), uploaded_by_user_id: adminA });
   const emptyAct = (await activation.openActivation(pool, {
     user_id: adminA, deal_intake_id: dealA2.id, property_id: propC.id })).activation;
-  await activation.ingestRentRoll(pool, {
+  await reviewedIngest(activation, pool, {
     user_id: adminA, deal_intake_id: dealA2.id, property_id: propC.id,
     activation_id: emptyAct.id,
     rows: [{ "Unit #": "900", "Resident": "Someone", "Mkt Rent": "", __row_number: 2 }],
@@ -579,7 +580,7 @@ function parseCsvLikeTheApp(text) {
   const mayAct = (await activation.openActivation(pool, {
     user_id: adminA, deal_intake_id: dealA2.id, property_id: propA.id })).activation;
   ok("F7a a new activation opens once the previous one is activated", mayAct.id !== act.id);
-  await activation.ingestRentRoll(pool, {
+  await reviewedIngest(activation, pool, {
     user_id: adminA, deal_intake_id: dealA2.id, property_id: propA.id,
     activation_id: mayAct.id,
     rows: [{ "Unit #": "301", "Resident": "Nkemdi, Obi", "Actual Rent": "1800", __row_number: 2 }],

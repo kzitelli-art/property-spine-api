@@ -51,6 +51,10 @@
 
 const { datedPropertyPositions, intervalPropertyPositions, rentRollBuckets } =
   require("./dated_positions");
+//  The bounded correction explanation is ONE read for two audiences: the
+//  staff history view and this standing projection (which Ask Spine
+//  gathers). Labels only, so the sanitizer changes nothing.
+const { correctionStanding } = require("./inventory_correction");
 const readerCapabilities = require("../shared/reader_capability_contract.js");
 
 const CONTRACT_VERSION = "tenancy_standing.v1";
@@ -121,6 +125,32 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
   if (!property_id) throw new Error("readTenancyStanding requires property_id");
   const dp = await datedPropertyPositions(pool, { property_id, as_of });
   const positions = dp.positions || [];
+  const unattached = dp.opening_claims_unattached || {};
+  const retainedUnknowns = {
+    confirmed_source_rows_not_attached_to_a_position: unattached.promoted || 0,
+    held_source_rows_not_attached_to_a_position: unattached.held || 0,
+  };
+  const retainedRows = {
+    unattached_source_rows: unattached.source_rows || [],
+    unattached_source_rows_truncated: unattached.truncated === true,
+  };
+  //  A READ THAT EXCLUDES ROWS SAYS SO, one level up: the loader reports
+  //  what it hid (retired inventory), and the standing carries it so a
+  //  sentence can say "N unit records are retired from current inventory"
+  //  instead of reading a smaller building. Tenancy attached to retired
+  //  inventory is a conflict, not a count.
+  const retired = dp.retired_excluded || { units: 0, leases_on_retired_inventory: 0, conflict: false };
+  const retiredExclusion = {
+    unit_records_retired_from_current_inventory: retired.units || 0,
+    tenancy_attached_to_retired_inventory: retired.leases_on_retired_inventory || 0,
+  };
+  //  WHICH records are excluded, why, on whose decision, and what operative
+  //  work is attached to them — the same bounded explanation the staff
+  //  history view renders. A failed read is a visible silence, never an
+  //  empty list.
+  let inventoryCorrection;
+  try { inventoryCorrection = await correctionStanding(pool, { property_id }); }
+  catch (e) { inventoryCorrection = { read_state: "READ_FAILED", excluded_from_current_inventory: null, excluded_records: null, operative_work_on_retired_inventory: null, conflict: null }; }
 
   const base = {
     contract_version: CONTRACT_VERSION,
@@ -133,9 +163,8 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
   };
 
   //  NOT_ESTABLISHED is the PROPERTY's silence and must never be dressed as
-  //  a healthy empty building (§40.7). A property with no inventory has not
-  //  told Spine anything yet; that is a different fact from "nobody lives
-  //  here", and collapsing them is how a confident wrong answer gets made.
+  //  a healthy empty building (§40.7). Retained source claims can outlive
+  //  current inventory; carry them without asserting occupancy or a position.
   if (!positions.length) {
     return {
       ...base,
@@ -143,7 +172,11 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
         why: "no rentable position is recorded for this property in Spine" },
       established_from: null,
       position: null,
-      unknowns: null,
+      //  No baseline remains an unknown (null), never a bag of zeroes — the
+      //  retirement exclusion rides only with a completed retained-claims read.
+      unknowns: unattached.read === "ok" ? { ...retainedUnknowns, ...retiredExclusion } : null,
+      ...retainedRows,
+      inventory_correction: inventoryCorrection,
       next_milestone: null,
       does_not_establish: [
         "Anything about occupancy, rent or commitments — tenancy has no inventory " +
@@ -181,6 +214,9 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
   //  let a confident sentence be built on top of 120 positions whose
   //  economics Spine cannot state.
   const rentUnknown = occupied.filter((p) => !p.lease || p.lease.rent == null);
+  // economics_state arrives from dated_positions. This projection counts it;
+  // it does not decide a second time which source amount is trustworthy.
+  const unavailableContractEconomics = occupied.filter((p) => p.economics_state === "unavailable");
   const evidenceUnresolved = positions.filter((p) => p.evidence_state === "inconclusive");
   const contested = positions.filter((p) => p.conflict_state === "conflicted");
   const importedOnly = occupied.filter((p) => p.proof_basis === "confirmed_opening_import");
@@ -234,13 +270,23 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
     //  WHAT SPINE DOES NOT KNOW, in numbers a sentence can carry.
     unknowns: {
       occupied_positions_with_no_recorded_rent: rentUnknown.length,
+      occupied_positions_with_unavailable_contract_economics: unavailableContractEconomics.length,
       positions_with_unresolved_occupancy_evidence: evidenceUnresolved.length,
       positions_with_overlapping_lease_claims: contested.length,
       occupied_positions_proven_only_by_the_opening_import: importedOnly.length,
       //  Now reachable in practice: an import whose person did not resolve
       //  records the lease with no tenant rather than attaching a guess.
       occupied_positions_with_no_linked_resident: residentUnlinked.length,
+      //  Confirmed source rows the chosen baseline holds that NO position
+      //  reads. The activation counted them as established; the positions
+      //  say not established. Named here so the two numbers can be
+      //  reconciled by a person instead of silently disagreeing.
+      ...retainedUnknowns,
+      ...retiredExclusion,
     },
+    //  By the key the source gave each row — a label, never a record id.
+    ...retainedRows,
+    inventory_correction: inventoryCorrection,
 
     next_milestone: nextMilestone(positions, dp.as_of),
 

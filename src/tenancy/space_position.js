@@ -241,6 +241,7 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
              on er.lease_id = l.id and er.record_state = 'verified'
           where l.space_id=s.id) as leases,
         (select json_agg(json_build_object(
+            'id', ue.id, 'lease_id', ue.lease_id,
             'event_type', ue.event_type, 'effective_date', ue.effective_date,
             'created_at', ue.created_at, 'status', ue.status,
             'payload', ue.payload, 'source', ue.source)
@@ -285,41 +286,119 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
          *  reader cannot point at is not a basis an operator can check —
          *  the trace, Ask Spine and the row detail all need to name the
          *  exact record, not just repeat its verdict. */
-        (select jsonb_build_object(
-                  'claim', case
-                    when pr.status = 'needs_review' then 'unreconciled'
-                    when coalesce(pr.normalized_json->>'is_vacant','false') = 'true'
-                         or pr.normalized_json->>'tenant_name' is null then 'vacant'
-                    else 'occupied'
-                  end,
-                  'proposal_id', pr.id,
-                  'proposal_status', pr.status,
-                  'natural_key', pr.natural_key,
-                  'opening_position_id', otp.id,
-                  'opening_position_as_of', to_char(otp.as_of_date,'YYYY-MM-DD'))
-           from opening_tenancy_positions otp
-           join proposed_records pr
-             on pr.activation_id = otp.activation_id
-            and pr.status in ('promoted','needs_review')
-            and (
-              lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number || '|' || s.space_label))
-              --  A key naming only the unit answers for the whole unit ONLY
-              --  when the unit is one position. Spreading it across a
-              --  three-bed unit would invent an answer for two beds the
-              --  source never named.
-              or (lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number))
-                  and (select count(*) from spaces s2 where s2.unit_id = u.id) = 1)
-            )
-          --  THE CHOSEN BASELINE, BY ID. Not "whichever row is currently
-          --  marked established" — see openingBaselineAsOf above. A null
-          --  baseline yields a null claim for every bed, which the reader
-          --  reports as a property-level NOT_ESTABLISHED rather than as
-          --  160 individual review exceptions.
-          where otp.id = $2::uuid
-          order by case when lower(btrim(pr.natural_key))
-                             = lower(btrim(u.unit_number || '|' || s.space_label))
-                        then 0 else 1 end
-          limit 1) as opening_space_claim
+        (select case
+                  when count(*) = 0 then null
+                  -- Two current rows that disagree are not an invitation to
+                  -- choose the exact key or the first row. They are an
+                  -- unresolved opening-position claim until reconciled.
+                  when count(distinct candidate.claim) > 1 then
+                    jsonb_build_object(
+                      'claim', 'unreconciled',
+                      'proposal_id', null,
+                      'proposal_status', 'needs_review',
+                      'natural_key', null,
+                      'opening_position_id', (array_agg(candidate.opening_position_id))[1],
+                      'opening_position_as_of', max(candidate.opening_position_as_of),
+                      'conflict_reason', 'conflicting_current_opening_claims',
+                      'conflicting_proposal_ids',
+                        jsonb_agg(candidate.proposal_id order by candidate.match_rank, candidate.proposal_id))
+                  else
+                    ((jsonb_agg(candidate.answer
+                       order by candidate.match_rank, candidate.proposal_id))->0)
+                    || jsonb_build_object('supporting_proposal_ids',
+                         jsonb_agg(candidate.proposal_id order by candidate.match_rank, candidate.proposal_id))
+                end
+           from (
+             select
+               pr.id as proposal_id,
+               -- Durable lineage outranks text; exact text outranks a bare key.
+               case when isr.produced_space_id = s.id then 0
+                    when lower(btrim(pr.natural_key))
+                          = lower(btrim(u.unit_number || '|' || s.space_label)) then 1
+                    else 2 end as match_rank,
+               case
+                 when pr.status in ('needs_review','conflicted') then 'unreconciled'
+                 when coalesce(pr.normalized_json->>'is_vacant','false') = 'true'
+                      or pr.normalized_json->>'tenant_name' is null then 'vacant'
+                 else 'occupied'
+               end as claim,
+               otp.id as opening_position_id,
+               to_char(otp.as_of_date,'YYYY-MM-DD') as opening_position_as_of,
+               jsonb_build_object(
+                 'claim', case
+                   when pr.status in ('needs_review','conflicted') then 'unreconciled'
+                   when coalesce(pr.normalized_json->>'is_vacant','false') = 'true'
+                        or pr.normalized_json->>'tenant_name' is null then 'vacant'
+                   else 'occupied'
+                 end,
+                 'proposal_id', pr.id,
+                 'proposal_status', pr.status,
+                 'natural_key', pr.natural_key,
+                 'opening_position_id', otp.id,
+                 'opening_position_as_of', to_char(otp.as_of_date,'YYYY-MM-DD')) as answer
+               from opening_tenancy_positions otp
+               join proposed_records pr
+                 on pr.activation_id = otp.activation_id
+                and pr.target_type = 'lease'
+                and pr.status in ('promoted','needs_review','conflicted')
+                -- Legacy proposals predate the section field and remain
+                -- current opening evidence. Explicit future proposals never
+                -- answer the current occupancy fallback.
+                and coalesce(lower(pr.normalized_json->>'section'), 'current') = 'current'
+               -- THE LINEAGE CONFIRMATION WROTE. import_source_rows carries
+               -- produced_unit_id / produced_space_id for the rentable
+               -- position a confirmation actually resolved. That is identity;
+               -- unit-number text, a room label and today's space count are
+               -- not, and each of them drifted (2026-09-06): a claim confirmed
+               -- against a unit later retired for superseded grain followed
+               -- its number onto the replacement unit; a linked claim vanished
+               -- when its room was relabelled; a bare-unit claim attached to
+               -- whichever bed a unit had left.
+               left join import_source_rows isr on isr.id = pr.import_source_row_id
+              -- THE CHOSEN BASELINE, BY ID. A null baseline produces zero
+              -- candidates and therefore a null property-level claim.
+              where otp.id = $2::uuid
+                and (
+                  -- 1. DURABLE SPACE LINEAGE: the exact position the
+                  --    confirmation resolved. Survives a relabel; never
+                  --    follows a unit number onto replacement inventory.
+                  (isr.produced_space_id is not null and isr.produced_space_id = s.id)
+                  -- 2. DURABLE UNIT LINEAGE, no space: inside THAT unit only.
+                  --    A named key matches its label there. A bare key is a
+                  --    claim about the unit and answers only when the unit
+                  --    has exactly ONE position — that position, whatever its
+                  --    label (the ruling canonical_onboarding_ledger.db.js
+                  --    froze: a unit-key current claim answers for the unit's
+                  --    sole bed, and an exact-key future row never outranks
+                  --    it). It never spreads across a bed set, and it never
+                  --    attaches to a placeholder left beside real beds — that
+                  --    is an inventory inconsistency, not a rentable
+                  --    position, and a claim on it inflates inventory by one.
+                  or (isr.produced_space_id is null and isr.produced_unit_id is not null
+                      and isr.produced_unit_id = u.id
+                      and (
+                        (position('|' in pr.natural_key) > 0
+                         and lower(btrim(split_part(pr.natural_key, '|', 2))) = lower(btrim(coalesce(s.space_label, ''))))
+                        or (position('|' in pr.natural_key) = 0
+                            and (select count(*) from spaces s2 where s2.unit_id = u.id) = 1)
+                      ))
+                  -- 3. NO LINEAGE (legacy rows): text is all there is. It
+                  --    answers by exact unit|label, or by bare key for a
+                  --    unit's sole position, and never once a retired unit
+                  --    has carried this number — the claim may have been
+                  --    about the inventory that was retired.
+                  or ((isr.id is null or (isr.produced_space_id is null and isr.produced_unit_id is null))
+                      and not exists (select 1 from inventory_retirements ir
+                                       where ir.property_id = u.property_id
+                                         and ir.reversed_at is null
+                                         and lower(btrim(ir.original_unit_number)) = lower(btrim(u.unit_number)))
+                      and (
+                        lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number || '|' || coalesce(s.space_label, '')))
+                        or (lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number))
+                            and (select count(*) from spaces s2 where s2.unit_id = u.id) = 1)
+                      ))
+                )
+           ) candidate) as opening_space_claim
       from spaces s
       join units u on u.id=s.unit_id
      where u.property_id=$1

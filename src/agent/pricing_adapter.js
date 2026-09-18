@@ -95,10 +95,42 @@ async function quotablePricing(pool, ctx = {}, opts = {}) {
   if (type.offer_state === "pricing_unavailable" || type.offer_state === "not_addressed")
     return HANDOFF("type_pricing_unavailable", `Pricing for ${type.label} is not available in the published version.`);
 
+  //  ── A TERM IS CHOSEN OR OFFERED, NEVER PICKED SILENTLY ───────────
+  //  This read `terms[0]` when no term was named. effective_pricing orders
+  //  terms by lease_term_months ascending, so terms[0] is deterministically
+  //  the SHORTEST published term — and a short term is the dearest one,
+  //  because that is the economics of short-term housing. The commonest
+  //  question in leasing, "how much is a 2 bedroom?", was therefore answered
+  //  with the highest number on the sheet, wearing a governance receipt.
+  //
+  //  effective_pricing already ruled on this exact question 300 lines away:
+  //  with no term supplied it refuses `lease_term_not_selected` and returns
+  //  the published MENU. The adapter used to make the opposite call on the
+  //  one path that talks to prospects. Now it agrees.
+  //
+  //  ONE TERM IS NOT A CHOICE. When a property publishes a single term there
+  //  is nothing to disambiguate and nothing being guessed, so it is quoted
+  //  and the term is stated. Refusing there would hand off on a question
+  //  that has exactly one answer, which is not honesty, only noise.
   const terms = type.terms || [];
-  const chosen = lease_term_months
-    ? terms.find((t) => Number(t.lease_term_months) === Number(lease_term_months))
-    : terms[0];
+  let chosen;
+  if (lease_term_months) {
+    chosen = terms.find((t) => Number(t.lease_term_months) === Number(lease_term_months));
+  } else if (terms.length === 1) {
+    chosen = terms[0];
+  } else if (terms.length > 1) {
+    const months = terms.map((t) => Number(t.lease_term_months)).sort((a, b) => a - b);
+    return {
+      ...HANDOFF("lease_term_not_selected",
+        `${type.label} is published on ${months.length} lease terms and the length decides the rent.`),
+      published_terms: months,
+      //  The menu, not an apology. A prospect asked a price; the honest answer
+      //  is that there is more than one and which applies is theirs to pick.
+      say: `We have ${type.label} on ${months.slice(0, -1).join(", ")}${months.length > 2 ? "," : ""}` +
+           ` and ${months[months.length - 1]}-month terms, and the rent depends on which you want —` +
+           ` which length are you looking for?`,
+    };
+  }
   if (!chosen) {
     return HANDOFF("term_not_published",
       lease_term_months ? `No published pricing for a ${lease_term_months}-month term on ${type.label}.`

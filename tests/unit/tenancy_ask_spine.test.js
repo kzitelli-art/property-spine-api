@@ -69,6 +69,7 @@ const ESTABLISHED = Object.freeze({
               positions_with_a_known_next: 91, forward_commitments_natively_proven: 0,
               leasing_grain: "bed" },
   unknowns: { occupied_positions_with_no_recorded_rent: 4,
+              occupied_positions_with_unavailable_contract_economics: 6,
               positions_with_unresolved_occupancy_evidence: 0,
               positions_with_overlapping_lease_claims: 0,
               occupied_positions_proven_only_by_the_opening_import: 37,
@@ -193,8 +194,9 @@ const gather = (over) => ask.gatherFacts(stubDb, {
     ok("G1  the compact projection arrives whole",
        facts.tenancy.position.rentable_positions === 160 && facts.tenancy.position.occupied === 37,
        JSON.stringify(facts.tenancy.position));
-    ok("G2  the unknowns arrive with it — counts, not a clean number",
-       facts.tenancy.unknowns.occupied_positions_with_no_recorded_rent === 4);
+    ok("G2  no-recorded-rent and unavailable-contract-economics arrive separately",
+       facts.tenancy.unknowns.occupied_positions_with_no_recorded_rent === 4
+       && facts.tenancy.unknowns.occupied_positions_with_unavailable_contract_economics === 6);
     ok("G3  the truth walls travel WITH the facts, not only in the prompt",
        Array.isArray(facts.tenancy.truth_walls)
        && facts.tenancy.truth_walls.some((w) => /occupied ≠ paying/.test(w)));

@@ -1,0 +1,19 @@
+{
+  "api": {
+    "head": "59bb82bf87a388778b54c4eb470aa7b43e155c04",
+    "tracked_diff_sha256": "1a3d5d2aa32d5303d384eb829b624ea82bcb59ebcf55075d38912805643c9ce8",
+    "working_tree_clean": false,
+    "changed_file_sha256": {
+      "tests/e2e/onboarding_review_local.js": "81a160d8120ab8f88d9f3fdc300f8e57599cd1ee50448b0084fa5f2f36415255",
+      "tests/proofs/availability_uncorroborated_claim.db.js": "5a11b05ec2eba2178f421fe50d4073943dfc6458062c20dea7c36d63688f0e77"
+    }
+  },
+  "app": {
+    "head": "a2dac2bad56bb32b41b49327cbde45d4f7c02a20",
+    "tracked_diff_sha256": "da9eb43342e62f1677e39d0b24fa3a7161747f0c8e7e81626aefcd9144137405",
+    "working_tree_clean": false,
+    "changed_file_sha256": {
+      "canonical_onboarding_review.browser.js": "420e504700e3bbd9af08bdeb3d39c0031b8b5624f02f36a64df4d6f48003147d"
+    }
+  }
+}

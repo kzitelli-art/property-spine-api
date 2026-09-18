@@ -138,7 +138,8 @@ async function resolveActorContext(pool, { user_id, property_id, as_of = null } 
          from concession_authority_grants
         where person_id = $1 and property_id = $2
           and effective_from <= $3::timestamptz
-          and (effective_until is null or effective_until > $3::timestamptz)`,
+          and (effective_until is null or effective_until > $3::timestamptz)
+        order by effective_from, id`,
       [person.id, property_id, asOf])).rows;
   } catch (e) {
     return deny("authority_read_failed", {
@@ -149,23 +150,20 @@ async function resolveActorContext(pool, { user_id, property_id, as_of = null } 
 
   const authorityRole = assignments.find((a) => FULL_AUTHORITY_ROLES.has(a.role)) || null;
   const roleBasis = authorityRole ? `assignment:${authorityRole.role}` : null;
-  const grant = grants[0] || null;
-
-  const resolve = (grantField) => {
+  // Every live grant is a valid authorization. A verb is granted when ANY
+  // live grant grants it, and the basis names the earliest such grant — two
+  // overlapping grants must never resolve by whichever row came back first.
+  const resolve = (...grantFields) => {
     if (authorityRole) return { granted: true, basis: roleBasis };
-    if (grant && grant[grantField]) return { granted: true, basis: `grant:${grant.id}` };
-    return { granted: false, basis: null };
+    const grant = grants.find((g) => grantFields.some((f) => g[f]));
+    return grant ? { granted: true, basis: `grant:${grant.id}` } : { granted: false, basis: null };
   };
   // may_prepare honours the older may_edit_pricing column, which meant the
   // same thing before the verb had a name — silently revoking authority
   // somebody was already given would be its own defect.
-  const prepare = authorityRole ? { granted: true, basis: roleBasis }
-    : grant && (grant.may_prepare_pricing || grant.may_edit_pricing)
-      ? { granted: true, basis: `grant:${grant.id}` } : { granted: false, basis: null };
+  const prepare = resolve("may_prepare_pricing", "may_edit_pricing");
   const review = resolve("may_review_pricing");
-  const publish = authorityRole ? { granted: true, basis: roleBasis }
-    : grant && grant.may_publish_public_offers
-      ? { granted: true, basis: `grant:${grant.id}` } : { granted: false, basis: null };
+  const publish = resolve("may_publish_public_offers");
   const manage = resolve("may_manage_concession_authority");
 
   const capabilities = {

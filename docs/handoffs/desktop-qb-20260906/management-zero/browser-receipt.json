@@ -1,0 +1,29 @@
+{
+  "proof": "canonical_onboarding_review",
+  "phase": "zero",
+  "mode": "server_interpreted_retained_source",
+  "app_source": "successor_index_html",
+  "api_origin": "literal_loopback",
+  "external_requests_blocked_before_egress": 0,
+  "confirmations_attempted": 0,
+  "sources": [
+    {
+      "source": "management_reconciled_counts",
+      "occupied": 0,
+      "inventory": 2,
+      "expected": "0%",
+      "observed": "0%",
+      "sub": "0 of 2 occupied",
+      "real_http": true
+    },
+    {
+      "source": "management_reconciled_counts",
+      "occupied": 1,
+      "inventory": 2,
+      "expected": "50%",
+      "observed": "50%",
+      "sub": "1 of 2 occupied",
+      "real_http": true
+    }
+  ]
+}

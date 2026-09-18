@@ -1,0 +1,444 @@
+{
+ "server": "d45d7687ba11aa8b624bfbce9150cee8733f6eec",
+ "summary": {
+  "shape": "greenery",
+  "stopped_at": {
+   "section": "exact-home",
+   "reason": "no established, use-configured position to offer"
+  },
+  "passed": 30,
+  "failed": 0,
+  "observations": 11
+ },
+ "results": [
+  {
+   "section": "property-and-staff",
+   "label": "the Greenery-shaped property is adopted through the governed door",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "ok": true,
+     "property_id": "<uuid>",
+     "organization_id": "<uuid>",
+     "already": false,
+     "receipt": "Greenery now belongs to this organization."
+    }
+   }
+  },
+  {
+   "section": "property-and-staff",
+   "label": "a manager receives the first assignment through the admin door",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 201,
+    "body": {
+     "ok": true,
+     "user": {
+      "id": "<uuid>",
+      "name": "Greenery Manager 7d2045a5",
+      "email": "<email>",
+      "phone": "<phone>"
+     },
+     "organization_id": "<uuid>",
+     "property_id": "<uuid>",
+     "role_key": "property_admin",
+     "platform_role": "member",
+     "note": "User provisioned. They can now log in via phone OTP at the operator app."
+    }
+   }
+  },
+  {
+   "section": "property-and-staff",
+   "label": "configuration: the Greenery text line is a fixture here; its real number and outbound policy are owner and provider inputs",
+   "ok": true,
+   "kind": "observe",
+   "detail": null
+  },
+  {
+   "section": "property-and-staff",
+   "label": "manager re-invited through the governed door to acquire person identity",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "invite": 200,
+    "verify": 200
+   }
+  },
+  {
+   "section": "property-and-staff",
+   "label": "the leasing agent joins through the governed invite and OTP",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "invite": 200,
+    "delivery": "sms_sent",
+    "verify": 200,
+    "body": {
+     "receipt": "Verified. You're in.",
+     "session_token": "zvnsRziqNas5VTVHBE8U6iHV1h5C7Hdp2EFUqvIrCTs",
+     "user": {
+      "id": "<uuid>",
+      "name": "Mike (journey) 7d2045a5",
+      "phone_number": "<phone>"
+     },
+     "property": {
+      "id": "<uuid>",
+      "name": "Greenery"
+     },
+     "role_title": "Leasing Agent",
+     "role_key": "leasing_agent",
+     "person_id": "<uuid>",
+     "allowed_modules": [
+      "leasing"
+     ],
+     "can_manage_roles": false,
+     "landing_module": "leasing",
+     "platform_role": "member"
+    }
+   }
+  },
+  {
+   "section": "property-and-staff",
+   "label": "the agent resolves as staff at the property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "state": "resolved"
+   }
+  },
+  {
+   "section": "property-and-staff",
+   "label": "the manager resolves as staff at the property",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "state": "resolved",
+    "basis": "bridge_plus_active_assignment_plus_authority"
+   }
+  },
+  {
+   "section": "property-and-staff",
+   "label": "staff ready",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "inquiry",
+   "label": "the authenticated website inquiry is captured once",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "New prospect \u2014 opened a new Greenery opportunity. AI opening response prepared (no message dispatched). Draft: \"Hi Journey, thanks for the inquiry! I'm confirming current availability and pricing now. I'd love to show you around, or is there anything I can answer first?\"",
+     "person_id": "<uuid>",
+     "lead_id": "<uuid>",
+     "new_person": true,
+     "reused_opportunity": false,
+     "first_response_sent": false,
+     "status": "new",
+     "conversation_id": "<uuid>",
+     "replayed": false,
+     "capture": {
+      "state": "captured",
+      "lead_event_id": "<uuid>",
+      "response_state": "prepared"
+     }
+    }
+   }
+  },
+  {
+   "section": "inquiry",
+   "label": "a relay redelivery replays the same person, lead and conversation",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "replayed": true
+   }
+  },
+  {
+   "section": "inquiry",
+   "label": "the form's positive consent is recorded (no consent would leave the prospect untextable)",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "consent_state": "opted_in"
+   }
+  },
+  {
+   "section": "inquiry",
+   "label": "capture sent nothing to the prospect",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "ownership",
+   "label": "conversation exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "ownership",
+   "label": "the agent takes ownership of the inquiry",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "ok": true,
+     "mode": "human_takeover",
+     "by": "<uuid>"
+    }
+   }
+  },
+  {
+   "section": "ownership",
+   "label": "the conversation detail names the agent as accountable owner",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "owner": true
+   }
+  },
+  {
+   "section": "ownership",
+   "label": "repeating the take-over by the same owner",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "ownership",
+   "label": "a second staff member cannot take an owned inquiry away silently",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 409
+   }
+  },
+  {
+   "section": "ownership",
+   "label": "the agent's personal Ask read after taking ownership",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "outcome": "answered",
+    "open_items": 1
+   }
+  },
+  {
+   "section": "tour",
+   "label": "conversation exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "tour",
+   "label": "the agent books the prospect onto a native slot from the conversation",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Tour booked. No confirmation message was sent.",
+     "tour_id": "<uuid>",
+     "slot_id": "<uuid>",
+     "scheduled_for": "2026-09-14T01:31:19.897Z",
+     "status": "scheduled",
+     "idempotent": false
+    }
+   }
+  },
+  {
+   "section": "tour",
+   "label": "a repeated booking returns the same tour",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "tour",
+   "label": "the tour is on the same lead and property",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "tour",
+   "label": "booking sent no message",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "tour",
+   "label": "tour check-in",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "tour",
+   "label": "the agent records the actual outcome as ready to apply",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Outcome recorded \u2014 tour given. Follow-up rail opened \u2014 outcome \u00b7 owner set to the actual host.",
+     "tour_id": "<uuid>",
+     "conversion_id": "<uuid>"
+    }
+   }
+  },
+  {
+   "section": "tour",
+   "label": "re-saving the same outcome replays instead of recording twice",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200
+   }
+  },
+  {
+   "section": "tour",
+   "label": "the outcome opened the conversion for the same person",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "tour",
+   "label": "post-tour follow-up is the agent's accountable work",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "exact-home",
+   "label": "conversion exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "exact-home",
+   "label": "leaseable targets read",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "exact-home",
+   "label": "configuration stop: no established, use-configured position exists at this property, so nothing is offerable",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "eligible": 0
+   }
+  },
+  {
+   "section": "exact-home",
+   "label": "chain stops here: no established, use-configured position to offer",
+   "ok": true,
+   "kind": "observe",
+   "detail": null
+  },
+  {
+   "section": "offer",
+   "label": "not exercised: the chain stopped at exact-home (no established, use-configured position to offer)",
+   "ok": true,
+   "kind": "observe",
+   "detail": null
+  },
+  {
+   "section": "send",
+   "label": "not exercised: the chain stopped at exact-home (no established, use-configured position to offer)",
+   "ok": true,
+   "kind": "observe",
+   "detail": null
+  },
+  {
+   "section": "application",
+   "label": "not exercised: the chain stopped at exact-home (no established, use-configured position to offer)",
+   "ok": true,
+   "kind": "observe",
+   "detail": null
+  },
+  {
+   "section": "lease",
+   "label": "not exercised: the chain stopped at exact-home (no established, use-configured position to offer)",
+   "ok": true,
+   "kind": "observe",
+   "detail": null
+  },
+  {
+   "section": "removed-authority",
+   "label": "agent exists",
+   "ok": true,
+   "kind": "check",
+   "detail": null
+  },
+  {
+   "section": "removed-authority",
+   "label": "the manager removes the agent's access through the governed door",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 200,
+    "body": {
+     "receipt": "Access updated.",
+     "assignment_id": "<uuid>",
+     "allowed_modules": [
+      "leasing"
+     ],
+     "primary_for_modules": [
+      "leasing"
+     ],
+     "landing_module": "leasing",
+     "active": false
+    }
+   }
+  },
+  {
+   "section": "removed-authority",
+   "label": "the agent's live session loses access immediately",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 401
+   }
+  },
+  {
+   "section": "removed-authority",
+   "label": "a removed agent cannot propose a send",
+   "ok": true,
+   "kind": "check",
+   "detail": {
+    "status": 401
+   }
+  },
+  {
+   "section": "removed-authority",
+   "label": "access restored through the same door",
+   "ok": true,
+   "kind": "observe",
+   "detail": {
+    "status": 200
+   }
+  }
+ ]
+}

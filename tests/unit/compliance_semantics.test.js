@@ -7,7 +7,7 @@ const contracts = require("../../src/asset/compliance_contracts.js");
 const factContracts = require("../../src/asset/compliance_fact_contracts.js");
 const semantics = require("../../src/asset/compliance_semantics.js");
 const projection = require("../../src/asset/compliance_projection.js");
-const solo = require("./fixtures/compliance/solo_license_periods.js");
+const solo = require("../fixtures/compliance/solo_license_periods.js");
 
 const EXPECTED_ASSERTIONS = 78;
 let pass = 0, fail = 0;

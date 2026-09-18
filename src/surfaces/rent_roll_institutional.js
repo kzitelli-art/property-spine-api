@@ -75,6 +75,14 @@ const ymd = (v) => {
 function statusLabel(r) {
   if (r.tenancy_state === "contested") return "Contested — overlapping leases";
   if (r.is_down) return "Down";
+  /*  ⚠ WITHOUT THIS LINE THE NEW STATE FALLS THROUGH TO "Occupied".
+   *  When `occupied_terms_not_established` was split out of `unresolved`,
+   *  every one of those positions stopped matching the test below and
+   *  reached the final `return "Occupied"` — silently upgrading beds with
+   *  no established rent, term or legal right to plain Occupied on the
+   *  ONE surface a lender reads. Found by grepping every consumer of
+   *  tenancy_state === "unresolved" before the split, not afterwards.  */
+  if (r.tenancy_state === "occupied_terms_not_established") return "Occupied — terms not established";
   if (r.tenancy_state === "unresolved") return "Unresolved occupancy evidence";
   if (r.tenancy_state === "vacant") return "Vacant";
   if (r.economics_state === "unavailable") return "Occupied — rent unavailable";
@@ -83,6 +91,13 @@ function statusLabel(r) {
 
 function institutionalRow(r) {
   const bed = r.space_label && !/whole\s*unit/i.test(r.space_label) ? ` · ${r.space_label}` : "";
+  // A recorded amount is a contractual figure in this report only when the
+  // canonical economics axis has established it.  Keep zero and negative
+  // amounts when they are established; this guard is about authority and
+  // finiteness, not a positivity heuristic.
+  const recordedRent = r.current_rent;
+  const contractualRent = r.economics_state === "available" && recordedRent != null &&
+    Number.isFinite(Number(recordedRent)) ? Number(recordedRent) : "";
   return {
     space_id: r.space_id,
     unit_id: r.unit_id,
@@ -95,7 +110,7 @@ function institutionalRow(r) {
     person_id: r.resident ? r.resident.person_id : null,
     lease_start: r.lease ? ymd(r.lease.start_date) : "",
     lease_expiration: r.lease ? ymd(r.lease.end_date) : "",
-    monthly_rent: r.current_rent == null ? "" : Number(r.current_rent),
+    monthly_rent: contractualRent,
     // Deliberately blank — see the header. The reconciliation section says why.
     security_deposit: "",
     current_balance: r.balance == null ? "" : Number(r.balance),
@@ -154,7 +169,9 @@ async function institutionalRentRoll(pool, { property_id, as_of = null } = {}) {
     // report an owner expects.
     reconciliation: {
       statements: [
-        `Trusted monthly contractual rent: $${Number(t.contractual_rent_trusted).toLocaleString()} from ${t.positions_contributing_rent} positions.`,
+        t.contractual_rent_trusted == null
+          ? "Trusted monthly contractual rent is unavailable: no position has a trusted contractual amount."
+          : `Trusted monthly contractual rent: $${Number(t.contractual_rent_trusted).toLocaleString()} from ${t.positions_contributing_rent} positions.`,
         `Contested rent claims excluded: $${Number(t.contractual_rent_excluded_contested).toLocaleString()} across ${rr.exceptions.contested} positions with overlapping lease claims.`,
         `${t.occupied_without_known_rent} occupied position(s) have unavailable contractual economics and contribute no rent.`,
         `${rr.exceptions.evidence_disagrees} position(s) have conflicting occupancy evidence between the opening source and canonical lease records.`,
@@ -186,7 +203,7 @@ function institutionalCsv(report) {
   const t = report.totals;
   lines.push("Total canonical rentable positions," + t.total_positions);
   lines.push("Confirmed contractual occupancy," + t.confirmed_contractual_occupancy + " of " + t.occupancy_denominator);
-  lines.push("Trusted monthly contractual rent," + t.trusted_monthly_contractual_rent);
+  lines.push("Trusted monthly contractual rent," + (t.trusted_monthly_contractual_rent == null ? "" : t.trusted_monthly_contractual_rent));
   lines.push("Positions contributing known rent," + t.positions_contributing_rent);
   lines.push("Contested rent excluded," + t.contested_rent_excluded);
   lines.push("Positions with unavailable economics," + t.positions_economics_unavailable);

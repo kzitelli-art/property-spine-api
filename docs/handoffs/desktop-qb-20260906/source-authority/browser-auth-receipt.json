@@ -1,0 +1,27 @@
+{
+  "proof": "canonical_onboarding_review",
+  "phase": "source-auth",
+  "mode": "server_interpreted_retained_source",
+  "app_source": "successor_index_html",
+  "api_origin": "literal_loopback",
+  "external_requests_blocked_before_egress": 0,
+  "confirmations_attempted": 0,
+  "sources": [
+    {
+      "source": "source_auth",
+      "actors_checked": 5,
+      "refused_unauthorized_actors": 2,
+      "opened_authorized_actors": 3,
+      "refusal_reason": "property_setup_access_required",
+      "refusal_visible": true,
+      "stale_review_absent_on_refusal": true,
+      "statuses": {
+        "outside_target": 403,
+        "maintenance_only_target": 403,
+        "assigned_target_management": 200,
+        "assigned_target_leasing": 200,
+        "org_admin": 200
+      }
+    }
+  ]
+}

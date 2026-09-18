@@ -1,0 +1,17 @@
+# Prospective turn planning — source review, 2026-09-09
+
+Owner experience: select a deliverable exact home for requested dates and give maintenance the work that supports future leasing, without falsely recording today's move-out.
+
+Custody: API 9f2acff97af311e6ebdcd5e2219f8cf873894748 / app c05ae68f6f8bc49ca4b5bd752adc928e1f4e0d88 plus working changes. Complete philosophy reread. Root and tour_handoff_gap independently inspected current source. No product changes or new DB proof this checkpoint.
+
+Existing mechanism: notice records a future vacate claim against the governed tenancy/space. turn_priority reads canonical availability.future_commitment and ranks existing in-progress turns, retaining contributing exact spaces and leases. unit_turn_read forwards its deadline; the operator route and app panel are reachable. A duplicate stored incoming deadline is unjustified. Expected completion and required-by date remain different facts.
+
+Observed earlier runtime green: focused owned HTTP chain passed commitment > pending > offer-only, with no application-created deadline. Source stop, not newly observed runtime red: rankTurnPriority selects only in_progress turns. The only discovered expected-ready writer is openTurnover, reached through actual move-out routes. It also writes move-out/possession and starts triage, so it cannot be called to plan early. Availability honestly refuses an established completion date without a governed estimate. The read-only worker found no separate reachable pre-move-out estimate writer.
+
+History inspected: f54bb912285795fd406b41826d1d7e8f37c3c186 introduced canonical turnover from resident move-out; d2fed71386b3d3543df2f63d988ca779809949f7 and 87deb5f8b3e93e458d57c6118b982aa0294b33ac preserve notice space/tenancy identity. These support retaining the existing owners, not treating notice as possession.
+
+Candidate direction, NOT accepted design: allow prospective planning through the existing turnover owner without move-out side effects. Before implementation, prove how its unit grain relates to exact outgoing beds and occupied siblings; how estimates retain actor/time/corrections; how actual move-out adopts the plan exactly once; how cancellation/changed dates reach selection, maintenance and Ask. A planned status alone does not answer these. Baseline status is text with default in_progress; source review establishes no governed planned lifecycle, not an SQL enum prohibition.
+
+Forbidden second paths: stored duplicate incoming-lease deadlines, guessed duration, early openTurnover, application as reservation, unit membership as bed authority, or a separate planner truth store. Next executable challenge should enter notice through the canonical HTTP door and demonstrate the stop before any synthetic direct turnover insertion; current competing-home fixtures are not proof of a prospective-plan writer.
+
+Fable access repair: frozen code-only source bundle created in Downloads as spine-fable-review-20260909-0145.zip. It includes current working bytes and per-file manifest; all1056 archived source hashes verified. ZIP SHA256 a766f0ef0c544f9ddae16648178a4c6e4446d5f8fa5135f5b3e71e5ed3207795. Private originals, environment files, database/runtime evidence and fixture directories excluded. It is review material, not a complete runtime distribution. Delivery still requires user attachment; no external upload performed. Fable must report omitted dependencies before claiming reproduced runtime evidence.

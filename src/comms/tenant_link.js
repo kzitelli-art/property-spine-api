@@ -75,9 +75,32 @@ const { normalizePropertyLine } = require("./property_line"); // the one canonic
 const clarification = require("../conversation/clarification");
 const { operatingReceipt, deliveryReceipt, composeReceipt } = require("../conversation/receipt");
 const technicianConversation = require("../technician/conversation");
+const { routeStaffSmsTurn } = require("../conversation/staff_sms_router");
+const { makeStaffGovernedRead } = require("./staff_governed_read");
+const { makeStaffLeasingAction } = require("../leasing/staff_sms_action");
+const defaultAskSpineAnswer = require("../agent/ask_spine_answer");
+const { createComplianceReferenceService } = require("../asset/compliance_references");
 
-module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService }) {
+module.exports = function tenantLinkModule({
+  pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService,
+  askSpineAnswer = defaultAskSpineAnswer, complianceReferenceService = null,
+  applicationsService = null,
+  getLeasingTourService = null,
+  getConversionService = null,
+  getApplicationInvitations = null,
+  staffLeasingAction: injectedStaffLeasingAction = null,
+}) {
   const router = express.Router();
+  const complianceReferences = complianceReferenceService || createComplianceReferenceService({
+    secret: process.env.COMPLIANCE_REFERENCE_SECRET,
+  });
+  const staffGovernedRead = makeStaffGovernedRead({ askSpineAnswer });
+  const staffLeasingAction = injectedStaffLeasingAction || makeStaffLeasingAction({
+    getLeasingTourService, getConversionService, getApplicationInvitations,
+  });
+  if (!staffLeasingAction || typeof staffLeasingAction.run !== "function") {
+    throw new Error("tenant_link requires the canonical staff leasing action service");
+  }
 
   // ── DEPENDENCY ASSERTION (symmetric with maintenance.js) ──────────────
   //  POST /tenant/maintenance and /tenant/maintenance/:id/add delegate every
@@ -766,10 +789,16 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
       const ledger = (await pool.query(
         `select label, kind, amount, occurred_at from ledger_entries
           where lease_id = $1 order by occurred_at desc limit 10`, [place.lease_id])).rows;
+      //  work_orders.person_id was dropped by migration 098, which split it
+      //  into reported_by_person_id and affected_person_id. This query kept
+      //  the old name, so every resident's /tenant/me answered 500 since.
+      //  A resident's open work is what they REPORTED or what AFFECTS their
+      //  home — 098's two relationships, both of them theirs.
       const workOrders = (await pool.query(
         `select id, title, issue_type, description, status, created_at
            from work_orders
-          where person_id = $1 and property_id = $2 and status <> 'complete'
+          where (reported_by_person_id = $1 or affected_person_id = $1)
+            and property_id = $2 and status <> 'complete'
           order by created_at desc`, [sess.person_id, sess.property_id])).rows;
 
       res.json({
@@ -1259,30 +1288,80 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
           //  turn must not become a provider timeout and a redelivery.
           emptyTwiml(res);
 
+          const attachments = twilioAttachments(req.body);
+          const route = routeStaffSmsTurn({ text: body || "", attachments });
           let turn;
-          const t = await pool.connect();
-          try {
-            await t.query("begin");
-            turn = await technicianConversation.runOperationsTurn(t, {
-              organizationId: ctx.organizationId, userId: ctx.staffUserId,
-              lineId: ctx.lineId, body: body || "",
-              providerMessageId: MessageSid,
-              //  MMS attachments as the carrier described them. The provider's
-              //  own media identity travels; its URL is a reference, never proof.
-              attachments: twilioAttachments(req.body),
-            }, { fetchMedia: sms && typeof sms.fetchMedia === "function" ? sms.fetchMedia : null });
-            await t.query("commit");
-          } catch (e) {
-            await t.query("rollback").catch(() => {});
-            //  A redelivery that lost the correlation-key race has already
-            //  been answered. Nothing to do, and nothing wrong.
-            if (e.code === "23505") {
-              console.error(`inbound-sms: operations turn already answered (${MessageSid}) — duplicate suppressed.`);
+
+          if (route.destination === "ask_spine") {
+            try {
+              turn = await staffGovernedRead.run(pool, anthropic, {
+                organizationId: ctx.organizationId,
+                userId: ctx.staffUserId,
+                lineId: ctx.lineId,
+                body: body || "",
+                providerMessageId: MessageSid,
+                propertyContext: ctx.propertyContext,
+                clarification: ctx.clarification,
+                askOptions: {
+                  mintComplianceReference: complianceReferences.mintReference,
+                  applicationsService,
+                },
+              });
+            } catch (e) {
+              if (e.code === "23505") {
+                console.error(`inbound-sms: operations read already answered (${MessageSid}) - duplicate suppressed.`);
+                return;
+              }
+              console.error("inbound-sms: operations read failed - inbound preserved, no reply sent:", e.message);
               return;
             }
-            console.error("inbound-sms: operations turn failed — inbound preserved, no reply sent:", e.message);
-            return;
-          } finally { t.release(); }
+          } else if (route.destination === "leasing") {
+            try {
+              turn = await staffLeasingAction.run(pool, {
+                organizationId: ctx.organizationId,
+                userId: ctx.staffUserId,
+                lineId: ctx.lineId,
+                body: body || "",
+                providerMessageId: MessageSid,
+                propertyContext: ctx.propertyContext,
+                clarification: ctx.clarification,
+                intent: route.leasing,
+              });
+            } catch (e) {
+              if (e.code === "23505") {
+                console.error(`inbound-sms: operations leasing turn already answered (${MessageSid}) - duplicate suppressed.`);
+                return;
+              }
+              console.error("inbound-sms: operations leasing turn failed - inbound preserved for human follow-up:", e.message);
+              return;
+            }
+          } else {
+            const t = await pool.connect();
+            try {
+              await t.query("begin");
+              turn = await technicianConversation.runOperationsTurn(t, {
+                organizationId: ctx.organizationId, userId: ctx.staffUserId,
+                lineId: ctx.lineId, body: body || "",
+                providerMessageId: MessageSid,
+                //  MMS attachments as the carrier described them. The provider's
+                //  own media identity travels; its URL is a reference, never proof.
+                attachments,
+              }, { fetchMedia: sms && typeof sms.fetchMedia === "function" ? sms.fetchMedia : null });
+              await t.query("commit");
+            } catch (e) {
+              await t.query("rollback").catch(() => {});
+              //  A redelivery that lost the correlation-key race has already
+              //  been answered. Nothing to do, and nothing wrong.
+              if (e.code === "23505") {
+                console.error(`inbound-sms: operations turn already answered (${MessageSid}) - duplicate suppressed.`);
+                return;
+              }
+              console.error("inbound-sms: operations turn failed - inbound preserved, no reply sent:", e.message);
+              return;
+            } finally {
+              t.release();
+            }
+          }
 
           //  TRANSPORT, AFTER THE COMMIT. The operating action is done and
           //  is not revised by anything the carrier does.

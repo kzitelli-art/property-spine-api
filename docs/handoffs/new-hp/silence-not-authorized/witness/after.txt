@@ -1,0 +1,10 @@
+AFTER — the same call, same lane, after the correction.
+
+leasing_person    = {"read_state":"NOT_AUTHORIZED","note":"This session does not hold the leasing or management entitlement at this property."}
+composite_silence = {"state":"QUIET","why":"every reader this session may read returned and none reports anything pending","withheld":[{"domain":"leasing_person","reason":"not_authorized"}]}
+
+a genuine failure is still BLIND:
+   {"state":"BLIND","unread":[{"domain":"maintenance","read_state":"READ_FAILED"},{"domain":"attention","read_state":"READ_FAILED"},{"domain":"work_order
+
+nothing withheld -> shape unchanged, no new key:
+   {"state":"QUIET","why":"every reader returned and none reports anything pending"}

@@ -1,0 +1,21 @@
+FIRST RED — already on the board at 571892df
+The matrix proof pins the compliance divergence as TODAY'S behaviour.
+command: node tests/proofs/ask_spine_entitlement_matrix.test.js
+
+  ── 8 × 6 ─────────────────────────────────────────────────────
+  compliance          · READ_FAILED    · READ_FAILED    · READ_FAILED    · READ_FAILED    E READ_FAILED    E READ_FAILED    
+  ok    compliance · [] · is absent, NOT_AUTHORIZED, or a real read
+  ok    compliance · [] · UNENTITLED but divergence is DECLARED (open gap, pinned)
+  ok    compliance · leasing · is absent, NOT_AUTHORIZED, or a real read
+  ok    compliance · leasing · UNENTITLED but divergence is DECLARED (open gap, pinned)
+  ok    compliance · management · is absent, NOT_AUTHORIZED, or a real read
+  ok    compliance · management · UNENTITLED but divergence is DECLARED (open gap, pinned)
+  ok    compliance · maintenance · is absent, NOT_AUTHORIZED, or a real read
+  ok    compliance · maintenance · UNENTITLED but divergence is DECLARED (open gap, pinned)
+  ok    compliance · asset_management · is absent, NOT_AUTHORIZED, or a real read
+  ok    compliance · asset_management · ENTITLED, so the branch runs
+  ok    compliance · all five · is absent, NOT_AUTHORIZED, or a real read
+  ok    compliance · all five · ENTITLED, so the branch runs
+  ok    gatherFacts called directly with ZERO modules DOES disclose compliance facts (the gap, pinned)
+  ok    …but the /ask door refuses first, so nothing is disclosed through it
+134/134 passed

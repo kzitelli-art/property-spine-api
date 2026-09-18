@@ -302,7 +302,7 @@ module.exports = function dealSetup({ pool, upload }) {
   router.get("/deal-setup/source/:artifactId/download", requireHuman, async (req, res) => {
     try {
       const a = await artifacts.read(pool, req.params.artifactId);
-      if (!a) return res.status(404).json({ error: "not_found", receipt: "That file is not on record." });
+      if (!a || a.artifact_kind !== "rent_roll") return res.status(404).json({ error: "not_found", receipt: "That rent roll is not on record." });
 
       //  Scope is checked HERE, against the actor, not inside the storage
       //  service: what a file is and who may see it are different questions.
@@ -312,9 +312,8 @@ module.exports = function dealSetup({ pool, upload }) {
             where dp.property_id = $1 and dp.status='current'`, [a.scope_id])).rows[0];
         if (!held) return res.status(403).json({ error: "no_current_deal",
           receipt: "That file's property is not currently on a deal you can open." });
-        const scope = await dealService.resolveDealScope(pool, {
-          user_id: req.human.id, deal_intake_id: held.intake_id });
-        if (!scope.ok) return res.status(scope.status).json({ error: scope.reason, receipt: scope.receipt });
+        await activation.resolveActivationScope(pool, {
+          user_id: req.human.id, deal_intake_id: held.intake_id, property_id: a.scope_id });
       } else {
         const scope = await dealService.resolveDealScope(pool, {
           user_id: req.human.id, deal_intake_id: a.scope_id });
@@ -342,7 +341,28 @@ module.exports = function dealSetup({ pool, upload }) {
     } catch (e) { fail(res, e); }
   });
 
-  //  STEP 2: the rows the app parsed, plus the artifact they came from.
+  // STEP 2: parse retained bytes and preview source-to-home identity.  This is
+  // read-only: inventory, leasing basis and the operating source substrate do
+  // not change until the reviewed mapping is applied below.
+  router.post("/deal-setup/activations/:activationId/preview-source",
+    requireHuman, rejectBodyActor, async (req, res) => {
+    try {
+      const act = (await pool.query("select * from activations where id=$1",
+        [req.params.activationId])).rows[0];
+      if (!act) return res.status(404).json({ error: "activation_not_found",
+        receipt: "That setup is no longer on record." });
+      res.json(await activation.previewRentRoll(pool, {
+        user_id: req.human.id, deal_intake_id: act.deal_id, property_id: act.property_id,
+        activation_id: act.id, rows: (req.body || {}).rows,
+        source_artifact_id: (req.body || {}).source_artifact_id,
+        source_as_of_date: (req.body || {}).source_as_of_date || null,
+        leasing_basis: (req.body || {}).leasing_basis || null,
+      }));
+    } catch (e) { fail(res, e); }
+  });
+
+  // STEP 3: apply the explicit reviewed decisions. Optional legacy rows are
+  // checked for agreement; they can never replace the retained bytes.
   router.post("/deal-setup/activations/:activationId/read-source",
     requireHuman, rejectBodyActor, async (req, res) => {
     try {
@@ -359,6 +379,8 @@ module.exports = function dealSetup({ pool, upload }) {
         source_artifact_id: (req.body || {}).source_artifact_id,
         source_as_of_date: (req.body || {}).source_as_of_date || null,
         leasing_basis: (req.body || {}).leasing_basis || null,
+        source_token: (req.body || {}).source_token || null,
+        inventory_decisions: (req.body || {}).inventory_decisions,
         force: Boolean((req.body || {}).force),
       });
       res.status(201).json(out);
@@ -371,6 +393,15 @@ module.exports = function dealSetup({ pool, upload }) {
         user_id: req.human.id, activation_id: req.params.activationId });
       res.json(out);
     } catch (e) { fail(res, e); }
+  });
+
+  router.post("/deal-setup/activations/:activationId/restart-source-review",
+    requireHuman, rejectBodyActor, async (req,res) => {
+    try {
+      res.status(201).json(await activation.restartSourceIdentityReview(pool, {
+        user_id:req.human.id, activation_id:req.params.activationId,
+      }));
+    } catch (e) { fail(res,e); }
   });
 
   router.post("/deal-setup/proposals/:proposedId/confirm", requireHuman, rejectBodyActor, async (req, res) => {
@@ -388,6 +419,14 @@ module.exports = function dealSetup({ pool, upload }) {
         reason: (req.body || {}).reason || null });
       res.json(out);
     } catch (e) { fail(res, e); }
+  });
+
+  router.post("/deal-setup/proposals/:proposedId/resolve-resident", requireHuman, rejectBodyActor, async (req,res) => {
+    try {
+      res.json(await activation.resolveResidentIdentity(pool,{
+        user_id:req.human.id,proposed_id:req.params.proposedId,
+        action:(req.body || {}).action,person_id:(req.body || {}).person_id || null}));
+    } catch(error) { fail(res,error); }
   });
 
   router.post("/deal-setup/activations/:activationId/establish", requireHuman, rejectBodyActor, async (req, res) => {
@@ -409,9 +448,8 @@ module.exports = function dealSetup({ pool, upload }) {
           where property_id=$1 and status='current'`, [req.params.propertyId])).rows[0];
       if (!held) return res.status(404).json({ error: "no_current_deal",
         receipt: "That property is not currently on a deal." });
-      const scope = await dealService.resolveDealScope(pool, {
-        user_id: req.human.id, deal_intake_id: held.intake_id });
-      if (!scope.ok) return res.status(scope.status).json({ error: scope.reason, receipt: scope.receipt });
+      await activation.resolveActivationScope(pool, {
+        user_id: req.human.id, deal_intake_id: held.intake_id, property_id: req.params.propertyId });
 
       const position = (await pool.query(
         `select op.*, ib.source_file, ib.source_as_of_date as batch_as_of
