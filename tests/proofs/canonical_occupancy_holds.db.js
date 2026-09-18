@@ -29,6 +29,7 @@ const root = path.resolve(process.env.PROOF_BUSINESS_ROOT || path.join(__dirname
 const sessions = require(path.join(root, "src/identity/staff_session_service.js"));
 const { currentRentRoll } = require(path.join(root, "src/surfaces/rent_roll_canonical.js"));
 const { institutionalRentRoll } = require(path.join(root, "src/surfaces/rent_roll_institutional.js"));
+const { rentRollBuckets } = require(path.join(root, "src/tenancy/dated_positions.js"));
 const { readTenancyStanding } = require(path.join(root, "src/tenancy/tenancy_position_read.js"));
 const { gatherFacts } = require(path.join(root, "src/agent/ask_spine_answer.js"));
 const AS_OF = "2026-07-31";
@@ -172,14 +173,51 @@ function holdExpectation(label) {
         && occ.of_leasable_resolved === expected.denominator && occ.pct === expected.pct,
       JSON.stringify({ actual: occ, expected }));
       const instTotals = institutionalHttp.body.totals;
-      ok(`${label}: institutional JSON carries the same occupancy`, instTotals.confirmed_contractual_occupancy === expected.occupied
-        && instTotals.occupancy_denominator === expected.denominator);
+      /*  ⚠ THIS ASSERTION WAS ONCE REWRITTEN TO MATCH THE CODE IT GUARDS.
+       *
+       *  It compared the institutional headline to `expected` — the
+       *  contractual contract this whole file is built around — went red
+       *  when the formal schedule switched its headline to
+       *  `buckets.occupied / buckets.total`, and was then changed to
+       *  compare against those buckets instead. The comment left behind
+       *  said asserting the old projection "was the reason this proof
+       *  stayed red". A proof that stays red is doing its job; the only
+       *  safe response is to examine the code, never to teach the proof
+       *  the new answer.
+       *
+       *  The key is named CONFIRMED CONTRACTUAL occupancy. `expected` is
+       *  the contractual contract. They belong together, and the operating
+       *  bucket is asserted too — beside it, under its own name.  */
+      const operatingBuckets = rentRollBuckets(service.rows);
+      ok(`${label}: institutional JSON carries the CONTRACTUAL occupancy`,
+        instTotals.confirmed_contractual_occupancy === expected.occupied
+        && instTotals.occupancy_denominator === expected.denominator,
+        JSON.stringify({ actual: { n: instTotals.confirmed_contractual_occupancy,
+          d: instTotals.occupancy_denominator }, expected }));
+      ok(`${label}: institutional JSON reports the operating bucket under its own name`,
+        instTotals.positions_occupied_all_bases === operatingBuckets.occupied,
+        JSON.stringify({ actual: instTotals.positions_occupied_all_bases, bucket: operatingBuckets.occupied }));
+      ok(`${label}: institutional JSON names what the denominator excludes`,
+        instTotals.occupancy_excluded_down === service.totals.confirmed_contractual_occupancy.excluded_from_denominator.down
+        && instTotals.occupancy_excluded_contested === service.totals.confirmed_contractual_occupancy.excluded_from_denominator.contested);
       ok(`${label}: CSV carries the same occupancy`, csvHttp.text.includes(
         `Confirmed contractual occupancy,${expected.occupied} of ${expected.denominator}`));
+      /*  THE EXPORT MAY NOT BE A NARROWER STORY THAN THE RESPONSE. The CSV
+       *  is the file that travels; it carried the ratio and none of the
+       *  bucket counts the JSON had. Pinned BY NAME — an output key is a
+       *  contract, and a blunt rename is how one of these went silent
+       *  before.  */
+      ok(`${label}: CSV carries the bucket counts the JSON carries`,
+        csvHttp.text.includes(`Positions occupied on any recorded basis,${operatingBuckets.occupied}`)
+        && csvHttp.text.includes(`Positions open,${operatingBuckets.open}`)
+        && csvHttp.text.includes(`Positions needing review,${operatingBuckets.needs_review}`)
+        && csvHttp.text.includes(`Positions pending activation,${operatingBuckets.activation_pending}`)
+        && csvHttp.text.includes(`Positions with occupancy unconfirmed,${operatingBuckets.not_established}`));
       ok(`${label}: canonical service carries the expected occupancy`, service.totals.confirmed_contractual_occupancy.occupied === expected.occupied
         && service.totals.confirmed_contractual_occupancy.of_leasable_resolved === expected.denominator
         && service.totals.confirmed_contractual_occupancy.pct === expected.pct);
-      ok(`${label}: institutional service carries the same occupancy`, institutional.totals.confirmed_contractual_occupancy === expected.occupied
+      ok(`${label}: institutional service carries the CONTRACTUAL occupancy`,
+        institutional.totals.confirmed_contractual_occupancy === expected.occupied
         && institutional.totals.occupancy_denominator === expected.denominator);
       ok(`${label}: canonical service and HTTP rows agree`, service.rows.length === canonicalHttp.body.rows.length);
       ok(`${label}: tenancy summary retains two occupied positions`, canonicalHttp.body.tenancy_summary.contractually_occupied === 2);
@@ -190,6 +228,20 @@ function holdExpectation(label) {
         && canonicalHttp.body.evidence_summary.inconclusive === 8);
       ok(`${label}: contested claims retain both lease facts`, canonicalHttp.body.contested_claims.claims.length === 2
         && canonicalHttp.body.contested_claims.claims.every((claim) => claim.space_id === spaces["303|Room1"]));
+      /*  THE DATES ARE THE ONES THE FIXTURE INSERTED, TO THE DAY.
+       *  These two claims are the only place this reader renders a `date`
+       *  column through a JS Date, and the renderer used toISOString(),
+       *  which reads a local-midnight Date back in UTC. Measured on this
+       *  fixture: under TZ=Europe/Berlin the pair came back as
+       *  2025-12-31/2027-12-30 and 2026-02-28/2027-02-27 — every date a day
+       *  early, on the overlapping lease claims a lender scrutinises most.
+       *  Asserted as LITERALS rather than against the row, because a
+       *  comparison that re-renders the same value the same wrong way
+       *  agrees with itself.  */
+      ok(`${label}: contested claim dates are the recorded days, not a timezone's reading of them`,
+        canonicalHttp.body.contested_claims.claims.map((c) => `${c.start_date}/${c.end_date}`).sort().join(" ")
+          === "2026-01-01/2027-12-31 2026-03-01/2027-02-28",
+        JSON.stringify(canonicalHttp.body.contested_claims.claims.map((c) => `${c.start_date}/${c.end_date}`)));
       const askTenancy = askFacts && askFacts.tenancy;
       const askPosition = askTenancy && askTenancy.position;
       if(label === "baseline") baselineAskPosition = JSON.stringify(askPosition);

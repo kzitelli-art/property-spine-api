@@ -32,6 +32,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
+const { dateColumnToIso } = require("../shared/date_column");
 
 const crypto = require("crypto");
 
@@ -378,8 +379,12 @@ async function store(db, {
       limit 1`,
     [scope_type, scope_id, v.sha256])).rows[0];
   if (existing) {
-    const dateText = value => value == null ? null : value instanceof Date
-      ? value.toISOString().slice(0,10) : String(value);
+    //  ⚠ SAME FALSE REFUSAL, ONE DOOR EARLIER. `existing.source_as_of_date`
+    //  is a `date` column and `source_as_of_date` is the caller's string, so
+    //  toISOString() made them disagree by a day on any host ahead of UTC —
+    //  and this one refuses the BYTES as already retained under a different
+    //  date. See src/shared/date_column.js.
+    const dateText = value => value == null ? null : dateColumnToIso(value);
     if (existing.artifact_kind === "rent_roll" && artifact_kind === "rent_roll" && source_as_of_date != null
         && dateText(existing.source_as_of_date) !== dateText(source_as_of_date)) {
       throw refusal("source_date_mismatch", "These bytes are already retained with a different source date. The earlier source has not been relabelled.");

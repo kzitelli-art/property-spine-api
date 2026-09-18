@@ -15,7 +15,125 @@
 //  it is not enabled by returning an informational exact-space candidate.
 // ════════════════════════════════════════════════════════════════════
 
+/*  ── MB-5: ONE NAMED DETERMINISTIC RULE, NO SCORE ───────────────────
+ *  Module scope and exported so the ordering can be exercised directly
+ *  with constructed homes. It was an inline lambda, which is why the
+ *  defect below could only be found by reasoning about it rather than by
+ *  running it.
+ *
+ *  ⚠ A RECORDED CONFLICT OUTRANKS EVERY COUNT OF UNKNOWNS.
+ *  The previous first key was all_recorded_constraints_satisfied, which
+ *  requires ZERO unknowns — so with no term chosen every home has an
+ *  unknown and that key separates nothing. Ranking then fell through to
+ *  "fewest unknowns", and a home known to be over budget AND the wrong
+ *  unit type outranked a home within budget with nothing against it,
+ *  purely because more of its facts had been resolved. Better-documented
+ *  mismatch beat plausible candidate — and the conversation shows the
+ *  top three.
+ *
+ *  Conflicting homes are still RETURNED, never hidden, just not ahead of
+ *  candidates nothing rules out. No score and no weighting: one
+ *  deterministic tuple of recorded facts, closed by space_label so two
+ *  equal beds in one unit cannot depend on database row arrival.      */
+function compareMatchedHomes(a, b) {
+  return ((a.constraint_counts.violated > 0) - (b.constraint_counts.violated > 0))
+    || (a.constraint_counts.not_established - b.constraint_counts.not_established)
+    || String(a.governed_ready_date || "9999-12-31").localeCompare(String(b.governed_ready_date || "9999-12-31"))
+    || ((a.governed_price == null ? Infinity : a.governed_price)
+        - (b.governed_price == null ? Infinity : b.governed_price))
+    || String(a.unit_number).localeCompare(String(b.unit_number))
+    || String(a.space_label || "").localeCompare(String(b.space_label || ""));
+}
+
+/*  ── TWO PURE READERS OF WHAT A PERSON SAID, AT MODULE SCOPE ───────
+ *  Neither touches `pool` or anything else the factory closes over, and
+ *  both decide whether a prospect is told "nothing fits". Kept out here
+ *  so they can be exercised directly as well as through the matcher —
+ *  a predicate with its own test and a caller nobody drove is exactly
+ *  how a missing import shipped twice in this file.               */
+/*  A recorded budget is free text BY DESIGN. The capture prompt in
+ *  src/comms/prospect_capture.js asks the model for "short verbatim-ish
+ *  text (e.g. '$1,400/mo', 'under $1,600', '$800 per person')" and
+ *  validates only that it is under 60 characters. So this function's job
+ *  is not to be clever about phrasing — it is to say whether those words
+ *  contain exactly ONE amount it can compare, and to refuse when they do
+ *  not. A number we cannot read is NOT a budget of zero and not a missing
+ *  budget: it is a recorded fact we could not compare, which is its own
+ *  not_established reason.
+ *
+ *  ⚠ THE OLD RULE TOOK THE FIRST NUMBER ANYWHERE IN THE STRING.
+ *  That is how "up to $1.4k" became a budget of 1.4 — after which every
+ *  priced home falls outside it, is dropped with `continue`, and the
+ *  prospect is told, confidently, that no priced home matched. A wrong
+ *  NEGATIVE is not an honest blank. "$1,200–$1,400" became 1200, silently
+ *  discarding the top of a range the person actually stated.
+ *
+ *  moveMonthEnd below already holds the right line for this file — "No
+ *  clever parser: a wrong month silently promotes a home the prospect
+ *  cannot take, and honest blank beats confident wrong." This is that same
+ *  line, applied to money, where it was missing.
+ *
+ *  ⚠ WHAT THIS STILL CANNOT DO, and must not pretend to: "$800 per
+ *  person" parses to 800 with no way to know it is per bed rather than per
+ *  unit, and a bare "1.4" is accepted as $1.40 because Spine cannot tell a
+ *  cents-scale figure from a shorthand without guessing. Both are meaning
+ *  questions that belong at CAPTURE, not to a reader downstream of it.  */
+function budgetAmount(fact) {
+  if (!fact) return { amount: null, why: "no_recorded_budget" };
+  const cleaned = String(fact.value).replace(/[,\s]/g, "");
+  //  A magnitude suffix is shorthand for a multiplier nobody applied — the
+  //  entire difference between $1,400 and $1.40.
+  if (/\d(?:k|m)\b/i.test(cleaned)) {
+    return { amount: null, why: "recorded_budget_uses_shorthand" };
+  }
+  const all = cleaned.match(/-?\d+(?:\.\d+)?/g) || [];
+  //  Two amounts are a RANGE, which is two facts. Taking either end
+  //  invents a bound the person did not state.
+  if (all.length > 1) return { amount: null, why: "recorded_budget_is_a_range" };
+  if (all.length === 0) return { amount: null, why: "recorded_budget_not_numeric" };
+  const n = Number(all[0]);
+  if (!Number.isFinite(n) || n < 0) return { amount: null, why: "recorded_budget_not_numeric" };
+  return { amount: n, why: null };
+}
+
+//  A recorded move month is free text. Accept only shapes that are
+//  unambiguously a month — YYYY-MM or YYYY-MM-DD. "spring", "ASAP" and
+//  "Jan" are recorded facts Spine cannot compare, which is its own
+//  not_established reason and NOT a satisfied constraint. No clever
+//  parser: a wrong month silently promotes a home the prospect cannot
+//  take, and honest blank beats confident wrong.
+function moveMonthEnd(fact) {
+  if (!fact) return { end: null, why: "no_recorded_move_month" };
+  const m = String(fact.value).trim().match(/^(\d{4})-(\d{2})(?:-(\d{2}))?$/);
+  if (!m) return { end: null, why: "recorded_move_month_not_a_month" };
+  const y = Number(m[1]), mo = Number(m[2]), day = m[3] ? Number(m[3]) : null;
+  if (!(mo >= 1 && mo <= 12)) return { end: null, why: "recorded_move_month_not_a_month" };
+  const lastOfMonth = new Date(Date.UTC(y, mo, 0));
+  /*  ⚠ A NAMED DAY IS A DEADLINE, NOT A MONTH.
+   *  The day used to be matched and then thrown away, so "2026-10-01" and
+   *  "2026-10-15" both became 2026-10-31 — and a home ready on the 25th
+   *  passed a prospect who said the 1st. That is precisely the failure the
+   *  comment above names: silently promoting a home the prospect cannot
+   *  take. The governed capture path (prospect_capture.js) only ever
+   *  writes 'YYYY-MM' or 'flexible', so this branch is reached from the
+   *  free-text writers — where a stated day means a stated day.  */
+  if (day !== null) {
+    if (!(day >= 1 && day <= lastOfMonth.getUTCDate())) {
+      return { end: null, why: "recorded_move_month_not_a_month" };
+    }
+    return { end: `${m[1]}-${m[2]}-${m[3]}`, why: null };
+  }
+  //  The LAST day of the recorded month: a prospect who said "August" can
+  //  take a home ready on the 31st.
+  return { end: lastOfMonth.toISOString().slice(0, 10), why: null };
+}
+
 module.exports = function leasingInventoryModule({ pool }) {
+  /*  Which refusals bound which decision. Required HERE, at module-factory
+   *  scope, because matchProspectHomes consults it on every call — an
+   *  earlier revision shipped with no require at all and only the
+   *  db-backed proof, which actually executes that line, could see it.  */
+  const decisionStrength = require("./match_decision_strength");
 
   //  availableUnits — the ONE query that answers "what could we offer?"
   //  property_id is SERVER-DERIVED by the caller (the conversation's
@@ -387,9 +505,9 @@ module.exports = function leasingInventoryModule({ pool }) {
 
   //  The ordering rule is DATA, named in every payload, so changing it is a
   //  visible diff and a ruling rather than a tweak (MB-5).
-  const MATCH_ORDER_RULE = "all_recorded_constraints_satisfied "
+  const MATCH_ORDER_RULE = "no_recorded_conflict "
     + "→ fewest_not_established → earliest_governed_ready_date "
-    + "→ lowest_governed_price → unit_number";
+    + "→ lowest_governed_price → unit_number → space_label";
 
   //  The prospect fact keys that exist. person_facts.js is the one writer;
   //  tour completion records exactly these three (leasing_leads OBS_KEYS).
@@ -428,35 +546,6 @@ module.exports = function leasingInventoryModule({ pool }) {
     return { read_state: "OK", facts, missing: PROSPECT_FACT_KEYS.filter((k) => !facts[k]) };
   }
 
-  //  A recorded budget is free text ("1200", "$1,200/mo"). A number we cannot
-  //  read is NOT a budget of zero and not a missing budget — it is a recorded
-  //  fact we could not compare, which is its own not_established reason.
-  function budgetAmount(fact) {
-    if (!fact) return { amount: null, why: "no_recorded_budget" };
-    const m = String(fact.value).replace(/[,\s]/g, "").match(/-?\d+(\.\d+)?/);
-    if (!m) return { amount: null, why: "recorded_budget_not_numeric" };
-    const n = Number(m[0]);
-    if (!Number.isFinite(n) || n < 0) return { amount: null, why: "recorded_budget_not_numeric" };
-    return { amount: n, why: null };
-  }
-
-  //  A recorded move month is free text. Accept only shapes that are
-  //  unambiguously a month — YYYY-MM or YYYY-MM-DD. "spring", "ASAP" and
-  //  "Jan" are recorded facts Spine cannot compare, which is its own
-  //  not_established reason and NOT a satisfied constraint. No clever
-  //  parser: a wrong month silently promotes a home the prospect cannot
-  //  take, and honest blank beats confident wrong.
-  function moveMonthEnd(fact) {
-    if (!fact) return { end: null, why: "no_recorded_move_month" };
-    const m = String(fact.value).trim().match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
-    if (!m) return { end: null, why: "recorded_move_month_not_a_month" };
-    const y = Number(m[1]), mo = Number(m[2]);
-    if (!(mo >= 1 && mo <= 12)) return { end: null, why: "recorded_move_month_not_a_month" };
-    //  The LAST day of the recorded month: a prospect who said "August" can
-    //  take a home ready on the 31st.
-    const last = new Date(Date.UTC(y, mo, 0)).toISOString().slice(0, 10);
-    return { end: last, why: null };
-  }
 
   async function matchProspectHomes({
     property_id, person_id = null,
@@ -466,21 +555,50 @@ module.exports = function leasingInventoryModule({ pool }) {
     const q = clientArg || pool;
     if (!property_id) return { matched: false, qualification: "no_property", homes: [] };
 
-    /*  MB-7 — TERM IS REQUIRED, AND THE REFUSAL IS INHERITED, NOT RETYPED.
-     *  The seam already distinguishes "I need your dates" from "nothing is
+    /*  MB-7 — THE VOCABULARY IS INHERITED, NOT RETYPED.
+     *  The seam distinguishes "I need your dates" from "nothing is
      *  available" and carries the sentence an agent should say. Asking it
-     *  for one home is the cheapest way to get that exact refusal without a
-     *  second copy of the rule that could drift from it.  */
+     *  for one home is the cheapest way to get that exact wording without
+     *  a second copy of the rule that could drift from it.
+     *
+     *  A TERM IS NO LONGER REQUIRED TO ANSWER. It is required to make a
+     *  contractual offer; interpretGate() decides which of those a given
+     *  qualification bounds.  */
     const gate = await availableUnits({ property_id, requested_start, requested_end,
       lease_term_months, discovery_mode: "exact_spaces", limit: 1 }, q);
-    const REFUSALS = ["term_required", "invalid_term", "pricing_term_required",
-      "invalid_pricing_term", "invalid_preferences", "term_check_unavailable",
-      "pricing_read_unavailable", "no_property"];
-    if (REFUSALS.includes(gate.qualification)) {
+    /*  ── THE REFUSAL BOUNDS THE ANSWER; IT DOES NOT ALWAYS EMPTY IT ───
+     *  MB-7 inherits this vocabulary rather than retyping it, which is
+     *  right. What was wrong is that EVERY inherited qualification was
+     *  fatal, so "you have not chosen a term" deleted the showing answer
+     *  as well as the offer — and the composer always calls without a
+     *  term, so an operator asking which homes to walk to got nothing.
+     *
+     *  Showing and offering are different decisions with different
+     *  requirements. match_decision_strength.js says which refusals bound
+     *  which decision. The offer decision is UNCHANGED: everything that
+     *  blocked a contractual offer still blocks one.                    */
+    /*  ── ONE INTERPRETATION OF THE GATE, READ HERE AND NOWHERE ELSE ──
+     *  The raw qualification goes straight to the predicate. Three
+     *  separate interpretations used to derive from it — does it block,
+     *  what strength does it allow, was a term chosen — and each revision
+     *  that repaired one broke another. They are now one call.
+     *
+     *  ⚠ DATES AND A PRICING TERM ARE DIFFERENT FACTS.
+     *  `pricing_term_required` means the caller DID supply dates and the
+     *  homes WERE evaluated for that interval; only the priced term is
+     *  unresolved. Reporting "no term chosen" there would tell an
+     *  operator their dates are missing when they are not.             */
+    const gateRead = decisionStrength.interpretGate(gate.qualification);
+    if (gateRead.blocks) {
       return { matched: false, qualification: gate.qualification, note: gate.note,
+        //  Carried so the standing projection can PROJECT this outcome
+        //  rather than classify it again (§40.7).
+        refusal_kind: gateRead.refusal_kind,
         refusal_inherited_from: "availableUnits(exact_spaces)", homes: [],
         ordering_rule: MATCH_ORDER_RULE, capability_class: "retrieval" };
     }
+    const strengthCeiling = gateRead.ceiling;
+    const termChosen = gateRead.dates_established;
 
     const term = { requested_start, requested_end, lease_term_months };
     const prospect = await readProspectFacts(q, { person_id, property_id });
@@ -495,6 +613,7 @@ module.exports = function leasingInventoryModule({ pool }) {
         .leaseableApplicationTargets(q, { property_id, requested_start, requested_end });
     } catch (e) {
       return { matched: false, qualification: "term_check_unavailable",
+        refusal_kind: decisionStrength.REFUSAL.READ_FAILED,
         note: "Spine could not read the homes and check those dates. This is not an empty inventory result.",
         homes: [], ordering_rule: MATCH_ORDER_RULE, capability_class: "retrieval" };
     }
@@ -562,11 +681,25 @@ module.exports = function leasingInventoryModule({ pool }) {
       //  The home is in eligible_targets FOR this exact term, which is the
       //  governed statement that it can support it. The prospect fact is the
       //  requested term itself, supplied by the caller and named as such.
-      basis.push(basisEntry("term", STATE.SATISFIED, {
-        prospect: { key: "requested_term", value: `${requested_start}..${requested_end}`,
-          source: "caller_supplied_term", recorded_at: null },
-        home: { read: "application_target_read.leaseableApplicationTargets",
-          value: "eligible_for_requested_term", as_of: requested_start } }));
+      /*  ⚠ SATISFIED ONLY WHEN A TERM WAS ACTUALLY CHOSEN. The home is in
+       *  eligible_targets FOR a term only if one was supplied; with none,
+       *  membership says the home exists and is governed inventory, NOT
+       *  that it supports a term nobody named. Recording SATISFIED here
+       *  without a term would manufacture the exact agreement this read
+       *  exists to establish (§5).                                       */
+      if (!termChosen) {
+        basis.push(basisEntry("term", STATE.NOT_ESTABLISHED, {
+          prospect: null,
+          home: { read: "application_target_read.leaseableApplicationTargets",
+            value: "governed_inventory", as_of: null },
+          why: "no_term_chosen" }));
+      } else {
+        basis.push(basisEntry("term", STATE.SATISFIED, {
+          prospect: { key: "requested_term", value: `${requested_start}..${requested_end}`,
+            source: "caller_supplied_term", recorded_at: null },
+          home: { read: "application_target_read.leaseableApplicationTargets",
+            value: "eligible_for_requested_term", as_of: requested_start } }));
+      }
 
       // ── READINESS ─────────────────────────────────────────────────
       //  COMPARED, not assumed. The first version of this decided the state
@@ -605,6 +738,45 @@ module.exports = function leasingInventoryModule({ pool }) {
         governed_ready_date: t.available_from || null,
         basis, constraint_counts: counts,
         all_recorded_constraints_satisfied: counts.violated === 0 && counts.not_established === 0,
+        /*  ── WHAT MAY BE CLAIMED ABOUT THIS HOME, AND NO MORE ──────────
+         *  Attached per home rather than stated once for the answer,
+         *  because homes in one answer differ: a violated recorded need
+         *  makes a home worth showing but not a likely fit, while the
+         *  missing term caps every home in the answer alike. The ceiling
+         *  is applied last so nothing exceeds what the caller's inputs
+         *  can support.                                                  */
+        decision_strength: (() => {
+          /*  ⚠ "NOTHING RULES IT OUT" IS NOT "PROBABLY A GOOD FIT".
+           *  The first version called every unviolated home likely_fit,
+           *  including one where NOTHING was known — all constraints
+           *  not_established. That is a candidate worth walking to, not
+           *  evidence of fit, and a label that says otherwise is the
+           *  confident-wrong §5 forbids. likely_fit now requires at least
+           *  one recorded need actually SATISFIED.                       */
+          /*  ⚠ A RECORDED CONFLICT IS NOT A WEAKER CLAIM — IT IS NO CLAIM.
+           *  `showable` is defined one file over as "worth walking to;
+           *  nothing known contradicts it", and this line handed that exact
+           *  label to homes where something known DID contradict it. One
+           *  label carrying two opposite facts is the same defect the formal
+           *  rent roll had when a physically DOWN unit printed as "Open" —
+           *  made here, one layer up, in the same week.
+           *
+           *  Spine declines to rank these rather than inventing a fourth
+           *  rung. The ladder itself is under review (showable / likely_fit /
+           *  offerable are not simply stronger versions of one fact: a home
+           *  can fit and be unshowable, or be offerable and a poor fit), and
+           *  a home whose conflict is already visible in `basis` needs no
+           *  strength word to be understood. null is the honest blank.     */
+          if (counts.violated > 0) return null;
+          const own = counts.satisfied === 0
+            ? decisionStrength.STRENGTH.SHOWABLE
+            : (counts.not_established === 0
+                ? decisionStrength.STRENGTH.OFFERABLE
+                : decisionStrength.STRENGTH.LIKELY_FIT);
+          const order = [decisionStrength.STRENGTH.SHOWABLE,
+            decisionStrength.STRENGTH.LIKELY_FIT, decisionStrength.STRENGTH.OFFERABLE];
+          return order.indexOf(own) <= order.indexOf(strengthCeiling) ? own : strengthCeiling;
+        })(),
         selection_eligible: false,
       });
     }
@@ -612,13 +784,7 @@ module.exports = function leasingInventoryModule({ pool }) {
     /*  MB-5 — ONE NAMED DETERMINISTIC RULE, NO SCORE.
      *  Every tiebreak is a recorded fact, and unit_number closes it so the
      *  order cannot depend on row arrival.  */
-    homes.sort((a, b) =>
-      (b.all_recorded_constraints_satisfied - a.all_recorded_constraints_satisfied)
-      || (a.constraint_counts.not_established - b.constraint_counts.not_established)
-      || String(a.governed_ready_date || "9999-12-31").localeCompare(String(b.governed_ready_date || "9999-12-31"))
-      || ((a.governed_price == null ? Infinity : a.governed_price)
-          - (b.governed_price == null ? Infinity : b.governed_price))
-      || String(a.unit_number).localeCompare(String(b.unit_number)));
+    homes.sort(compareMatchedHomes);
 
     /*  MB-6 — COVERAGE IS REPORTED, NOT ASSUMED. A property with no published
      *  pricing says so and still evaluates readiness; it does not answer
@@ -630,7 +796,9 @@ module.exports = function leasingInventoryModule({ pool }) {
       readiness: homes.length ? "evaluable" : "no_governed_homes",
       unit_type: homes.some((h) => h.basis.find((b) => b.constraint === "unit_type").home_fact)
         ? "evaluable" : "unavailable_for_this_property",
-      term: "evaluable",
+      //  A term nobody chose was never evaluated. Saying "evaluable" here
+      //  would report coverage for a comparison that did not happen.
+      term: termChosen ? "evaluable" : "term_not_chosen",
       bedrooms: "not_a_recorded_prospect_fact",
     };
 
@@ -643,12 +811,23 @@ module.exports = function leasingInventoryModule({ pool }) {
       prospect: { person_id: person_id || null, recorded_facts: prospect.facts,
         missing_fact_keys: prospect.missing },
       ordering_rule: MATCH_ORDER_RULE,
+      /*  ── THE CEILING, AND THE SECOND HALF OF THE HANDSHAKE ─────────
+       *  The reader already declared what it needed; nothing ever read
+       *  that declaration and came back with it. `needs_for_offer` names
+       *  the ONE fact that stands between this answer and a contractual
+       *  offer, so a caller can ask for exactly that and nothing else —
+       *  never reopen a blank form for a fact Spine already holds.     */
+      decision_strength_ceiling: strengthCeiling,
+      needs_for_offer: gateRead.missing,
       constraint_coverage: coverage,
       home_count: homes.length,
       homes: homes.slice(0, Math.min(Math.max(Number(limit) || 25, 1), 100)),
       truncated: homes.length > Math.min(Math.max(Number(limit) || 25, 1), 100),
       may_promise: false,
-      note: "Retrieval on a declared basis. Each home names every constraint compared, "
+      note: (termChosen ? "" : "No lease term was chosen, so no home here is stated as "
+        + "contractually offerable; each carries the strongest claim its recorded facts "
+        + "support. ")
+        + "Retrieval on a declared basis. Each home names every constraint compared, "
         + "the recorded prospect fact behind it and the governed home fact it was compared "
         + "against. Homes that fail a constraint are RETURNED and marked violated, never "
         + "hidden. Unknowns stay unknown. These are informational; no home is held or "
@@ -657,9 +836,14 @@ module.exports = function leasingInventoryModule({ pool }) {
   }
 
   /*  MB-8 — THE COMPACT STANDING PROJECTION.
-   *  Cheap enough to gather routinely, and it carries NO ids: an entitled
-   *  person asking from a meeting gets counts, the basis and what is unknown.
-   *  Detail is a second read through the staff door.  */
+   *  Cheap enough to gather routinely, and it carries NO record ids: an
+   *  entitled person asking from a meeting gets the top named options with
+   *  the basis behind each, the counts, and what is unknown. Homes are
+   *  identified by LABEL; ids stay in the detail read behind the staff door.
+   *
+   *  It used to pass counts only, and its next action told the operator to
+   *  go open the matching screen — the backend had an answer to WHICH home
+   *  and the conversation received an answer to HOW MANY.  */
   async function readProspectMatchStanding(db, { property_id, person_id = null,
     requested_start = null, requested_end = null, lease_term_months = null } = {}) {
     const r = await matchProspectHomes({ property_id, person_id, requested_start,
@@ -674,9 +858,25 @@ module.exports = function leasingInventoryModule({ pool }) {
        *  because SPINE did not ask for dates. The read succeeded; the
        *  property is silent; the question is simply not answerable yet,
        *  and `why` says so in the seam's own vocabulary.  */
-      return { read_state: "OK", truth_state: "NOT_ESTABLISHED",
+      /*  ⚠ A READ THAT FAILED IS NOT A SUCCESSFUL "NOTHING ESTABLISHED".
+       *  Every unmatched result used to be flattened to read_state OK,
+       *  so "Spine could not read pricing" and "the caller gave no dates"
+       *  arrived identically — and the first is a fact about SPINE, which
+       *  §40.7 keeps separate from a fact about the property. The kind is
+       *  decided once, upstream; this PROJECTS it.                      */
+      const failedRead = r.refusal_kind === decisionStrength.REFUSAL.READ_FAILED;
+      return { read_state: failedRead ? "READ_FAILED" : "OK",
+        truth_state: failedRead ? null : "NOT_ESTABLISHED",
+        refusal_kind: r.refusal_kind || null,
         attention_state: null, as_of: new Date().toISOString(),
         qualification: r.qualification, why: r.note || null,
+        //  ⚠ NOW UNREACHABLE FOR THE TERM CASES. Since showing and
+        //  offering were separated, term_required and
+        //  pricing_term_required produce a MATCHED answer with a capped
+        //  ceiling, so they never arrive here; only fatal refusals do.
+        //  Kept rather than deleted because the mapping is still the
+        //  correct one if a nested read ever surfaces them as fatal, and
+        //  a reader should not have to guess whether that was intended.
         needs_from_caller: r.qualification === "term_required"
           || r.qualification === "pricing_term_required" ? r.qualification : null,
         capability_class: "retrieval", claims_not_made: ["comparison", "causal_explanation"],
@@ -703,6 +903,65 @@ module.exports = function leasingInventoryModule({ pool }) {
         h.basis.find((b) => b.constraint === "price" && b.state === "violated")).length,
       recorded_prospect_facts: Object.keys(r.prospect.recorded_facts),
       missing_prospect_facts: r.prospect.missing_fact_keys,
+      /*  ── HOW STRONG A CLAIM THIS ANSWER SUPPORTS ───────────────────
+       *  Carried into the standing projection because the conversational
+       *  reader must be able to say "worth showing" without implying
+       *  "can be offered". `needs_from_caller` keeps the vocabulary the
+       *  unmatched branch already uses, so both paths ask for a term the
+       *  same way and a caller can answer either one identically.      */
+      decision_strength_ceiling: r.decision_strength_ceiling || null,
+      /*  ⚠ COUNTED BY NAME, NOT BY TRUTHINESS. `showable` was
+       *  `filter((h) => h.decision_strength)` — every matched home with any
+       *  strength at all, reported to the conversational reader under the
+       *  name of the weakest specific claim. It is now the count of homes
+       *  that ARE showable, with the other states counted beside it, so the
+       *  four numbers describe the same population the options list does.  */
+      showable: r.homes.filter((h) => h.decision_strength === "showable").length,
+      likely_fit: r.homes.filter((h) => h.decision_strength === "likely_fit").length,
+      offerable: r.homes.filter((h) => h.decision_strength === "offerable").length,
+      with_recorded_conflict: r.homes.filter((h) => h.decision_strength == null).length,
+      needs_from_caller: r.needs_for_offer || null,
+      /*  ── THE ANSWER, NOT THE COUNT OF ANSWERS ──────────────────────
+       *  This projection reduced a ranked, reasoned home list to
+       *  tallies, and its next action told the operator to go open the
+       *  matching screen. The backend had an answer to "WHICH home?" and
+       *  the conversation received an answer to "how many homes?" — the
+       *  exact re-entry this product exists to remove.
+       *
+       *  ⚠ LABELS, NEVER IDS (§40.8, MB-8). unit_number and space_label
+       *  are what a person says out loud; a record id handed to a model
+       *  lets it compose a link Spine never resolved. The ids stay in
+       *  the detail read behind the staff door.
+       *
+       *  Top three, because this is the compact projection gathered on
+       *  every question — homes_considered carries the rest, and the
+       *  detail read is one step away.                                  */
+      options: r.homes.slice(0, 3).map((h) => ({
+        home: [h.unit_number, h.space_label].filter(Boolean).join(" · "),
+        decision_strength: h.decision_strength,
+        //  Why it is here, and what is still unknown — the two halves an
+        //  operator needs to decide whether to walk to it.
+        /*  ⚠ THE EVIDENCE, NOT THREE LISTS OF CONSTRAINT NAMES. The
+         *  matcher already compared a recorded prospect value against a
+         *  governed home value for every constraint. Projecting only the
+         *  NAMES let the conversation say "the unit type conflicts" and
+         *  left it unable to say what was asked for versus what the home
+         *  is, or by how much a price is over budget — so anything
+         *  downstream would have to reconstruct facts that were already
+         *  in hand. One compact row per constraint replaces all three
+         *  lists; no second explanation generator.                      */
+        basis: h.basis.map((b) => ({
+          constraint: b.constraint,
+          result: b.state,
+          prospect: b.prospect_fact ? b.prospect_fact.value : null,
+          prospect_source: b.prospect_fact ? b.prospect_fact.source || null : null,
+          home: b.home_fact ? b.home_fact.value : null,
+          home_read: b.home_fact ? b.home_fact.read || null : null,
+          why: b.why || null,
+        })),
+        governed_ready_date: h.governed_ready_date || null,
+        governed_price: h.governed_price == null ? null : h.governed_price,
+      })),
       constraint_coverage: r.constraint_coverage,
       ordering_rule: r.ordering_rule,
       basis: "each home carries the constraint, the recorded prospect fact and the governed home fact",
@@ -712,3 +971,7 @@ module.exports = function leasingInventoryModule({ pool }) {
   return { availableUnits, attachSelectedUnit, matchConfirmationToOffer,
            matchProspectHomes, readProspectMatchStanding };
 };
+
+module.exports.compareMatchedHomes = compareMatchedHomes;
+module.exports.budgetAmount = budgetAmount;
+module.exports.moveMonthEnd = moveMonthEnd;

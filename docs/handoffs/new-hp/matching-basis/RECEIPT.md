@@ -1,5 +1,14 @@
 # Prospect-to-home matching — retrieval on a declared basis
 
+> ⛔ **SUPERSEDED IN PART, 2026-09-15.** The MB-5 ordering key, the MB-7
+> term refusal and the MB-8 counts-only projection described below were all
+> changed by the overnight matcher build, with proof. This receipt records
+> what this lane did on 2026-09-14 and is **history, not current behaviour**.
+> See the banner on
+> `docs/handoffs/new-hp/rulings/MATCHING_BASIS_RULING_20260914.md`
+> and `docs/CURRENT_STATE.md` row 85.
+
+
 Lane `claude-opus/matching-basis-20260914` (API only). Governed by
 `docs/handoffs/new-hp/rulings/MATCHING_BASIS_RULING_20260914.md`; every
 section below cites the ruling it satisfies.

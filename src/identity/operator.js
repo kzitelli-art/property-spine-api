@@ -4257,8 +4257,72 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
           if (application.conversion_id !== req.params.conversionId || application.property_id !== conv.property_id ||
               application.person_id !== conv.person_id || application.space_id !== invitation.space_id)
             throw Object.assign(new Error("This invitation does not resolve to its original application and home."),{httpStatus:409});
-          if ((await client.query("select id from lease_packets where application_id=$1 limit 1",[application.id])).rows.length)
-            throw Object.assign(new Error("A lease packet already exists. Resolve it before changing agreed terms."),{httpStatus:409});
+          /*  ── A PACKET EXISTING IS NO LONGER THE QUESTION ────────────
+           *  This refused whenever ANY packet row existed, including one
+           *  already superseded. That held while packets only appeared
+           *  because a person pressed a button, so a correction always came
+           *  first. Automatic preparation (owner ruling 2026-09-15) creates
+           *  the packet at submission, so this now blocks every legitimate
+           *  successor-offer correction.
+           *
+           *  THE PROTECTIVE REFUSAL IS KEPT AND MADE PRECISE, not removed.
+           *  What must never be silently changed is an agreement the
+           *  applicant has ACKNOWLEDGED or that has been executed — the
+           *  same line assessLeasePacketEligibility already draws when it
+           *  calls a submitted packet "frozen evidence" and sends changes
+           *  down the governed correction path.
+           *
+           *  A packet still in preparation (draft / sent / tenant_in_progress)
+           *  is superseded by the existing mechanism: the next
+           *  generateLeasePacket version stamps `superseded_at` on it, and
+           *  resolveSignerAccess already refuses any packet with
+           *  `superseded_at` set — so the obsolete link stops opening
+           *  without anything new being built to revoke it.            */
+          /*  ── ANY CURRENT PACKAGE BLOCKS A SUCCESSOR OFFER ──────────
+           *  Two suites pin this from opposite sides and BOTH are right:
+           *
+           *    two_step_leasing.e2e.js   "a prepared packet blocks a further
+           *                              offer change (changed terms need a
+           *                              new package, never a silent swap)"
+           *                              — 409, on a packet prepared from the
+           *                              acknowledged offer.
+           *    tour_application_lease    "a prepared lease packet blocks
+           *                              further application-offer revision"
+           *                              — 409, on a staff-generated packet.
+           *
+           *  ⚠ AND THE THIRD CASE THAT SEEMED TO CONTRADICT THEM IS GONE.
+           *  The tour journey's legitimate successor offers were refused
+           *  once — "A lease packet already exists" — because submission
+           *  itself owed AND dispatched the handoff, so a package existed
+           *  before anyone tried to correct anything. Two attempts were made
+           *  to carve an exception for that (frozen states only; then frozen
+           *  states plus operator-confirmed lineage), and BOTH let a real
+           *  silent swap through. The exception was never needed: moving the
+           *  handoff from submission to COMPLETION removed the after-commit
+           *  dispatch, so no package exists at those revision points at all.
+           *  A rule with a hole in it, carved for a condition that no longer
+           *  exists, is worse than the plain rule.
+           *
+           *  So: a CURRENT package blocks. Superseded and void ones do not —
+           *  a superseded version is history, and its access is already dead
+           *  because resolveSignerAccess refuses it. The package's state only
+           *  chooses which sentence the operator reads.                   */
+          const FROZEN_PACKET_STATES = ['submitted','resident_executed','executed'];
+          const blocking = (await client.query(
+            `select id, status, (status = any($2::text[])) as frozen_state
+               from lease_packets
+              where application_id=$1 and superseded_at is null
+                and coalesce(status,'') <> 'void'
+              order by version desc limit 1`,
+            [application.id, FROZEN_PACKET_STATES])).rows[0];
+          if (blocking)
+            throw Object.assign(new Error(
+              blocking.status === 'submitted'
+                ? "The applicant has already acknowledged this package. Changing agreed terms now is a governed correction, not a new offer."
+                : blocking.frozen_state
+                  ? "This lease has already been executed. Changing agreed terms now is a governed correction, not a new offer."
+                  : "A signing package has already been prepared for these terms. Changing them now needs a new package, not a silent swap."),
+              {httpStatus:409});
         }
         if (b.application_id && (!application || application.id !== b.application_id))
           throw Object.assign(new Error("The requested application does not belong to this invitation."),{httpStatus:409});
@@ -4279,6 +4343,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         property_id:req.operator.property_id, space_id:made.offer.space_id,
         intended_move_in:made.application_terms.lease_start_date,
         requested_end:made.application_terms.lease_end_date,
+        //  Correcting THEIR OWN terms must not be refused because THEY signed.
+        //  The id comes from the application row loaded and property-checked
+        //  above, never from the request body.
+        for_application_id: application ? application.id : null,
       });
       if (!target.ok) throw Object.assign(new Error(target.refusal_reason), {httpStatus:target.httpStatus || 409,code:target.refusal_code});
       if (invitation) {

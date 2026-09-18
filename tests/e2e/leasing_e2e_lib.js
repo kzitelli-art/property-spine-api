@@ -69,6 +69,33 @@ async function ctx({ wipe = true } = {}) {
               where executed_lease_record_id in (select id from executed_lease_records where property_id=$1)`, [prop]);
     await q(`delete from executed_lease_records where property_id=$1`, [prop]);
     await q(`delete from leases where property_id=$1`, [prop]);
+    /*  ── AND THE PACKAGES PRIOR SCENARIOS SIGNED ───────────────────
+     *  Every scenario on this fixture shares ONE bed ("Bed B"), and each
+     *  leaves behind an application whose packet a resident signed. Those
+     *  used to be inert once the lease rows above were gone. They are not
+     *  any more: `application_inventory_hold` reads a signed, current,
+     *  non-terminal package as A HOME SOMEBODY HAS SIGNED FOR, so the bed
+     *  stops being offerable and the NEXT scenario is refused with
+     *  `application_target_held_for_signed_applicant`.
+     *
+     *  That is the product working — two people must not sign for one bed
+     *  — and it is why this wipe has to clear it. It turned CI red one
+     *  rung later (tests/e2e/tour_application_lease.e2e.js, "Spine retains
+     *  the tour receipt and requests complete terms before send
+     *  confirmation"), where the post-tour reply correctly said someone
+     *  had already signed for the home instead of asking for terms.
+     *  Reproduced by leaving a signed packet on Bed B and watching that
+     *  exact assertion fail.
+     *
+     *  ⚠ SUPERSEDED, NOT DELETED. Migration 192's mutation guard freezes
+     *  signer identity once a packet leaves `draft` ("lease packet signer
+     *  identity is frozen after issue"), and that wall is not worked
+     *  around. `superseded_at` is the product's own way of saying a
+     *  package is no longer the current one, it is what resolveSignerAccess
+     *  and the hold read both already honour, and it is true of a finished
+     *  scenario's package. Scoped to this fixture property.            */
+    await q(`update lease_packets set superseded_at = now(), updated_at = now()
+              where property_id=$1 and superseded_at is null`, [prop]);
   }
   const mike = (await q("select id from users where name='Mike Grivna' limit 1")).rows[0].id;
   const c = await pool.connect();
@@ -87,6 +114,32 @@ async function ctx({ wipe = true } = {}) {
 /*  Drives lead → application@bed → approve → terms → packet → send.
     Returns { appId, packetId, rawTok }.  Stops before the resident signs.  */
 async function toPacket(C, { bed, rent = 1025, name = null } = {}) {
+  /*  ── START A FRESH JOURNEY ON THIS BED ─────────────────────────────
+   *  Callers use this helper seven times in a row on ONE fixture bed —
+   *  leasing_hostile.e2e.js alone runs seven independent hostile cases
+   *  against C.bedB — and every case that signs leaves a live signed
+   *  package behind.
+   *
+   *  That used to be inert. It is not any more: the tenant's signature now
+   *  serializes on the bed and refuses a second live signed claimant, so
+   *  scenario two was refused with `home_already_signed_for` and its packet
+   *  never left `tenant_in_progress`. The product is right — two people must
+   *  not sign for one home — and the fixture has to stop pretending seven
+   *  sequential scenarios are one continuous story.
+   *
+   *  ctx({wipe:true}) does exactly this at the scope of the PROPERTY, at the
+   *  start of a rung. This is the same statement at the scope of the BED, at
+   *  the start of a journey: whatever was current on this bed belongs to a
+   *  finished scenario and is no longer the current package.
+   *
+   *  ⚠ SUPERSEDED, NEVER DELETED — migration 192 freezes signer identity
+   *  once a packet leaves `draft`, and `superseded_at` is the product's own
+   *  way of saying a package is no longer current. Scoped to this one bed.  */
+  await q(`update lease_packets p set superseded_at = now(), updated_at = now()
+            from lease_applications a
+           where a.id = p.application_id and a.space_id = $1
+             and p.superseded_at is null`, [bed]);
+
   const __name = name || HOSTILE_NAME();
   const phone = await unclaimedFixturePhone();
   const intake = await api("POST", "/leasing/intake", { key: "e2e-key", body: {

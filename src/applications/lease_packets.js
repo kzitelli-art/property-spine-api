@@ -48,6 +48,9 @@ const mammoth = require("mammoth");
 const pdfParse = require("pdf-parse");
 const sourceArtifacts = require("../onboarding/source_artifact_service");
 const { normalizeE164 } = require("../identity/phone_identity");
+//  THE ONE inventory-hold read. Required so the signature path asks the same
+//  question the availability surfaces ask, rather than a second copy of it.
+const applicationHold = require("./application_inventory_hold");
 const { readBoundApplicationOffer, deriveConfirmationFromAuthoredOffer } = require("./proposed_terms_service");
 
 module.exports = function leasePacketsModule(deps) {
@@ -985,6 +988,11 @@ module.exports = function leasePacketsModule(deps) {
     expectedPropertyId = null,
     createNewVersion = false,
     auditContext = null,
+    /*  Spine preparing the package itself against the applicant's
+     *  acknowledged offer (owner ruling, 2026-09-15). EXPLICIT — a caller
+     *  that simply has no actor still gets the refusal, so this cannot be
+     *  reached by forgetting to pass one.                               */
+    automatedPreparation = false,
   }) {
     if (!applicationId) {
       throw packetError(400, "application_id_required", "An application id is required.");
@@ -1055,6 +1063,7 @@ module.exports = function leasePacketsModule(deps) {
         confirmationId = await deriveConfirmationFromAuthoredOffer(client, {
           app, offer: authoredOffer, actorUserId,
           currentConfirmationId: app.proposed_terms_confirmation_id || null,
+          automatedPreparation,
         });
       } catch (e) {
         if (e && e.code && !e.httpStatus) throw packetError(e.http || 409, e.code, e.message);
@@ -1395,6 +1404,20 @@ module.exports = function leasePacketsModule(deps) {
     }
 
     if (["sent", "in_progress", "tenant_in_progress"].includes(row.status)) {
+      /*  ⚠ ACCESS TO AN ISSUED PACKET CANNOT BE REISSUED. Migration 192's
+       *  trg_lease_packet_signer_mutation_guard freezes token_hash,
+       *  token_expires_at and link_issued_at the moment a packet leaves
+       *  `draft`; the only UPDATE it permits is setting submitted_at. An
+       *  attempt to re-mint raises `lease packet signer identity and link
+       *  authority are frozen after issue` (restrict_violation).
+       *
+       *  That rule is deliberate and is not worked around here. Raw tokens
+       *  are stored only as a hash, so an undelivered link is unrecoverable
+       *  BY DESIGN. Recovering delivery therefore means a new packet
+       *  VERSION of the same agreement through generateLeasePacket
+       *  (createNewVersion), which supersedes the prior version and — via
+       *  resolveSignerAccess's `superseded_at is null` filter — invalidates
+       *  its access at the same moment. See src/applications/lease_handoff.js.  */
       return {
         receipt: "The signing links were already issued. No new token was created.",
         already_issued: true,
@@ -2500,6 +2523,65 @@ module.exports = function leasePacketsModule(deps) {
         }
       }
 
+      /*  ══ FIRST COMPLETED SIGNATURE OWNS THE HOME ═══════════════════
+       *
+       *  ⚠ THE LOCKS ABOVE DO NOT PREVENT THIS. resolveSignerAccess takes
+       *  `for update of pk, s` — each applicant's OWN packet and OWN signer
+       *  row. Two applicants racing for one bed hold different packets and
+       *  different signer rows, so those locks never contend, and both
+       *  submissions could stamp `tenant_submitted_at`. The inventory hold
+       *  is DERIVED from that stamp, so it could only report the collision
+       *  afterwards — `contested_by` was a detector for a condition that
+       *  should never have been reachable.
+       *
+       *  A packet blocks a NEW application from targeting the bed, but two
+       *  packets may legitimately have been ISSUED before either applicant
+       *  signed. That window is the whole of the race.
+       *
+       *  ── SERIALIZE ON THE BED ITSELF ────────────────────────────────
+       *  `spaces` is the canonical row for this exact home, so locking it
+       *  makes the two submissions contend on the one object they are
+       *  actually competing for. Whoever takes the lock re-reads the hold
+       *  INSIDE it and either stamps or is refused; the loser blocks until
+       *  the winner commits and then sees the winner's signature. No
+       *  reservation table, no new workflow state, no second notion of
+       *  "taken" — the existing derived hold, consulted before the write
+       *  that creates it rather than only after.
+       *
+       *  ONE PREDICATE, NOT TWO: this asks `holdForSpace`, the same read
+       *  every availability surface uses, so the guard and the reader
+       *  cannot disagree about what counts as held.
+       *
+       *  TENANT ONLY. `tenant_submitted_at` is stamped for the tenant
+       *  signer alone, so the tenant's signature is what claims the home. A
+       *  guarantor signing their own side claims nothing and is not
+       *  serialized — trapping them here would be a refusal with no fact
+       *  behind it.
+       *
+       *  NO SPACE, NO SERIALIZATION. A legacy unit-grain application
+       *  carries no space_id. There is no bed to contend on, so this does
+       *  not run — and it does not refuse either, because refusing an
+       *  application whose grain predates beds would break historical
+       *  records to guard a race they cannot enter.                      */
+      if (signer.signer_role === "tenant" && app.space_id) {
+        await client.query(`select id from spaces where id=$1 for update`, [app.space_id]);
+        const held = await applicationHold.holdForSpace(client, app.space_id);
+        if (held && String(held.application_id) !== String(app.id)) {
+          await client.query("rollback");
+          //  ⚠ NAMES NOBODY. This sentence is read by the applicant who
+          //  lost the race; who signed first is the other applicant's
+          //  business. It says what is true, that nothing was signed, and
+          //  where to go — a refusal has to be sayable and has to name a
+          //  next step.
+          return res.status(409).json({
+            error: "home_already_signed_for",
+            receipt: "This home has just been signed for by someone else. "
+              + "Nothing was signed on your behalf and no lease has been created. "
+              + "Please contact the leasing office — they can offer you another home.",
+          });
+        }
+      }
+
       //  THE PACKET'S STATE DEPENDS ON WHAT IT ACTUALLY IS.
       //  With no governing instrument this is a terms acknowledgment and
       //  'submitted' remains its terminal state — unchanged, and still the
@@ -2602,6 +2684,11 @@ module.exports = function leasePacketsModule(deps) {
     resolveApprovalAuthority,
     getBundle,
     publicPacket,
+    //  The applicant-side reader. Exposed so a proof can establish that the
+    //  issued link actually REACHES the packet, rather than asserting that a
+    //  token row exists — a token nobody can redeem is not reachability.
+    resolveSignerAccess,
+    signerPacket,
     propertyLeaseConfiguration,
     configurePropertyLeaseTemplate,
   });

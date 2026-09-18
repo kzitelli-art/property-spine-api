@@ -64,7 +64,7 @@ function digestToken(raw) {
 }
 
 module.exports = function applicationSubmissionModule(deps) {
-  const { pool, spawnObligationFromEvent, completeObligation, conversionService, commBoundary = null, applicationInputAuthority = null } = deps;
+  const { pool, spawnObligationFromEvent, completeObligation, conversionService, commBoundary = null, applicationInputAuthority = null, leaseHandoff = null } = deps;
   const router = express.Router();
 
   // operator gate — shared key. LEGACY: this shared-key gate and the routes under
@@ -86,6 +86,9 @@ module.exports = function applicationSubmissionModule(deps) {
       const out = await fn(client);
       await client.query("commit");
       res.json(out);
+      /*  ⚠ NOTHING IS DISPATCHED HERE ANY MORE. Submission owes the
+       *  applicant's remaining work, not a lease. The handoff is recorded —
+       *  and then executed — only once that work is finished.            */
     } catch (e) {
       await client.query("rollback");
       //  The retired-inventory wall (180/197 triggers) is a refusal, not a fault.
@@ -320,7 +323,31 @@ module.exports = function applicationSubmissionModule(deps) {
       [gate.id, app.id]
     );
 
-    return { application: app, approval_obligation_id: gate.id, rung_closed, gate_role: approvalGateRole() };
+    /*  5) WHAT IS OWED AT SUBMISSION IS THE APPLICANT'S REMAINING WORK.
+     *
+     *  ⚠ AN EARLIER VERSION RECORDED THE LEASE HANDOFF HERE, AND THAT WAS
+     *  THE WRONG BOUNDARY. Submitting is not completing. An application
+     *  arriving without income verification is missing something, and the
+     *  work owed is chasing that specific item — not preparing a lease.
+     *  With a background recovery sweep running, owing the handoff at
+     *  submission would have turned every unfinished application into a
+     *  delivered lease as soon as nobody was watching.
+     *
+     *  The handoff is recorded when this obligation's required inputs are
+     *  all satisfied — see completeApplicationRequirement in
+     *  src/applications/lease_handoff.js. No second notion of
+     *  "complete" is introduced: completion IS this obligation having
+     *  nothing outstanding, expressed in the engine's own required_inputs.  */
+    let completion = null;
+    if (leaseHandoff && typeof leaseHandoff.recordCompletionOwed === "function") {
+      completion = await leaseHandoff.recordCompletionOwed(client, {
+        application: app, source_event_id: null });
+    }
+
+    return { application: app, approval_obligation_id: gate.id, rung_closed,
+      gate_role: approvalGateRole(),
+      completion_obligation_id: completion ? completion.obligation_id : null,
+      outstanding_requirements: completion ? completion.required_inputs : null };
   }
 
   // ════════════════════════════════════════════════════════════════════
@@ -928,6 +955,9 @@ module.exports = function applicationSubmissionModule(deps) {
     const target = await applicationTarget.resolveSubmissionTarget(client, {
       property_id: inv.property_id, unit_id: inv.unit_id, space_id: inv.space_id,
       intended_move_in: offer.lease_start_date, requested_end: offer.lease_end_date,
+      //  This application's own applicant may have signed for this bed
+      //  already; their own hold is not a reason to refuse them.
+      for_application_id: applicationId || null,
     });
     if (!target.ok) throw httpErr(target.httpStatus || 409, target.refusal_reason, target.refusal_code);
     const ack = (await client.query(`insert into application_terms_acknowledgements
@@ -1048,7 +1078,10 @@ module.exports = function applicationSubmissionModule(deps) {
       const still = await applicationTarget.resolveSubmissionTarget(client, {
         property_id: inv.property_id, unit_id: inv.unit_id, space_id: inv.space_id,
         intended_move_in: inv.intended_move_in,
-        requested_end: agreedTerms ? agreedTerms.lease_end_date : null });
+        requested_end: agreedTerms ? agreedTerms.lease_end_date : null,
+        //  From the invitation row the server already loaded. A bed held by
+        //  ANOTHER applicant refuses here, which is the point.
+        for_application_id: inv.lease_application_id || null });
       if (!still.ok) {
         throw httpErr(still.httpStatus || 409,
           still.refusal_reason || "This application link can no longer be used.",
@@ -1104,6 +1137,11 @@ module.exports = function applicationSubmissionModule(deps) {
       application: out.application,
       approval_obligation_id: out.approval_obligation_id,
       rung_closed: out.rung_closed,
+      //  Carried out of the service so tx()'s after-commit step can see it.
+      //  Without this the route's own response shape silently drops the id
+      //  and the handoff would be recorded and never discharged.
+      completion_obligation_id: out.completion_obligation_id || null,
+      outstanding_requirements: out.outstanding_requirements || null,
     };
   }, res));
 
@@ -1125,6 +1163,8 @@ module.exports = function applicationSubmissionModule(deps) {
     return {
       receipt: `Internal application created for ${applicant_name} (source: ${source}). With ${out.gate_role} for approval.`,
       application: out.application, approval_obligation_id: out.approval_obligation_id,
+      completion_obligation_id: out.completion_obligation_id || null,
+      outstanding_requirements: out.outstanding_requirements || null,
     };
   }, res));
 
@@ -1147,6 +1187,18 @@ module.exports = function applicationSubmissionModule(deps) {
     // the rail records timeliness; the disposition records the decision).
     // decision != 'approved' so this will NOT start signature follow-up.
     await closeApprovalGate(client, { app, by_user_id: decided_by_user_id, decision: reason });
+
+    /*  SAME SAFETY, THE OTHER THREE OBLIGATIONS. The block below releases
+     *  the conversion rail's signature rung for one reason — so the team is
+     *  not told to chase a signature on a dead application — and the
+     *  application-completion chase, the owed signing package and the 60-day
+     *  signing clock are the same sentence about the same dead application.
+     *  Released as `revoked`: nothing was supplied and no window ran out;
+     *  the work was called off. Same transaction as the disposition.     */
+    if (leaseHandoff && typeof leaseHandoff.releaseOnTerminal === "function") {
+      await leaseHandoff.releaseOnTerminal(client, {
+        application_id: app.id, terminal_code: reason });
+    }
 
     // SAFETY: a decline/withdraw/expire must never leave lease-signature work
     // open. In the correct flow signature follow-up only begins on approval, so

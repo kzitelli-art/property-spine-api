@@ -104,6 +104,23 @@ const bad = (n, d) => { fail++; console.log(`  ✗ ${n}  — ${d}`); };
   if (!errors.length) ok("no failures from this server", `${sandbox.length} external request(s) blocked by this container's egress proxy — harness, not product`);
   else bad("failures from this server", errors.slice(0, 3).join(" || "));
 
+  /*  ── AND RELEASE THE SHARED BED THIS SCENARIO TOOK ────────────────
+   *  ctx({wipe:true}) clears what PRIOR scenarios left on this fixture,
+   *  which is why it now supersedes their packages too — but the package
+   *  THIS rung just signed is created after that wipe, and the next rung
+   *  (tests/e2e/tour_application_lease.e2e.js) does not use ctx at all.
+   *  Leaving it signed and current holds Bed B, and that rung is then
+   *  correctly refused with `application_target_held_for_signed_applicant`
+   *  at its post-tour reply — which is exactly how this turned CI red.
+   *
+   *  Same mechanism, same reasoning, one application: superseded, never
+   *  deleted (migration 192 freezes signer identity after issue). It runs
+   *  after every assertion above, so nothing proven here depends on it.  */
+  const rel = await q(`update lease_packets set superseded_at = now(), updated_at = now()
+                        where application_id=$1 and superseded_at is null`, [P.appId]);
+  if (rel.rowCount > 0) ok("the scenario releases the shared fixture bed it held");
+  else bad("releasing the shared fixture bed", "no current package to supersede");
+
   console.log(`\n  screenshots: ${OUT}/resident_page.png · ${OUT}/resident_after_clicks.png`);
   console.log(`  BROWSER RUNG: ${pass} passed, ${fail} failed`);
   await browser.close(); await pool.end();

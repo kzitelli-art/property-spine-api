@@ -58,7 +58,21 @@ const sha = (p) => crypto.createHash("sha256").update(fs.readFileSync(p)).digest
 const sql = (v) => `-- synthetic ${v}\ncreate table if not exists syn_${v} (x int);\n`;
 
 function stage(versions) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "migproof-"));
+  //  The staged tree mirrors the repo's SHAPE, not just its files. migrate.js
+  //  takes its SSL answer from `../src/shared/database_ssl` — a path that is
+  //  only inside the staging area if the runner sits in a `migrations/`
+  //  directory with a sibling `src/`. Copying it to the temp root instead
+  //  would resolve that require to `/tmp/src/shared/...`, outside the
+  //  fixture entirely. So: stage a root, and return the migrations dir, which
+  //  is what every caller below already treats as `dir`.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "migproof-"));
+  const dir = path.join(root, "migrations");
+  fs.mkdirSync(dir);
+  fs.mkdirSync(path.join(root, "src", "shared"), { recursive: true });
+  fs.copyFileSync(
+    path.join(ROOT, "src", "shared", "database_ssl.js"),
+    path.join(root, "src", "shared", "database_ssl.js"),
+  );
   fs.copyFileSync(REAL_MIGRATE, path.join(dir, "migrate.js"));
   fs.copyFileSync(REAL_VERDICT, path.join(dir, "ledger_verdict.js"));
   //  migrate.js requires 'pg'. Node resolves that by walking up from the

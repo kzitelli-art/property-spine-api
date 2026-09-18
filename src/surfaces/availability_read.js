@@ -38,6 +38,12 @@ const { datedPropertyPositions } = require("../tenancy/dated_positions");
 // ONE readiness definition, shared with the triage service. A second copy here
 // is exactly how a read and a write come to disagree.
 const { deriveReadiness } = require("../maintenance/unit_triage_service");
+/*  THE ONE INVENTORY-HOLD PREDICATE. A bed an applicant has signed for is
+ *  spoken for. It is read here rather than re-derived, so the matcher, the
+ *  rent roll, the pricing packet and the application-target authority — all
+ *  of which reach availability through this file — say the same thing about
+ *  the same bed. See src/applications/application_inventory_hold.js.      */
+const applicationHold = require("../applications/application_inventory_hold");
 
 // An operating designation is NOT a durable use. A model unit is
 // residential by purpose and unmarketable by current designation, and
@@ -257,6 +263,24 @@ function marketingState(p, liveOk) {
   if (!MARKETABLE_USE_TYPES.has(p.use_type))
     return { state: "not_marketable_use", reason: "use_type_" + p.use_type };
 
+  /*  ── SIGNED FOR, SO NOT OFFERABLE (last, deliberately) ─────────────
+   *  A commitment, not an occupancy fact — so it is consulted LAST, on a
+   *  bed that has already passed every physical and contractual guard
+   *  above. A contested, down, occupied or unturned position keeps the
+   *  description its own evidence earned; this only ever converts a bed
+   *  that would otherwise read `marketable_now`.
+   *
+   *  It is a READ of lease_packets.tenant_submitted_at, so a declined or
+   *  withdrawn application releases its bed through the same read that
+   *  created the hold. Nothing is reserved by hand and nothing has to be
+   *  released by hand.                                                   */
+  if (p.application_hold) {
+    return { state: applicationHold.HELD_STATE,
+      reason: p.application_hold.contested_by && p.application_hold.contested_by.length
+        ? "more_than_one_applicant_has_signed_for_this_home"
+        : "signed_by_applicant" };
+  }
+
   return { state: "marketable_now", reason: null };
 }
 
@@ -373,6 +397,9 @@ const HUMAN = {
   activation_pending: "Lease commenced — awaiting move-in funds",
   use_not_configured: "Use type not configured",
   marketable_now: "Marketable now",
+  //  Operator copy, not a code. Someone signed for this home, so it is not
+  //  offerable — and the row carries who and when beside it.
+  [applicationHold.HELD_STATE]: "Signed for by an applicant — held",
   unavailable: "Live read failed",
 };
 
@@ -516,6 +543,33 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
     if (e.code !== "42P01") throw e;   // only a missing table is tolerated
   }
 
+  /*  ── SIGNED-APPLICANT HOLDS ────────────────────────────────────────
+   *  Overlaid like operating_use and triage: a fact the position classifier
+   *  does not own, read once for the property and attached per space.
+   *
+   *  FAIL-CLOSED ON EVERY FAILURE BUT ONE. A hold read that cannot run
+   *  would leave a bed reading `marketable_now` when somebody has signed
+   *  for it, and the product would offer it to a second person — so a
+   *  timeout, a permission error or a bad query takes this read down
+   *  rather than quietly answering "nobody has signed".
+   *
+   *  ⚠ THE ONE EXCEPTION IS 42P01, AND IT IS NOT A WEAKENING. If
+   *  `lease_applications` or `lease_packets` does not exist, no application
+   *  exists, so no applicant CAN have signed: an empty hold map is the
+   *  truth there, not a guess. Propagating instead would take the whole
+   *  availability read — and with it the application-target authority and
+   *  the prospect matcher — down on any database that has not reached
+   *  migration 033, which is how this first turned CI red: a staff
+   *  post-tour reply that should have asked for terms said "I couldn't
+   *  read the application targets just now" instead. Same tolerance, same
+   *  error code and the same reasoning as the triage overlay above.     */
+  let holdsBySpace = new Map();
+  try {
+    holdsBySpace = await applicationHold.heldSpacesForProperty(pool, property_id);
+  } catch (e) {
+    if (e.code !== "42P01") throw e;   // only a missing relation is tolerated
+  }
+
   const horizonEnd = new Date(new Date(`${asOf}T00:00:00Z`).getTime() + horizon_days * 86400000)
     .toISOString().slice(0, 10);
 
@@ -553,6 +607,7 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       operating_use: ops.get(String(p.space_id)) || null,
       triage: triageByUnit.get(String(p.unit_id)) || null,
       turnover: turnApplies ? unitTurn : null,
+      application_hold: holdsBySpace.get(String(p.space_id)) || null,
     };
     const m = marketingState(withOps, true);
     const dates = availableFrom(withOps, m.state, asOf);
@@ -584,6 +639,14 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
         outgoing_lease_end_date: ymd(withOps.turnover.outgoing_lease_end_date),
       } : null,
       operating_use: withOps.operating_use,
+
+      /*  WHO holds it and SINCE WHEN travel with the state. An operator
+       *  reading "held" needs to know whose signature did that — a state
+       *  name with no attribution is an unexplained refusal on a screen.
+       *  `contested_by` is non-empty only when more than one applicant has
+       *  signed for the same bed, which is a real defect surfaced rather
+       *  than a winner picked silently (§5).                             */
+      application_hold: withOps.application_hold || null,
 
       // ── WHY, not just THAT (BUILD 1) ──
       //  The row can now name the open scope rather than only stating a
@@ -663,6 +726,11 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       //  Reported in the headline so an unknown is never a quiet remainder.
       occupancy_unknown: inState("occupancy_unknown").length,
       evidence_unreconciled: inState("evidence_unreconciled").length,
+      //  Homes somebody has already signed for. In the headline because a
+      //  manager reading "3 marketable" after a signing week needs to see
+      //  where the others went — a state absent from the summary is a
+      //  quiet remainder, which is how a bed goes missing from a count.
+      [applicationHold.HELD_STATE]: inState(applicationHold.HELD_STATE).length,
     },
 
     // Each position appears in exactly one state.
@@ -684,6 +752,7 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       evidence_unreconciled: inState("evidence_unreconciled").length,
       use_not_configured: inState("use_not_configured").length,
       not_marketable_use: inState("not_marketable_use").length,
+      [applicationHold.HELD_STATE]: inState(applicationHold.HELD_STATE).length,
     },
 
     rows,

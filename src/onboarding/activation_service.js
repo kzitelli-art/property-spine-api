@@ -55,6 +55,7 @@ const personIngress = require("../identity/person_ingress.js"); // the ONE door 
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
+const { dateColumnToIso } = require("../shared/date_column");
 
 const { describePlan, planFor } = require("./rent_roll_field_map.js");
 const artifacts = require("./source_artifact_service.js");
@@ -835,8 +836,10 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     const actMeta = (await client.query(
       "select import_batch_id, source_as_of_date from activations where id=$1",
       [p.activation_id])).rows[0] || {};
-    const sourceAsOf = actMeta.source_as_of_date
-      ? new Date(actMeta.source_as_of_date).toISOString().slice(0, 10) : null;
+    //  ⚠ A `date` COLUMN, NOT A TIMESTAMP. node-pg builds it at LOCAL
+    //  midnight, so toISOString() reads it back a day early in every zone
+    //  ahead of UTC. One module owns this; see src/shared/date_column.js.
+    const sourceAsOf = dateColumnToIso(actMeta.source_as_of_date);
     const undated = n.start_date == null && n.end_date == null;
     if (undated && !sourceAsOf) {
       await client.query(
@@ -1258,9 +1261,10 @@ async function establishOpeningPosition(db, { user_id, activation_id } = {}) {
     //  interpolating one produces "Thu Apr 30 2026 00:00:00 GMT+0000
     //  (Coordinated Universal Time)" in the middle of a sentence a person
     //  reads. It is a DATE; it is written as one.
-    const asOfText = act.source_as_of_date
-      ? new Date(act.source_as_of_date).toISOString().slice(0, 10)
-      : "an unstated date";
+    //  ...and it is the RECORDED date. The fix for the locale string was
+    //  toISOString(), which is right for a timestamp and a day early for a
+    //  `date` column east of UTC — in a sentence a person reads as fact.
+    const asOfText = dateColumnToIso(act.source_as_of_date) || "an unstated date";
 
     return { opening_position: created, superseded: prior ? prior.id : null,
       receipt:

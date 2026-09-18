@@ -53,8 +53,22 @@ const { classifyLedger } = require("./ledger_verdict");
 //  Neon and fatal against a local Postgres that does not speak SSL (a fresh
 //  docker-compose volume is exactly that). Recorded as CURRENT_STATE defect
 //  #28; the fix is the one the header of src/shared/database_ssl.js exists for.
+//
+//  Two lineages fixed this defect independently and a merge kept both, which
+//  is a SyntaxError, not a conflict marker: a `const` import and a `function`
+//  of the same name in one scope. The import wins. The local copy could only
+//  see loopback hosts, so the compose service name `db` still read as remote
+//  and still attempted SSL against a server that does not speak it; the
+//  module also honors an explicit `sslmode=disable`. One module owns the
+//  answer (§7).
+//
+//  ⚠ THIS FILE IS COPIED INTO ISOLATED DIRECTORIES, so the require graph is
+//  a contract with its copiers. Both stage this dependency at the same
+//  relative path; a third copier must do the same or it runs a migrate.js
+//  that exists nowhere (MODULE_NOT_FOUND, not a verdict):
+//      tests/unit/migration_release_gate.test.js
+//      tools/release0/prove_out_of_order_release.js
 const { databaseSsl } = require("../src/shared/database_ssl");
-
 
 /*  WHICH BUILD IS THIS, REALLY.
  *

@@ -648,10 +648,34 @@ function createApplicationInputAuthority() {
 }
 const __applicationInputAuthority = createApplicationInputAuthority();
 
+/*  ── THE APPLICATION-TO-LEASE HANDOFF, OWED DURABLY ──────────────────
+ *  Built from the pieces that already exist — the obligation engine for
+ *  "this is owed", and the lease packets service for preparing and issuing
+ *  the signing package. No second sender and no second workflow engine.
+ *  See src/applications/lease_handoff.js for what each existing guard
+ *  already proves.                                                      */
+const leaseHandoffModule = require("./src/applications/lease_handoff");
+const __leaseHandoff = leaseHandoffModule({
+  pool, spawnObligationFromEvent, satisfyObligation, completeObligation,
+  leasePackets: __leasePackets._service, commBoundary,
+});
+
+/*  Recovery sweep: owed handoffs resume through normal execution after a
+ *  restart, not because someone re-submits or calls a runner by hand. It
+ *  also runs the 30-day application-completion clock.
+ *
+ *  OFF twice over: LEASE_HANDOFF_RECOVERY_ENABLED=true turns it on, and
+ *  LEASE_HANDOFF_RECOVERY_PROPERTIES must name the properties it may touch
+ *  — enabled with no allowlist refuses to sweep rather than sweeping
+ *  everything. Both stay off for live properties until the inventory hold
+ *  and approver follow-through are connected.                            */
+__leaseHandoff.startHandoffRecovery();
+
 const __applicationSubmission = applicationSubmissionModule({
   pool, spawnObligationFromEvent, completeObligation,
   conversionService: __leasingConversion._service, commBoundary,
   applicationInputAuthority: __applicationInputAuthority,
+  leaseHandoff: __leaseHandoff,
 });
 app.use("/", __applicationSubmission);
 

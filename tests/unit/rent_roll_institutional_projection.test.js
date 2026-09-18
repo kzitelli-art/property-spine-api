@@ -28,7 +28,18 @@ canonical.currentRentRoll = async () => ({
   totals: {
     inventory: rows.length,
     leasable: rows.length,
-    confirmed_contractual_occupancy: { occupied: rows.length, of_leasable_resolved: rows.length },
+    //  THE FULL SHAPE THE REAL READER PRODUCES. This fake carried only the
+    //  two scalars, so it asserted a contract narrower than the one
+    //  currentRentRoll actually returns — and the first consumer to read
+    //  the rest got a TypeError from a test, not from reality. A fake that
+    //  is missing fields the real thing always has is a fake that will
+    //  eventually be wrong about something that matters.
+    confirmed_contractual_occupancy: {
+      occupied: rows.length, of_leasable_resolved: rows.length, pct: 100,
+      excluded_from_denominator: { down: 0, contested: 0 },
+      reported_beside: { occupied_terms_not_established: 0, unresolved_positions: 0,
+        evidence_disagrees: 0, evidence_inconclusive: 0 },
+    },
     contractual_rent_trusted: 0,
     positions_contributing_rent: 1,
     contractual_rent_excluded_contested: 0,

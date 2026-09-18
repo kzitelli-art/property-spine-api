@@ -369,15 +369,45 @@ async function confirmProposedTerms(client, input) {
 //  a different current offer (offer corrected after a voided packet)
 //  supersedes the previous derived row. Requires a server-derived actor —
 //  the key-gated legacy door cannot author this record.
-async function deriveConfirmationFromAuthoredOffer(client, { app, offer, actorUserId, currentConfirmationId }) {
+async function deriveConfirmationFromAuthoredOffer(client, {
+  app, offer, actorUserId, currentConfirmationId,
+  /*  ── AUTOMATED PREPARATION (owner ruling, 2026-09-15) ─────────────
+   *  Spine may prepare and deliver the package itself against the
+   *  current, authorized, applicant-acknowledged offer. Two things must
+   *  stay separable and both must be recorded:
+   *
+   *    COMMERCIAL AUTHORITY  the offer's AUTHOR. They made the decision
+   *                          these terms express, and it is their
+   *                          authority this record rests on.
+   *    EXECUTOR              Spine. It performed the later preparation.
+   *
+   *  ⚠ NO STAFF SESSION IS FABRICATED AND NONE IS IMPLIED. This flag is
+   *  an EXPLICIT argument, never a fallback from a null actor: every
+   *  other caller that arrives without an actor still gets the refusal
+   *  below, unchanged. Nothing here mints an identity, a session or a
+   *  credential, so no access control anywhere else is widened.       */
+  automatedPreparation = false,
+} = {}) {
+  const authorship = (await client.query(
+    `select authority_basis_snapshot from lease_offers where id=$1`, [offer.id])).rows[0];
+  const authorSnapshot = (authorship && authorship.authority_basis_snapshot) || {};
+  const offerAuthor = authorSnapshot.actor_user_id || null;
+
+  if (!actorUserId && automatedPreparation) {
+    //  The authority is the author's, so an offer with no recorded author
+    //  cannot be prepared automatically — there would be nobody whose
+    //  decision this record expresses. That is a refusal, not a default.
+    if (!offerAuthor) {
+      throw conflict("offer_author_unrecorded",
+        "This offer carries no recorded author, so Spine cannot prepare a package on its authority.");
+    }
+    actorUserId = offerAuthor;
+  }
   if (!actorUserId) {
     throw conflict("preparation_actor_required",
       "Preparing a signing package from the applicant's acknowledged offer requires a signed-in staff actor.");
   }
   const terms = offer.terms;
-  const authorship = (await client.query(
-    `select authority_basis_snapshot from lease_offers where id=$1`, [offer.id])).rows[0];
-  const authorSnapshot = (authorship && authorship.authority_basis_snapshot) || {};
   const current = currentConfirmationId ? (await client.query(
     `select id, source, application_offer_id, application_terms_hash
        from application_proposed_terms_confirmations where id=$1`, [currentConfirmationId])).rows[0] : null;
@@ -409,11 +439,25 @@ async function deriveConfirmationFromAuthoredOffer(client, { app, offer, actorUs
   if (existing) {
     confirmationId = existing.id;
   } else {
+    /*  THE EXECUTOR IS RECORDED HERE, IN ITS OWN EVENT TYPE.
+     *  `authority_basis` is CHECK-constrained to four values and stays
+     *  'authored_offer' — widening it would be a migration for something
+     *  the audit trail already carries. A distinct event type is
+     *  queryable, needs no schema, and cannot be confused with a staff
+     *  member having opened a screen. The obligation that drove this is
+     *  owner_type 'system' for the same reason.                        */
+    const evType = automatedPreparation
+      ? "application_terms_derived_from_authored_offer_by_spine"
+      : "application_terms_derived_from_authored_offer";
+    const evNote = automatedPreparation
+      ? `signing package prepared AUTOMATICALLY BY SPINE from acknowledged application offer ${offer.id} `
+        + `for application ${app.id} (hash ${String(offer.hash).slice(0, 12)}); commercial authority is the `
+        + `offer author ${offerAuthor}, who did not perform this preparation`
+      : `signing package prepared from acknowledged application offer ${offer.id} for application ${app.id} (hash ${String(offer.hash).slice(0, 12)})`;
     const ev = (await client.query(
       `insert into events (property_id, person_id, unit_id, type, note)
-       values ($1, $2, $3, 'application_terms_derived_from_authored_offer', $4) returning id`,
-      [app.property_id, app.person_id || null, app.unit_id || null,
-       `signing package prepared from acknowledged application offer ${offer.id} for application ${app.id} (hash ${String(offer.hash).slice(0, 12)})`])).rows[0];
+       values ($1, $2, $3, $5, $4) returning id`,
+      [app.property_id, app.person_id || null, app.unit_id || null, evNote, evType])).rows[0];
     confirmationId = (await client.query(
       `insert into application_proposed_terms_confirmations
          (application_id, property_id, actor_user_id, event_id, rent, security_deposit,

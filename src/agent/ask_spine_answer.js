@@ -690,12 +690,46 @@ async function gatherFacts(db, {
    *  did not catch it because it asserts the assignment EXISTS in source,
    *  not that a subject reaches it. Measured, not assumed:
    *  questionSubject("which homes fit this prospect") === "leasing_person".  */
+  /*  ── ONE SUBJECT RESOLUTION, READ TWICE (§7) ────────────────────────
+   *  The leasing subject was resolved ~300 lines below, for the standing
+   *  read, while the matcher above it passed `facts.person` — a key
+   *  nothing in this file ever assigns, so it was always null and the
+   *  matcher never learned who was being asked about. The person was
+   *  already known; it was simply known later than the first reader that
+   *  needed it.
+   *
+   *  Resolved once here and memoised, so both readers share ONE identity
+   *  decision. Resolving twice would let the same question answer about
+   *  two different people on one pass, which is the divergence §7 exists
+   *  to prevent — and identity is the one fact this file refuses to
+   *  guess.                                                              */
+  let _subjResolved, _subjError;
+  const leasingSubject = async () => {
+    if (_subjError) throw _subjError;
+    if (_subjResolved !== undefined) return _subjResolved;
+    try {
+      _subjResolved = await leasingReader.resolveLeasingSubject(db, { property_id, text: question });
+      return _subjResolved;
+    } catch (e) { _subjError = e; throw e; }
+  };
+
   if (subject === "leasing_person") {
     if ((allowed_modules || []).some((m) => m === "leasing" || m === "management")) {
       try {
+        /*  A subject that will not resolve is NOT a matcher failure. The
+         *  branch below owns that outcome and says which of the four
+         *  silences it is; here it simply means no recorded needs to
+         *  compare against, and the homes still answer "what could I
+         *  show". Swallowing the error here would be wrong only if it
+         *  were the sole reader — it is not.                            */
+        let matchPersonId = null;
+        try {
+          const subj = await leasingSubject();
+          if (subj && subj.resolved && subj.person) matchPersonId = subj.person.id;
+        } catch (_) { /* reported by the leasing_person branch below */ }
         const standing = await prospectMatchReader({ pool: db }).readProspectMatchStanding(db, {
           property_id,
-          person_id: (facts.person && facts.person.id) || null,
+          person_id: matchPersonId,
           requested_start: null, requested_end: null, lease_term_months: null,
         });
         facts.prospect_match = standing;
@@ -1014,7 +1048,7 @@ async function gatherFacts(db, {
       && ((allowed_modules || []).includes("leasing")
           || (allowed_modules || []).includes("management"))) {
     try {
-      const subj = await leasingReader.resolveLeasingSubject(db, { property_id, text: question });
+      const subj = await leasingSubject();
       if (!subj.resolved) {
         if (subj.reason === "no_person_named" && isPropertyWideSignerQuestion(question)) {
           const review = await applicationReviewReader.buildReviewList(db, property_id);
