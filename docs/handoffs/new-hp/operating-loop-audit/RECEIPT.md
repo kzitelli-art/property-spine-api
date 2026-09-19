@@ -276,3 +276,13 @@ Recorded, not fixed: `canonical_onboarding_review.browser.js`'s `zero`
 phase (unregistered) expects `Current occupancy` with a percent on the
 signed-in desk; the pin lineage has rendered `Occupied in rent roll` as a
 count since app `44e0e42`. Pre-existing at the pin; not this merge's.
+
+## Addendum, 2026-09-19 — break 2's two app follow-ups (row 155)
+
+Availability now says the server's confidence word (`incomplete · turn
+scope exceeds plan`, not `expected`), and management can re-state the
+ready date with a reason from the row through the row-152 door. Browser
+verified on the owned runtime with its own fixture, 19/19; the browser
+caught a broken `onclick` attribute the HTML harness had passed. Pin moved
+to app `494ff1a`.
+
