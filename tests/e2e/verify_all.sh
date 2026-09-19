@@ -558,6 +558,9 @@ if [ "$FAILED" = "0" ]; then
   step "website inquiry visibility" node tests/proofs/website_inquiry_visibility.db.js
   step "website inquiry state and authority" node tests/proofs/website_inquiry_state.db.js
   step "website capture-only intake" node tests/proofs/website_capture_only.db.js
+  #  The exact contract an external website follows to post a lead: the two
+  #  ids are the ones boot.sh just bound into LEASING_INTAKE_PROPERTY_IDS.
+  step "web lead intake contract (two bound properties)" env E2E_SKYLINE_PROPERTY_ID="$REAL_INTAKE_ACTIVE_ID" E2E_GREENERY_PROPERTY_ID="$E2E_INTAKE_INACTIVE_PROPERTY_ID" node tests/proofs/web_lead_intake_contract.db.js
   step "attributed external email reply" node tests/proofs/external_email_reply.db.js
   step "staff inquiry ownership and response" node tests/proofs/conversation_takeover_owner.db.js
   step "staff inquiry native tour booking" node tests/proofs/staff_conversation_tour.db.js
