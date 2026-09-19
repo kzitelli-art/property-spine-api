@@ -366,6 +366,21 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     //  its verdict.
     _opening_space_claim: (row.opening_space_claim && row.opening_space_claim.claim) || null,
     _opening_claim_source: row.opening_space_claim || null,
+    /*  ── THE MOVE-OUT DOOR'S RECORD, DATED ─────────────────────────────
+     *  Carried only when it is a fact ON THIS DATE: the door had opened by
+     *  asOf, and the lease it ended is not the one governing asOf. A read
+     *  taken before the door opened must see the lease, not the move-out;
+     *  a read taken after a NEW lease on the same bed must see that lease.
+     *  Whether it establishes vacancy is decided in dated_positions
+     *  (positionBasis), beside every other fact that can refute one.   */
+    _move_out_turnover: (() => {
+      const t = row.move_out_turnover || null;
+      if (!t || !t.outgoing_lease_id || !t.opened_on) return null;
+      if (String(t.opened_on) > String(asOf)) return null;
+      const governing = current || activationPending || null;
+      if (governing && String(governing.id) === String(t.outgoing_lease_id)) return null;
+      return t;
+    })(),
   };
 }
 

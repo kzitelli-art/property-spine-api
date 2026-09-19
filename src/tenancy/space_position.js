@@ -255,6 +255,23 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
             and ue.status='scheduled' order by ue.effective_date desc limit 1) as notice_date,
         (select t.status from turnovers t
           where t.unit_id=u.id and t.status='in_progress' limit 1) as turn_status,
+        /*  ── THE GOVERNED MOVE-OUT, IF ONE NAMES THIS BED ──────────────
+         *  A turnover row whose outgoing lease sits on THIS space is the
+         *  move-out door's durable record that the resident left. It is a
+         *  dated fact (opened_on) and it names the lease it ended, so the
+         *  classifier can tell it from a turn-only capture and from a
+         *  sibling bed's move-out. Unit-grained turns without an outgoing
+         *  lease deliberately do not appear here: they say the unit is
+         *  being worked on, not that anyone left. Latest wins.        */
+        (select jsonb_build_object(
+            'turnover_id', t.id, 'status', t.status,
+            'outgoing_lease_id', t.outgoing_lease_id,
+            'opened_on', to_char(t.created_at, 'YYYY-MM-DD'),
+            'ready_date', t.ready_date)
+           from turnovers t
+           join leases ol on ol.id = t.outgoing_lease_id
+          where t.unit_id = u.id and ol.space_id = s.id
+          order by t.created_at desc, t.id desc limit 1) as move_out_turnover,
         u.occupancy_status as compat_occupancy,
         /*  ── WHAT THE ESTABLISHED OPENING POSITION SAID ABOUT THIS BED ──
          *
