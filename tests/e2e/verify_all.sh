@@ -428,6 +428,11 @@ else
   step "extracted route bindings"    node tests/e2e/extracted_route_bindings.e2e.js
   step "ingest property authority"   node tests/e2e/ingest_property_authority.e2e.js
   step "legacy ingestion retired" env E2E_EXPECT_SERVER_COMMIT="$(git rev-parse HEAD)" node tests/e2e/legacy_ingestion_retired.e2e.js
+  #  POST /persons minted a human from a NAME ALONE — the contradiction of
+  #  the continuity-handle rule (row 156). Retired in place; this proves the
+  #  410 through the real key gate and that nothing is written by any shape
+  #  of request the old handler used to answer differently.
+  step "person create retired" env E2E_EXPECT_SERVER_COMMIT="$(git rev-parse HEAD)" node tests/e2e/person_create_retired.e2e.js
   step "work order person columns"   node tests/e2e/work_order_person_columns.e2e.js
   step "read ai connection authority" node tests/e2e/read_ai_connection_authority.e2e.js
   step "notice space column"         node tests/e2e/notice_space_column.e2e.js

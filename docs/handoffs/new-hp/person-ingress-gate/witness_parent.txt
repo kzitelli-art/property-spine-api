@@ -1,0 +1,11 @@
+════ tests/e2e/person_create_retired.e2e.js — PARENT WITNESS mode ════
+   src/baseline/baseline_routes.js restored to 6586c5ce (the pre-retirement handler)
+
+PASS runtime build receipt is accessible
+PASS the answering server is THIS tree, not a stale one on the port
+PROOF_RUNTIME=6586c5ce9d2e7eaf66c955b9feaa2aaeef6e0282
+PASS PARENT: the open door answers 201
+PASS PARENT: a NAME ALONE is accepted
+PASS PARENT: it minted a DURABLE PERSON with no continuity handle — no phone, no email, no normalised key
+PASS PARENT: the tables moved — the retirement proof is not asserting a route that never worked
+POST /persons PARENT WITNESS: 6 assertions passed — the defect is real
