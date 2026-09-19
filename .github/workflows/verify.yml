@@ -87,10 +87,12 @@ jobs:
       #
       #  Read-only, and pinned to a full commit sha rather than a branch:
       #  a branch ref would let the app move under a green API run.
-      #  property-spine-app is PUBLIC, so the default GITHUB_TOKEN reads it
-      #  and no secret is required. If it is ever made private this step is
-      #  the one line to change (`token: ${{ secrets.<name> }}`, contents:read
-      #  on that repository only) — nothing else here weakens to compensate.
+      #  property-spine-app is PRIVATE (2026-09-19). The default GITHUB_TOKEN
+      #  cannot read another private repository, so this checkout uses
+      #  APP_PIN_READ_TOKEN: a fine-grained token with contents:read on
+      #  property-spine-app ONLY, stored as a repository secret here. Nothing
+      #  else weakens to compensate; the checkout stays read-only, pinned to
+      #  a full sha, and does not persist the credential.
       - name: Check out the operator app at the pin
         uses: actions/checkout@v4
         with:
@@ -99,6 +101,7 @@ jobs:
           path: operator-app-pinned
           fetch-depth: 0
           persist-credentials: false
+          token: ${{ secrets.APP_PIN_READ_TOKEN }}
 
       - name: Point the proofs at that checkout
         run: |
