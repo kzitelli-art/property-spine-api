@@ -1,0 +1,61 @@
+(node:7018) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+
+1 · the row establishes a tenancy and NO person — both readers agree
+  ok    the lease exists and carries NO tenant
+  ok    the SCREEN read: resident_not_linked = 1
+  ok    the SCREEN read: the source's name stands as an unlinked CLAIM
+  ok    ASK SPINE's standing read says the SAME count — one read, two projections
+  ok    … and lists the claimed name as unlinked
+
+2 · management links by phone — both readers move together
+  ok    the door answers 200 and created a person
+  ok    the Person carries the continuity handle
+  ok    the lease names exactly that person
+  ok    the staged claim is promoted, and records HOW it resolved
+  ok    ⛔ FINDING: a linked resident on an active lease still reads lifecycle 'lead'
+  ok    … and 'lead' is outside the set a staff context cannot override
+  ok    the SCREEN read: resident_not_linked = 0
+  ok    the SCREEN read: resident is the person, and the claim is gone
+  ok    ASK SPINE's standing read moved with it — still the same read
+
+3 · that phone texts the property line — recognised, not re-created
+communications_boundary: UNMATCHED sender +12155616260 at idloop-28751c14 — saved 480bef44-4f3e-413d-91a4-1deb74f8e96b, needs_human, zero outbound.
+  ok    the inbound resolved to THIS property
+  ok    ⛔ FINDING: the linked resident is NOT recognised — tier 1 needs a USED tenant invite
+  ok    the text is preserved on the property for a human, not guessed at
+  ok    and the gap is exactly the invite: this resident has no used tenant_invite
+  ok    NO second Person was created by the text
+  ok    exactly ONE Person carries that phone
+
+3b · NEGATIVE CONTROL — a different phone is not this resident
+communications_boundary: UNMATCHED sender +12155626260 at idloop-28751c14 — saved 7788d11c-a6e5-4db9-89c9-8084ab22dae0, needs_human, zero outbound.
+  ok    a stranger's text is NOT attributed to the linked resident
+  ok    it is kept on the property for a human instead of guessed
+
+4 · the Person Card shows the tenancy
+  ok    the canonical Person Card read answers 200
+  ok    it names this person
+  ok    and it shows a presence/tenancy at this property — not an empty card
+
+5 · Ask Spine, entitled and not
+ask-spine/answer model error proof: the model must not be invoked
+  ok    an entitled operator passes authorization (the model is never consulted for that)
+  ok    an unentitled session is refused
+  ok    … and the refusal discloses no name
+
+6 · NEGATIVE CONTROL — a handle on two Persons refuses and writes nothing
+  ok    the door refuses 409
+  ok    it names the disagreement and carries the candidates
+  ok    nothing was written
+  ok    the refusal changed nothing: the spare is the ONLY unlinked lease
+  ok    and the resident we linked is still linked
+
+7 · the SECOND door onto 'who is on this lease' is closed
+  ok    the retired door answers 410 Gone, not 404 and not success
+  ok    the refusal NAMES the door to use instead — a refusal must be sayable and name a next step
+  ok    the refusal does not leak machinery at a person who typed a name
+  ok    and it wrote NOTHING — the lease is untouched
+  ok    the canonical read is unchanged by the refusal
+
+38 passed, 0 failed

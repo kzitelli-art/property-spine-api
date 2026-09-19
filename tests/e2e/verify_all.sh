@@ -375,6 +375,12 @@ step "canonical onboarding snapshot" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL
 #  this proof drives, so only the successor runs here.
 step "person continuity handle: no phone or email, no Person" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/person_continuity_handle.db.js
 step "link resident: the door that links an unlinked resident" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/link_resident.db.js
+#  Three green proofs of three pieces is not a proof that the loop closes.
+#  This walks ONE resident from an unlinked rent-roll row to an attributed
+#  inbound text, asserting the SCREEN read and the ASK SPINE read agree at
+#  every seam, and that the retired second door onto the same lease refuses.
+#  It runs AFTER link_resident because it is the seam test over that door.
+step "identity loop closes: one resident, all the way round" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/identity_loop_closes.db.js
 step "governing lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/governing_lease_execution.db.js
 step "canonical lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/spine_lease_execution.db.js
 step "lease guarantor signing"   env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/lease_guarantor_signing.db.js
