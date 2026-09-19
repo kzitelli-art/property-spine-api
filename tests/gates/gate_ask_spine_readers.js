@@ -409,6 +409,9 @@ const REGISTRY = {
     reached_by: [
       "how many beds are open",
       "what is the rent roll",
+      //  CURRENT_STATE row 158 — the short form a person actually texts
+      //  from a meeting, with no tenancy noun in it at all.
+      "who is in 401",
     ],
     //  Matches src/tenancy/tenancy_position_read.js exactly. Retrieval only:
     //  comparison needs a basis (per bed, per season, against what) that is a

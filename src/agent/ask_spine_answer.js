@@ -228,6 +228,23 @@ const EQUITY_TERMS =
 //  make every such sentence look composed when it is only ambiguous.
 const TENANCY_TERMS =
   /\b(rent ?roll|occupanc(?:y|ies)|occupied|vacan(?:t|cy|cies)|leases?\b|leased|leasing|tenanc(?:y|ies)|residents?\b|move[- ]?(?:in|out)s?|beds?\b|who lives|how many (?:units|beds|positions|residents))\b/i;
+//  ⚠ CURRENT_STATE row 158 — THE SHORT FORM NOBODY TYPES IN A MEETING.
+//  TENANCY_TERMS above requires a tenancy noun (resident, bed, occupancy,
+//  "who lives") beside "who". A person texting from a meeting types the
+//  bare form: "who is in 401", "who's in 401", "who is at 401". None of
+//  those carry a tenancy noun, so they fell through every named domain to
+//  the `work` default — measured, not assumed:
+//  questionSubject("who is in 401") === "work" before this pattern existed.
+//
+//  Scoped to "who is/'s in|at <unit-or-bed token>" ONLY, where the token is
+//  the unit/bed shape this repo actually uses (leads with a digit, e.g.
+//  "401", "1417-103") — not a bare "who is in <word>" wildcard. That keeps
+//  it from swallowing "who is on call" (wrong preposition) or "who is the
+//  vendor for 401" ("the vendor" sits between "is" and a location, not a
+//  bare unit token) — both stay exactly where they route today. "who is in
+//  bed B of 212" needs no help from this pattern: "bed" already satisfies
+//  TENANCY_TERMS above, so this one only carries the plain-number form.
+const WHO_IS_IN_UNIT_TERMS = /\bwho(?:'s|\s+is)\s+(?:in|at)\s+(?:the\s+)?[a-z]*\d[\w-]*\b/i;
 //  ⚠ A PERSON'S LEASING STANDING IS A DIFFERENT QUESTION FROM THE RENT
 //  ROLL'S. "How many beds are open" is Tenancy — a property-level count.
 //  "Which bed did Marisol apply for, and has she signed" is about ONE
@@ -444,7 +461,7 @@ function canReadEconomics(modules) {
 function questionSubject(question) {
   if (leasingKnowledge.isKnowledgeRead(question)) return "leasing_knowledge";
   const text = String(question || "");
-  const tenancyThing = TENANCY_TERMS.test(text);
+  const tenancyThing = TENANCY_TERMS.test(text) || WHO_IS_IN_UNIT_TERMS.test(text);
   const contractedService = CONTRACTED_SERVICE_TERMS.test(text);
   const equity = EQUITY_TERMS.test(text);
   const debt = DEBT_TERMS.test(text);
