@@ -67,6 +67,9 @@ function positionLine(p) {
   const current = p.lease
     ? {
         resident: p.resident ? p.resident.name : null,
+        //  The source's name when no Person is linked — a claim, shown as
+        //  one. Never copied into `resident`.
+        resident_claim: p.resident_claim ? p.resident_claim.name : null,
         //  STABLE IDENTITY, carried but not displayed. A surface that shows a
         //  resident's name and cannot say WHICH person record it is has made
         //  the name the key, and names are not keys (§ the identity refusal).

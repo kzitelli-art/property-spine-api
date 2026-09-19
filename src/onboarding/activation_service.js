@@ -945,7 +945,17 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     const person = ingested.person_id
       ? (await client.query(`select * from persons where id=$1`, [ingested.person_id])).rows[0]
       : null;
-    if (!person) {
+    //  NO CONTINUITY HANDLE (person_ingress.js): the source names the
+    //  resident and carries no phone or email, so no Person was minted and
+    //  nothing needs review — there is nothing to link to yet. The tenancy
+    //  fact is still established below; the lease carries no tenant and the
+    //  rent roll reads `resident_not_linked` with the source's name beside
+    //  it. Ruled 2026-09-19 (CURRENT_STATE row 136 → 156).
+    const unlinked = !person && ingested.staged_reason === "no_continuity_handle";
+    const unlinkedNote = unlinked
+      ? ` Resident not linked: the source names ${n.tenant_name} but carries no phone or email, so no Person was created; the lease carries the claim.`
+      : "";
+    if (!person && !unlinked) {
       await client.query(
         "update proposed_records set status='needs_review',status_reason=$2,updated_at=now() where id=$1",
         [proposed_id, homeTenants.length
@@ -964,8 +974,8 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     // home. Keep every competing lease visible for the governed correction;
     // source acceptance cannot choose a winner by query order.
     if (competing.length > 1) await holdForOverlap();
-    const samePersonRights = competing.filter((l) =>
-      (l.tenant_ids || []).map(String).includes(String(person.id)));
+    const samePersonRights = person ? competing.filter((l) =>
+      (l.tenant_ids || []).map(String).includes(String(person.id))) : [];
     const tied = samePersonRights.find((l) => !undated || (
       (l.start_date == null || asDate(l.start_date) <= sourceAsOf) &&
       (l.end_date == null || asDate(l.end_date) >= sourceAsOf)
@@ -1061,7 +1071,7 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
             where id=$1
               and (produced_unit_id is null or produced_unit_id=$3)
               and (produced_space_id is null or produced_space_id=$4)`,
-          [p.import_source_row_id, person.id, unit.id, space.id]);
+          [p.import_source_row_id, person ? person.id : null, unit.id, space.id]);
         if (attached.rowCount !== 1) throw refusal(409, "source_home_attachment_changed",
           "This evidence row is attached to a different reviewed home. Nothing was confirmed.");
       }
@@ -1073,9 +1083,10 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
           where id=$1`,
         [proposed_id, String(user_id),
          `Accepted as current occupancy as of ${sourceAsOf || "the source date"}: ${n.tenant_name} on ${where}. ` +
-         `Contractual terms unknown — this source carries no lease dates, so no lease was created; the reported rent is retained as evidence.`]);
+         `Contractual terms unknown — this source carries no lease dates, so no lease was created; the reported rent is retained as evidence.` + unlinkedNote]);
       await client.query("commit");
-      return { lease_id: null, person_id: person.id, unit_id: unit.id, vacant: false,
+      return { lease_id: null, person_id: person ? person.id : null, unit_id: unit.id, vacant: false,
+        resident_linked: !!person,
         outcome: "occupancy_accepted_terms_unknown",
         receipt: `${where} — ${n.tenant_name} recorded as occupying this home as of ${sourceAsOf || "the source date"}. No lease dates in the source, so no lease was created; terms stay unknown until a lease is established.`,
         authority_basis: scope.authority_basis };
@@ -1097,7 +1108,7 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
           import_batch_id, source_type, source_as_of_date, confidence)
        values ($1,$2,$3,$4,$5,$6,$7,'active',$8,'rent_roll_ledger',$9,'extracted')
        returning *`,
-      [propertyId, space.id, [person.id], n.actual_rent,
+      [propertyId, space.id, person ? [person.id] : [], n.actual_rent,
        n.start_date ?? null, n.end_date ?? null, n.balance ?? 0,
        act.import_batch_id || null, act.source_as_of_date || null])).rows[0];
 
@@ -1123,13 +1134,15 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     await client.query(
       `update proposed_records
           set status='promoted', promoted_record_id=$2,
-              confirmed_by=$3, confirmed_at=now(), updated_at=now(), status_reason=null
-        where id=$1`, [proposed_id, lease.id, String(user_id)]);
+              confirmed_by=$3, confirmed_at=now(), updated_at=now(), status_reason=$4
+        where id=$1`, [proposed_id, lease.id, String(user_id), unlinked ? unlinkedNote.trim() : null]);
 
     await client.query("commit");
     return { lease_id: lease.id, person_id: person ? person.id : null, unit_id: unit.id, vacant: false,
+      resident_linked: !!person,
       outcome: "lease_created",
-      receipt: `Unit ${n.unit_number} — ${n.tenant_name} is now part of the position.`,
+      receipt: `Unit ${n.unit_number} — ${n.tenant_name} is now part of the position.` +
+        (unlinked ? " Resident not linked: no phone or email in the source, so no Person was created." : ""),
       authority_basis: scope.authority_basis };
   } catch (e) {
     try { await client.query("rollback"); } catch { /* already rolled back */ }
@@ -1331,7 +1344,10 @@ async function resolveResidentIdentity(db, {user_id,proposed_id,action,person_id
     await client.query("update proposed_records set status=$2,status_reason=$3,updated_at=now() where id=$1",
       [proposed_id,ready ? "staged" : lease.status,ready ? "Resident identity resolved. Review and add the lease separately." : lease.status_reason]);
     await client.query("commit");
-    return {person_id:resolution.person_id,receipt:"Resident identity resolved. No lease was established by this identity decision."};
+    return {person_id:resolution.person_id,identity_decision:resolution.identity_decision||null,
+      receipt: resolution.identity_decision === "distinct_unlinked"
+        ? "Recorded as a different person. With no phone or email in the source no Person was created; the row proceeds with the resident not linked. No lease was established by this identity decision."
+        : "Resident identity resolved. No lease was established by this identity decision."};
   } catch(error) { await client.query("rollback").catch(()=>{}); throw error; }
   finally { client.release(); }
 }

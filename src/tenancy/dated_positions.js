@@ -1019,6 +1019,12 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
         rent: lease.rent == null ? null : Number(lease.rent),
       } : null,
       resident: resident ? { person_id: resident.person_id, name: resident.name || null } : null,
+      //  No linked Person, but the source named someone: carried as a CLAIM,
+      //  visibly unlinked, never promoted to `resident`. `resident_not_linked`
+      //  still counts this row (rent_roll_canonical) — the name beside the
+      //  exception is what keeps the exception honest instead of blank.
+      resident_claim: !resident && lease && lease.claimed_name
+        ? { name: lease.claimed_name, source: "rent_roll", linked: false } : null,
       current_rent: lease && lease.rent != null ? Number(lease.rent) : null,
       proof_basis: lease ? lease.proof_basis : null,
       notice_state: p.notice_state,

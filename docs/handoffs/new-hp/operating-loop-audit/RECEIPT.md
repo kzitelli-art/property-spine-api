@@ -286,3 +286,16 @@ verified on the owned runtime with its own fixture, 19/19; the browser
 caught a broken `onclick` attribute the HTML harness had passed. Pin moved
 to app `494ff1a`.
 
+## Addendum, 2026-09-19 — ingest identity routing (row 156)
+
+No durable continuity handle → no durable Person. A name-only rent-roll
+row (the real parser carries no phone or email) now establishes the lease
+with no tenant, stages the person claim with the reason, and the rent roll
+reads `resident_not_linked` with the source's name beside it as a claim. A
+reviewer's "new person" on such a claim resolves as `distinct_unlinked` so
+the row can still reach the overlap rules. Proof: successor 20/20 through
+the real Deal Setup path; witness 5/5 on the parent (Person minted from a
+name, phone 0, email 0). Reconciliation 79/79 and hardening 105/105 after
+test-only adaptations that are named in the row. Greenery's 95 existing
+Persons untouched.
+

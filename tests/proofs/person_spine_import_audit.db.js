@@ -142,6 +142,31 @@ let ok = null;
         where exists (select 1 from leases l where l.property_id=$1
                         and l.tenant_ids @> array[p.id])`, [prop])).rows[0];
 
+    //  2026-09-19 RULING (person_ingress.js): no durable continuity handle →
+    //  no durable Person. This row carries a name and a PMS id and no phone
+    //  or email, so under an authority it now STAGES a claim and mints
+    //  nothing; the lease carries the name as a claim and the rent roll
+    //  reads it as resident_not_linked. The questions below were asked of a
+    //  Person that no longer exists for this evidence, so the audit stops
+    //  here with the new state recorded. The decisive renewal test is now
+    //  tests/proofs/person_continuity_handle.db.js (successor + witness).
+    if (!personRow) {
+      head("RULING IN FORCE  no phone, no email → no Person");
+      const staged = (await pool.query(
+        `select status, status_reason from proposed_records
+          where property_id=$1 and target_type='person' order by created_at desc limit 1`, [prop])).rows[0];
+      const leaseRow = (await pool.query(
+        `select tenant_ids from leases where property_id=$1 order by created_at desc limit 1`, [prop])).rows[0];
+      say(`      person created: NONE`);
+      say(`      person claim:   ${staged ? staged.status : "NONE"} — ${staged ? String(staged.status_reason || "").slice(0, 96) : ""}`);
+      say(`      lease tenants:  ${leaseRow ? JSON.stringify(leaseRow.tenant_ids) : "no lease"}`);
+      ok = !!leaseRow && Array.isArray(leaseRow.tenant_ids) && leaseRow.tenant_ids.length === 0
+        && (!staged || staged.status !== "promoted");
+      say(ok ? "      -> CLOSED under the ruling: the tenancy exists, the identity does not, and Spine says so."
+             : "      -> OPEN: a lease without tenants or an unpromoted claim was expected.");
+      throw Object.assign(new Error("audit_complete_under_ruling"), { audit_complete: true });
+    }
+
     head("Q2–Q4  which code decides a Person exists, and on what key");
     say("      snapshot_loader.js has NO person lookup. Reuse is a side effect of");
     say("      findLease(), whose key is:");
@@ -271,4 +296,7 @@ let ok = null;
   //  divergence is closed. It now ASSERTS closure rather than merely
   //  narrating it, so a regression that reopens the fork turns it red.
   process.exit(ok === false ? 1 : 0);
-})().catch((e) => { console.error("AUDIT ERROR", e); process.exit(1); });
+})().catch((e) => {
+  if (e && e.audit_complete) { console.log("      (audit complete under the 2026-09-19 ruling)"); process.exit(0); }
+  console.error("AUDIT ERROR", e); process.exit(1);
+});

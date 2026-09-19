@@ -367,6 +367,13 @@ step "canonical onboarding source" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" 
 step "canonical onboarding ledger" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_ledger.db.js
 step "canonical onboarding lifecycle" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_lifecycle.db.js
 step "canonical onboarding snapshot" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_snapshot.db.js
+#  No durable continuity handle → no durable Person (CURRENT_STATE 156). A
+#  name-only rent-roll row establishes the lease unlinked, stages the claim,
+#  and the canonical rent roll reads resident_not_linked with the source's
+#  name beside it. Witness lives with the proof (PROOF_EXPECT_DEFECT=1 on the
+#  commit before it); the onboarding parent above predates the preview seam
+#  this proof drives, so only the successor runs here.
+step "person continuity handle: no phone or email, no Person" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/person_continuity_handle.db.js
 step "governing lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/governing_lease_execution.db.js
 step "canonical lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/spine_lease_execution.db.js
 step "lease guarantor signing"   env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/lease_guarantor_signing.db.js

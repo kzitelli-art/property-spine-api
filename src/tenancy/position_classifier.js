@@ -241,6 +241,7 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     end_date: lease.end_date || null,
     rent: lease.rent == null ? null : Number(lease.rent),
     tenants: tenantList(lease, personNames),
+    claimed_name: lease.claimed_name || null,
     proof_basis: proofBasis(lease),
   } : null;
 

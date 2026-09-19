@@ -218,6 +218,16 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
             'start_date', l.start_date, 'end_date', l.end_date,
             'rent', l.rent, 'tenant_ids', l.tenant_ids,
             'economic_tenancy_activated_at', l.economic_tenancy_activated_at,
+            -- THE SOURCE'S NAME FOR THE RESIDENT, when the lease was
+            -- established from a rent roll. A lease with no tenant is
+            -- resident_not_linked (no phone or email in the source, so
+            -- no Person — person_ingress.js); the name the source gave is
+            -- still a fact worth reading beside that, and it lives on the
+            -- promoted claim, not on the lease. Provenance, never identity.
+            'claimed_name', (select pr.normalized_json->>'tenant_name'
+                               from proposed_records pr
+                              where pr.promoted_record_id = l.id and pr.target_type = 'lease'
+                              order by pr.confirmed_at desc nulls last limit 1),
             -- PROOF INPUTS (shared derivation). Carried here so every surface
             -- reads ONE answer to "how do we know this lease is true" instead
             -- of each re-deriving it. native = executed AND funded through
