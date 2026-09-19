@@ -29,6 +29,6 @@
 #
 #  Format: one `key value` pair per line. `#` begins a comment.
 # ════════════════════════════════════════════════════════════════════
-sha    494ff1a38f5fe094de24559df0f0492243bf9757
+sha    1060c23a92db84bbabb05721781d780e6a9ed394
 branch claude/app-convergence-20260919
 repo   kzitelli-art/property-spine-app
