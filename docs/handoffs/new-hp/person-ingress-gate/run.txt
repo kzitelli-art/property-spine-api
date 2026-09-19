@@ -1,0 +1,75 @@
+════ gate_person_ingress ════
+  PERSON-INGRESS BOUNDARY GATE
+════════════════════════════════════════════════════════════════
+
+  scanned 680 files across src, tools, seeds, migrations and server.js
+  files that write a person: 9
+
+  ok    the ingress module exists and holds the authority
+  ok    NO UNDECLARED PATH MINTS A HUMAN
+  ok    converted, and stays converted: src/shared/snapshot_loader.js
+  ok    converted, and stays converted: src/identity/activation.js
+  ok    converted, and stays converted: src/onboarding/activation_service.js
+  ok    converted, and stays converted: src/shared/seed_snapshot.js
+  ok    the register is still accurate (paid-off entries removed)
+  ok    every declared entry carries a channel, a reason and a removal condition
+  ok    lease identity does not use a display name
+  ok    the detector finds a real write PAST an unbalanced /* in a literal
+
+  ── the register ──
+     src/leasing/leasing_leads.js
+        channel: leasing_intake
+        removes: Route resolveOrCreatePerson through personIngress.ingestPerson({channel:'leasing_intake'}) and delete the local copy, once the leasing browser proofs cover it.
+     src/leasing/leasing_shadow_import.js
+        channel: leasing_intake
+        removes: Same conversion as leasing_leads.js; its states map onto the ingress dispositions.
+     src/identity/staff_bridge.js
+        channel: staff_bridge
+        removes: Convert when the staff_bridge profile is exercised by a proof.
+     src/shared/no076_failclosed_check.js
+        channel: harness
+        removes: Not product. Remove with the check itself.
+     tools/harness/mkfixture.js
+        channel: harness
+        removes: Remove with the harness.
+     tools/ask_spine_e2e_seed.js
+        channel: harness
+        removes: Remove with the seed.
+     tools/demo_run_ops.js
+        channel: demo
+        removes: Remove with the demo runner.
+     seeds/seed_demo_live_tour.js
+        channel: demo
+        removes: Remove with the seed.
+
+  10 run · 10 passed · 0 failed
+
+════ tests/e2e/person_create_retired.e2e.js — SUCCESSOR, server booted at 7670c685841a6f3194265751bd990f1aa5cffe05 ════
+PASS runtime build receipt is accessible
+PASS the answering server is THIS tree, not a stale one on the port
+PROOF_RUNTIME=7670c685841a6f3194265751bd990f1aa5cffe05
+PASS the door answers 410 Gone
+PASS and it is REACHABLE — a 404 would leave the same digest and mean nothing else
+PASS the refusal carries the retirement code
+PASS it names the leasing intake door
+PASS it names the link-resident door
+PASS it states the rule a caller has to satisfy — a phone or an email
+PASS it says nothing was changed
+PASS it does not speak machinery at whoever reads it
+PASS an empty body gets the SAME 410 — input is never parsed or resolved
+PASS a NAME ALONE — the defect itself gets the SAME 410 — input is never parsed or resolved
+PASS an unknown property_id gets the SAME 410 — input is never parsed or resolved
+PASS an invalid lifecycle_status gets the SAME 410 — input is never parsed or resolved
+PASS no body at all gets the SAME 410 — input is never parsed or resolved
+PASS persons and events are byte-identical after every refused call
+PASS no person carries the name this proof tried to mint
+PASS without the shared key the server's gate refuses FIRST — the tombstone is never reached
+PASS the keyless refusal is not the retirement receipt
+PASS and it still wrote nothing
+PASS GET /persons still answers — the reads beside it are untouched
+POST /persons retirement: 21 assertions passed
+
+════ regression on the owned runtime ════
+person_continuity_handle.db.js     20 passed, 0 failed
+link_resident.db.js                42 passed, 0 failed
+identity_loop_closes.db.js         40 passed, 0 failed
