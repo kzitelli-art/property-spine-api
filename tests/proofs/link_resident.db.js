@@ -122,8 +122,10 @@ const csv = `Unit,Room,Resident,Market Rent,Actual Rent,Lease From,Lease To
   ok("outcome is created", r1.json && r1.json.outcome === "created", r1.json);
   const l1 = await one("select tenant_ids from leases where id=$1", [leases[0]]);
   ok("the lease now names exactly that person", l1.tenant_ids.length === 1 && String(l1.tenant_ids[0]) === String(r1.json.person_id), l1.tenant_ids);
-  const p1 = await one("select primary_phone_e164, name from persons where id=$1", [r1.json.person_id]);
+  const p1 = await one("select primary_phone_e164, name, lifecycle_status, leasing_stage from persons where id=$1", [r1.json.person_id]);
   ok("the Person carries the continuity handle — the whole point of row 156", p1 && p1.primary_phone_e164 === "+1" + PH_LINK, p1);
+  ok("SEAM 2: a CREATED person is created a resident, not the ingress default 'lead'",
+    p1 && p1.lifecycle_status === "resident" && p1.leasing_stage === "resident", p1);
   const c1 = await claimFor(leases[0]);
   ok("the staged claim is PROMOTED, with resolution_kind and promoted_record_id together (migration 177)",
     c1 && c1.status === "promoted" && c1.resolution_kind === "created" && String(c1.promoted_record_id) === String(r1.json.person_id) && c1.confirmed_by === String(user.id), c1);
@@ -188,6 +190,50 @@ const csv = `Unit,Room,Resident,Market Rent,Actual Rent,Lease From,Lease To
   ok("unit 103 was never touched by any of them", lFinal.tenant_ids.length === 0, lFinal.tenant_ids);
   const stray = await one("select count(*)::int n from persons where name = any($1::text[])", [[N3]]);
   ok("and no Person was minted from its name by any refusal", stray.n === 0, stray);
+
+  // ────────────────────────────────────────────────────────────────────
+  //  7 · SEAM 2 — resolved_existing advances a 'lead' person to 'resident',
+  //  and never downgrades a person with a MORE specific status already.
+  //  Two spare leases, off-rent-roll (no matching import claim), exactly
+  //  the same pattern identity_loop_closes.db.js uses for its negative
+  //  control: real units and spaces so the door's own property/space/lease
+  //  reads are exercised for real, invisible to the CSV-driven rent-roll
+  //  assertions above.
+  console.log("\n7 · SEAM 2 — resolved_existing on 'lead' advances; on 'tenant' does not move");
+  const mkSpareLease = async (unitNumber) => {
+    const u = await one("insert into units (property_id, unit_number) values ($1,$2) returning id", [property.id, unitNumber]);
+    const sp = await one("insert into spaces (unit_id) values ($1) returning id", [u.id]);
+    return one(`insert into leases (property_id, space_id, tenant_ids, lease_status, start_date, end_date, rent)
+                values ($1,$2,'{}','active','2026-07-01','2027-06-30',900) returning id`, [property.id, sp.id]);
+  };
+
+  const PH_LEAD = "215560" + NONCE;
+  const leadPerson = await one(
+    "insert into persons(name, primary_phone_e164, lifecycle_status, leasing_stage) values ($1,$2,'lead','lead') returning id",
+    ["Pre-existing Lead " + NONCE, "+1" + PH_LEAD]);
+  const leaseLead = await mkSpareLease("197");
+  const rLead = await link(leaseLead.id, { phone: PH_LEAD, source_basis: "recognised from a prior inquiry" });
+  ok("resolved_existing, not a second create", rLead.status === 200 && rLead.json.outcome === "resolved_existing", rLead.json);
+  ok("it is the SAME pre-existing person", String(rLead.json.person_id) === String(leadPerson.id), { got: rLead.json.person_id, want: leadPerson.id });
+  const leadAfter = await one("select lifecycle_status, leasing_stage from persons where id=$1", [leadPerson.id]);
+  ok("a 'lead' person is ADVANCED to 'resident' — a lease in force is presence",
+    leadAfter.lifecycle_status === "resident" && leadAfter.leasing_stage === "resident", leadAfter);
+  const evLead = await one("select note from events where person_id=$1 and type='resident_linked' order by occurred_at desc limit 1", [leadPerson.id]);
+  ok("the event names the lifecycle advance", evLead && /[Ll]ifecycle advanced to resident/.test(evLead.note), evLead);
+
+  const PH_TENANT = "215557" + NONCE;
+  const tenantPerson = await one(
+    "insert into persons(name, primary_phone_e164, lifecycle_status, leasing_stage) values ($1,$2,'tenant','tenant') returning id",
+    ["Pre-existing Tenant " + NONCE, "+1" + PH_TENANT]);
+  const leaseTenant = await mkSpareLease("198");
+  const rTenant = await link(leaseTenant.id, { phone: PH_TENANT, source_basis: "recognised, already a tenant elsewhere" });
+  ok("resolved_existing on the tenant too", rTenant.status === 200 && rTenant.json.outcome === "resolved_existing", rTenant.json);
+  const tenantAfter = await one("select lifecycle_status, leasing_stage from persons where id=$1", [tenantPerson.id]);
+  ok("a 'tenant' person is left UNCHANGED — this door recognises presence, it never downgrades a more specific status",
+    tenantAfter.lifecycle_status === "tenant" && tenantAfter.leasing_stage === "tenant", tenantAfter);
+  const evTenant = await one("select note from events where person_id=$1 and type='resident_linked' order by occurred_at desc limit 1", [tenantPerson.id]);
+  ok("… and the event does NOT claim a lifecycle advance that did not happen",
+    evTenant && !/[Ll]ifecycle advanced/.test(evTenant.note), evTenant);
 
   await new Promise((r) => server.close(r));
   console.log(`\n${passed} passed, ${failed} failed`);

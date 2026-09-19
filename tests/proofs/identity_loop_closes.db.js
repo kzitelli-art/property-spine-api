@@ -20,9 +20,14 @@
         → Ask Spine, entitled, names the resident; unentitled gets nothing
       → and the OLD door onto the same lease refuses, naming the new one
 
-    TWO FINDINGS ARE RECORDED AS ASSERTIONS, NOT AS NOTES: the inbound text
-    does not recognise the linked resident (seam 3), and the linked resident
-    never leaves lifecycle 'lead' (seam 2). Widen either and a test goes red.
+    TWO FINDINGS WERE RECORDED HERE. SEAM 2 IS NOW CLOSED, ON THE MERGE THAT
+    brought this proof in: link_resident.js now passes lifecycle_status
+    'resident' to a CREATED person and advances a 'lead'/null person to
+    'resident' on `resolved_existing` (never downgrading tenant, resident,
+    past_resident, applicant or vendor). This file now asserts the guard
+    FIRES, in place of the old "still reads 'lead'" finding. SEAM 3 remains
+    open and is still asserted as a finding: the inbound text does not
+    recognise the linked resident. Widen either and a test goes red.
 
     WHERE EACH SEAM IS ENTERED, SAID PRECISELY:
       · Deal Setup, link-resident and Person Card go through REAL HTTP or
@@ -161,25 +166,36 @@ const anthropicNever = { messages: { create: async () => { throw new Error("proo
   ok("the staged claim is promoted, and records HOW it resolved",
     pClaim && pClaim.status === "promoted" && pClaim.resolution_kind === "created" && String(pClaim.promoted_record_id) === String(personId), pClaim);
 
-  //  ⛔ SECOND FINDING, MEASURED RATHER THAN READ OFF THE SOURCE.
-  //  The retired POST /leases/:id/tenants advanced the person to 'tenant'
-  //  and wrote a lifecycle_change event. link-resident does not: it passes
-  //  no lifecycle_status to ingestPerson, which defaults to 'lead'. So a
-  //  resident on an active lease reads 'lead' in the person lifecycle.
-  //  It has a CONSEQUENCE worth naming: authority_resolution's
-  //  HARD_COUNTERPARTY set is {tenant, resident, past_resident, applicant,
-  //  vendor} — the values a staff context CANNOT override. 'lead' is not in
-  //  it, so the "a real counterparty may not be granted staff authority"
-  //  guard does not fire for a resident linked this way.
-  //  NOT this slice's to fix (on `resolved_existing` ingress does not update
-  //  an existing person, so a correct fix is a ruling about the lifecycle
-  //  model, not a field). Asserted so it is evidence, and so that whoever
-  //  fixes it has to come here and say so.
+  //  ⛔ SEAM 2, CLOSED ON THIS MERGE (row 161). A lease in force is presence:
+  //  link_resident.js now passes lifecycle_status:'resident' into
+  //  ingestPerson, so a CREATED person is created a resident, not the
+  //  ingress default 'lead'. The CONSEQUENCE that made this worth fixing:
+  //  authority_resolution's HARD_COUNTERPARTY set is {tenant, resident,
+  //  past_resident, applicant, vendor} — the values a staff context CANNOT
+  //  override. 'lead' was not in it, so the "a real counterparty may not be
+  //  granted staff authority" guard did not fire for a resident linked this
+  //  way. It must fire now.
   const lifecycle = await one("select lifecycle_status, leasing_stage from persons where id=$1", [personId]);
-  ok("⛔ FINDING: a linked resident on an active lease still reads lifecycle 'lead'",
-    lifecycle.lifecycle_status === "lead", lifecycle);
-  ok("… and 'lead' is outside the set a staff context cannot override",
-    !["tenant", "resident", "past_resident", "applicant", "vendor"].includes(lifecycle.lifecycle_status), lifecycle);
+  ok("SEAM 2 CLOSED: a linked resident on an active lease reads lifecycle 'resident', not 'lead'",
+    lifecycle.lifecycle_status === "resident" && lifecycle.leasing_stage === "resident", lifecycle);
+  ok("… and 'resident' IS inside the set a staff context cannot override",
+    ["tenant", "resident", "past_resident", "applicant", "vendor"].includes(lifecycle.lifecycle_status), lifecycle);
+
+  //  THE COUNTERPARTY GUARD ITSELF, EXERCISED — not just the lifecycle value
+  //  read back. resolveAuthority's dry run runs the same nine independent
+  //  checks a real grant would; asserting the ACTUAL check that HARD_
+  //  COUNTERPARTY backs ("person_is_not_a_counterparty") refuses for this
+  //  person is the honest proof that the guard fires, not an inference from
+  //  the column value.
+  const authorityResolution = require(path.join(root, "src/identity/authority_resolution.js"));
+  const guardDryRun = await authorityResolution.resolveAuthority(pool, {
+    spec: { person_id: personId, property_id: property.id, requested_role: "asset_manager",
+            reviewer_user_id: user.id, reason: "identity_loop_closes proof" } });
+  const counterpartyCheck = guardDryRun.receipt.evidence.find((c) => c.id === "person_is_not_a_counterparty");
+  ok("the counterparty guard REFUSES staff authority for this now-resident person",
+    guardDryRun.would_apply === false && counterpartyCheck && counterpartyCheck.passed === false, guardDryRun.receipt.evidence);
+  ok("… and names lifecycle_status as the reason, not a demo artifact or anything else",
+    counterpartyCheck && /lifecycle_status is 'resident'/.test(counterpartyCheck.detail || ""), counterpartyCheck);
 
   const rr2 = await currentRentRoll(pool, { property_id: property.id });
   const row2 = rr2.rows.find((r) => r.lease && String(r.lease.lease_id) === String(lease.id));

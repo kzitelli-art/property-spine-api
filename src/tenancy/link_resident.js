@@ -159,6 +159,11 @@ module.exports = function linkResidentRoutes(deps) {
 
       //  THE ONE WRITER. authority = this staff session, named. See the
       //  header for why activation_id is not passed.
+      //
+      //  A lease in force is presence, not a lead: this door only ever
+      //  fires against an already-signed lease, so a person it CREATES is
+      //  created a resident, never the ingress default 'lead'. See (b)
+      //  below for the resolved_existing side of the same fact.
       const out = await personIngress.ingestPerson(client, {
         property_id: req.operator.property_id,
         channel: "rent_roll",
@@ -172,6 +177,8 @@ module.exports = function linkResidentRoutes(deps) {
           name: leaseClaim.claimed_name || null,
           source_system: "rent_roll",
           import_source_row_id: leaseClaim.import_source_row_id || null,
+          lifecycle_status: "resident",
+          leasing_stage: "resident",
         },
       });
 
@@ -209,6 +216,26 @@ module.exports = function linkResidentRoutes(deps) {
         `update leases set tenant_ids = array[$1::uuid], updated_at = now() where id = $2`,
         [out.person_id, lease.id]);
 
+      //  (b) A LEASE IN FORCE IS PRESENCE. `ingestPerson` on `resolved_existing`
+      //  recognises the person but never updates them (person_ingress.js is
+      //  untouched — see the header). If the person Spine already knew is
+      //  still sitting at the ingress default `lead` (or has no lifecycle at
+      //  all), attaching them to a real lease is exactly the fact that
+      //  advances them — the counterparty guard in authority_resolution.js
+      //  (HARD_COUNTERPARTY) must fire for them from this moment on. Any
+      //  OTHER status — tenant, resident, past_resident, applicant, vendor —
+      //  is left alone: this door recognises presence, it never downgrades a
+      //  status a more specific fact already established.
+      let lifecycleAdvanced = false;
+      if (out.resolution_kind === "resolved_existing") {
+        const advanced = (await client.query(
+          `update persons set lifecycle_status = 'resident', leasing_stage = 'resident'
+             where id = $1 and (lifecycle_status = 'lead' or lifecycle_status is null)
+             returning id`,
+          [out.person_id])).rows[0];
+        lifecycleAdvanced = !!advanced;
+      }
+
       //  resolution_kind and promoted_record_id in ONE statement (migration
       //  177): a promotion may never exist without the institutional fact of
       //  HOW it resolved.
@@ -231,12 +258,15 @@ module.exports = function linkResidentRoutes(deps) {
 
       //  One event, naming the handle KIND and the basis — never the handle
       //  value. A ledger of how identity was established should not become a
-      //  second place a phone number lives.
+      //  second place a phone number lives. When the recognised person was
+      //  advanced off `lead`, that is said here too — it is the only durable
+      //  record of why their lifecycle changed.
+      const noteLine = `Resident linked to lease ${lease.id} by ${handle.kind} (${out.resolution_kind}). Basis: ${basis}`
+        + (lifecycleAdvanced ? " Lifecycle advanced to resident: a lease in force is presence." : "");
       await client.query(
         `insert into events (property_id, person_id, unit_id, type, note)
          values ($1,$2,$3,'resident_linked',$4)`,
-        [lease.property_id, out.person_id, lease.unit_id || null,
-         `Resident linked to lease ${lease.id} by ${handle.kind} (${out.resolution_kind}). Basis: ${basis}`]);
+        [lease.property_id, out.person_id, lease.unit_id || null, noteLine]);
 
       await client.query("commit");
       return res.json({
