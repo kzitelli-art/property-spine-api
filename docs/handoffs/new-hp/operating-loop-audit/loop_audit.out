@@ -1,0 +1,151 @@
+
+=== S0  Every lease ended yesterday. Nobody has told Spine anything else. ===
+
+── S0  (as_of 2026-09-19)
+   101  rr=needs_review/occupied_terms_not_established  basis=established/recorded_possession  ev=uncorroborated  poss=delivered  → avail=not_ready(possession_not_returned)  from=null/incomplete  ready=unknown/none  fc=none
+   102  rr=needs_review/occupied_terms_not_established  basis=established/recorded_possession  ev=uncorroborated  poss=delivered  → avail=not_ready(possession_not_returned)  from=null/incomplete  ready=unknown/none  fc=none
+   103  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=unknown/none  fc=none
+   104  rr=null/unresolved  basis=not_established/null  ev=inconclusive  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/none  fc=none
+   105  rr=needs_review/unresolved  basis=established/recorded_possession  ev=inconclusive  poss=delivered  → avail=not_ready(possession_not_returned)  from=null/incomplete  ready=unknown/none  fc=none
+   rent roll tally: {"occupied":1,"activation_pending":0,"open":0,"needs_review":3,"not_established":1,"unclassified":0,"established":4,"total":5,"occupied_contractual":0,"occupied_terms_not_established":1,"occupied_state_unknown":0}
+  HOLD   Rent Roll → Availability: 101 (possession still held) is NOT offered   [not_ready/possession_not_returned]
+  HOLD   Rent Roll → Availability: 101's reason is the RIGHT ended without possession returned   [possession_not_returned]
+  HOLD   Control E (103, opening claim, no possession event): contractually free, readiness unresolved → not called ready   [occupied/opening_claim_occupied_uncorroborated ready=unknown/none]
+  note   Control E reason names a STALE opening claim, not readiness   [103 basis=established/opening_claim_occupied evidence=uncorroborated]
+  HOLD   Control E (104, lease-only basis, no claim): not called ready   [occupancy_unknown/no_established_occupancy_basis basis=not_established/null]
+  BREAK  Rent roll and availability agree 103/104 are not occupied positions   [103=occupied 104=null]
+
+=== S1  Move-out confirmed on 101 through the canonical turnover writer; expected ready 2026-10-03 ===
+  note   openTurnover   [Effective move_out recorded (verified prior possession). | walk: Initial walk assigned - same-day inspection expected.]
+
+── S1  (as_of 2026-09-19)
+   101  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=turnover_required(turnover_in_progress)  from=2026-10-03/expected  ready=turning/turnover_in_progress  fc=none
+   102  rr=needs_review/occupied_terms_not_established  basis=established/recorded_possession  ev=uncorroborated  poss=delivered  → avail=not_ready(possession_not_returned)  from=null/incomplete  ready=unknown/none  fc=none
+   103  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=unknown/none  fc=none
+   104  rr=null/unresolved  basis=not_established/null  ev=inconclusive  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/none  fc=none
+   105  rr=needs_review/unresolved  basis=established/recorded_possession  ev=inconclusive  poss=delivered  → avail=not_ready(possession_not_returned)  from=null/incomplete  ready=unknown/none  fc=none
+   rent roll tally: {"occupied":2,"activation_pending":0,"open":0,"needs_review":2,"not_established":1,"unclassified":0,"established":4,"total":5,"occupied_contractual":0,"occupied_terms_not_established":2,"occupied_state_unknown":0}
+  HOLD   Maintenance → Availability: turn in progress reads turnover_required with the governed expected date   [turnover_required from=2026-10-03/expected]
+  HOLD   The turn enters Turn Priority as raw vacancy (no commitment yet)   [raw_vacancy]
+  BREAK  Rent roll: 101 is now an OPEN position (classified, not a remainder)   [occupied basis=established/opening_claim_occupied]
+
+=== S2  Prospect One asks for 101 from 2026-10-09 to 2027-10-09 (after expected ready) ===
+  HOLD   Availability → Leasing: honestly offerable for the requested dates   [{"ok":true,"offerable":true,"code":null,"state":"turnover_required","from":"2026-10-03"}]
+  HOLD   Control A: move-in requested BEFORE the governed ready date → refused   [{"ok":false,"offerable":false,"code":"application_move_in_before_expected_ready","state":"turnover_required","from":"2026-10-03"}]
+
+=== S3  Prospect One's lease is created: pending, start 2026-10-09, executed AND funded (locked) ===
+   (written as confirm-term writes it — leases.pending with application_id, executed record, paid move-in charge —
+    the real confirmTermService needs the whole application chain and is exercised by tour_application_lease.e2e.js)
+
+── S3  (as_of 2026-09-19)
+   101  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=turnover_required(turnover_in_progress)  from=2026-10-03/expected  ready=turning/turnover_in_progress  fc=locked
+   102  rr=needs_review/occupied_terms_not_established  basis=established/recorded_possession  ev=uncorroborated  poss=delivered  → avail=not_ready(possession_not_returned)  from=null/incomplete  ready=unknown/none  fc=none
+   103  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=unknown/none  fc=none
+   104  rr=null/unresolved  basis=not_established/null  ev=inconclusive  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/none  fc=none
+   105  rr=needs_review/unresolved  basis=established/recorded_possession  ev=inconclusive  poss=delivered  → avail=not_ready(possession_not_returned)  from=null/incomplete  ready=unknown/none  fc=none
+   rent roll tally: {"occupied":2,"activation_pending":0,"open":0,"needs_review":2,"not_established":1,"unclassified":0,"established":4,"total":5,"occupied_contractual":0,"occupied_terms_not_established":2,"occupied_state_unknown":0}
+  HOLD   Leasing → Rent Roll: the future commitment rides on the same dated position   [fc=locked]
+  BREAK  Availability: position now committed to a future resident (never offered)   [turnover_required]
+  HOLD   Leasing → Maintenance: Turn Priority AUTOMATICALLY carries the incoming commitment and its deadline   [committed_start 2026-10-09]
+  HOLD   Maintenance's own move-in reader sees the same lease   [{"lease_id":"d5f5d2d4-5c48-4dff-a1ca-712f1db3b3f9","space_id":"6e2c1f26-cafe-458c-9e63-efedebc538c6","space_label":"(whole unit)","move_in_date":"2026-10-09","days_remaining":20,"commitment_state":"locked","proof_basis":"native_verified"}]
+  HOLD   Control B: a second prospect asking inside the committed interval → refused   [{"ok":false,"offerable":false,"code":"application_term_not_free","state":"turnover_required","from":"2026-10-03"}]
+  note   interval read for 101 over the second prospect's dates   [term_blocked]
+
+=== S4  Initial walk on 101: vacant, SEVERE, long-lead HVAC finding (turn will slip) ===
+  HOLD   Leasing → Maintenance: severe triage on a committed unit raises the PROTECT-MOVE-IN decision for a manager   [Protect the next move-in — unit 101, 2026-10-09 (20 days)]
+
+── S4  (as_of 2026-09-19)
+   101  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=turnover_required(turnover_in_progress)  from=2026-10-03/expected  ready=turning/turnover_in_progress  fc=locked
+   102  rr=needs_review/occupied_terms_not_established  basis=established/recorded_possession  ev=uncorroborated  poss=delivered  → avail=not_ready(possession_not_returned)  from=null/incomplete  ready=unknown/none  fc=none
+   103  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=unknown/none  fc=none
+   104  rr=null/unresolved  basis=not_established/null  ev=inconclusive  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/none  fc=none
+   105  rr=needs_review/unresolved  basis=established/recorded_possession  ev=inconclusive  poss=delivered  → avail=not_ready(possession_not_returned)  from=null/incomplete  ready=unknown/none  fc=none
+   rent roll tally: {"occupied":2,"activation_pending":0,"open":0,"needs_review":2,"not_established":1,"unclassified":0,"established":4,"total":5,"occupied_contractual":0,"occupied_terms_not_established":2,"occupied_state_unknown":0}
+  BREAK  Maintenance → Leasing: the expected ready date should move (or lose confidence) after a severe long-lead finding   [still from=2026-10-03/expected reason=turnover_in_progress]
+  note   turnovers.ready_date after severe triage   [{"status":"in_progress","ready_date":"2026-10-03T00:00:00.000Z"}]
+
+=== S4b Control C on 102: turn opened (expected 2026-10-03), prospect asks 2026-10-09, THEN the walk finds a long-lead problem ===
+  HOLD   102 offerable for 2026-10-09 before the walk   [{"ok":true,"offerable":true,"code":null,"state":"turnover_required","from":"2026-10-03"}]
+  BREAK  Control C: after the turn visibly slips, leasing should NOT still be able to promise 2026-10-09 on the old date   [{"ok":true,"offerable":true,"code":null,"state":"turnover_required","from":"2026-10-03"} triage=turning/turnover_in_progress]
+  note   obligations raised for 102's slip (no committed move-in on it yet)   [protect_next_move_in=0 — nothing else signals leasing]
+
+=== S5  Work and readiness on 101: complete turn scope, final walk certifies READY ===
+  note   readiness gate before the final walk   [actionable]
+  note   certification   [outcome=ready closed_turnovers=1 next_move_in=2026-10-09]
+
+── S5  (as_of 2026-09-19)
+   101  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=successor_locked(committed_to_a_future_start_date)  from=null/incomplete  ready=ready/certification  fc=locked
+   102  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=turnover_required(turnover_in_progress)  from=2026-10-03/expected  ready=turning/turnover_in_progress  fc=none
+   103  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=unknown/none  fc=none
+   104  rr=null/unresolved  basis=not_established/null  ev=inconclusive  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/none  fc=none
+   105  rr=needs_review/unresolved  basis=established/recorded_possession  ev=inconclusive  poss=delivered  → avail=not_ready(possession_not_returned)  from=null/incomplete  ready=unknown/none  fc=none
+   rent roll tally: {"occupied":3,"activation_pending":0,"open":0,"needs_review":1,"not_established":1,"unclassified":0,"established":4,"total":5,"occupied_contractual":0,"occupied_terms_not_established":3,"occupied_state_unknown":0}
+  HOLD   Work → Readiness → Availability: certification closes the physical turn and the readiness axis reads certified   [ready/certification]
+  HOLD   The turn leaves Turn Priority automatically   [gone]
+  HOLD   Control D: physically ready but contractually committed → still not offered to anyone else   [successor_locked]
+  HOLD   Control D (application authority agrees)   [{"ok":false,"offerable":false,"code":"not_offerable","state":"successor_locked","from":null}]
+  note   move-in delivery obligation (unit_ready gate) for the incoming lease   [n=0 — in production confirm-term opens it; certification does not feed its unit_ready input (source: readiness_service.js has no delivery call)]
+
+=== S5b Legacy door on 102: POST /turnovers/:id/ready with the shared operator key, no certification ===
+  note   satisfy moveout_photos   [HTTP 200]
+  note   satisfy deposit_review   [HTTP 200]
+  note   legacy ready   [HTTP 200 status=ready]
+
+── S5b  (as_of 2026-09-19)
+   101  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=successor_locked(committed_to_a_future_start_date)  from=null/incomplete  ready=ready/certification  fc=locked
+   102  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=not_ready/initial_triage  fc=none
+   103  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=unknown/none  fc=none
+   104  rr=null/unresolved  basis=not_established/null  ev=inconclusive  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/none  fc=none
+   105  rr=needs_review/unresolved  basis=established/recorded_possession  ev=inconclusive  poss=delivered  → avail=not_ready(possession_not_returned)  from=null/incomplete  ready=unknown/none  fc=none
+   rent roll tally: {"occupied":3,"activation_pending":0,"open":0,"needs_review":1,"not_established":1,"unclassified":0,"established":4,"total":5,"occupied_contractual":0,"occupied_terms_not_established":3,"occupied_state_unknown":0}
+  BREAK  A second readiness writer should not exist: the legacy route closed the turn with zero certifications   [HTTP 200 certifications=0]
+  BREAK  After a governed move-out and a closed turn, 102 should be OFFERABLE (or honestly blocked on readiness), not 'occupied' from a stale opening claim   [occupied/opening_claim_occupied_uncorroborated basis=established/opening_claim_occupied ev=uncorroborated]
+
+=== S5c 105 (lease-only basis, possession recorded, NO opening claim): governed move-out, turn closed ===
+  note   105 move-out   [Effective move_out recorded (verified prior possession).]
+  HOLD   105 during the turn: turnover_required with a governed date   [turnover_required basis=not_established/unit_occupancy_status_only]
+  note   105 legacy ready   [HTTP 200]
+
+── S5c  (as_of 2026-09-19)
+   101  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=successor_locked(committed_to_a_future_start_date)  from=null/incomplete  ready=ready/certification  fc=locked
+   102  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=not_ready/initial_triage  fc=none
+   103  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=unknown/none  fc=none
+   104  rr=null/unresolved  basis=not_established/null  ev=inconclusive  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/none  fc=none
+   105  rr=null/unresolved  basis=not_established/unit_occupancy_status_only  ev=confirmed  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/walk_assigned_not_done  fc=none
+   rent roll tally: {"occupied":3,"activation_pending":0,"open":0,"needs_review":0,"not_established":2,"unclassified":0,"established":3,"total":5,"occupied_contractual":0,"occupied_terms_not_established":3,"occupied_state_unknown":0}
+  BREAK  After a governed move-out (possession end RECORDED) and a closed turn, 105 should be offerable or honestly readiness-blocked, not 'occupancy unknown'   [occupancy_unknown/no_established_occupancy_basis basis=not_established/unit_occupancy_status_only rr=null]
+  note   what Spine DOES hold for 105   [last_possession_end=undefined turn={"status":"ready","has_outgoing":true}]
+
+=== S6  Move-in. The dated read at 2026-10-09, then the clock is moved so the real activation writer can run ===
+
+── S6 dated read at lease start  (as_of 2026-10-09)
+   101  rr=activation_pending/activation_pending  basis=established/commenced_lease_pending_activation  ev=uncorroborated  poss=pending  → avail=activation_pending(lease_commenced_awaiting_move_in_funds)  from=null/incomplete  ready=ready/certification  fc=none
+   102  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=not_ready/initial_triage  fc=none
+   103  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=unknown/none  fc=none
+   104  rr=null/unresolved  basis=not_established/null  ev=inconclusive  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/none  fc=none
+   105  rr=null/unresolved  basis=not_established/unit_occupancy_status_only  ev=confirmed  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/walk_assigned_not_done  fc=none
+   rent roll tally: {"occupied":2,"activation_pending":1,"open":0,"needs_review":0,"not_established":2,"unclassified":0,"established":3,"total":5,"occupied_contractual":0,"occupied_terms_not_established":2,"occupied_state_unknown":0}
+  HOLD   Move-in → Rent Roll (dated): at the start date the committed lease reads activation_pending, not open and not occupied   [activation_pending/activation_pending]
+
+── S6 today, lease commenced, funds cleared, not yet activated  (as_of 2026-09-19)
+   101  rr=activation_pending/activation_pending  basis=established/commenced_lease_pending_activation  ev=uncorroborated  poss=pending  → avail=activation_pending(lease_commenced_awaiting_move_in_funds)  from=null/incomplete  ready=ready/certification  fc=none
+   102  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=not_ready/initial_triage  fc=none
+   103  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=unknown/none  fc=none
+   104  rr=null/unresolved  basis=not_established/null  ev=inconclusive  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/none  fc=none
+   105  rr=null/unresolved  basis=not_established/unit_occupancy_status_only  ev=confirmed  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/walk_assigned_not_done  fc=none
+   rent roll tally: {"occupied":2,"activation_pending":1,"open":0,"needs_review":0,"not_established":2,"unclassified":0,"established":3,"total":5,"occupied_contractual":0,"occupied_terms_not_established":2,"occupied_state_unknown":0}
+  HOLD   Before activation: activation_pending on the rent roll AND on availability (same fact, two readers)   [activation_pending / activation_pending]
+  note   activation   [activated=true funds=cleared]
+
+── S6 after activation  (as_of 2026-09-19)
+   101  rr=occupied/contractually_occupied  basis=established/operative_lease  ev=confirmed  poss=pending  → avail=occupied(spanning_lease)  from=null/incomplete  ready=ready/certification  fc=none
+   102  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=not_ready/initial_triage  fc=none
+   103  rr=occupied/occupied_terms_not_established  basis=established/opening_claim_occupied  ev=uncorroborated  poss=pending  → avail=occupied(opening_claim_occupied_uncorroborated)  from=null/incomplete  ready=unknown/none  fc=none
+   104  rr=null/unresolved  basis=not_established/null  ev=inconclusive  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/none  fc=none
+   105  rr=null/unresolved  basis=not_established/unit_occupancy_status_only  ev=confirmed  poss=pending  → avail=occupancy_unknown(no_established_occupancy_basis)  from=null/incomplete  ready=unknown/walk_assigned_not_done  fc=none
+   rent roll tally: {"occupied":3,"activation_pending":0,"open":0,"needs_review":0,"not_established":2,"unclassified":0,"established":3,"total":5,"occupied_contractual":1,"occupied_terms_not_established":2,"occupied_state_unknown":0}
+  HOLD   Move-in → Rent Roll: the incoming commitment IS the next current tenancy — no reclassification step   [occupied/contractually_occupied]
+  HOLD   Availability agrees (occupied by a spanning lease)   [occupied]
+  note   possession after activation   [pending — keys are a separate governed handoff, by design]
+
+=== SUMMARY  holds=23  breaks=8  property=d5da3fa0-ceb2-472f-8aad-a37f12519b3e ===
