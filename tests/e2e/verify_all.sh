@@ -486,6 +486,7 @@ else
   step "required work target" node tests/proofs/triage_work_scope.db.js
   step "turn expected date stays on its exact home" node tests/proofs/availability_turn_date_scope.db.js
   step "when a turn slips, leasing sees it" node tests/proofs/turn_slip_visible_to_leasing.db.js
+  step "one readiness truth feeds every gate" node tests/proofs/readiness_one_truth.db.js
   step "legacy decision writes closed" node tests/e2e/legacy_decision_writes_disabled.e2e.js
   step "greenery staff onboarding" node tests/proofs/greenery_staff_onboarding.db.js
   step "source-to-home identity review and Greenery inventory contract" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/source_home_identity_review.db.js

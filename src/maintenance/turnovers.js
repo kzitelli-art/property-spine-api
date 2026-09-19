@@ -167,6 +167,32 @@ module.exports = function turnovers(deps) {
         return res.status(409).json({ error: "turnover is already ready" });
       }
 
+      // ── THE ABSENCE OF OPEN WORK IS NOT READINESS (row 153) ──────────
+      //  This door used to close a turn on move-out photos and a deposit
+      //  review alone — administrative proof — so a unit nobody had walked
+      //  read turn-complete and fell through to marketable. The ONLY thing
+      //  that may make a unit physically ready is a live certification a
+      //  named human signed (readiness_service.js), and a certified walk
+      //  closes the turn on its own. So this route may only confirm what a
+      //  certification already established; without one it refuses.
+      //  RETIREMENT CONDITION: delete this route when nothing outside the
+      //  readiness door needs to mark a turn ready. Nothing in the app or
+      //  the proofs calls it today.
+      const cert = turnover.unit_id ? (await client.query(
+        `select c.id from unit_readiness_certifications c
+          where c.unit_id=$1 and c.state='ready'
+            and not exists (select 1 from unit_readiness_certifications s where s.supersedes_id = c.id)
+          limit 1`, [turnover.unit_id])).rows[0] : null;
+      if (!cert) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "READINESS_NOT_CERTIFIED",
+          receipt: "This turn cannot be marked ready: no authorized person has certified the unit physically ready. "
+            + "Record the final readiness walk; a certified walk closes the turn on its own.",
+          hint: "POST /operator/readiness/units/:unitId/walk with outcome 'ready'",
+        });
+      }
+
       // find + complete the obligation through the SHARED helper. The helper
       // enforces the proof gate: if moveout_photos/deposit_review are still
       // outstanding, it throws INPUTS_OUTSTANDING and we refuse — you can't

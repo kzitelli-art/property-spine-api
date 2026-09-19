@@ -70,7 +70,13 @@ async function closeActiveTurnoversForReadiness(db, { property_id, unit_id, read
 }
 
 function makeReadinessService(deps) {
-  const { spawnObligationFromEvent, workAcceptanceService } = deps || {};
+  //  deliveryHelper is OPTIONAL so existing constructors keep working; when
+  //  present (server.js passes the ONE instance movein.js uses), a `ready`
+  //  certification satisfies the incoming lease's `unit_ready` delivery
+  //  input, so the key handoff reads the same readiness the turn queue and
+  //  availability read (row 153). Without it, nothing is fed and nothing
+  //  is claimed.
+  const { spawnObligationFromEvent, workAcceptanceService, deliveryHelper = null } = deps || {};
   if (typeof spawnObligationFromEvent !== "function") {
     throw new Error("readiness_service requires spawnObligationFromEvent()");
   }
@@ -327,6 +333,32 @@ function makeReadinessService(deps) {
         closed_turnover_ids: closedTurnovers.map((t) => t.id),
       })])).rows[0];
 
+    // ── THE CERTIFICATION IS THE PROOF THE DELIVERY GATE WANTS ───────
+    //  Every open move-in delivery obligation for a lease on this unit's
+    //  spaces gets `unit_ready` satisfied by this certification. Not only
+    //  the locked next move-in: a pending, unfunded incoming lease has a
+    //  delivery obligation too, and the unit is ready for it just the same.
+    //  Keys, funds and the lease's own activation stay their own gates.
+    const deliveryInputs = [];
+    if (deliveryHelper && typeof deliveryHelper.satisfyDeliveryInput === "function") {
+      const incoming = (await client.query(
+        `select distinct o.related_id as lease_id
+           from obligations o
+           join leases l on l.id = o.related_id
+           join spaces s on s.id = l.space_id
+          where s.unit_id = $1 and o.related_type = 'lease'
+            and o.type = 'move_in_delivery' and o.status in ('open','in_progress')`,
+        [walk.unit_id])).rows;
+      for (const row of incoming) {
+        const fed = await deliveryHelper.satisfyDeliveryInput(client, {
+          lease_id: row.lease_id, input_key: "unit_ready", source: "readiness_certification",
+          source_obligation_id: null, actor: actor_user_id,
+          proof_extra: { certification_id: cert.id, walk_id: walk.id },
+        });
+        deliveryInputs.push({ lease_id: row.lease_id, satisfied: !!fed.satisfied, reason: fed.reason || null });
+      }
+    }
+
     // Close the final-walk obligation if one is open. A SUCCESSFUL
     // certification spawns nothing — it is quiet by design.
     await client.query(
@@ -338,6 +370,7 @@ function makeReadinessService(deps) {
     return {
       outcome: "ready", walk, certification: cert, event: ev,
       closed_turnovers: closedTurnovers,
+      delivery_inputs_satisfied: deliveryInputs,
       next_move_in: nextMoveIn,
       authority: auth,
       senior_accountable: senior,
