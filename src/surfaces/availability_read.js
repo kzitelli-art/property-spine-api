@@ -764,7 +764,23 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
   const inState = (s) => rows.filter((r) => r.marketing_state === s);
   const marketable = inState("marketable_now");
   const upcoming = inState("upcoming");
-  const withinHorizon = upcoming.filter((r) => r.within_horizon);
+  // EXPECTED WITHIN HORIZON — every row Spine can honestly stand behind a
+  // date for, inside the horizon, regardless of marketing_state. A row does
+  // not have to be 'upcoming' (on notice) to carry a governed expected ready
+  // date: 'turnover_required' rows carry one too (the active turn plan), and
+  // the earlier count — scoped to marketing_state 'upcoming' only — dropped
+  // those, showing "0 expected" above rows dated inside the horizon.
+  //
+  // availability_confidence 'expected' is the gate, not marketing_state:
+  // 'confirmed' is marketable_now (already counted separately) and
+  // 'incomplete' means Spine is NOT standing behind the date — a stated plan
+  // a schedule-controlling finding has since exceeded, a bare lease-end
+  // guess with no governed turn duration, or an unscheduled/unconfirmed
+  // readiness — so those never count here even when a date happens to be
+  // present and inside the horizon.
+  const withinHorizon = rows.filter(
+    (r) => r.availability_confidence === "expected" && r.within_horizon
+  );
 
   return {
     property_id, as_of: asOf, horizon_days, horizon_end: horizonEnd,
