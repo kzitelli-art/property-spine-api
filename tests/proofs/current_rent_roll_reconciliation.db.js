@@ -628,6 +628,70 @@ const LETTER = ["A", "B", "C"];
       ok("2026-09-19 ruling: a name-only source row links no Person (resident_not_linked), and says so",
         r.body.person_id === null && r.body.resident_linked === false && /Resident not linked/.test(r.body.receipt || ""),
         { person_id: r.body.person_id, linked: r.body.resident_linked, receipt: r.body.receipt });
+
+      //  ── ROW 156 IS "DONE AS A SCREEN, NOT A DOMAIN" UNTIL ASK SPINE CAN
+      //  ANSWER IT TOO (§40.2). The rent roll (`currentRentRoll`) has
+      //  reported `exceptions.resident_not_linked` and `resident_claim`
+      //  since the ruling above; this block proves the SAME fact, from the
+      //  SAME canonical read, now reaches the Ask Spine standing projection
+      //  — one lease with no tenant (`datedLeaseId`, just created) and its
+      //  promoted claim carrying the source's name in
+      //  `normalized_json.tenant_name`.
+      //  Inline, not a nested section() — this stays labelled "H" in the
+      //  receipt; section() reassigns the shared `current` label for
+      //  everything that runs after it returns, which would mislabel the
+      //  rest of H's own assertions below.
+      await (async () => {
+        const ask = require("../../src/agent/ask_spine_answer.js");
+        const { currentRentRoll } = require("../../src/surfaces/rent_roll_canonical.js");
+        const claim = await one(`select normalized_json from proposed_records where id=$1`, [dated.id]);
+        ok("the promoted claim carries the source's name as normalized_json.tenant_name",
+          claim.normalized_json && claim.normalized_json.tenant_name === rows[0].Resident,
+          claim.normalized_json);
+
+        const screenRR = await currentRentRoll(pool, { property_id: F.other, as_of: AS_OF_NOW });
+        const standingNow = await readers.standing.readTenancyStanding(pool, { property_id: F.other, as_of: AS_OF_NOW });
+        ok("the screen (rent_roll_canonical) counts the just-created unlinked lease",
+          screenRR.exceptions.resident_not_linked >= 1, screenRR.exceptions);
+        ok("Ask Spine's standing projection carries exceptions.resident_not_linked — same number, no second query",
+          standingNow.exceptions && standingNow.exceptions.resident_not_linked === screenRR.exceptions.resident_not_linked,
+          { standing: standingNow.exceptions, screen: screenRR.exceptions });
+        const claimRow = (standingNow.resident_claims_unlinked || []).find((c) => c.unit === "Apt 1");
+        ok("the claimed name for the unlinked row is carried, marked not linked, never as `resident`",
+          !!claimRow && claimRow.name === rows[0].Resident && claimRow.linked === false,
+          { claimRow, wanted: rows[0].Resident });
+        ok("no array here is a second 160-row payload — it stays bounded",
+          Array.isArray(standingNow.resident_claims_unlinked) && standingNow.resident_claims_unlinked.length <= 20);
+
+        console.log("        Ask Spine standing exceptions:", JSON.stringify(standingNow.exceptions),
+          "· claims:", JSON.stringify(standingNow.resident_claims_unlinked));
+
+        //  ENTITLED: leasing/management reach the claim, by name.
+        const entitledFacts = await ask.gatherFacts(pool, { property_id: F.other, allowed_modules: ["leasing"],
+          subject: "tenancy", question: "who is in Apt 1 and how many residents are not linked" });
+        ok("an entitled reader gets the count and the claimed name",
+          entitledFacts.tenancy && entitledFacts.tenancy.exceptions
+          && entitledFacts.tenancy.exceptions.resident_not_linked >= 1
+          && entitledFacts.tenancy.resident_claims_unlinked.some((c) => c.name === rows[0].Resident),
+          entitledFacts.tenancy && { exceptions: entitledFacts.tenancy.exceptions, claims: entitledFacts.tenancy.resident_claims_unlinked });
+        ok("no record id crossed with it (§40.8)",
+          !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(JSON.stringify(entitledFacts.tenancy)));
+
+        //  UNENTITLED: §40.8 — entitlement precedes intelligence. Refused
+        //  before any fact is gathered, so the name never has a chance to
+        //  reach a wording layer at all. The stub THROWS if the model is
+        //  ever called, so a refusal that quietly still asked would fail
+        //  loudly rather than merely looking withheld.
+        const neverCalled = { messages: { create: async () => {
+          throw new Error("the model must never be reached for an unauthorized tenancy question"); } } };
+        const refused = await ask.answer(pool, neverCalled, { property_id: F.other,
+          allowed_modules: ["asset_management"], question: "who is in Apt 1 and how many residents are not linked" });
+        ok("an asset-management-only session is not_authorized for a resident-linkage question",
+          refused.outcome === "not_authorized", refused);
+        ok("...and the claimed name appears NOWHERE in what came back",
+          !JSON.stringify(refused).includes(rows[0].Resident), refused);
+      })();
+
       //  The recognition scenario below needs a Person to recognise. Under the
       //  ruling one exists only once the resident is reached on a channel that
       //  is a continuity handle, so identity is established here the way it
