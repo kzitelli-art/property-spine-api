@@ -483,6 +483,10 @@ app.use("/", turnoversModule({ pool, satisfyObligation, completeObligation, turn
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, deliveryHelper, recordEffectivePossession }));
 app.use("/", noticeModule({ pool }));   // Availability Slice A — notice writes unit_events only; no obligation spawns at notice
 app.use("/", require("./src/tenancy/space_position_routes")({ pool }));
+//  LINK RESIDENT — the one operator door that turns row 156's unlinked
+//  resident claim into a durable Person, through person_ingress and nowhere
+//  else. Staff-session gated, management module, property from the session.
+app.use("/", require("./src/tenancy/link_resident")({ pool }));
 app.use("/", onboardingModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 // ── ONBOARDING FUNNEL (revenue/roles/NOI-goal; honest mode; only needs pool) ──
 app.use("/api", onboardingFunnel({ pool }));

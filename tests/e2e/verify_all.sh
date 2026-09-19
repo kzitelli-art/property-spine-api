@@ -374,6 +374,7 @@ step "canonical onboarding snapshot" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL
 #  commit before it); the onboarding parent above predates the preview seam
 #  this proof drives, so only the successor runs here.
 step "person continuity handle: no phone or email, no Person" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/person_continuity_handle.db.js
+step "link resident: the door that links an unlinked resident" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/link_resident.db.js
 step "governing lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/governing_lease_execution.db.js
 step "canonical lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/spine_lease_execution.db.js
 step "lease guarantor signing"   env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/lease_guarantor_signing.db.js
