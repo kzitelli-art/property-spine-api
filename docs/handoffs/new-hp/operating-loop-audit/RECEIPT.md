@@ -250,3 +250,29 @@ now runs to 119/127 — the 8 failures assert a certified unit becomes
 `marketable_now`, which the row-61 occupancy-basis guard deliberately
 stopped. It is superseded by `availability_readiness_axis.db.js` and stays
 unregistered.
+
+## Addendum, 2026-09-19 — the app pin converged (row 154)
+
+The three app rungs parked by row 139 are live in `verify_all.sh` again.
+One app commit carries both lineages (`claude/app-convergence-20260919`
+@ `475b3e1`: pin `2e8199a` merged with the convergence line `2bbdb63`, six
+`index.html` hunks resolved by hand, app suite 77 harnesses · 2626 · 0 red),
+and `tests/e2e/app_pin.txt` now names it.
+
+The browser rung earned its place: on the merged app the signed-in desk
+showed the server's contractually-occupied **94** (not 95), but the pin's
+count cell had dropped the §19 sub-line naming the **1** position whose
+terms are not established. The number had converged; the disclosure had
+not. Fixed in the panel's canonical branch, from the same canonical read;
+the proof reads either label, falsified 13/14 → 14/14.
+
+Re-proofs on the merged app, owned runtime: coupled rent-roll 14/14 + 6/6,
+`retained_inquiry_dom`, `person_identity_ingress` 40/40,
+`forward_semantics_are_the_servers` 34/34, `forward_occupancy_unresolved`
+24/24, `operating_truth_pill` 24/24, `person_identity_signed_in` 14/14,
+`forward_convergence_signed_in` 14/14.
+
+Recorded, not fixed: `canonical_onboarding_review.browser.js`'s `zero`
+phase (unregistered) expects `Current occupancy` with a percent on the
+signed-in desk; the pin lineage has rendered `Occupied in rent roll` as a
+count since app `44e0e42`. Pre-existing at the pin; not this merge's.

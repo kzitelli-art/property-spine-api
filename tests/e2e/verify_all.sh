@@ -179,50 +179,21 @@ step "property line identity and inbound doors" node tests/unit/property_line_id
 if app_rung_ready; then
   step "browser: retained inquiry is recoverable in the app (app $APP_PIN_SHORT)" \
     env CHROMIUM="${CHROMIUM:-}" node "$APP_ROOT/retained_inquiry_dom.test.js"
-  #  ── THREE RUNGS NOT REGISTERED HERE, AND EXACTLY WHY ───────────────
-  #  The Rent Roll x Person Spine convergence build (CURRENT_STATE
-  #  135-138) added three pure-function app rungs:
-  #
-  #      person_identity_ingress.test.js            40 assertions
-  #      forward_semantics_are_the_servers.test.js  34 assertions
-  #      forward_occupancy_unresolved.test.js       24 assertions
-  #
-  #  They were registered here and CI went red twice (runs 693, 694):
-  #  MODULE_NOT_FOUND, because a rung registered by the API must exist at
-  #  the DECLARED PIN, and the pin is not the app those proofs were
-  #  written against.
-  #
-  #  Measured, with the full app history fetched (a shallow clone makes
-  #  `git merge-base` return nothing and invites a much worse conclusion):
-  #  both app branches fork from app main c6769ba. The declared pin
-  #  2e8199a is 116 commits past main; the convergence app 2bbdb63 is 10
-  #  commits past main. Neither contains the other. The pinned index.html
-  #  contains none of psCanonicalForward, pcPersonRefusal,
-  #  openCanonicalPersonFromRelationship, _rrLeasingCycle or "Not
-  #  projectable", so these rungs cannot pass at the pin by construction.
-  #
-  #  Moving the pin to 2bbdb63 was tried and rejected: it drops ~45 proof
-  #  files that exist only on the pin's lineage, starting with the
-  #  retained_inquiry_dom rung registered immediately above. Trading 45
-  #  rungs for 3 is not a fix.
-  #
-  #  So the honest state is: the app lines must converge first. A trial
-  #  merge of 2bbdb63 onto 2e8199a conflicts in 6 hunks of index.html and
-  #  nowhere else, so it is tractable — but it is an app-integration
-  #  decision with its own browser re-proof, not a line in this file.
-  #
-  #  WHAT RE-REGISTERS THEM: one app commit that contains both lineages.
-  #  Move the pin to it and restore the three `step` lines below. Until
-  #  then these three rungs run in the app repo's own suite
-  #  (run_harnesses.sh: 39 harnesses, 1607 assertions, green), which is
-  #  where they are green today, and NOT in this one.
-  #
-  #  step "app: nothing unestablished opens a Person Card" \
-  #    node "$APP_ROOT/person_identity_ingress.test.js"
-  #  step "app: forward semantics belong to the server" \
-  #    node "$APP_ROOT/forward_semantics_are_the_servers.test.js"
-  #  step "app: unknown forward is not a percentage" \
-  #    node "$APP_ROOT/forward_occupancy_unresolved.test.js"
+  #  ── THREE PURE-FUNCTION APP RUNGS (CURRENT_STATE 135-138, 154) ──────
+  #  These were registered, went red twice at the old pin (runs 693, 694:
+  #  MODULE_NOT_FOUND — the pin did not contain the lineage they were
+  #  written against), and were parked until one app commit carried both
+  #  lineages. That commit is the pin now (app 475b3e1: pin 2e8199a merged
+  #  with the convergence line, six index.html hunks resolved, the app's
+  #  own suite green). A rung registered here MUST exist at the declared
+  #  pin; if the pin ever moves to a commit without these files, CI goes
+  #  red by name rather than skipping.
+  step "app: nothing unestablished opens a Person Card" \
+    node "$APP_ROOT/person_identity_ingress.test.js"
+  step "app: forward semantics belong to the server" \
+    node "$APP_ROOT/forward_semantics_are_the_servers.test.js"
+  step "app: unknown forward is not a percentage" \
+    node "$APP_ROOT/forward_occupancy_unresolved.test.js"
 else
   echo "── browser: retained inquiry          SKIPPED ($(app_rung_skip_reason))"
   SKIPPED="retained inquiry app proof"
