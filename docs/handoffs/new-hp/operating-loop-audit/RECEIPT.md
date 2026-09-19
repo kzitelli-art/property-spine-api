@@ -6,9 +6,16 @@ Greenery. **No production data, phone configuration or prospect communication
 was touched.** No product code was changed.
 
 ```
-API   73508c65  claude/rentroll-grain-refusal-20260918   (tree unchanged by this audit)
+API   73508c65  claude/rentroll-grain-refusal-20260918   (tree unchanged by the audit itself)
 proof docs/handoffs/new-hp/operating-loop-audit/loop_audit.db.js   → loop_audit.out
       23 seams HOLD · 8 BREAK   (a verdict, not an exit code)
+
+CLOSED the same night — see "The closure" at the end of this receipt:
+      34c47a17  row 151  a governed move-out is a vacancy fact          CI 711 green
+      31e6bb32  row 152  when a turn slips, leasing sees it               CI 712 green
+      e2d4e295  row 153  one readiness truth feeds every gate             CI 713 green
+      + the door-yields correction (below)
+      loop_audit_after_151_153.out   29 HOLD · 2 BREAK (both labelling notes)
 ```
 
 The question asked: *does Property Spine already have one connected operating
@@ -207,3 +214,39 @@ checklist stops being a second inspection.
 - One property shape (whole-unit apartments). Nothing here is Skyline-specific,
   and nothing here was run against Skyline or Greenery.
 - No browser rung. Every seam here is a service or HTTP seam.
+
+---
+
+## The closure
+
+Same fixture, same audit script, re-run on the tree after rows 151–153
+(`loop_audit_after_151_153.out`): **29 hold, 2 break**, and the two that
+remain are the labelling notes recorded above, not loop breaks — a turning
+position with a locked future lease is labelled `turnover_required` while
+still refusing every competing prospect, and a lease that merely expires
+with no move-out stays on its opening claim, by design.
+
+| Break | Closed by | What changed |
+|---|---|---|
+| 1 · vacated position dead-ends | row 151, `34c47a17` | the move-out door is a governed later fact for basis, tenancy, evidence and terms; vacancy still evaluated last |
+| 2 · turn slip invisible to leasing | row 152, `31e6bb32` | plan confidence follows the walk (`turn_scope_exceeds_plan`); the date can be re-stated with a reason through `POST /operator/units/:unitId/turn-target` |
+| 3 · three readiness truths | row 153, `e2d4e295` | legacy ready refuses without a certification; certification feeds `unit_ready` into the delivery gate |
+
+**One defect the closure itself introduced, found by this re-run and fixed
+before this receipt was written:** `movedOutByDoor` governed the evidence
+axis even when a stronger fact (a commenced pending lease, recorded
+possession, an unclassifiable spanning lease, a contest) had already
+answered the basis, so a vacated bed whose incoming lease had commenced
+crashed `rentRollExplain` on a current lease that was not there. The
+predicate now yields to those facts in every reader, the explanation no
+longer assumes a lease in its later-fact branch, and the case is pinned in
+`tests/proofs/vacated_position_basis.db.js` (21/21). CI runs 711–713 were
+green without it because no registered proof covered door + commenced
+lease; that gap is what the new case closes.
+
+Unregistered `tests/proofs/readiness_certification_proof.js` had stale
+relative requires from the test reorganisation; the paths are fixed, and it
+now runs to 119/127 — the 8 failures assert a certified unit becomes
+`marketable_now`, which the row-61 occupancy-basis guard deliberately
+stopped. It is superseded by `availability_readiness_axis.db.js` and stays
+unregistered.

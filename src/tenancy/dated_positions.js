@@ -75,6 +75,17 @@ const claimOf = claim;
 function movedOutByDoor(p) {
   const t = p._move_out_turnover || null;
   if (!t || !t.outgoing_lease_id) return null;
+  /*  A stronger fact about the position always wins over the door, in
+   *  EVERY reader that asks — the same facts positionBasis consults first.
+   *  Found by the loop audit's move-in step: a vacated bed whose incoming
+   *  lease had COMMENCED read basis `commenced_lease_pending_activation`
+   *  while evidenceState still said the door governed, and the rent-roll
+   *  explanation then assumed a current lease that was not there. One
+   *  predicate, one answer.                                             */
+  if (p.conflict_state === "conflicted") return null;
+  if (p.current_lease_position || p.activation_pending_lease_position) return null;
+  if ((p.other_spanning_lease_positions || []).length) return null;
+  if (p.current_possession && p.current_possession.since) return null;
   if (claim(p._opening_space_claim) === "unreconciled") return null;
   const src = p._opening_claim_source || null;
   const claimAsOf = src && src.opening_position_as_of ? String(src.opening_position_as_of) : null;
@@ -513,7 +524,7 @@ function rentRollExplain(p, opts = {}) {
       conflicting_refs: [],
     };
   }
-  if (p.evidence_state === "governed_by_later_fact") {
+  if (p.evidence_state === "governed_by_later_fact" && cur) {
     return {
       code: REASON.POST_BASELINE_OPERATIVE_LEASE_GOVERNS_DATE,
       sentence: `The opening position${atBase} recorded this bed vacant, and that remains true ` +

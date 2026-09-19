@@ -241,6 +241,19 @@ const D = (n) => ymd(Date.now() + n * DAY);
         h.bucket === "open" && h.basis_type === "turnover_recorded_move_out", line(h));
     }
 
+    console.log("\n== the door yields to a stronger fact: an incoming lease that has COMMENCED ==");
+    //  Found by the loop audit after row 151 shipped: door + commenced pending
+    //  lease crashed the rent-roll explanation. The read must not throw, and
+    //  the commenced lease — not the door — must answer.
+    L["201-next"] = (await one(`insert into leases(property_id,space_id,tenant_ids,rent,start_date,end_date,lease_status)
+      values($1,$2,$3,1200,$4,$5,'pending') returning id`, [P, u201.spaces[0], [person], D(0), D(365)])).id;
+    let commenced = null, threw = null;
+    try { commenced = (await read(P))[u201.spaces[0]]; } catch (e) { threw = e.message; }
+    ok("201 with a commenced incoming lease: the read does not throw", !threw, threw || "");
+    ok("201: the commenced lease answers, not the door",
+      commenced && commenced.bucket === "activation_pending" && commenced.basis_type === "commenced_lease_pending_activation", commenced ? line(commenced) : "");
+    await pool.query("update leases set lease_status='cancelled' where id=$1", [L["201-next"]]);
+
     console.log("\n== a NEWER opening claim wins over an older door ==");
     const B = await property(tag + "-newer");
     const u301 = await unit(B.id, "301");
