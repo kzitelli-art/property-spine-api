@@ -219,6 +219,43 @@ function sourceDate(grid, beforeIndex) {
   return found.size ? [...found][0] : null;
 }
 
+
+/*  ── THE REPORT'S OWN STATEMENT OF HOW IT WAS ARRANGED ──────────────
+ *  Yardi prints "Summarize By = Unit | Room | Bed" in the header block.
+ *  That is a REPORT PARAMETER, never the property's leasing grain — a
+ *  by-the-bed building emits a by-unit export perfectly happily, and
+ *  nothing about the basis may be inferred from it (see
+ *  tenancy/leasing_grain.js).
+ *
+ *  What it IS good for is recognising the wrong export. A by-unit
+ *  arrangement of a building that has rooms or beds emits THREE row
+ *  levels for the same physical bed — a unit subtotal carrying full
+ *  identity, a room row, and a bed row on vacancies — so market rent
+ *  appears two or three times and no row set corresponds to the
+ *  positions. The totals checksum catches it, but as a bed-count
+ *  mismatch, which is a confusing way to tell someone they exported the
+ *  wrong report. This says the actual thing, and names the one-dropdown
+ *  fix.  */
+function sourceSummarizeBy(grid, beforeIndex) {
+  for (let rowIndex = 0; rowIndex < beforeIndex; rowIndex += 1) {
+    for (const value of grid[rowIndex] || []) {
+      const match = text(value).match(/^summarize by\s*=\s*(.+)$/i);
+      if (match) return match[1].trim().toLowerCase();
+    }
+  }
+  return null;
+}
+
+/*  Does this layout name a position BELOW the unit?  Discriminating on
+ *  the columns, not on the property: a genuinely by-the-unit building's
+ *  export carries neither header, so `Summarize By = Unit` is correct
+ *  for it and must not be refused. Only a report that HAS rooms or beds
+ *  and was rolled up above them is wrong. */
+function namesSubUnitPositions(headers) {
+  return (headers || []).some((h) => ["room", "bed"].includes(
+    String(h == null ? "" : h).toLowerCase().replace(/[^a-z0-9]/g, "")));
+}
+
 function fieldIndex(headers, plan, field) {
   const header = plan && plan.mapped && plan.mapped[field];
   return header == null ? -1 : headers.indexOf(header);
@@ -286,8 +323,71 @@ function isTerminalNumericSubtotal(grid, index, candidate) {
   return true;
 }
 
+/*  ── THE SOURCE'S OWN STATED TOTALS ─────────────────────────────────
+ *  A Yardi rent roll ends with its own footer: "Total: 1325 - The
+ *  Greenery Apartments (crm1325)  105.00 ... 113,500.00  101,200.00 ...".
+ *  The adapter found that row only to STOP at it, and threw the numbers
+ *  away.
+ *
+ *  Those numbers are NOT an oracle about the building. They come out of
+ *  the same Yardi report as the detail rows, so agreement proves the
+ *  EXTRACTION, not the tenancy — a stale lease is stated identically in
+ *  both. What they are is the only independent check on our own parsing
+ *  that ships inside the file, and it is a strong one: a layout we read
+ *  wrongly almost never lands on the source's own totals by accident.
+ *
+ *  Kept as `source_declared_totals`, deliberately apart from anything
+ *  canonical, so nothing downstream can mistake a source assertion for
+ *  an established fact.  */
+function declaredTotalsFrom(row, headers, plan) {
+  const totals = {};
+  //  "Total Beds" is in KNOWN_UNUSED for DETAIL rows — each states 1.00 and
+  //  the bed IS the row, so mapping it would store the same fact twice. In
+  //  the FOOTER the same column states the property's bed count, which is
+  //  the most legible check there is: 105 stated, 105 read. Found by header
+  //  rather than through the plan, precisely because the plan ignores it.
+  const bedIndex = headers.findIndex(
+    (h) => ["totalbeds", "beds", "ofbeds"].includes(
+      String(h == null ? "" : h).toLowerCase().replace(/[^a-z0-9]/g, "")));
+  if (bedIndex >= 0) {
+    const raw = text(row[bedIndex]);
+    if (raw && numericSourceValue(raw)) {
+      const n = Number(raw.replace(/[()$,\s]/g, ""));
+      if (Number.isFinite(n) && n > 0) totals.bed_count = n;
+    }
+  }
+  for (const field of ["sqft", "market_rent", "actual_rent", "deposit", "other", "balance"]) {
+    const index = fieldIndex(headers, plan, field);
+    if (index < 0) continue;
+    const raw = text(row[index]);
+    if (!raw || !numericSourceValue(raw)) continue;
+    const negative = /^\(.*\)$/.test(raw);
+    const n = Number(raw.replace(/[()$,\s]/g, ""));
+    if (!Number.isFinite(n)) continue;
+    totals[field] = negative ? -n : n;
+  }
+  return Object.keys(totals).length ? totals : null;
+}
+
+/*  Either order: some exports print "Summary Groups" before the
+ *  "Total:" line and some after, so the whole tail is scanned rather
+ *  than assuming the footer is the row we stopped on. */
+function findDeclaredTotals(grid, from, candidate) {
+  for (let index = from; index < grid.length; index += 1) {
+    const row = grid[index] || [];
+    if (!isTotalFooter(row, candidate.headers, candidate.plan)) continue;
+    const totals = declaredTotalsFrom(row, candidate.headers, candidate.plan);
+    if (totals) return { totals, source_label: text(row[0]) };
+  }
+  return null;
+}
+
 function rowsFromCandidate(grid, firstRow, candidate) {
   const rows = [];
+  //  Where the table ended, so the tail can be scanned for the stated
+  //  totals. Returned beside the rows rather than hung off the array —
+  //  an array carrying a stray property is a trap for the next reader.
+  let stoppedAt;
   let section = "current";
   let sawData = false;
   let sawCurrentHeading = false;
@@ -317,6 +417,7 @@ function rowsFromCandidate(grid, firstRow, candidate) {
 
     if (text(source[0]).toLowerCase() === "summary groups" ||
         isTotalFooter(source, candidate.headers, candidate.plan)) {
+      stoppedAt = index;
       break;
     }
 
@@ -338,7 +439,7 @@ function rowsFromCandidate(grid, firstRow, candidate) {
     rows.push(row);
     sawData = true;
   }
-  return rows;
+  return { rows, stoppedAt: stoppedAt === undefined ? grid.length : stoppedAt };
 }
 
 function parseRentRollSource({ buffer, filename, mime_type: _mimeType = null } = {}) {
@@ -365,10 +466,32 @@ function parseRentRollSource({ buffer, filename, mime_type: _mimeType = null } =
   }
 
   const chosen = sheets[0];
-  const rows = rowsFromCandidate(chosen.grid, chosen.firstRow, chosen.candidate);
+  //  BEFORE reading a single row: is this even the right arrangement of
+  //  the report? Refusing here costs the operator one dropdown; accepting
+  //  costs them a rent roll whose every number is built from rows that do
+  //  not correspond to rentable positions.
+  const summarizeBy = sourceSummarizeBy(chosen.grid, chosen.candidate.headerStart);
+  if (summarizeBy === "unit" && namesSubUnitPositions(chosen.candidate.headers)) {
+    throw refusal("rent_roll_summarized_above_position",
+      "This rent roll was exported with Summarize By = Unit, but it carries Room and Bed " +
+      "columns — so its rows are unit subtotals stacked above the actual beds, and no row " +
+      "set corresponds to what is rentable. Re-run the report with Summarize By = Room " +
+      "(or Bed) so each rentable position is one row.",
+      { summarize_by: summarizeBy });
+  }
+
+  const { rows, stoppedAt } = rowsFromCandidate(chosen.grid, chosen.firstRow, chosen.candidate);
+  const declared = findDeclaredTotals(chosen.grid, stoppedAt, chosen.candidate);
   return {
     rows,
+    //  A SOURCE ASSERTION, never a canonical total. Null when the layout
+    //  states none — absence is not a failed check, it is no check.
+    source_declared_totals: declared ? declared.totals : null,
+    source_declared_totals_label: declared ? declared.source_label : null,
     source_as_of_date: sourceDate(chosen.grid, chosen.candidate.headerStart),
+    //  Retained as a source assertion: useful on the review screen ("we
+    //  read your by-room export"), never consulted for the leasing grain.
+    source_summarize_by: summarizeBy,
     format,
     sheet_name: format === "csv" ? null : chosen.sheetName,
   };

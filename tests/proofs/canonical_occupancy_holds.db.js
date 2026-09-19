@@ -289,6 +289,93 @@ function holdExpectation(label) {
       from leases where property_id=$1 order by id`, [property.id]);
     ok("holds preserve native lease bytes", JSON.stringify(leaseAfter) === JSON.stringify(leaseSnapshot));
     ok("restored trusted rent matches baseline", restored.canonical.totals.contractual_rent_trusted === 1750);
+
+    /*  ── §40.4 · THE OCCUPIED SUB-TALLY, AND EXACTLY WHAT THIS FIXTURE
+     *  CAN AND CANNOT PIN (CURRENT_STATE 141, 143)
+     *
+     *  readTenancyStanding is the §40.6 projection Ask Spine reads. Its
+     *  `occupied` count sums `contractually_occupied` and
+     *  `occupied_terms_not_established`, so on The Greenery it sat at 95 at
+     *  every date while the split moved 94/1 -> 0/95: a true number under a
+     *  word that means something else. A screen commits to an altitude and a
+     *  person can open the row; A SENTENCE CANNOT BE OPENED, so the split
+     *  travels with the count rather than being left to a wording layer.
+     *
+     *  ⚠ WHAT THIS FIXTURE DOES **NOT** REPRODUCE, MEASURED NOT ASSUMED.
+     *  These beds carry NATIVE leases and no confirmed opening-import claim.
+     *  Read past every lease end this property reports
+     *
+     *      occupied 0 · open 0 · terms_not_established 0 · NOT_ESTABLISHED
+     *
+     *  — the positions leave BOTH buckets, because a lapsed native lease
+     *  leaves them with no basis at all. Greenery's 95 stay
+     *  occupied-without-terms because a confirmed import basis holds them
+     *  there. So an assertion here that "past every lease end nothing is
+     *  contractually occupied" would pass VACUOUSLY on an empty set and
+     *  claim to be testing the collapse while testing nothing. It was
+     *  written that way first and removed after measuring the fixture.
+     *
+     *  What this proof therefore pins is the part that is real here: the
+     *  sub-tally's ARITHMETIC and its agreement with the unknowns line, at
+     *  two dates, plus the fact that nothing becomes occupied-without-terms
+     *  without a basis. Reproducing the Greenery collapse needs a fixture
+     *  with an accepted opening claim and no lease; that is named in row 144
+     *  and is a slice of its own, not a line here.                        */
+    if (!parent) {
+      const LAPSED = "2028-01-01";   // every fixture lease ends 2027-12-31 or earlier
+      const atAsOf = baseline.directStanding;
+      const atLapsed = await readTenancyStanding(pool, { property_id: property.id, as_of: LAPSED });
+
+      for (const [when, st] of [["at as_of", atAsOf], ["past every lease end", atLapsed]]) {
+        const pos = st.position || {};
+        //  The sub-tally accounts for the coarse count EXACTLY — no position
+        //  lost, none double-counted, and every field a real number rather
+        //  than an absent key that would make a comparison pass by accident.
+        ok(`standing ${when}: the occupied sub-tally reconciles to the coarse count`,
+          typeof pos.occupied_contractual === "number"
+          && typeof pos.occupied_terms_not_established === "number"
+          && typeof pos.occupied_state_unknown === "number"
+          && pos.occupied_contractual + pos.occupied_terms_not_established
+             + pos.occupied_state_unknown === pos.occupied,
+          JSON.stringify(pos));
+        /*  The unknowns line and the count come from ONE tally, so they can
+         *  never disagree and then need reconciling by a person.
+         *
+         *  ⚠ THE `typeof` GUARD IS LOAD-BEARING. Written as a bare equality
+         *  this assertion passed VACUOUSLY against the pre-fix reader, where
+         *  BOTH sides are `undefined` and `undefined === undefined` is true —
+         *  green about two fields that did not exist. Caught by running the
+         *  falsification rather than trusting it, and it is the third time
+         *  this same shape appeared in one sitting.  */
+        const unknownsLine = (st.unknowns || {}).occupied_positions_with_contractual_terms_not_established;
+        ok(`standing ${when}: the unknowns line is the same number as the count`,
+          typeof unknownsLine === "number"
+          && typeof pos.occupied_terms_not_established === "number"
+          && unknownsLine === pos.occupied_terms_not_established,
+          JSON.stringify({ unknowns_line: unknownsLine, position: pos }));
+      }
+
+      //  The live case this fixture DOES carry: at a date its leases cover,
+      //  occupied positions are contractual and none is terms-unknown. This
+      //  is what makes the arithmetic above non-trivial — the fields are
+      //  populated from real positions, not all zero.
+      ok("standing: at as_of the occupied positions are contractual, and none is terms-unknown",
+        atAsOf.position.occupied_contractual > 0
+        && atAsOf.position.occupied_contractual === atAsOf.position.occupied
+        && atAsOf.position.occupied_terms_not_established === 0,
+        JSON.stringify(atAsOf.position));
+
+      //  AND NOTHING DRIFTS INTO occupied-without-terms WITHOUT A BASIS.
+      //  This is the assertion worth having on this fixture: a lapsed native
+      //  lease must not manufacture an occupied position Spine cannot stand
+      //  behind. It leaves the set instead, and says NOT_ESTABLISHED.
+      ok("standing: a lapsed native lease does not become occupied-without-terms",
+        atLapsed.position.occupied === 0
+        && atLapsed.position.occupied_terms_not_established === 0
+        && atLapsed.standing.truth_state === "NOT_ESTABLISHED",
+        JSON.stringify({ as_of: LAPSED, position: atLapsed.position, standing: atLapsed.standing }));
+    }
+
     if (!parent && failed === 0 && process.env.PROOF_HOLDS_BROWSER === '1') {
       if (!process.env.PROOF_OUTPUT_DIR) throw new Error('Owned private output is required for browser fixtures');
       for (const number of ['301', '302', '303', '304']) await hold(number);

@@ -384,8 +384,11 @@ app.use("/", require("./src/maintenance/work_acceptance")({
 //  The only path in the system that may establish `ready`, and only from an
 //  explicit human certification. Reopening prior work goes through
 //  workAcceptanceService so there is one canonical reopen path, not two.
+//  ONE delivery helper for the whole process: the certification feeds the
+//  same move-in delivery gate movein.js and the leasing routes read (row 153).
+const deliveryHelper = require("./src/comms/delivery")({ satisfyObligation, completeObligation }); // Slice D shared completion-feed
 const readinessService = require("./src/maintenance/readiness_service")
-  .makeReadinessService({ spawnObligationFromEvent, workAcceptanceService });
+  .makeReadinessService({ spawnObligationFromEvent, workAcceptanceService, deliveryHelper });
 app.use("/", require("./src/maintenance/readiness")({ pool, readinessService }));
 
 // ── AUTHENTICATED STAFF AGENT CAPTURE (BUILD 5) ──────────────────────────
@@ -477,10 +480,13 @@ app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, co
 app.use("/", orgchartModule({ pool }));
 app.use("/", roomOwnersModule({ pool }));
 app.use("/", turnoversModule({ pool, satisfyObligation, completeObligation, turnoverService }));
-const deliveryHelper = require("./src/comms/delivery")({ satisfyObligation, completeObligation }); // Slice D shared completion-feed
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, deliveryHelper, recordEffectivePossession }));
 app.use("/", noticeModule({ pool }));   // Availability Slice A — notice writes unit_events only; no obligation spawns at notice
 app.use("/", require("./src/tenancy/space_position_routes")({ pool }));
+//  LINK RESIDENT — the one operator door that turns row 156's unlinked
+//  resident claim into a durable Person, through person_ingress and nowhere
+//  else. Staff-session gated, management module, property from the session.
+app.use("/", require("./src/tenancy/link_resident")({ pool }));
 app.use("/", onboardingModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 // ── ONBOARDING FUNNEL (revenue/roles/NOI-goal; honest mode; only needs pool) ──
 app.use("/api", onboardingFunnel({ pool }));

@@ -56,10 +56,10 @@
       D12 an artifact belonging to another property is refused
 
    E  CONFIRMATION — canonical truth, and the lineage loop closed
-      E1  confirming writes a person and a lease
+      E1  confirming writes a lease; no person without a phone or email
       E2  the lease is stamped with the import batch
       E3  the evidence row now names the lease it produced
-      E4  …and the person it produced
+      E4  …and no person, because none was produced
       E5  a vacant row confirms WITHOUT inventing a lease
       E6  confirming twice is refused
       E7  people are never merged by name
@@ -457,8 +457,14 @@ function parseCsvLikeTheApp(text) {
     user_id: adminA, proposed_id: p101.id });
 
   const lease = (await pool.query(`select * from leases where id=$1`, [confirmed.lease_id])).rows[0];
-  ok("E1  confirming wrote a person and a lease",
-     Boolean(lease) && Array.isArray(lease.tenant_ids) && lease.tenant_ids.length === 1
+  //  2026-09-19: no durable continuity handle → no durable Person. The
+  //  fixture rows carry a name and no phone or email (the real parser maps
+  //  neither), so confirming establishes the LEASE and links no tenant; the
+  //  rent roll reads the row as resident_not_linked with the source's name
+  //  beside it. tests/proofs/person_continuity_handle.db.js is the proof.
+  ok("E1  confirming wrote a lease and, with no phone or email in the source, no person",
+     Boolean(lease) && Array.isArray(lease.tenant_ids) && lease.tenant_ids.length === 0
+     && confirmed.person_id === null && confirmed.resident_linked === false
      && Number(lease.rent) === 1450 && lease.lease_status === "active");
   ok("E2  the lease is stamped with the import batch", lease.import_batch_id === batch.id);
 
@@ -467,7 +473,7 @@ function parseCsvLikeTheApp(text) {
     [p101.import_source_row_id])).rows[0];
   ok("E3  the evidence row now names the lease it produced",
      evRow.produced_lease_id === confirmed.lease_id);
-  ok("E4  …and the person it produced", evRow.produced_person_id === confirmed.person_id);
+  ok("E4  …and no person, because none was produced", evRow.produced_person_id === null && confirmed.person_id === null);
 
   const vac = await activation.confirmProposal(pool, { user_id: adminA, proposed_id: p103.id });
   const vacRow = (await pool.query(

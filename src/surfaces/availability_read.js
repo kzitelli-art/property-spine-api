@@ -37,7 +37,7 @@
 const { datedPropertyPositions } = require("../tenancy/dated_positions");
 // ONE readiness definition, shared with the triage service. A second copy here
 // is exactly how a read and a write come to disagree.
-const { deriveReadiness } = require("../maintenance/unit_triage_service");
+const { deriveReadiness, scheduleAtRisk } = require("../maintenance/unit_triage_service");
 /*  THE ONE INVENTORY-HOLD PREDICATE. A bed an applicant has signed for is
  *  spoken for. It is read here rather than re-derived, so the matcher, the
  *  rent roll, the pricing packet and the application-target authority — all
@@ -309,9 +309,37 @@ function ymd(d) {
   return String(d).slice(0, 10);
 }
 
+/*  ── DOES THE TURN PLAN STILL HOLD? ──────────────────────────────────
+ *  The expected-ready date is stated once, by a manager at move-out, and
+ *  before row 152 nothing that maintenance later found could touch it: a
+ *  walk that confirmed a dead HVAC left the row saying `expected` on the
+ *  old date and the application authority kept promising it (row 150,
+ *  break 2). The date is still carried — it is what the manager said —
+ *  but it is only `expected` while no schedule-controlling finding
+ *  post-dates it. The test is the triage service's own (scheduleAtRisk),
+ *  and a governed re-statement of the date after the finding restores
+ *  `expected`, because the manager has now priced the finding in.     */
+function turnPlanExceeded(p) {
+  const t = p.triage, turn = p.turnover;
+  if (!t || !turn || t.certified_ready || t.pending_walk) return false;
+  if (!scheduleAtRisk({ confirmation: { initial_condition: t.initial_condition },
+                        findings: Array.from({ length: t.long_lead_count || 0 }, () => ({ long_lead_kind: "long_lead" })) })) return false;
+  const stated = turn.ready_date_stated_at ? new Date(turn.ready_date_stated_at).getTime() : 0;
+  const found = t.confirmed_at ? new Date(t.confirmed_at).getTime() : 0;
+  return found > stated;
+}
+
 function availableFrom(p, state, asOf) {
   if (state === "marketable_now") {
     return { available_from: asOf, availability_confidence: "confirmed", blocking_fact: null };
+  }
+  if ((state === "upcoming" || state === "turnover_required") && p.turnover && p.turnover.expected_ready_date
+      && turnPlanExceeded(p)) {
+    return {
+      available_from: ymd(p.turnover.expected_ready_date),
+      availability_confidence: "incomplete",
+      blocking_fact: "turn_scope_exceeds_plan",
+    };
   }
   if (state === "upcoming") {
     if (p.turnover && p.turnover.expected_ready_date) {
@@ -463,13 +491,16 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
           order by c.unit_id, c.created_at desc
        )
        select l.unit_id, l.vacancy_observation, l.initial_condition, l.inspection_completeness,
+              l.created_at as confirmed_at,
               coalesce(array_remove(array_agg(distinct w.work_text)
                        filter (where w.status = 'required'), null), '{}') as open_scope,
-              count(distinct f.id) filter (where f.withdrawn_at is null) as live_finding_count
+              count(distinct f.id) filter (where f.withdrawn_at is null) as live_finding_count,
+              -- the schedule-controlling findings, for scheduleAtRisk
+              count(distinct f.id) filter (where f.withdrawn_at is null and f.long_lead_kind is not null) as long_lead_count
          from latest l
          left join unit_triage_required_work w on w.confirmation_id = l.id
          left join unit_triage_findings     f on f.confirmation_id = l.id
-        group by l.unit_id, l.vacancy_observation, l.initial_condition, l.inspection_completeness`,
+        group by l.unit_id, l.vacancy_observation, l.initial_condition, l.inspection_completeness, l.created_at`,
       [property_id]
     );
     for (const r of tq.rows) {
@@ -481,7 +512,14 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
         findings: Array.from({ length: Number(r.live_finding_count) || 0 }, () => ({ withdrawn_at: null })),
         requiredWork: openScope.map((t) => ({ status: "required", work_text: t })),
       });
-      triageByUnit.set(String(r.unit_id), { ...d, open_scope: openScope, pending_walk: false });
+      triageByUnit.set(String(r.unit_id), {
+        ...d, open_scope: openScope, pending_walk: false,
+        //  Carried for the turn-plan test in availableFrom: what the walk
+        //  found, and WHEN it was confirmed relative to the plan date.
+        initial_condition: r.initial_condition,
+        long_lead_count: Number(r.long_lead_count) || 0,
+        confirmed_at: r.confirmed_at,
+      });
     }
 
     // ── WALK ASSIGNED BUT NOT DONE ───────────────────────────────────
@@ -579,7 +617,14 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
     `select distinct on (t.unit_id)
             t.unit_id, t.id as turnover_id, t.ready_date as expected_ready_date,
             t.outgoing_lease_id, l.end_date as outgoing_lease_end_date,
-            l.space_id as outgoing_space_id
+            l.space_id as outgoing_space_id,
+            -- WHEN the plan date was last stated: at move-out, or at the
+            -- latest governed re-statement (turnover_service.restateExpectedReady).
+            -- A finding confirmed AFTER this instant is one the plan did not
+            -- know about; one confirmed before it was already priced in.
+            greatest(t.created_at, coalesce((select max(e.occurred_at) from events e
+                where e.unit_id = t.unit_id and e.type = 'turn_ready_date_restated'
+                  and e.occurred_at >= t.created_at), t.created_at)) as ready_date_stated_at
        from turnovers t
        left join leases l on l.id = t.outgoing_lease_id and l.property_id = t.property_id
          and exists (select 1 from spaces ls where ls.id = l.space_id and ls.unit_id = t.unit_id)
@@ -637,6 +682,14 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
         expected_ready_date: ymd(withOps.turnover.expected_ready_date),
         outgoing_lease_id: withOps.turnover.outgoing_lease_id || null,
         outgoing_lease_end_date: ymd(withOps.turnover.outgoing_lease_end_date),
+        //  ISO text, never a Date: the served row and the in-process row
+        //  must be the same value (availability_turn_date_scope pins it).
+        ready_date_stated_at: withOps.turnover.ready_date_stated_at
+          ? new Date(withOps.turnover.ready_date_stated_at).toISOString() : null,
+        //  `holds` while nothing found after the date was stated controls
+        //  the schedule; `exceeded` otherwise. Says WHY the row above says
+        //  `incomplete` instead of leaving a reader to reconstruct it.
+        plan_state: turnPlanExceeded(withOps) ? "exceeded" : "holds",
       } : null,
       operating_use: withOps.operating_use,
 
@@ -711,7 +764,23 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
   const inState = (s) => rows.filter((r) => r.marketing_state === s);
   const marketable = inState("marketable_now");
   const upcoming = inState("upcoming");
-  const withinHorizon = upcoming.filter((r) => r.within_horizon);
+  // EXPECTED WITHIN HORIZON — every row Spine can honestly stand behind a
+  // date for, inside the horizon, regardless of marketing_state. A row does
+  // not have to be 'upcoming' (on notice) to carry a governed expected ready
+  // date: 'turnover_required' rows carry one too (the active turn plan), and
+  // the earlier count — scoped to marketing_state 'upcoming' only — dropped
+  // those, showing "0 expected" above rows dated inside the horizon.
+  //
+  // availability_confidence 'expected' is the gate, not marketing_state:
+  // 'confirmed' is marketable_now (already counted separately) and
+  // 'incomplete' means Spine is NOT standing behind the date — a stated plan
+  // a schedule-controlling finding has since exceeded, a bare lease-end
+  // guess with no governed turn duration, or an unscheduled/unconfirmed
+  // readiness — so those never count here even when a date happens to be
+  // present and inside the horizon.
+  const withinHorizon = rows.filter(
+    (r) => r.availability_confidence === "expected" && r.within_horizon
+  );
 
   return {
     property_id, as_of: asOf, horizon_days, horizon_end: horizonEnd,

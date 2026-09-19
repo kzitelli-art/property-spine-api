@@ -39,6 +39,9 @@ const { spacePosition, loadSpaceRows, loadPersonNames, openingBaselineAsOf } =
   require("./space_position");
 //  Same imported predicate as the loader — the attrs read must describe the
 //  same row set, or a retired unit contributes attributes to nothing.
+//  "Today" for a dated read is the BUILDING's day (migration 123), not the
+//  server's UTC calendar day. See shared/property_timezone.js.
+const { propertyOperatingToday } = require("../shared/property_timezone");
 const { NOT_RETIRED_SQL, retiredExclusion } = require("./inventory_retirement");
 //  The interval question is a CLASSIFICATION, so it lives with every other
 //  classification — pure, beside classifyPosition, sharing rangesOverlap and
@@ -51,6 +54,44 @@ const NON_REVENUE_CLAIMS = new Set(["model", "down"]);
 const claim = (v) => String(v || "").toLowerCase();
 //  Same normalisation, named so it reads clearly inside positionBasis.
 const claimOf = claim;
+
+/*  ── THE MOVE-OUT DOOR AS A LATER FACT ───────────────────────────────
+ *  A turnover that NAMES this position's outgoing lease is the governed
+ *  record that the resident left (turnover_service.openTurnover). The
+ *  classifier carries it only once it is a fact on the read date and the
+ *  lease it ended no longer governs (position_classifier._move_out_turnover).
+ *
+ *  It is a LATER fact, so it governs an OLDER accepted claim and yields to
+ *  a NEWER one: an opening position dated on or after the door was opened
+ *  is a fresher observation of the same bed, and wins. An unreconciled
+ *  claim is never overridden — a person still owes that reconciliation.
+ *
+ *  Found by the operating-loop audit (CURRENT_STATE row 150): without this,
+ *  a resident who left through Spine's own door left a bed that read
+ *  Occupied (stale opening claim) or occupancy unknown (lease-only basis)
+ *  forever, because the only fact that could establish vacancy was an
+ *  opening claim of `vacant`. Vacancy is still evaluated LAST; this simply
+ *  lets the door's record be one of the facts consulted.                */
+function movedOutByDoor(p) {
+  const t = p._move_out_turnover || null;
+  if (!t || !t.outgoing_lease_id) return null;
+  /*  A stronger fact about the position always wins over the door, in
+   *  EVERY reader that asks — the same facts positionBasis consults first.
+   *  Found by the loop audit's move-in step: a vacated bed whose incoming
+   *  lease had COMMENCED read basis `commenced_lease_pending_activation`
+   *  while evidenceState still said the door governed, and the rent-roll
+   *  explanation then assumed a current lease that was not there. One
+   *  predicate, one answer.                                             */
+  if (p.conflict_state === "conflicted") return null;
+  if (p.current_lease_position || p.activation_pending_lease_position) return null;
+  if ((p.other_spanning_lease_positions || []).length) return null;
+  if (p.current_possession && p.current_possession.since) return null;
+  if (claim(p._opening_space_claim) === "unreconciled") return null;
+  const src = p._opening_claim_source || null;
+  const claimAsOf = src && src.opening_position_as_of ? String(src.opening_position_as_of) : null;
+  if (claimAsOf && claimAsOf >= String(t.opened_on)) return null;
+  return t;
+}
 
 // A committed import batch is evidence. It is publishable operating truth
 // immediately only when it predates the activation lifecycle; once an
@@ -209,6 +250,16 @@ function positionBasis(p) {
   if (claim === "unreconciled") {
     return { state: "established", type: "opening_position_unreconciled", ref: openingRef };
   }
+  //  The governed move-out. Below every fact that can refute a vacancy
+  //  (a lease, a commenced lease, an unclassifiable lease, recorded
+  //  possession, an unreconciled claim) and above the opening claims it
+  //  post-dates. See movedOutByDoor for the ordering rule.
+  const door = movedOutByDoor(p);
+  if (door) {
+    return { state: "established", type: "turnover_recorded_move_out",
+      ref: { kind: "turnover", id: door.turnover_id, outgoing_lease_id: door.outgoing_lease_id,
+             opened_on: door.opened_on, turn_status: door.status } };
+  }
   if (claim === "occupied") {
     return { state: "established", type: "opening_claim_occupied", ref: openingRef };
   }
@@ -254,6 +305,9 @@ function tenancyState(p) {
    *  axis is the value most likely to be trusted by a future reader.  */
   if ((p.other_spanning_lease_positions || []).length) return "unresolved";
   if (claim(p._opening_space_claim) === "vacant") return "vacant";
+  //  The resident left through the move-out door and no later fact says
+  //  otherwise. Same ordering rule as positionBasis.
+  if (movedOutByDoor(p)) return "vacant";
   /*  ── ACCEPTED OCCUPANCY IS NOT "UNRESOLVED" ───────────────────────
    *  A position the operator explicitly accepted as occupied, with no
    *  lease on record, read `unresolved` on this axis — which to a lender
@@ -394,6 +448,7 @@ const REASON = Object.freeze({
   OPERATIVE_LEASE_SPANS_DATE: "OPERATIVE_LEASE_SPANS_DATE",
   COMMENCED_LEASE_NOT_ACTIVATED: "COMMENCED_LEASE_NOT_ACTIVATED",
   ESTABLISHED_VACANT_NO_LATER_BLOCKER: "ESTABLISHED_VACANT_NO_LATER_BLOCKER",
+  MOVE_OUT_RECORDED_NO_LATER_BLOCKER: "MOVE_OUT_RECORDED_NO_LATER_BLOCKER",
   NO_AUTHORITATIVE_BASIS: "NO_AUTHORITATIVE_BASIS",
 });
 
@@ -455,7 +510,21 @@ function rentRollExplain(p, opts = {}) {
       conflicting_refs: [],
     };
   }
-  if (p.evidence_state === "governed_by_later_fact") {
+  if (p.basis_type === "turnover_recorded_move_out") {
+    const d = (p.basis_ref || {});
+    return {
+      code: REASON.MOVE_OUT_RECORDED_NO_LATER_BLOCKER,
+      sentence: `Move-out recorded ${d.opened_on || "on an unstated date"} through the turnover door, ` +
+        `ending lease ${d.outgoing_lease_id}` +
+        (claim.value === "occupied" ? `; the opening position${atBase} recorded this bed occupied, and the ` +
+          `move-out is the later fact that governs${onDate}` : "") +
+        `. No operative lease spans${onDate} and no later fact contradicts the vacancy.`,
+      supporting_refs: [ref("turnover", d.id, { outgoing_lease_id: d.outgoing_lease_id, opened_on: d.opened_on }),
+        ...openingRefs].filter(Boolean),
+      conflicting_refs: [],
+    };
+  }
+  if (p.evidence_state === "governed_by_later_fact" && cur) {
     return {
       code: REASON.POST_BASELINE_OPERATIVE_LEASE_GOVERNS_DATE,
       sentence: `The opening position${atBase} recorded this bed vacant, and that remains true ` +
@@ -559,7 +628,41 @@ const NOT_ESTABLISHED_LABEL = "Occupancy Unconfirmed";
 function rentRollBuckets(positions) {
   const t = { occupied: 0, activation_pending: 0, open: 0, needs_review: 0,
               not_established: 0, unclassified: 0,
-              established: 0, total: positions.length };
+              established: 0, total: positions.length,
+              /*  ── `occupied` IS A COLLAPSING WORD, SO THE COLLAPSE IS COUNTED ──
+               *  CURRENT_STATE 134 and 138 recorded that /operator/rent-roll/units
+               *  "is not a dated read" because it reports occupied 95 / open 10 at
+               *  every as_of. The numbers were right; THE DIAGNOSIS WAS WRONG, and
+               *  wrong in the most ordinary way — a frozen number looks exactly
+               *  like a read that ignores its date.
+               *
+               *  It is dated. Measured on the governed Greenery establishment:
+               *
+               *      as_of        occupied  contractual  terms_not_established
+               *      2026-09-18      95         94                1
+               *      2027-02-01      95         85               10
+               *      2027-08-01      95          0               95
+               *
+               *  The bucket sits at 95 because THE TWO SUB-STATES ALWAYS SUM TO 95.
+               *  The split moves; the total does not.
+               *
+               *  That is worse than a stale read, not better: it is a TRUE number
+               *  under a word that means something else. At 2027-08-01 not one
+               *  position has established contractual terms and the read says
+               *  "occupied: 95" — a lender is told the building is full when Spine
+               *  cannot stand behind a single term on it. §40.5's truth wall, in
+               *  the rent roll's own vocabulary:
+               *
+               *      occupied  !=  contractually occupied
+               *
+               *  So the coarse count is left EXACTLY as it was — every existing
+               *  consumer and total is unchanged — and the distinction it collapses
+               *  is tallied beside it from `tenancy_state`, a field the canonical
+               *  position already carries. This is still a tally of a recorded
+               *  decision, not a second interpreter.  */
+              occupied_contractual: 0,
+              occupied_terms_not_established: 0,
+              occupied_state_unknown: 0 };
   for (const p of positions) {
     /*  TALLY THE DECISION, do not re-make it. A caller may hand us the
      *  canonical positions or a surface's projection of them; either way
@@ -579,6 +682,23 @@ function rentRollBuckets(positions) {
     if (b === "occupied" || b === "activation_pending"
         || b === "open" || b === "needs_review") t[b]++;
     else t.unclassified++;
+
+    /*  Only describes the occupied ones, and never promotes or demotes: the
+     *  bucket above already decided, and a row whose recorded bucket
+     *  disagrees with its own tenancy_state keeps the bucket.
+     *
+     *  A projection that dropped `tenancy_state` counts as UNKNOWN, never as
+     *  zero. This is the hazard the comment above already records — the Rent
+     *  Roll once handed this function projected rows with `basis_state`
+     *  dropped — and "0 lack terms" is a claim the data cannot support (§5).
+     *  `notice` and any state a later build introduces are unknown here too,
+     *  rather than quietly contractual.  */
+    if (b === "occupied") {
+      const ts = p.tenancy_state;
+      if (ts === "contractually_occupied") t.occupied_contractual++;
+      else if (ts === "occupied_terms_not_established") t.occupied_terms_not_established++;
+      else t.occupied_state_unknown++;
+    }
   }
   return t;
 }
@@ -613,7 +733,10 @@ function evidenceState(p) {
    *  accepted the occupancy. That is sufficient authority for the fact it
    *  established — someone occupies this bed — and no authority at all
    *  for terms it never established. See contractualTermsState.  */
-  if (!lease && c === "occupied") return "uncorroborated";
+  //  An accepted `occupied` claim that the move-out door has since ended is
+  //  a sequence, not an uncorroborated claim: the claim was true, and then
+  //  the resident left. The door is the later fact that governs.
+  if (!lease && c === "occupied") return movedOutByDoor(p) ? "governed_by_later_fact" : "uncorroborated";
 
   /*  ── A SEQUENCE IS NOT A CONTRADICTION ────────────────────────────
    *  A baseline that recorded this bed vacant on 31 July does not fight a
@@ -650,7 +773,7 @@ function evidenceState(p) {
  *  exists".  */
 function contractualTermsState(p) {
   if (p.current_lease_position) return "established";
-  if (claim(p._opening_space_claim) === "occupied") return "not_established";
+  if (claim(p._opening_space_claim) === "occupied" && !movedOutByDoor(p)) return "not_established";
   return "not_applicable";
 }
 
@@ -774,7 +897,18 @@ async function unattachedOpeningClaims(pool, baseline, rawPositions) {
 
 async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) {
   if (!property_id) throw new Error("datedPropertyPositions requires property_id");
-  const asOf = as_of || new Date().toISOString().slice(0, 10);
+  //  "TODAY" IS THE BUILDING'S DAY, NOT THE SERVER'S. This defaulted to
+  //  `new Date().toISOString().slice(0,10)` — the UTC calendar day — while
+  //  migration 123 had been recording each property's operating timezone
+  //  all along. UTC leads America/New_York by 4–5 hours, so from about 8pm
+  //  in Philadelphia the rent roll answered for TOMORROW: lease starts,
+  //  expirations, notice dates and the August 1 turnover all one day out.
+  //  An explicit as_of is untouched, and a property with no zone still gets
+  //  the UTC day — but the read now names which basis produced it.
+  const day = as_of
+    ? { date: as_of, basis: "explicit", timezone: null }
+    : await propertyOperatingToday(pool, property_id);
+  const asOf = day.date;
 
   const sp = await spacePosition(pool, { property_id, as_of: asOf });
 
@@ -885,6 +1019,12 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
         rent: lease.rent == null ? null : Number(lease.rent),
       } : null,
       resident: resident ? { person_id: resident.person_id, name: resident.name || null } : null,
+      //  No linked Person, but the source named someone: carried as a CLAIM,
+      //  visibly unlinked, never promoted to `resident`. `resident_not_linked`
+      //  still counts this row (rent_roll_canonical) — the name beside the
+      //  exception is what keeps the exception honest instead of blank.
+      resident_claim: !resident && lease && lease.claimed_name
+        ? { name: lease.claimed_name, source: "rent_roll", linked: false } : null,
       current_rent: lease && lease.rent != null ? Number(lease.rent) : null,
       proof_basis: lease ? lease.proof_basis : null,
       notice_state: p.notice_state,
@@ -919,6 +1059,13 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
       physical_readiness: p.physical_readiness,
       possession_state: p.possession_state,
       current_possession: p.current_possession,
+      //  The END of possession, carried since row 150: a reader that can
+      //  see when someone arrived but not that they left is half a fact.
+      last_possession_end: p.last_possession_end || null,
+      //  The move-out door's record for this bed, when it is a fact on this
+      //  date (see position_classifier). Named beside the basis ref so a
+      //  reader can point at the turnover that vacated the position.
+      move_out_turnover: p._move_out_turnover || null,
       availability_state: p.availability_state,
       available_from: p.available_from,
 
@@ -930,6 +1077,10 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
   return {
     property_id,
     as_of: asOf,
+    //  Which clock produced as_of, so a read that disagrees with the board
+    //  late in the evening is answerable rather than merely puzzling.
+    as_of_basis: day.basis,
+    as_of_timezone: day.timezone,
     count: positions.length,
     //  A READ THAT EXCLUDES ROWS SAYS SO. The loader drops retired
     //  inventory, and a silently shortened row set is the same defect class

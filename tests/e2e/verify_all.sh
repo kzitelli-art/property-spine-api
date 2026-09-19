@@ -179,6 +179,21 @@ step "property line identity and inbound doors" node tests/unit/property_line_id
 if app_rung_ready; then
   step "browser: retained inquiry is recoverable in the app (app $APP_PIN_SHORT)" \
     env CHROMIUM="${CHROMIUM:-}" node "$APP_ROOT/retained_inquiry_dom.test.js"
+  #  ── THREE PURE-FUNCTION APP RUNGS (CURRENT_STATE 135-138, 154) ──────
+  #  These were registered, went red twice at the old pin (runs 693, 694:
+  #  MODULE_NOT_FOUND — the pin did not contain the lineage they were
+  #  written against), and were parked until one app commit carried both
+  #  lineages. That commit is the pin now (app 475b3e1: pin 2e8199a merged
+  #  with the convergence line, six index.html hunks resolved, the app's
+  #  own suite green). A rung registered here MUST exist at the declared
+  #  pin; if the pin ever moves to a commit without these files, CI goes
+  #  red by name rather than skipping.
+  step "app: nothing unestablished opens a Person Card" \
+    node "$APP_ROOT/person_identity_ingress.test.js"
+  step "app: forward semantics belong to the server" \
+    node "$APP_ROOT/forward_semantics_are_the_servers.test.js"
+  step "app: unknown forward is not a percentage" \
+    node "$APP_ROOT/forward_occupancy_unresolved.test.js"
 else
   echo "── browser: retained inquiry          SKIPPED ($(app_rung_skip_reason))"
   SKIPPED="retained inquiry app proof"
@@ -189,7 +204,19 @@ step "current packet execution decision attribution" node tests/unit/execution_d
 step "terms attribution model boundary" node tests/unit/terms_attribution_model_boundary.test.js
 step "leasing knowledge coverage" node tests/unit/leasing_knowledge_coverage.test.js
 step "prospect first response question grounding" node tests/unit/first_response_conversation.test.js
+step "leasing grain not established refuses" node tests/unit/leasing_grain_not_established.test.js
+step "property operating day is the building's" node tests/unit/property_operating_today.test.js
+step "management-read reads the grain, never infers it" node tests/unit/management_read_grain_label.test.js
+step "management-read vacancy is a classification, not a remainder" node tests/unit/management_read_vacant_is_not_a_remainder.test.js
+step "a resident identifier is never a rent-roll status" node tests/unit/rent_roll_status_not_identity.test.js
+step "occupied is not contractually occupied" node tests/unit/rent_roll_occupied_is_not_contractual.test.js
+#  Found unregistered while working row 143: DB-free, green, and it guards
+#  the §40.8 assertion that an unentitled question never reaches a READ
+#  (proved by the reader never being called, not by inspecting the answer).
+#  Free to run and it was defending nothing in CI.
+step "tenancy is readable by Ask Spine, entitled before it is read" node tests/unit/tenancy_ask_spine.test.js
 step "rent roll source adapter"  node tests/unit/rent_roll_source_adapter.test.js
+step "rent roll source totals reconcile" node tests/unit/rent_roll_source_totals.test.js
 step "institutional rent projection" node tests/unit/rent_roll_institutional_projection.test.js
 step "rent roll space identity" node --test tests/unit/rent_roll_space_identity.test.js
 step "availability occupancy basis" node --test tests/unit/availability_occupancy_basis.test.js
@@ -340,6 +367,20 @@ step "canonical onboarding source" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" 
 step "canonical onboarding ledger" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_ledger.db.js
 step "canonical onboarding lifecycle" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_lifecycle.db.js
 step "canonical onboarding snapshot" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/canonical_onboarding_snapshot.db.js
+#  No durable continuity handle → no durable Person (CURRENT_STATE 156). A
+#  name-only rent-roll row establishes the lease unlinked, stages the claim,
+#  and the canonical rent roll reads resident_not_linked with the source's
+#  name beside it. Witness lives with the proof (PROOF_EXPECT_DEFECT=1 on the
+#  commit before it); the onboarding parent above predates the preview seam
+#  this proof drives, so only the successor runs here.
+step "person continuity handle: no phone or email, no Person" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/person_continuity_handle.db.js
+step "link resident: the door that links an unlinked resident" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/link_resident.db.js
+#  Three green proofs of three pieces is not a proof that the loop closes.
+#  This walks ONE resident from an unlinked rent-roll row to an attributed
+#  inbound text, asserting the SCREEN read and the ASK SPINE read agree at
+#  every seam, and that the retired second door onto the same lease refuses.
+#  It runs AFTER link_resident because it is the seam test over that door.
+step "identity loop closes: one resident, all the way round" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/identity_loop_closes.db.js
 step "governing lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/governing_lease_execution.db.js
 step "canonical lease execution" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/spine_lease_execution.db.js
 step "lease guarantor signing"   env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/lease_guarantor_signing.db.js
@@ -348,6 +389,8 @@ step "opening claim identity"     node tests/proofs/opening_claim_identity.db.js
 step "opening claim relay edges"  node tests/proofs/opening_claim_relay_edges.db.js
 step "opening claim unattached"   node tests/proofs/opening_claim_unattached.db.js
 step "availability readiness axis" node tests/proofs/availability_readiness_axis.db.js
+step "availability headline counts every expected date in horizon" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/availability_expected_within_horizon.db.js
+step "a governed move-out is a vacancy fact" node tests/proofs/vacated_position_basis.db.js
 step "canonical Deal Setup HTTP" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/deal_setup_http.db.js
 
 # ── the real server, the real HTTP door ─────────────────────────────
@@ -385,6 +428,11 @@ else
   step "extracted route bindings"    node tests/e2e/extracted_route_bindings.e2e.js
   step "ingest property authority"   node tests/e2e/ingest_property_authority.e2e.js
   step "legacy ingestion retired" env E2E_EXPECT_SERVER_COMMIT="$(git rev-parse HEAD)" node tests/e2e/legacy_ingestion_retired.e2e.js
+  #  POST /persons minted a human from a NAME ALONE — the contradiction of
+  #  the continuity-handle rule (row 156). Retired in place; this proves the
+  #  410 through the real key gate and that nothing is written by any shape
+  #  of request the old handler used to answer differently.
+  step "person create retired" env E2E_EXPECT_SERVER_COMMIT="$(git rev-parse HEAD)" node tests/e2e/person_create_retired.e2e.js
   step "work order person columns"   node tests/e2e/work_order_person_columns.e2e.js
   step "read ai connection authority" node tests/e2e/read_ai_connection_authority.e2e.js
   step "notice space column"         node tests/e2e/notice_space_column.e2e.js
@@ -428,6 +476,8 @@ else
   step "required work standing" node tests/unit/required_work_standing.test.js
   step "required work target" node tests/proofs/triage_work_scope.db.js
   step "turn expected date stays on its exact home" node tests/proofs/availability_turn_date_scope.db.js
+  step "when a turn slips, leasing sees it" node tests/proofs/turn_slip_visible_to_leasing.db.js
+  step "one readiness truth feeds every gate" node tests/proofs/readiness_one_truth.db.js
   step "legacy decision writes closed" node tests/e2e/legacy_decision_writes_disabled.e2e.js
   step "greenery staff onboarding" node tests/proofs/greenery_staff_onboarding.db.js
   step "source-to-home identity review and Greenery inventory contract" env HARNESS_DATABASE_URL="$E2E_DATABASE_URL" node tests/proofs/source_home_identity_review.db.js

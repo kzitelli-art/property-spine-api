@@ -88,6 +88,7 @@ function upload(deal, property, token, filename, csv, asOf) {
 const q = (sql, args = []) => pool.query(sql, args);
 const one = async (sql, args = []) => (await q(sql, args)).rows[0];
 const staffSessions = require("../../src/identity/staff_session_service.js");
+const personIngress = require("../../src/identity/person_ingress.js");
 async function session(userId, propertyId) {
   return (await staffSessions.issueStaffSession(pool, { userId, propertyId, purpose: "bootstrap_invite" })).session_token;
 }
@@ -408,11 +409,13 @@ const LETTER = ["A", "B", "C"];
       let r = await confirm(F.mikeTok, nv.p.id);
       let p;
       const leaseCount = (await one(`select count(*)::int n from leases where space_id=$1`, [nv.sid])).n;
-      ok("D1 a signed row naming a resident nobody on this home is: the confirmation creates the person under the operator's authority (no candidate to choose)", r.status === 200 && r.body.person_id, { status: r.status, error: r.body && r.body.error });
+      //  2026-09-19 ruling: a name-only row (the tracker carries no phone or
+      //  email) links no Person. Accepted, unlinked, and it says so.
+      ok("D1 a signed row naming a resident nobody on this home is: accepted under the operator's authority with the resident NOT linked (no phone or email → no Person)", r.status === 200 && r.body.person_id === null && r.body.resident_linked === false, { status: r.status, error: r.body && r.body.error, person_id: r.body && r.body.person_id });
       ok("D1 SUCCESSOR: Add accepts current occupancy with contractual terms unknown — NO lease is manufactured from a dateless signed row", r.status === 200 && r.body.outcome === "occupancy_accepted_terms_unknown" && leaseCount === 0, { status: r.status, outcome: r.body && r.body.outcome, error: r.body && r.body.error, leases_on_bed: leaseCount });
       if (WITNESS) observe("WITNESS: on the baseline this Add created an ACTIVE lease with null dates (unbounded term) from a tracker row that carries no dates", { status: r.status, leases_on_bed: leaseCount, lease: leaseCount ? await one(`select lease_status,start_date,end_date,rent from leases where space_id=$1`, [nv.sid]) : null });
       const evidence = await one(`select produced_person_id is not null as person, produced_space_id=$2 as space, produced_lease_id is null as no_lease from import_source_rows r join proposed_records pr on pr.import_source_row_id=r.id where pr.id=$1`, [nv.p.id, nv.sid]);
-      ok("D1 the evidence row names the resident and the exact home, and no lease", evidence.person && evidence.space && evidence.no_lease, evidence);
+      ok("D1 the evidence row names the exact home, no person (none was produced) and no lease", !evidence.person && evidence.space && evidence.no_lease, evidence);
 
       //  2. SAME PERSON, ACTIVE LEASE ON THIS BED: already represented.
       const ar = proposalFor("already_represented_active");
@@ -622,9 +625,97 @@ const LETTER = ["A", "B", "C"];
       if (r.status === 409 && r.body.error === "resident_identity_requires_review") { await resolveResident(F.mikeOtherTok, dated.id, "created", null); r = await confirm(F.mikeOtherTok, dated.id); }
       const datedLeaseId = r.body && r.body.lease_id;
       ok("a dated row still creates a lease with the source's dates and rent (unchanged behaviour)", r.status === 200 && r.body.outcome === "lease_created" && (await one(`select start_date::text s, end_date::text e, rent from leases where id=$1`, [r.body.lease_id])).s === "2026-09-01", { status: r.status, outcome: r.body && r.body.outcome, error: r.body && r.body.error });
+      ok("2026-09-19 ruling: a name-only source row links no Person (resident_not_linked), and says so",
+        r.body.person_id === null && r.body.resident_linked === false && /Resident not linked/.test(r.body.receipt || ""),
+        { person_id: r.body.person_id, linked: r.body.resident_linked, receipt: r.body.receipt });
+
+      //  ── ROW 156 IS "DONE AS A SCREEN, NOT A DOMAIN" UNTIL ASK SPINE CAN
+      //  ANSWER IT TOO (§40.2). The rent roll (`currentRentRoll`) has
+      //  reported `exceptions.resident_not_linked` and `resident_claim`
+      //  since the ruling above; this block proves the SAME fact, from the
+      //  SAME canonical read, now reaches the Ask Spine standing projection
+      //  — one lease with no tenant (`datedLeaseId`, just created) and its
+      //  promoted claim carrying the source's name in
+      //  `normalized_json.tenant_name`.
+      //  Inline, not a nested section() — this stays labelled "H" in the
+      //  receipt; section() reassigns the shared `current` label for
+      //  everything that runs after it returns, which would mislabel the
+      //  rest of H's own assertions below.
+      await (async () => {
+        const ask = require("../../src/agent/ask_spine_answer.js");
+        const { currentRentRoll } = require("../../src/surfaces/rent_roll_canonical.js");
+        const claim = await one(`select normalized_json from proposed_records where id=$1`, [dated.id]);
+        ok("the promoted claim carries the source's name as normalized_json.tenant_name",
+          claim.normalized_json && claim.normalized_json.tenant_name === rows[0].Resident,
+          claim.normalized_json);
+
+        const screenRR = await currentRentRoll(pool, { property_id: F.other, as_of: AS_OF_NOW });
+        const standingNow = await readers.standing.readTenancyStanding(pool, { property_id: F.other, as_of: AS_OF_NOW });
+        ok("the screen (rent_roll_canonical) counts the just-created unlinked lease",
+          screenRR.exceptions.resident_not_linked >= 1, screenRR.exceptions);
+        ok("Ask Spine's standing projection carries exceptions.resident_not_linked — same number, no second query",
+          standingNow.exceptions && standingNow.exceptions.resident_not_linked === screenRR.exceptions.resident_not_linked,
+          { standing: standingNow.exceptions, screen: screenRR.exceptions });
+        const claimRow = (standingNow.resident_claims_unlinked || []).find((c) => c.unit === "Apt 1");
+        ok("the claimed name for the unlinked row is carried, marked not linked, never as `resident`",
+          !!claimRow && claimRow.name === rows[0].Resident && claimRow.linked === false,
+          { claimRow, wanted: rows[0].Resident });
+        ok("no array here is a second 160-row payload — it stays bounded",
+          Array.isArray(standingNow.resident_claims_unlinked) && standingNow.resident_claims_unlinked.length <= 20);
+
+        console.log("        Ask Spine standing exceptions:", JSON.stringify(standingNow.exceptions),
+          "· claims:", JSON.stringify(standingNow.resident_claims_unlinked));
+
+        //  ENTITLED: leasing/management reach the claim, by name.
+        const entitledFacts = await ask.gatherFacts(pool, { property_id: F.other, allowed_modules: ["leasing"],
+          subject: "tenancy", question: "who is in Apt 1 and how many residents are not linked" });
+        ok("an entitled reader gets the count and the claimed name",
+          entitledFacts.tenancy && entitledFacts.tenancy.exceptions
+          && entitledFacts.tenancy.exceptions.resident_not_linked >= 1
+          && entitledFacts.tenancy.resident_claims_unlinked.some((c) => c.name === rows[0].Resident),
+          entitledFacts.tenancy && { exceptions: entitledFacts.tenancy.exceptions, claims: entitledFacts.tenancy.resident_claims_unlinked });
+        ok("no record id crossed with it (§40.8)",
+          !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(JSON.stringify(entitledFacts.tenancy)));
+
+        //  UNENTITLED: §40.8 — entitlement precedes intelligence. Refused
+        //  before any fact is gathered, so the name never has a chance to
+        //  reach a wording layer at all. The stub THROWS if the model is
+        //  ever called, so a refusal that quietly still asked would fail
+        //  loudly rather than merely looking withheld.
+        const neverCalled = { messages: { create: async () => {
+          throw new Error("the model must never be reached for an unauthorized tenancy question"); } } };
+        const refused = await ask.answer(pool, neverCalled, { property_id: F.other,
+          allowed_modules: ["asset_management"], question: "who is in Apt 1 and how many residents are not linked" });
+        ok("an asset-management-only session is not_authorized for a resident-linkage question",
+          refused.outcome === "not_authorized", refused);
+        ok("...and the claimed name appears NOWHERE in what came back",
+          !JSON.stringify(refused).includes(rows[0].Resident), refused);
+      })();
+
+      //  The recognition scenario below needs a Person to recognise. Under the
+      //  ruling one exists only once the resident is reached on a channel that
+      //  is a continuity handle, so identity is established here the way it
+      //  will be in operation — through the one ingress door, with a phone —
+      //  and attached to what the source row produced. A proof stand-in for
+      //  "the resident texted", not a second way to mint a human.
+      const linkLater = async (name, phone, leaseId, proposalId) => {
+        const ing = await personIngress.ingestPerson(pool, { property_id: F.other, channel: "rent_roll",
+          authority: { actor: "proof:resident-reached-by-phone", basis: "resident identity established on a continuity handle (proof stand-in)" },
+          evidence: { name, phone, source_system: "rent_roll" } });
+        if (ing.disposition !== "created") throw new Error("identity stand-in did not create: " + JSON.stringify(ing));
+        if (leaseId) await q(`update leases set tenant_ids=array[$1]::uuid[] where id=$2`, [ing.person_id, leaseId]);
+        await q(`update import_source_rows set produced_person_id=$1 where id=(select import_source_row_id from proposed_records where id=$2)`, [ing.person_id, proposalId]);
+        return ing.person_id;
+      };
+      //  Unique per run: the owned database keeps earlier runs' Persons and a
+      //  reused phone would RESOLVE to one of them instead of creating.
+      const handleNonce = String(1000 + Math.floor(Math.random() * 8999));
+      await linkLater(rows[0].Resident, "+1215560" + handleNonce, datedLeaseId, dated.id);
       r = await confirm(F.mikeOtherTok, undated.id);
       if (r.status === 409 && r.body.error === "resident_identity_requires_review") { await resolveResident(F.mikeOtherTok, undated.id, "created", null); r = await confirm(F.mikeOtherTok, undated.id); }
-      const undatedPersonId = r.body && r.body.person_id;
+      const undatedPersonId = r.body && r.body.person_id
+        ? r.body.person_id
+        : await linkLater(rows[1].Resident, "+1215561" + handleNonce, null, undated.id);
       ok("an undated signed row accepts occupancy with terms unknown on the unit shape too", r.status === 200 && r.body.outcome === "occupancy_accepted_terms_unknown", { status: r.status, outcome: r.body && r.body.outcome, error: r.body && r.body.error });
       r = await confirm(F.mikeOtherTok, vacant.id);
       ok("an explicit VACANT row still records a vacant position (source states vacancy)", r.status === 200 && r.body.vacant === true, { status: r.status, error: r.body && r.body.error });

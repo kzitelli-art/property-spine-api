@@ -279,6 +279,33 @@ async function resolvePersonFromEvidence(client, { property_id = null, evidence 
   };
 }
 
+/*  ── A DURABLE CONTINUITY HANDLE ─────────────────────────────────────
+ *  What lets Spine recognise the same human again: a phone or an email.
+ *  A name is not one (two residents share a name more often than a
+ *  silent merge is noticed), and a PMS resident id is provenance — the
+ *  source's key for its row, never Spine's key for a human (migration
+ *  177). Without a handle a durable Person is a record that can never
+ *  recognise anyone: Greenery's 95 rent-roll Persons carried phone 0/95,
+ *  email 0/95 (CURRENT_STATE row 136). So the rule, ruled 2026-09-19:
+ *
+ *      no durable continuity handle  →  no durable Person
+ *
+ *  The claim is still recorded (staged), the lease still carries the
+ *  source's name, and the rent roll says `resident_not_linked` — which is
+ *  the truth, not a defect to hide. Identity is established when the
+ *  resident is reached on a channel that IS a handle.  */
+function continuityHandle(evidence = {}) {
+  const phone = normalizePhone(evidence.phone || evidence.primary_phone_e164);
+  if (phone) return { kind: "phone", value: phone };
+  const email = normalizeEmail(evidence.email);
+  if (email) return { kind: "email", value: email };
+  return null;
+}
+const NO_HANDLE_MESSAGE =
+  "This source names the resident but carries no phone or email, so Spine records the " +
+  "name as a claim on the lease and does not create a Person from a name alone. The " +
+  "resident is linked when they are reached by phone or email.";
+
 /*  ── THE ONLY `insert into persons` IN PROPERTY SPINE ────────────────
  *  Private on purpose: it is reachable through ingestPerson and through
  *  confirmPersonProposal, both of which require an authority. There is no
@@ -287,6 +314,12 @@ async function createPerson(client, { evidence, authority }) {
   if (!authority || !authority.actor) {
     throw refuse("INGRESS_AUTHORITY_REQUIRED",
       "A Person can only be created under a named authority.");
+  }
+  //  An authority may permit a Person; it cannot supply what would let
+  //  Spine recognise one. httpStatus 409 so a route relays it as a
+  //  refusal with the next step, not a 500.
+  if (!continuityHandle(evidence)) {
+    throw refuse("NO_CONTINUITY_HANDLE", NO_HANDLE_MESSAGE, { httpStatus: 409 });
   }
   const canon = normalizePhone(evidence.phone);
   const email = normalizeEmail(evidence.email);
@@ -373,12 +406,22 @@ async function ingestPerson(client, {
   // code match is only a candidate; the signed person proposal is authority.
   if (channel === "rent_roll" && activation_id && ev.import_source_row_id) {
     const confirmed = (await client.query(
-      `select promoted_record_id from proposed_records
+      `select id, promoted_record_id, status, payload_json->>'identity_decision' as identity_decision
+         from proposed_records
         where activation_id=$1 and property_id=$2 and import_source_row_id=$3
-          and target_type='person' and status='promoted'
-          and resolution_kind in ('resolved_existing','created')
-          and confirmed_by is not null and confirmed_at is not null`,
+          and target_type='person'
+          and confirmed_by is not null and confirmed_at is not null
+          and ((status='promoted' and resolution_kind in ('resolved_existing','created'))
+               or payload_json->>'identity_decision' = 'distinct_unlinked')`,
       [activation_id, property_id, ev.import_source_row_id])).rows[0];
+    //  A reviewer already judged this row a DIFFERENT person from every
+    //  candidate, and with no continuity handle nothing could be minted: the
+    //  decision stands, the claim stays staged, the caller proceeds unlinked.
+    if (confirmed && confirmed.identity_decision === "distinct_unlinked") {
+      return { disposition: "proposed", person_id: null, proposal_id: confirmed.id, resolution_kind: null,
+        candidates: [], evidence_used: ["confirmed_person_proposal"], staged_reason: "no_continuity_handle",
+        reason: "A reviewer judged this row a different person from the candidates; with no phone or email it stays unlinked." };
+    }
     if (confirmed) {
       const live = await liveRecord(client, confirmed.promoted_record_id);
       if (!live) throw refuse("CONFIRMED_PERSON_UNAVAILABLE", "The confirmed resident identity is no longer resolvable. Review the identity before establishing the lease.");
@@ -411,7 +454,19 @@ async function ingestPerson(client, {
   if (!authority) {
     const proposal_id = await writeProposal(client,
       { activation_id, property_id, evidence: ev, decision, status: "staged" });
-    return { ...decision, person_id: null, proposal_id, resolution_kind: null };
+    return { ...decision, person_id: null, proposal_id, resolution_kind: null, staged_reason: "no_authority" };
+  }
+
+  //  Authority present, nothing to recognise the human by: the claim is
+  //  staged with the reason, and the caller carries the name on the lease.
+  //  `staged_reason` is what lets a caller tell this apart from "a human
+  //  must look" (needs_review / conflicted): nothing here needs review —
+  //  there is simply nothing to link to yet.
+  if (!continuityHandle(ev)) {
+    const staged = { ...decision, reason: NO_HANDLE_MESSAGE + " " + decision.reason };
+    const proposal_id = await writeProposal(client,
+      { activation_id, property_id, evidence: ev, decision: staged, status: "staged" });
+    return { ...staged, person_id: null, proposal_id, resolution_kind: null, staged_reason: "no_continuity_handle" };
   }
 
   const person = await createPerson(client, { evidence: ev, authority });
@@ -471,10 +526,26 @@ async function confirmPersonProposal(client, {
   } else {
     const ev = (pr.payload_json && pr.payload_json.evidence) || {};
     const normalized = pr.normalized_json || {};
-    const person = await createPerson(client, {
-      evidence: { ...normalized, ...ev, name: ev.name || normalized.name || null },
-      authority: authority || { actor, basis: "operator confirmation" },
-    });
+    const evidence = { ...normalized, ...ev, name: ev.name || normalized.name || null };
+    //  "A new person" with nothing to recognise them by is a judgment, not a
+    //  record: the reviewer has said this row is NOT any candidate. That
+    //  decision is kept — confirmed, with the reason — and no Person is
+    //  minted. The claim stays staged and the lease proceeds unlinked. The
+    //  alternative (refusing) leaves a name-only row that is genuinely a
+    //  different resident with no way past identity review.
+    if (!continuityHandle(evidence)) {
+      await client.query(
+        `update proposed_records
+            set status='staged', promoted_record_id=null, resolution_kind=null,
+                confirmed_by=$2, confirmed_at=now(), updated_at=now(),
+                status_reason=$3,
+                payload_json = coalesce(payload_json,'{}'::jsonb) || '{"identity_decision":"distinct_unlinked"}'::jsonb
+          where id=$1`,
+        [proposal_id, String(actor),
+         "Judged a different person from the candidates. " + NO_HANDLE_MESSAGE]);
+      return { proposal_id, person_id: null, resolution_kind: null, identity_decision: "distinct_unlinked" };
+    }
+    const person = await createPerson(client, { evidence, authority: authority || { actor, basis: "operator confirmation" } });
     resolved = person.id;
   }
 
@@ -492,6 +563,7 @@ module.exports = {
   resolvePersonFromEvidence,
   ingestPerson,
   confirmPersonProposal,
+  continuityHandle,
   CHANNELS,
   DISPOSITIONS,
   RESOLUTION_KINDS,

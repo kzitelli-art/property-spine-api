@@ -218,6 +218,16 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
             'start_date', l.start_date, 'end_date', l.end_date,
             'rent', l.rent, 'tenant_ids', l.tenant_ids,
             'economic_tenancy_activated_at', l.economic_tenancy_activated_at,
+            -- THE SOURCE'S NAME FOR THE RESIDENT, when the lease was
+            -- established from a rent roll. A lease with no tenant is
+            -- resident_not_linked (no phone or email in the source, so
+            -- no Person — person_ingress.js); the name the source gave is
+            -- still a fact worth reading beside that, and it lives on the
+            -- promoted claim, not on the lease. Provenance, never identity.
+            'claimed_name', (select pr.normalized_json->>'tenant_name'
+                               from proposed_records pr
+                              where pr.promoted_record_id = l.id and pr.target_type = 'lease'
+                              order by pr.confirmed_at desc nulls last limit 1),
             -- PROOF INPUTS (shared derivation). Carried here so every surface
             -- reads ONE answer to "how do we know this lease is true" instead
             -- of each re-deriving it. native = executed AND funded through
@@ -255,6 +265,23 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
             and ue.status='scheduled' order by ue.effective_date desc limit 1) as notice_date,
         (select t.status from turnovers t
           where t.unit_id=u.id and t.status='in_progress' limit 1) as turn_status,
+        /*  ── THE GOVERNED MOVE-OUT, IF ONE NAMES THIS BED ──────────────
+         *  A turnover row whose outgoing lease sits on THIS space is the
+         *  move-out door's durable record that the resident left. It is a
+         *  dated fact (opened_on) and it names the lease it ended, so the
+         *  classifier can tell it from a turn-only capture and from a
+         *  sibling bed's move-out. Unit-grained turns without an outgoing
+         *  lease deliberately do not appear here: they say the unit is
+         *  being worked on, not that anyone left. Latest wins.        */
+        (select jsonb_build_object(
+            'turnover_id', t.id, 'status', t.status,
+            'outgoing_lease_id', t.outgoing_lease_id,
+            'opened_on', to_char(t.created_at, 'YYYY-MM-DD'),
+            'ready_date', t.ready_date)
+           from turnovers t
+           join leases ol on ol.id = t.outgoing_lease_id
+          where t.unit_id = u.id and ol.space_id = s.id
+          order by t.created_at desc, t.id desc limit 1) as move_out_turnover,
         u.occupancy_status as compat_occupancy,
         /*  ── WHAT THE ESTABLISHED OPENING POSITION SAID ABOUT THIS BED ──
          *

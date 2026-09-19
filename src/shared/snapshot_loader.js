@@ -26,6 +26,8 @@ const { resolvePropertyIdentity, resolutionError } = require("../identity/proper
 //  (/operator/rent-roll/import) is deliberately NOT behind this.
 const { syntheticTargetAllowed, syntheticRefusal } = require("./synthetic_data_perimeter.js");
 const { spacePosition } = require("../tenancy/space_position");
+const { resolveLeasingGrain, GRAIN_NOT_ESTABLISHED, GRAIN_REFUSAL_MESSAGE } =
+  require("../tenancy/leasing_grain.js");
 const { publishedSourceBatchSql } = require("../tenancy/dated_positions");
 //  The ONE canonical inventory-materialization rule. The evidence pass must
 //  not create beds beside the trigger's provisional whole-unit placeholder.
@@ -67,6 +69,11 @@ const CONFIGS = {
 
 const NON_REVENUE = /^(vacant|model|down|offline)$/i;
 const OCCUPIED_STATUSES = new Set(["current", "occupied", "notice", "commercial"]);
+/*  A position whose lifecycle state the source does not state. It is NOT in
+ *  OCCUPIED_STATUSES and NOT in NON_REVENUE, because it is neither — which
+ *  is exactly why the summary must withhold a total rather than count it as
+ *  zero.  */
+const STATUS_NOT_ESTABLISHED = "not_established";
 const IMPORT_ROLES = new Set(["admin", "owner", "manager", "property_manager", "leasing_manager"]);
 
 function num(v) {
@@ -89,16 +96,110 @@ function dt(v) {
   return `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
 }
 
-function cleanStatus(v, section) {
-  const s = String(v || "").trim().toLowerCase();
+/*  RECOGNISE a lifecycle word, or return null. Returning null is the whole
+ *  point: the previous version ended `return s || "current"`, so ANY string
+ *  it did not understand came back as that position's status, and an empty
+ *  one became "current" — a status the document never stated.
+ *
+ *  Both halves were load-bearing defects. See cleanStatus below for the
+ *  first and statusFromSource for the second.  */
+function recogniseStatus(v, section) {
+  const s = String(v == null ? "" : v).trim().toLowerCase();
   if (section === "future" || s === "future" || s === "pending") return "future";
+  if (!s) return null;
   if (/model/.test(s)) return "model";
   if (/down|offline/.test(s)) return "down";
   if (/vacant|vacant_blank/.test(s)) return "vacant";
   if (/notice/.test(s)) return "notice";
   if (/commercial|comm/.test(s)) return "commercial";
   if (/current|occupied|active/.test(s)) return "current";
-  return s || "current";
+  return null;
+}
+
+/*  Retained for the one caller that hands in a value already known to be a
+ *  non-revenue word (parseResident). It no longer invents "current" for an
+ *  unreadable value; STATUS_NOT_ESTABLISHED is a state, not a guess.  */
+function cleanStatus(v, section) {
+  return recogniseStatus(v, section) || STATUS_NOT_ESTABLISHED;
+}
+
+/*  WHERE A POSITION'S STATUS MAY COME FROM — AND WHERE IT MAY NOT.
+ *
+ *  This replaced:
+ *
+ *      cleanStatus(raw?.status || raw?.resident_raw || raw?.resident_id, ...)
+ *
+ *  The third fallback made a PERSON'S SOURCE RECORD ID the position's
+ *  status. Measured on The Greenery signed in (CURRENT_STATE 134): 95 of 105
+ *  positions carried a resident id in `status`, so the lifecycle vocabulary
+ *  was dead, this route's own summary reported `occupied: 0` beside 94
+ *  leased rows, and a position on NOTICE counted as occupied.
+ *
+ *  An identifier is not a state. So:
+ *
+ *    · raw.status        IS a status source            -> source_status_column
+ *    · raw.resident_raw / raw.resident MAY be one, but ONLY when the cell
+ *      holds a recognised lifecycle WORD. This vendor writes VACANT, MODEL
+ *      and DOWN into the Resident column, and that genuinely is status
+ *      information -> resident_cell_lifecycle_word. A NAME in that cell is
+ *      not, and falls through.
+ *    · raw.resident_id   is NEVER consulted. Not as a fallback, not ever.
+ *
+ *  Nothing recognised is NOT_ESTABLISHED, distinguishing two silences the
+ *  four-silences rule (§40.7) says may not collapse:
+ *      unrecognised_source_value  the source said something unreadable
+ *      not_established            the source said nothing at all
+ *
+ *  For Greenery this means an occupied bed reports `not_established`, which
+ *  is the truth: that export has NO status column, its section header is
+ *  "Current/Notice/Vacant Residents", and occupancy there is established by
+ *  the LEASE. Notice cannot be expressed in it at all.  */
+function statusFromSource(raw, section) {
+  if (section === "future") return { status: "future", basis: "section", source_value: null };
+
+  const explicit = raw == null ? null : raw.status;
+  if (explicit != null && String(explicit).trim()) {
+    const v = String(explicit).trim();
+    const r = recogniseStatus(explicit, section);
+    if (r) return { status: r, basis: "source_status_column", source_value: v };
+
+    /*  BEFORE blaming the document, check whether WE put an identifier here.
+     *
+     *  This path is not hypothetical. `raw` is stored normalizeRow-SHAPED
+     *  (see the import_source_rows writer), so the version of normalizeRow
+     *  that pushed the resident id into `status` also WROTE that id into
+     *  every stored row — and then re-read it. The ingest and the read were
+     *  the same defect run twice. Measured on the governed Greenery
+     *  establishment: all 95 leased rows hold the same value in `status`,
+     *  `resident_id` and `resident_raw` (e.g. "s0004577").
+     *
+     *  Calling that `unrecognised_source_value` would tell an operator the
+     *  rent roll said something Spine could not read. The rent roll said
+     *  nothing — it has no status column at all. Spine put the id there.
+     *  Misattributing our defect to their document is its own defect.
+     *
+     *  The test is EQUALITY with this row's own resident identifier, which
+     *  is evidence. Id-SHAPE alone would be a guess, and a real status
+     *  vocabulary is allowed to look however the vendor likes.  */
+    const rid = raw.resident_id == null ? "" : String(raw.resident_id).trim();
+    if (rid && rid.toLowerCase() === v.toLowerCase()) {
+      return { status: STATUS_NOT_ESTABLISHED, basis: "identifier_in_status_field", source_value: v };
+    }
+    return { status: STATUS_NOT_ESTABLISHED, basis: "unrecognised_source_value", source_value: v };
+  }
+
+  let sawSomething = null;
+  for (const cell of [raw == null ? null : raw.resident_raw, raw == null ? null : raw.resident]) {
+    if (cell == null || !String(cell).trim()) continue;
+    if (sawSomething === null) sawSomething = String(cell).trim();
+    const r = recogniseStatus(cell, section);
+    if (r) return { status: r, basis: "resident_cell_lifecycle_word", source_value: String(cell).trim() };
+  }
+
+  //  A NAME in the resident cell is not an unreadable status — it is simply
+  //  not a status source. Saying "unrecognised" there would report a defect
+  //  in a correctly read document.
+  return { status: STATUS_NOT_ESTABLISHED, basis: "not_established", source_value: null };
 }
 
 /*  ONE PARSING RULE FOR THE SOURCE RECORD ID, BOTH DIALECTS.
@@ -136,7 +237,8 @@ function sourceRecordId(raw, residentName) {
 
 function normalizeRow(raw, rowIndex = 0) {
   const section = String(raw?.section || "current").toLowerCase() === "future" ? "future" : "current";
-  const status = cleanStatus(raw?.status || raw?.resident_raw || raw?.resident_id, section);
+  const st = statusFromSource(raw, section);
+  const status = st.status;
   const unit = String(raw?.unit_number ?? raw?.unit ?? "").trim();
   const residentName = raw?.name ?? raw?.resident_name ?? raw?.resident ?? null;
   const nonRevenue = NON_REVENUE.test(status);
@@ -146,10 +248,20 @@ function normalizeRow(raw, rowIndex = 0) {
     room: raw?.room == null ? null : String(raw.room).trim(),
     space_label: raw?.space_label == null ? null : String(raw.space_label).trim(),
     unit_type: raw?.unit_type ?? raw?.type ?? null,
-    resident_raw: raw?.resident_raw ?? raw?.resident_id ?? residentName ?? status,
+    //  `?? status` used to sit at the end of this chain, which is the mirror
+    //  image of the defect above: a lifecycle word leaking into a RESIDENT
+    //  field. On a row with no resident information at all it now reads
+    //  null, because that is what the source says.
+    resident_raw: raw?.resident_raw ?? raw?.resident_id ?? residentName ?? null,
     name: nonRevenue ? null : (residentName == null ? null : String(residentName).trim()),
     resident_id: nonRevenue ? null : sourceRecordId(raw, residentName),
     status,
+    //  WHERE the status came from, so a reader can audit the classification
+    //  instead of trusting it, and the RAW value when the source stated
+    //  something this build cannot read. Same move as `as_of_basis`
+    //  (CURRENT_STATE 122) and `basis_state` (131).
+    status_basis: st.basis,
+    status_source_value: st.source_value,
     sqft: num(raw?.sqft),
     market_rent: num(raw?.market_rent ?? raw?.market),
     actual_rent: num(raw?.actual_rent ?? raw?.rent),
@@ -696,10 +808,47 @@ async function loadSnapshot(pool, cfg, inputRows, options = {}) {
   }
 }
 
+/*  OCCUPANCY THIS READ CANNOT ESTABLISH IS NOT OCCUPANCY OF ZERO.
+ *
+ *  This summary used to report `occupied: 0` and `current_occupancy_pct: 0`
+ *  for The Greenery — 95 leased beds — because every one of those positions
+ *  carried a resident id where its status belonged, and an id is in neither
+ *  OCCUPIED_STATUSES nor NON_REVENUE. The id is fixed above; the counting
+ *  rule still has to be honest about a source that states no status, which
+ *  Greenery's genuinely does not.
+ *
+ *  THREE BASES, and the middle one is the one that gets fudged:
+ *      source_status           every position classified -> exact answer
+ *      partially_established   some classified           -> floor only
+ *      not_established         none classified           -> no answer
+ *
+ *  `occupied` is null unless it is COMPLETE, because the bare name is what a
+ *  naive consumer reads and treats as the whole truth — that is exactly the
+ *  `total - vacant` class of error being repaired here. The floor travels
+ *  under its own unambiguous name, `occupied_at_least`, so a surface can
+ *  render ">=X%" per the §18 ruling. And a floor of zero is not a floor: with
+ *  nothing classified the floor is null too, never 0, because "0" reads as
+ *  "nothing is leased" when the truth is "we cannot tell yet".
+ *
+ *  Vacancy is untouched and still counted from its own positive
+ *  classification — never as total minus occupied (§42).  */
 function summarizeRows(rows) {
   const current = rows.filter(r => r.section !== "future");
   const future = rows.filter(r => r.section === "future");
   const occupied = current.filter(r => OCCUPIED_STATUSES.has(r.status));
+  const unclassified = current.filter(r => r.status === STATUS_NOT_ESTABLISHED);
+  const occupancyBasis = current.length === 0 ? "source_status"
+    : unclassified.length === 0 ? "source_status"
+    : unclassified.length >= current.length ? "not_established"
+    : "partially_established";
+  const occupancyEstablished = occupancyBasis === "source_status";
+  const occupiedCount = occupancyEstablished ? occupied.length : null;
+  //  §18, exactly as frozen: a floor of zero is not a floor. If nothing is
+  //  recognisably occupied AND anything is unclassified, there is no floor to
+  //  publish — 0 would read as "nothing is leased" when the truth is "we
+  //  cannot tell yet". Greenery is this case: 10 classified vacant, 95
+  //  unstated, so the basis is partially_established and the floor is null.
+  const occupiedFloor = (occupied.length === 0 && unclassified.length > 0) ? null : occupied.length;
   const vacant = current.filter(r => r.status === "vacant");
   const nonRevenue = current.filter(r => r.status === "model" || r.status === "down");
   const owed = current.filter(r => Number(r.balance) > 0);
@@ -710,13 +859,18 @@ function summarizeRows(rows) {
     inventory,
     current_rows: current.length,
     future_rows: future.length,
-    occupied: occupied.length,
+    occupied: occupiedCount,
+    occupied_at_least: occupiedFloor,
+    occupancy_basis: occupancyBasis,
+    status_not_established: unclassified.length,
     vacant: vacant.length,
     non_revenue: nonRevenue.length,
     model: current.filter(r => r.status === "model").length,
     down: current.filter(r => r.status === "down").length,
-    current_occupancy_pct: inventory ? Math.round(occupied.length / inventory * 10000) / 100 : null,
-    leasable_occupancy_pct: revenueInventory ? Math.round(occupied.length / revenueInventory * 10000) / 100 : null,
+    current_occupancy_pct: (occupancyEstablished && inventory)
+      ? Math.round(occupied.length / inventory * 10000) / 100 : null,
+    leasable_occupancy_pct: (occupancyEstablished && revenueInventory)
+      ? Math.round(occupied.length / revenueInventory * 10000) / 100 : null,
     future_commitments: future.length,
     gross_ar_owed: Math.round(owed.reduce((s,r)=>s+Number(r.balance||0),0)*100)/100,
     credits_prepaid: Math.round(Math.abs(credits.reduce((s,r)=>s+Number(r.balance||0),0))*100)/100,
@@ -924,8 +1078,16 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
      *  authority, and a caller that disagrees does not get to reshape it.  */
     const basisRow = (await client.query(
       `select leasing_basis from properties where id = $1`, [propertyId])).rows[0];
-    const grain = String((basisRow && basisRow.leasing_basis) || options.leasingModel || "unit")
-      .toLowerCase() === "bed" ? "bed" : "unit";
+    //  LAST WALL. `=== "bed" ? "bed" : "unit"` stood here: a two-way branch
+    //  over a three-value column, so 'unknown' — the column's own NOT NULL
+    //  DEFAULT — resolved to 'unit' and every bed in the building collapsed
+    //  into its unit with no discrepancy raised. See tenancy/leasing_grain.js.
+    const grain = resolveLeasingGrain({
+      property: basisRow && basisRow.leasing_basis, supplied: options.leasingModel });
+    if (!grain) {
+      throw Object.assign(new Error(GRAIN_REFUSAL_MESSAGE),
+        { code: GRAIN_NOT_ESTABLISHED, status: 409 });
+    }
 
     /*  The source's OWN statement of this property's grain, per unit, in
      *  first-seen order — the same construction loadSnapshot uses. Needed

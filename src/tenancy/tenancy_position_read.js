@@ -76,6 +76,10 @@ const TRUTH_WALLS = Object.freeze([
   "confirmed opening import ≠ verified in Spine — accepted opening truth is not the same proof " +
     "as a lease Spine executed and funded itself.",
   "a unit ≠ a rentable position — a unit may hold several beds, and occupancy is counted per bed.",
+  "a resident_claim is not a resident — it is the source's name for who occupies a leased " +
+    "position with no linked Person (no phone or email to recognise them by, per the continuity " +
+    "handle rule). It is shown as a claim, never promoted to `resident`, and never counted as an " +
+    "identity Spine has established.",
 ]);
 
 const CAPABILITIES = readerCapabilities.validate(
@@ -177,6 +181,11 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
       unknowns: unattached.read === "ok" ? { ...retainedUnknowns, ...retiredExclusion } : null,
       ...retainedRows,
       inventory_correction: inventoryCorrection,
+      //  No positions means no lease means no resident-linkage question —
+      //  null, not a zero that would misread as "every resident is linked".
+      exceptions: null,
+      resident_claims_unlinked: null,
+      resident_claims_unlinked_truncated: null,
       next_milestone: null,
       does_not_establish: [
         "Anything about occupancy, rent or commitments — tenancy has no inventory " +
@@ -221,6 +230,40 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
   const contested = positions.filter((p) => p.conflict_state === "conflicted");
   const importedOnly = occupied.filter((p) => p.proof_basis === "confirmed_opening_import");
   const residentUnlinked = occupied.filter((p) => p.lease && !p.resident);
+  //  ── THE SAME FILTER, THE SAME `positions` ARRAY, NO SECOND QUERY ──────
+  //  rent_roll_canonical.js's `exceptions.resident_not_linked` is exactly
+  //  `rows.filter((r) => r.lease && !r.resident).length` over the rows
+  //  currentRentRoll built from this SAME datedPropertyPositions call. This
+  //  read already holds that array as `positions` — reusing it here is what
+  //  keeps the screen and Ask Spine's answer to "how many residents are not
+  //  linked" the same number without a second occupancy derivation (§40).
+  //  Deliberately over ALL positions, not `occupied` alone: a lease can
+  //  exist on a position this classifier buckets outside `occupied` (e.g.
+  //  contested), and rent_roll_canonical does not narrow the denominator
+  //  either — narrowing it here would silently answer a different question
+  //  than the screen's exception count.
+  const unlinkedResidentPositions = positions.filter((p) => p.lease && !p.resident);
+  //  Bounded, matching the `unattached_source_rows` precedent immediately
+  //  above: a sentence needs the count and a few examples ("who is in
+  //  401?"), not a second 160-row payload smuggled through the compact
+  //  projection. `_truncated` says so out loud rather than silently
+  //  dropping rows the same way a shorter list would.
+  const RESIDENT_CLAIM_ROW_LIMIT = 20;
+  const residentClaimsUnlinked = unlinkedResidentPositions.slice(0, RESIDENT_CLAIM_ROW_LIMIT).map((p) => ({
+    //  `unit_number` is the DISPLAY unit ("401") — what "who is in 401"
+    //  actually names. `position` is the bed/room label within it, carried
+    //  beside it because a multi-bed unit needs both to say which row this
+    //  is; on a whole-unit property the two coincide and `position` reads
+    //  as the unit's own placeholder label.
+    unit: p.unit_number,
+    position: p.space_label,
+    //  A CLAIM, never a resident. `resident_claim` already carries
+    //  `linked: false` (dated_positions.js) — relayed verbatim rather than
+    //  reshaped, so this cannot say something the per-row fact does not.
+    //  Honest blank when the source named no one at all (§5): never "".
+    name: p.resident_claim ? p.resident_claim.name : null,
+    linked: false,
+  }));
 
   const src = dp.opening_truth && dp.opening_truth.latest_confirmed_source;
 
@@ -252,6 +295,30 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
       units: units.size,
       rentable_positions: positions.length,
       occupied: tally.occupied,
+      /*  `occupied` IS A COLLAPSING WORD, AND THIS IS THE CONVERSATIONAL
+       *  READER, SO THE COLLAPSE IS THE MOST EXPENSIVE HERE.
+       *
+       *  CURRENT_STATE 141 measured it on the Rent Roll: the bucket sums
+       *  `contractually_occupied` and `occupied_terms_not_established`, and
+       *  on The Greenery those two always total 95, so the headline sits
+       *  still while the split moves —
+       *
+       *      2026-09-18   95 = 94 contractual +  1 without terms
+       *      2027-08-01   95 =  0 contractual + 95 without terms
+       *
+       *  A screen commits to an altitude and a person can open the row. A
+       *  SENTENCE cannot be opened. Asked "what is our occupancy in August
+       *  2027", this read answered `occupied: 95` with nothing anywhere in
+       *  the projection saying that not one position has established
+       *  contractual terms at that date — and the only unknown that moved
+       *  was `no_recorded_rent`, which is the RENT axis, not the terms axis.
+       *
+       *  §40.4 requires a fact to carry its epistemic status in its shape,
+       *  not to be one number a wording layer is trusted to qualify. So the
+       *  split travels with the count.  */
+      occupied_contractual: tally.occupied_contractual,
+      occupied_terms_not_established: tally.occupied_terms_not_established,
+      occupied_state_unknown: tally.occupied_state_unknown,
       //  A CLASSIFICATION, never a remainder.
       open: tally.open,
       //  Spoken for and not offerable — never folded into Open.
@@ -269,6 +336,13 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
 
     //  WHAT SPINE DOES NOT KNOW, in numbers a sentence can carry.
     unknowns: {
+      /*  THE TERMS AXIS, which nothing here carried before. Distinct from
+       *  the two rent lines below it: a position can have established
+       *  contractual terms and no recorded rent, and — at a forward date —
+       *  a recorded rent with no established terms. Same number, same
+       *  tally as `position.occupied_terms_not_established`, so the two
+       *  cannot drift apart and be reconciled by a reader.  */
+      occupied_positions_with_contractual_terms_not_established: tally.occupied_terms_not_established,
       occupied_positions_with_no_recorded_rent: rentUnknown.length,
       occupied_positions_with_unavailable_contract_economics: unavailableContractEconomics.length,
       positions_with_unresolved_occupancy_evidence: evidenceUnresolved.length,
@@ -284,6 +358,26 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
       ...retainedUnknowns,
       ...retiredExclusion,
     },
+
+    //  ROW 156: EVERY RESIDENT ON A NEW ONBOARDING IS UNLINKED UNTIL REACHED
+    //  ON A HANDLE, AND THAT MUST BE A GOVERNED ANSWER, NOT ONLY A SCREEN
+    //  COLUMN (§40.2). `resident_not_linked` is the exact count
+    //  rent_roll_canonical.js reports under the same name, from the SAME
+    //  `positions` this read already holds — never a second query, never a
+    //  new table. Sibling to `unknowns` rather than folded into it: this is
+    //  a person-linkage fact about identity, not an economics or evidence
+    //  unknown, and it is asked about on its own ("how many residents are
+    //  not linked", "who is in 401") rather than as part of a tenancy tally.
+    exceptions: {
+      resident_not_linked: unlinkedResidentPositions.length,
+    },
+    //  THE CLAIMED NAMES, bounded and marked. A count alone cannot answer
+    //  "who is in 401" — the source's name travels as a CLAIM
+    //  (`linked: false`), exactly as the Rent Roll screen shows it, and is
+    //  never presented as `resident` or treated as an established identity.
+    resident_claims_unlinked: residentClaimsUnlinked,
+    resident_claims_unlinked_truncated: unlinkedResidentPositions.length > RESIDENT_CLAIM_ROW_LIMIT,
+
     //  By the key the source gave each row — a label, never a record id.
     ...retainedRows,
     inventory_correction: inventoryCorrection,
@@ -297,6 +391,9 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
       "Any rent the source this property was established from did not carry.",
       "Any comparison to another property, another period or a market — no basis is recorded.",
       "Why occupancy is where it is — tenancy records no causal linkage.",
+      "Who lives in a position with no linked Person — resident_claims_unlinked carries the " +
+      "source's name as a claim; it is not proof of identity and is never the same fact as " +
+      "an established resident.",
     ],
   };
 }

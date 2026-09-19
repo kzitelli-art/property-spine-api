@@ -637,94 +637,54 @@ router.patch("/leases/:id/approval", async (req, res) => {
   }
 });
 // ════════════════════════════════════════════════════════════════════
-//  TENANT LINKAGE — applicant → tenant on a lease
-//
-//  The missing connective tissue. The leasing side builds up a person
-//  (lead → applicant). The lease/money side needs to know WHO the tenant is,
-//  so obligations (e.g. collections) attach to a real human instead of being
-//  orphaned. This endpoint links a person to a lease and advances their
-//  lifecycle to 'tenant' in one atomic step.
-//
-//  • adds person_id to leases.tenant_ids (no duplicates)
-//  • advances the person applicant → tenant (validated; writes a funnel event)
-//  • records a tenant_added event on the lease
-//
-//  Paste into server.js among the lease endpoints (before AI INGESTION).
+//  TENANT LINKAGE — RETIRED. The live door is POST /operator/leases/
+//  :leaseId/link-resident (src/tenancy/link_resident.js). What follows is
+//  the refusal that stands in this path's place; see the block below it.
 // ════════════════════════════════════════════════════════════════════
 
-// ── attach a person to a lease as a tenant ──
-// Body: { person_id }
+// ── attach a person to a lease as a tenant ── RETIRED ──────────────
+//
+//  ⛔ THIS DOOR IS CLOSED. It took an already-known `person_id` and pushed
+//  it onto a lease with NO property scope (the lease id alone decided the
+//  property), no staff session, no ingress, and no record of how the
+//  identity was established — it wrote a `tenant_added` event, which says
+//  that it happened, not what established it. The governed door is
+//  POST /operator/leases/:leaseId/link-resident (src/tenancy/link_resident.js,
+//  CURRENT_STATE row 159): it resolves the person from a continuity handle
+//  through person_ingress, scopes the property to the session, promotes the
+//  staged claim with resolution_kind, and records the handle KIND and basis.
+//
+//  Two doors onto "who is on this lease" is how the same lease ends up with
+//  two different answers about the same resident.
+//
+//  ⚠ ONE THING THIS DOOR DID THAT ITS REPLACEMENT DOES NOT: it advanced the
+//  person to lifecycle_status 'tenant'. link-resident passes no
+//  lifecycle_status to ingestPerson, so a linked resident on an active lease
+//  reads 'lead'. Measured and asserted in tests/proofs/identity_loop_closes.db.js,
+//  and recorded in CURRENT_STATE row 160 — NOT fixed by restoring this door,
+//  which had zero callers and so was never doing the advance for anyone.
+//
+//  CALLERS, MEASURED BEFORE CLOSING: zero. Searched EVERY TRACKED FILE on
+//  ALL 109 property-spine-app remote branches (not just index.html, not just
+//  the pinned branch), and this repo's src/, server.js, tests/, tools/ and
+//  migrations/. ⚠ Source can prove a consumer exists; it cannot prove one
+//  does not — the shared operator key is held outside this repo, so an
+//  external caller now receives a refusal that NAMES the door to use
+//  instead, rather than a 404 they would have to guess at.
+//
+//  CLASSIFICATION: Class 3 (retired-in-place). REMOVAL CONDITION: one full
+//  release with zero calls to this path in the access logs — then delete
+//  this handler and its block comment entirely.
 router.post("/leases/:id/tenants", async (req, res) => {
-  const { person_id } = req.body || {};
-  if (!person_id) return res.status(400).json({ error: "person_id is required" });
-
-  const client = await pool.connect();
-  try {
-    await client.query("begin");
-
-    const lr = await client.query("select * from leases where id=$1 for update", [req.params.id]);
-    if (lr.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "lease not found" }); }
-    const lease = lr.rows[0];
-
-    const pr = await client.query("select * from persons where id=$1 for update", [person_id]);
-    if (pr.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "person not found" }); }
-    const person = pr.rows[0];
-
-    // Already on the lease? No-op success (idempotent).
-    const current = lease.tenant_ids || [];
-    const alreadyOn = current.includes(person_id);
-
-    // Add to tenant_ids if not present (array_append guarded by uniqueness).
-    if (!alreadyOn) {
-      await client.query(
-        `update leases set tenant_ids = array_append(tenant_ids, $1), updated_at=now()
-         where id=$2`,
-        [person_id, req.params.id]
-      );
-    }
-
-    // Advance lifecycle to tenant. Only valid forward moves: applicant→tenant
-    // is the normal path. If they're already 'tenant', leave it. If they're a
-    // 'lead' (skipping applicant), we still allow it here because attaching to a
-    // signed lease is itself the proof they've become a tenant — but we record
-    // the jump honestly in the event note.
-    let lifecycleNote = null;
-    if (person.lifecycle_status !== "tenant" && person.lifecycle_status !== "past") {
-      const from = person.lifecycle_status;
-      await client.query(
-        `update persons set lifecycle_status='tenant', updated_at=now() where id=$1`,
-        [person_id]
-      );
-      await client.query(
-        `insert into events (property_id, person_id, type, note)
-         values ($1,$2,'lifecycle_change',$3)`,
-        [lease.property_id, person_id, `${from} → tenant (attached to lease ${lease.id})`]
-      );
-      lifecycleNote = `${from} → tenant`;
-    }
-
-    // Record the linkage as a lease event.
-    await client.query(
-      `insert into events (property_id, person_id, type, note)
-       values ($1,$2,'tenant_added',$3)`,
-      [lease.property_id, person_id, `tenant added to lease ${lease.id}`]
-    );
-
-    await client.query("commit");
-
-    // Return the refreshed lease + person.
-    const out = await pool.query("select * from leases where id=$1", [req.params.id]);
-    res.status(201).json({
-      lease: out.rows[0],
-      person_advanced: lifecycleNote,
-      already_on_lease: alreadyOn,
-    });
-  } catch (e) {
-    await client.query("rollback");
-    res.status(500).json({ error: e.message });
-  } finally {
-    client.release();
-  }
+  return res.status(410).json({
+    error: "gone",
+    receipt: "This way of adding a resident to a lease has been retired. Use "
+      + "POST /operator/leases/:leaseId/link-resident with the resident's phone "
+      + "or email and where it came from — it scopes the property to your "
+      + "session, resolves the person through Spine's one identity path, and "
+      + "records how the identity was resolved.",
+    next_step: "POST /operator/leases/:leaseId/link-resident",
+  });
 });
 
 // ── remove a person from a lease (roommate leaves, data fix) ──

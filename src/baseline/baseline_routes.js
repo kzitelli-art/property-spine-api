@@ -212,96 +212,60 @@ function transitionAllowed(from, to) {
   return ti === fi + 1;                          // only forward by exactly one
 }
 
-// ── create a person (this is what an inquiry creates) ──
-// property_id and source are the analytics-critical fields. `source` is the
-// marketing channel (zillow, apartments.com, walk_in, referral, ...) — the
-// field the PM/leasing manager reads to decide where the dollars go.
-// lifecycle_status defaults to 'lead'; you normally don't pass it on create.
-router.post("/persons", async (req, res) => {
-  const {
-    name, email, phone, source,
-    property_id, interested_unit_id,
-    lifecycle_status,            // optional; defaults to 'lead' in the DB
-  } = req.body || {};
-
-  // A lead with no way to reach them and no name is just noise. Require at
-  // least one identifying/contact field so the record is actually useful.
-  if (!name && !email && !phone) {
-    return res.status(400).json({ error: "a person needs at least one of: name, email, phone" });
-  }
-
-  // If a status was passed on create, it must be a real one.
-  if (lifecycle_status && !LIFECYCLE.includes(lifecycle_status)) {
-    return res.status(400).json({ error: `lifecycle_status must be one of: ${LIFECYCLE.join(", ")}` });
-  }
-
-  try {
-    // If a property was named, confirm it exists (clear error beats a vague FK error).
-    if (property_id) {
-      const prop = await pool.query("select id from properties where id=$1", [property_id]);
-      if (prop.rows.length === 0) return res.status(404).json({ error: "property not found" });
-    }
-    // Same for an interested unit, if supplied.
-    if (interested_unit_id) {
-      const u = await pool.query("select id from units where id=$1", [interested_unit_id]);
-      if (u.rows.length === 0) return res.status(404).json({ error: "interested_unit_id not found" });
-    }
-
-    // CANONICAL IDENTITY: normalize the phone and dedup on primary_phone_e164
-    // (the one-phone-one-person rule). A raw insert here previously minted a
-    // duplicate person for the same human in a different phone format. If a
-    // person with this canonical phone already exists, reuse it (backfilling
-    // the canonical key on legacy rows) rather than creating a second.
-    const { normalizeE164: __normPhone } = require("../identity/phone_identity");
-    const __canon = __normPhone(phone);
-    let person = null;
-    if (__canon) {
-      person = (await pool.query(
-        `select * from persons where primary_phone_e164=$1 order by created_at limit 1`, [__canon])).rows[0] || null;
-      if (!person) {
-        // adopt a legacy row whose STORED phone normalizes to our canonical
-        // (matches any raw stored format), then backfill the canonical key.
-        const __tail10 = __canon.replace(/\D/g, "").slice(-10);
-        const __cands = (await pool.query(
-          `select * from persons where phone is not null and regexp_replace(phone,'\\D','','g') like $1 order by created_at`,
-          ["%" + __tail10])).rows;
-        person = __cands.find(p => __normPhone(p.phone) === __canon) || null;
-        if (person) {
-          await pool.query(`update persons set primary_phone_e164=coalesce(primary_phone_e164,$1), updated_at=now() where id=$2`, [__canon, person.id]);
-        }
-      }
-    }
-    if (person) {
-      // backfill missing contact fields; identity stays put.
-      await pool.query(
-        `update persons set name=coalesce(name,$1), email=coalesce(email,$2), updated_at=now() where id=$3`,
-        [name ?? null, email ?? null, person.id]);
-    } else {
-      const r = await pool.query(
-        `insert into persons
-           (name, email, phone, primary_phone_e164, source, lifecycle_status, leasing_stage, interested_unit_id)
-         values ($1,$2,$3,$4,$5, coalesce($6,'lead'), coalesce($6,'lead'), $7)
-         returning *`,
-        [name ?? null, email ?? null, phone ?? null, __canon, source ?? null,
-         lifecycle_status ?? null, interested_unit_id ?? null]
-      );
-      person = r.rows[0];
-    }
-
-    // Write the inquiry as a real EVENT. This is agent-invisible (it spawns
-    // no human obligation) but management-visible: it's the first datapoint
-    // in this person's funnel and the anchor for "time to first response".
-    await pool.query(
-      `insert into events (property_id, person_id, unit_id, type, note)
-       values ($1,$2,$3,'inquiry',$4)`,
-      [property_id ?? null, person.id, interested_unit_id ?? null,
-       source ? `inquiry via ${source}` : "inquiry"]
-    );
-
-    res.status(201).json(person);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+// ── create a person ── RETIRED ────────────────────────────────────
+//
+//  ⛔ THIS DOOR IS CLOSED. It minted a human from a NAME ALONE
+//  (`if (!name && !email && !phone)` was the whole bar), carried its own
+//  second implementation of phone identity, took `property_id` from the
+//  BODY as authority (§21), and ran behind the shared operator key with no
+//  staff session and no property scope. It is the direct contradiction of
+//  the rule frozen on 2026-09-19 (CURRENT_STATE row 156): no continuity
+//  handle — a normalised phone or an email — no durable Person. A name is
+//  not a continuity handle.
+//
+//  WHERE THE WORK GOES INSTEAD:
+//    • an inquiry            → POST /leasing/intake (its own intake secret;
+//                              resolves the person through the canonical
+//                              leasing resolver)
+//    • a resident on a lease → POST /operator/leases/:leaseId/link-resident
+//                              (session-scoped, resolves through
+//                              person_ingress, records how it resolved)
+//  Both refuse a name with no handle instead of inventing a Person, which
+//  is the behaviour this route existed to provide and should not have.
+//
+//  CALLERS, MEASURED BEFORE CLOSING: zero. Searched EVERY TRACKED FILE on
+//  ALL property-spine-app remote branches (the path `/persons` appears
+//  nowhere in the app, on any branch), and this repo's src/, server.js,
+//  tests/ and tools/. ⚠ Source can prove a consumer exists; it cannot
+//  prove one does not — the shared operator key is held outside this repo,
+//  so an external caller receives a refusal that NAMES the doors to use
+//  instead, rather than a 404 they would have to guess at.
+//
+//  HOW THIS WRITE CAME TO BE UNDECLARED, since the register said server.js:
+//  before #141 (c97523d5) this handler was `app.post("/persons")` at
+//  server.js:484 and its insert at server.js:545. That commit extracted
+//  server.js lines 291-926 VERBATIM into this file. The register's
+//  server.js entry did not follow the move — and its stated reason ("the
+//  public intake door's inline resolver") never described this route
+//  anyway; the leasing intake resolver is `resolveOrCreatePerson` in
+//  leasing_leads.js, which carries its own entry. Both gate failures were
+//  one event: a file move the register did not follow.
+//
+//  CLASSIFICATION: Class 3 (retired-in-place). REMOVAL CONDITION: one full
+//  release with zero calls to this path in the access logs — then delete
+//  this handler and its block comment entirely.
+//
+//  GET /persons, GET /persons/:id and PATCH /persons/:id are READS and a
+//  lifecycle edit; they mint nobody and are untouched here.
+router.post("/persons", async (_req, res) => {
+  return res.status(410).json({
+    code: "person_create_retired",
+    receipt: "Creating a person through this route has been retired. Send an inquiry "
+      + "to POST /leasing/intake, or link a resident who is already on a lease with "
+      + "POST /operator/leases/:leaseId/link-resident. Either way Spine needs a phone "
+      + "or an email — a name on its own does not establish a person. Nothing was changed.",
+    next_action: "use_leasing_intake_or_link_resident",
+  });
 });
 
 // ── list persons (with light filtering for the management views) ──

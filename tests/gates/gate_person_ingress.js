@@ -50,6 +50,27 @@ const INGRESS = "src/identity/person_ingress.js";
  *  class this slice closes — converting the live leasing intake in the
  *  same change would have put proven messaging behaviour at risk for no
  *  gain to the defect being fixed.  */
+
+/*  REMOVED 2026-09-19 — `server.js`, declared as channel `leasing_intake`
+ *  with the reason "the public intake door's inline resolver, predating the
+ *  module split".
+ *
+ *  That reason never described the write it covered. The write was inside
+ *  `app.post("/persons")` at server.js:484, its insert at server.js:545 —
+ *  the Release-0 baseline primitive, not the leasing intake door. The
+ *  leasing intake resolver is `resolveOrCreatePerson` in leasing_leads.js,
+ *  which carries its own entry above and always did.
+ *
+ *  Commit c97523d5 (#141) then extracted server.js lines 291-926 VERBATIM
+ *  into src/baseline/baseline_routes.js. The register did not follow the
+ *  move, so the SAME write showed up twice in this gate: `server.js` went
+ *  stale and `baseline_routes.js` went undeclared. One event, two failures.
+ *
+ *  POST /persons is now retired in place (410, Class 3, removal condition
+ *  in the route's own block comment) because it minted a human from a name
+ *  alone — the direct contradiction of the continuity-handle rule. So there
+ *  is nothing left to declare on either path, and neither file is listed.
+ *  Proven by tests/proofs/person_create_retired.db.js.  */
 const DECLARED = Object.freeze([
   { path: "src/leasing/leasing_leads.js", channel: "leasing_intake",
     reason: "The canonical leasing resolver. Its phone→legacy-phone→email logic IS the " +
@@ -64,9 +85,6 @@ const DECLARED = Object.freeze([
     reason: "Staff identity, not a counterparty. Guarded by its own partial unique index " +
             "(migration 104) which no other channel has.",
     removal: "Convert when the staff_bridge profile is exercised by a proof." },
-  { path: "server.js", channel: "leasing_intake",
-    reason: "The public intake door's inline resolver, predating the module split.",
-    removal: "Fold into the leasing_intake profile with leasing_leads.js." },
   { path: "src/shared/no076_failclosed_check.js", channel: "harness",
     reason: "A fail-closed self-check that creates and deletes one tagged row.",
     removal: "Not product. Remove with the check itself." },

@@ -13,11 +13,24 @@
 //       upcoming:  { future_leases, preleasing_pct, risk:{level,reason} },
 //       noi: { trailing:null, trending:null, missing_source },
 //       focus: [ ranked alerts by dollars/lost-revenue/urgency ],
-//       basis: 'bed'|'unit'
+//       basis: 'bed'|'unit'|null, basis_state, unit_label
 //     }
 //
-// Leasing model is inferred from the data: if a unit has >1 space, it's
-// by-bed; else by-unit. (Matches how the snapshot wrote it.)
+// LEASING GRAIN IS READ, NOT INFERRED. This file used to compute
+//   const basis = maxSpaces > 1 ? "bed" : "unit";
+// which is the guess migration 026 created 'unknown' to prevent — "instead
+// of silently guessing from row patterns". A by-the-bed building whose beds
+// are not materialized yet has maxSpaces === 1, so it was labelled "units"
+// in contradiction of its own properties.leasing_basis, with nothing saying
+// so. The grain now comes from the property, and when the property has not
+// answered, this read SAYS SO (basis null, basis_state
+// 'not_established', unit_label 'spaces') rather than picking a noun.
+//
+// The counts themselves are counts of SPACES and always were — no total,
+// percentage or classification in this file depends on the basis. Only the
+// noun did. So this is a labelling correction, not an occupancy change, and
+// it deliberately does NOT refuse the read: the space counts are true
+// whether or not anybody has declared what a leasable position is here.
 // lease_status: 'active' = current, 'pending' = future, 'commercial' = comm.
 // ============================================================
 
@@ -25,6 +38,12 @@ module.exports = function managementRead(deps) {
   const express = require("express");
   const router = express.Router();
   const { pool, spacePosition } = deps;
+  const { leasingGrain, grainCountLabel } = require("../tenancy/leasing_grain");
+  /*  THE CANONICAL DATED READER, so this surface can publish the answer the
+   *  Rent Roll, the lender report and Ask Spine publish — rather than only
+   *  its own. See the `canonical` block below for why it rides alongside
+   *  instead of replacing the counts.  */
+  const { datedPropertyPositions, rentRollBuckets } = require("../tenancy/dated_positions");
   if (!pool) throw new Error("management_read requires a pool");
 
   router.get("/properties/:id/management-read", async (req, res) => {
@@ -75,16 +94,42 @@ module.exports = function managementRead(deps) {
         });
       }
 
-      // ── infer basis: by-bed if any unit has >1 space ──
-      const spacesPerUnit = new Map();
-      for (const r of rows) spacesPerUnit.set(r.unit_id, (spacesPerUnit.get(r.unit_id) || 0) + 1);
-      const maxSpaces = Math.max(...spacesPerUnit.values());
-      const basis = maxSpaces > 1 ? "bed" : "unit";
-      const unitLabel = basis === "bed" ? "beds" : "units";
+      /*  ── GRAIN IS THE PROPERTY'S ANSWER, NOT A PATTERN IN THE ROWS ──
+       *  What stood here was
+       *      const basis = maxSpaces > 1 ? "bed" : "unit";
+       *  a guess from row shape, which is the one thing migration 026
+       *  wrote 'unknown' to stop. It could contradict the property's own
+       *  declared basis and could never say "not established". Reading the
+       *  column costs one query and makes this route agree with every
+       *  other reader of the grain (src/tenancy/leasing_grain.js). */
+      const basisRow = (await client.query(
+        `select leasing_basis from properties where id = $1`, [propertyId])).rows[0];
+      const basis = leasingGrain(basisRow && basisRow.leasing_basis);
+      const basisState = basis ? "declared" : "not_established";
+      //  'spaces' when nobody has answered. Not a softer 'units' — the
+      //  honest noun for a count whose position meaning is undeclared.
+      const unitLabel = grainCountLabel(basis);
 
       // ── classify each space ──
       const NON_REV_LABEL = /model|down|offline/i;
       let occupied = 0, vacant = 0, commercial = 0, down = 0, model = 0;
+      /*  COMMITTED IS A CLASSIFICATION, BECAUSE VACANT MUST NOT BE A
+       *  REMAINDER (§42, CURRENT_STATE 146).
+       *
+       *  This loop used to end `else { vacant++; vacantList.push(...) }`, so
+       *  every space that was not detectably occupied became vacant — which
+       *  is the subtraction the canonical reader was corrected for, in its own
+       *  words: "That subtraction was the defect: it swept committed,
+       *  contested and unreconciled beds into Open because they were not
+       *  Occupied."
+       *
+       *  A bed with a future lease and no current one is SPOKEN FOR. Counting
+       *  it vacant put it in the "Empty beds are the fastest revenue to
+       *  recover" card and added its market rent to the money that card says
+       *  is recoverable — pointing an operator at beds somebody has already
+       *  signed for. An all-committed building raised that card with every
+       *  bed in it.  */
+      let committed = 0;
       let currentRentRoll = 0;          // sum of actual rent on current (occupied) leases
       let marketIfFull = 0;             // sum of market rent across all revenue spaces
       const balances = [];              // {unit, tenant, balance}
@@ -120,32 +165,129 @@ module.exports = function managementRead(deps) {
           occupied++;
           currentRentRoll += Number(r.cur_rent || 0);
           if (Number(r.cur_balance || 0) !== 0) balances.push({ unit: r.unit_number, tenant: r.cur_tenant || "—", balance: Number(r.cur_balance) });
+        } else if (r.fut_lease_id) {
+          //  Spoken for and not yet in. Never Open, never in the vacancy
+          //  card, and never in the recoverable-rent total.
+          committed++;
         } else {
           vacant++;
           vacantList.push({ unit: r.unit_number, market: Number(r.market_rent || 0) });
         }
       }
 
+      /*  THE CANONICAL OCCUPANCY, read once, beside this surface's own.
+       *
+       *  Wrapped because a presentation layer must not become the thing that
+       *  decides a contract is broken: if the canonical read throws or the
+       *  property has no established positions, this block is null WITH A
+       *  REASON and the rest of the payload is served unchanged. Silently
+       *  omitting it, or substituting zeros, would be the worse failure —
+       *  `occupied: 0` reads as a building nobody lives in.                */
+      let canonicalOccupancy = null;
+      let canonicalReason = null;
+      try {
+        const dp = await datedPropertyPositions(pool, { property_id: req.params.id, as_of: null });
+        const positions = (dp && Array.isArray(dp.positions)) ? dp.positions : [];
+        if (!positions.length) {
+          canonicalReason = "no canonical rentable positions are established for this property";
+        } else {
+          const t = rentRollBuckets(positions);
+          canonicalOccupancy = {
+            as_of: dp.as_of || null,
+            rentable_positions: t.total,
+            occupied: t.occupied,
+            occupied_contractual: t.occupied_contractual,
+            occupied_terms_not_established: t.occupied_terms_not_established,
+            occupied_state_unknown: t.occupied_state_unknown,
+            open: t.open,
+            activation_pending: t.activation_pending,
+            needs_review: t.needs_review,
+            not_established: t.not_established,
+          };
+        }
+      } catch (e) {
+        canonicalReason = "the canonical dated read was unavailable: " + (e && e.message ? e.message : "unknown");
+      }
+
       const revenueSpaces = totalSpaces - down - model;   // leasable
       const currentPct = revenueSpaces ? Math.round((occupied + commercial) / revenueSpaces * 1000) / 10 : null;
-      const upcomingPct = revenueSpaces ? Math.round(((occupied + commercial + futureCount) / revenueSpaces) * 1000) / 10 : null;
+      /*  A RENEWAL IS ONE BED, SO UPCOMING MAY NOT EXCEED THE BUILDING.
+       *
+       *  This read `(occupied + commercial + futureCount) / revenueSpaces`,
+       *  and `futureCount` counts every row carrying a fut_lease_id —
+       *  INCLUDING a bed that also has a current lease, which is exactly what
+       *  a renewal is. A fully renewed building counted each bed twice and
+       *  reported 200% of itself as upcoming; a mixed one reported 75% where
+       *  two of four beds are held.
+       *
+       *  This was first filed as needing a ruling on what "upcoming" MEANS.
+       *  It does not. Under either reading — "beds with someone in them or
+       *  coming" or "beds spoken for" — a renewed bed is ONE bed, and a
+       *  percentage above 100% of the leasable denominator is wrong under
+       *  both. The semantics stay open; the arithmetic does not.
+       *
+       *  `occupied + commercial + committed` is already the deduplicated
+       *  count, because `committed` (added for the vacancy fix) is FUTURE
+       *  WITHOUT CURRENT by construction — the renewal is in `occupied` and
+       *  cannot also be in `committed`. No clamp, no max(): the numerator is
+       *  simply a set of beds counted once.
+       *
+       *  `future_leases` below keeps `futureCount` untouched: it counts
+       *  LEASES and is correct as a lease count.                          */
+      const upcomingHeld = occupied + commercial + committed;
+      const upcomingPct = revenueSpaces ? Math.round((upcomingHeld / revenueSpaces) * 1000) / 10 : null;
 
       // ── leasing risk: vacant + thin future leasing = exposure ──
       // risk rises when there are many vacant/expiring spaces and few future signed.
-      const expiringSoon = rows.filter(r => {
+      /*  ONE predicate for "this bed's current lease ends within 90 days",
+       *  used by both the count and the coverage numerator below, so the two
+       *  cannot drift into disagreeing about which beds are expiring.  */
+      const expiresWithin90 = (r) => {
         if (!r.cur_end_date) return false;
-        const d = new Date(r.cur_end_date); const now = new Date();
-        const days = (d - now) / (1000*60*60*24);
-        return days >= 0 && days <= 90;       // current leases ending within 90 days
-      }).length;
+        const days = (new Date(r.cur_end_date) - new Date()) / (1000*60*60*24);
+        return days >= 0 && days <= 90;
+      };
+      const expiringSoon = rows.filter(expiresWithin90).length;
       const openOrExpiring = vacant + expiringSoon;
+
+      /*  COVERAGE MUST COUNT FUTURE LEASES ON THE BEDS IN THE DENOMINATOR.
+       *
+       *  This read `futureCount / (vacant + expiringSoon)`, and `futureCount`
+       *  counts EVERY row with a fut_lease_id. That was self-cancelling while
+       *  a committed bed sat inside `vacant` — it was in both halves. Giving
+       *  `committed` its own bucket (the vacancy fix, CURRENT_STATE 146) took
+       *  it out of the denominator and left its lease in the numerator, so a
+       *  future lease could "cover" a bed that is not in the gap being
+       *  measured. THAT INCONSISTENCY WAS INTRODUCED BY THAT FIX.
+       *
+       *  Measured consequence: one committed bed beside one genuinely open
+       *  bed reported `risk: low` — "1 future signed covers most of the 1
+       *  beds open or expiring soon" — while the open bed had nothing signed
+       *  for it at all. `riskLevel` drives a focus card's SEVERITY and the
+       *  line "turn is outrunning leasing", so this is a published judgement,
+       *  not only prose.
+       *
+       *  The denominator is beds still needing somebody: genuinely open, or
+       *  expiring within 90 days. A future lease on a bed with no current
+       *  lease makes that bed `committed` and removes it from the gap
+       *  entirely, so it may not also be credited against a different bed.
+       *  What CAN cover a bed in the gap is a renewal — a future lease on a
+       *  bed whose current lease is expiring. That is the whole numerator,
+       *  and the control asserts a genuine renewal still counts.           */
+      const coveringFutures = rows.filter((r) => {
+        if (!r.fut_lease_id) return false;
+        if (NON_REV_LABEL.test(r.space_label || "") || NON_REV_LABEL.test(r.cur_tenant || "")) return false;
+        if (!r.cur_lease_id) return false;      // committed, not in the gap
+        return expiresWithin90(r);              // a renewal covering its own expiring bed
+      }).length;
+
       let riskLevel = "low", riskReason = "";
       if (revenueSpaces) {
-        const coverage = openOrExpiring ? futureCount / openOrExpiring : 1;   // future signed vs the gap to fill
+        const coverage = openOrExpiring ? coveringFutures / openOrExpiring : 1;
         if (vacant === 0 && expiringSoon === 0) { riskLevel = "low"; riskReason = `Fully leased, nothing expiring in 90 days.`; }
-        else if (coverage >= 0.75) { riskLevel = "low"; riskReason = `${futureCount} future signed covers most of the ${openOrExpiring} ${unitLabel} open or expiring soon.`; }
-        else if (coverage >= 0.35) { riskLevel = "watch"; riskReason = `${openOrExpiring} ${unitLabel} open or expiring within 90 days; only ${futureCount} future leases signed.`; }
-        else { riskLevel = "high"; riskReason = `${openOrExpiring} ${unitLabel} open or expiring within 90 days but only ${futureCount} future leases signed — turn is outrunning leasing.`; }
+        else if (coverage >= 0.75) { riskLevel = "low"; riskReason = `${coveringFutures} future signed covers most of the ${openOrExpiring} ${unitLabel} open or expiring soon.`; }
+        else if (coverage >= 0.35) { riskLevel = "watch"; riskReason = `${openOrExpiring} ${unitLabel} open or expiring within 90 days; only ${coveringFutures} future leases signed.`; }
+        else { riskLevel = "high"; riskReason = `${openOrExpiring} ${unitLabel} open or expiring within 90 days but only ${coveringFutures} future leases signed — turn is outrunning leasing.`; }
       }
 
       // ── collection-loss exposure: gross positive balances owed ──
@@ -248,6 +390,13 @@ module.exports = function managementRead(deps) {
         property_id: propertyId,
         has_data: true,
         basis,
+        //  basis_state distinguishes "the property declared this" from "nobody
+        //  has answered, so the noun below is 'spaces'". A consumer that reads
+        //  `basis` alone must not treat null as 'unit'.
+        basis_state: basisState,
+        basis_receipt: basis ? null
+          : "This property has not been established as leasing by bed or by unit, "
+          + "so these are counts of spaces. Choose the property grain to count beds or units.",
         position_status,
         position_exceptions,
         unit_label: unitLabel,
@@ -257,6 +406,45 @@ module.exports = function managementRead(deps) {
           residential_occupied: occupied,
           commercial,
           vacant,
+          //  Classified, not left over. occupied + committed + vacant +
+          //  commercial + down + model === total_spaces, by construction.
+          committed,
+          /*  ── TWO DERIVATIONS, AND THE DISAGREEMENT IS NOW VISIBLE ─────
+           *  (CURRENT_STATE 146; the pattern is row 142's, not a new one)
+           *
+           *  The counts above come from `cur_lease_id` presence, the canonical
+           *  reader from `tenancy_state`, so a contradiction looked certain.
+           *  Measured on the governed Greenery establishment over real HTTP:
+           *
+           *      here        occupied 95
+           *      canonical   occupied 95            -> they AGREE
+           *                  occupied_contractual 94
+           *                  occupied_terms_not_established 1
+           *
+           *  They agree on the coarse count. Describing the gap as "a
+           *  disagreement of one bed" was comparing `occupied` against
+           *  `contractually_occupied` — the very category error this whole
+           *  line of work exists to stop, made while making it. So row 138
+           *  item (3)'s "second definition" is really a MISSING DISTINCTION:
+           *  this surface had no contractual number at all.
+           *
+           *  The lender-facing report already solves this correctly and was
+           *  measured doing so (row 142): it passes the canonical number
+           *  through under a name that says CONFIRMED CONTRACTUAL and reports
+           *  the coarser bucket beside it under `positions_occupied_all_bases`.
+           *  Same move here. NO number above changes, so nothing that reads
+           *  this surface moves; the canonical answer is published beside it
+           *  and a disagreement is stated rather than discovered.
+           *
+           *  A failed or unestablished canonical read is `null` with a named
+           *  reason, and `agrees_with_canonical` is then `null` too — never
+           *  `true`, because Spine compared nothing. READ_FAILED is not
+           *  agreement and it is not NOT_ESTABLISHED (§40.7).            */
+          canonical: canonicalOccupancy,
+          canonical_unavailable_reason: canonicalOccupancy ? null : canonicalReason,
+          agrees_with_canonical: canonicalOccupancy
+            ? (canonicalOccupancy.occupied === occupied + commercial)
+            : null,
           leasable: revenueSpaces,
           total_spaces: totalSpaces,
           down, model,

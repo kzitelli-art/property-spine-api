@@ -150,6 +150,40 @@ const gather = (over) => ask.gatherFacts(stubDb, {
      ask.questionSubject("what is our occupancy and are the licenses current")
        === "composition_unavailable");
 
+  /*  CURRENT_STATE row 158 — "who is in 401" carries no tenancy noun at
+   *  all (no resident/beds/lives/occupancy), so TENANCY_TERMS alone never
+   *  saw it and it fell through to `work` by default. A person texting
+   *  from a meeting types the short form, not "who lives in 401". Falsify
+   *  by reverting WHO_IS_IN_UNIT_TERMS: these four go back to "work".    */
+  console.log("\n  ── R9 · the short form a person actually texts ──");
+  ok("R9a  'who is in 401' routes to tenancy",
+     ask.questionSubject("who is in 401") === "tenancy",
+     ask.questionSubject("who is in 401"));
+  ok("R9b  'who's in 401' routes to tenancy",
+     ask.questionSubject("who's in 401") === "tenancy",
+     ask.questionSubject("who's in 401"));
+  ok("R9c  'who is at 401' routes to tenancy",
+     ask.questionSubject("who is at 401") === "tenancy",
+     ask.questionSubject("who is at 401"));
+  ok("R9d  'who is in 1417-103' (unit-dash-suffix token) routes to tenancy",
+     ask.questionSubject("who is in 1417-103") === "tenancy",
+     ask.questionSubject("who is in 1417-103"));
+  ok("R9e  'who is in bed B of 212' already routed to tenancy via 'bed'",
+     ask.questionSubject("who is in bed B of 212") === "tenancy",
+     ask.questionSubject("who is in bed B of 212"));
+  //  ⚠ CONTROLS THAT MUST NOT MOVE. The new pattern requires "who is/'s"
+  //  directly followed by "in"/"at" and then a token that leads with a
+  //  digit — it must not widen `work` or capture a different subject.
+  ok("R9f  'what work is in 401' is untouched — stays work",
+     ask.questionSubject("what work is in 401") === "work",
+     ask.questionSubject("what work is in 401"));
+  ok("R9g  'who is on call' is untouched (wrong preposition) — stays work",
+     ask.questionSubject("who is on call") === "work",
+     ask.questionSubject("who is on call"));
+  ok("R9h  'who is the vendor for 401' is untouched — stays work",
+     ask.questionSubject("who is the vendor for 401") === "work",
+     ask.questionSubject("who is the vendor for 401"));
+
   // ── E · ENTITLEMENT PRECEDES INTELLIGENCE (§40.8) ─────────────────
   console.log("\n  ── E · unentitled facts never enter model context ──");
   {

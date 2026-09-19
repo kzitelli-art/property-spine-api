@@ -98,6 +98,20 @@ const OBLIGATION_TYPES = Object.freeze({
 //  There is no third outcome. Absence of a finding is not evidence of
 //  readiness — it is absence of evidence, which is exactly the defect this
 //  build corrects.
+/*  ── IS THE TURN'S SCHEDULE AT RISK? ONE PREDICATE, TWO READERS ──────
+ *  The triage writer has always used this test to decide whether a
+ *  committed move-in needs a manager's protection. Availability now uses
+ *  the SAME test to decide whether the turn's expected-ready date can
+ *  still be offered as `expected` (row 152): a severe condition or any
+ *  long-lead finding is, by the triage service's own definition, a
+ *  condition that plausibly controls the schedule. Two copies of this
+ *  rule would be two opinions about one unit.                          */
+function scheduleAtRisk({ confirmation, findings = [] } = {}) {
+  if (!confirmation) return false;
+  const live = findings.filter((f) => f && !f.withdrawn_at);
+  return confirmation.initial_condition === CONDITION.SEVERE || live.some((f) => !!f.long_lead_kind);
+}
+
 function deriveReadiness({ confirmation, findings = [], requiredWork = [] }) {
   if (!confirmation) {
     return {
@@ -465,8 +479,7 @@ function makeUnitTriageService(deps) {
     //    unit, transfer anyone, or change a lease. It surfaces the decision
     //    and names who owes it.
     const moveIn = await nextCommittedMoveIn(client, { unit_id });
-    const hasLongLead = findingRows.some((f) => !!f.long_lead_kind);
-    const atRisk = !!moveIn && (initial_condition === CONDITION.SEVERE || hasLongLead);
+    const atRisk = !!moveIn && scheduleAtRisk({ confirmation: conf, findings: findingRows });
 
     let moveInRiskObligation = null;
     if (atRisk) {
@@ -599,4 +612,4 @@ function makeUnitTriageService(deps) {
   };
 }
 
-module.exports = { makeUnitTriageService, deriveReadiness, workScopeLabel, validateWorkTargets, READINESS, OBLIGATION_TYPES };
+module.exports = { makeUnitTriageService, deriveReadiness, scheduleAtRisk, workScopeLabel, validateWorkTargets, READINESS, OBLIGATION_TYPES };

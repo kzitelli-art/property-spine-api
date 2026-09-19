@@ -417,6 +417,7 @@ Storage stays domain-specific. The owner layer consumes the contract.
 - **Server-derived identity & authority** (§21). The browser requests; the server decides. A client-provided property ID is never authority.
 - **Capture once, read everywhere** (§7). One canonical service write updates board, Person Card, and reporting projections.
 - **Every domain has two readers — the UI and Ask Spine** (§40). Ask Spine is a permanent interface contract, not an AI layer: it reads the same canonical reads the screens do, never scrapes a screen or queries arbitrary tables. The model gets fluency over wording, never authority over attribution, source authority, current state, relevance, or conflict. A domain is not done until it is registered (§40.2).
+- **The rent roll is the core** (§42). Not a feature beside Leasing, Maintenance and Money — the operating model those systems establish, change, reconcile against or consume. It is a READ at a date, never a table. The row spine is the building (Skyline 160 beds, Greenery 105), never the import's row count. A position carries independent axes, basis asked first; `Open` is a positive classification and may never be `total − occupied`; vacancy is evaluated last because a stale vacancy double-lets a bed. Trusted rent stays narrow and claimed rent stays visible beside it. Missing is never `$0`.
 - **Classify every component 1–4** (§18) with an exact removal condition for anything temporary.
 
 ## Before any feature — the Eight Questions (§31)

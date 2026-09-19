@@ -271,6 +271,82 @@ test("duplicate headers, unsupported headers, formats, and corrupt workbooks ref
     "unreadable_source");
 });
 
+/*  ── THE WRONG ARRANGEMENT OF THE RIGHT REPORT ──────────────────────
+ *  "Summarize By" is a REPORT PARAMETER, never the property's leasing
+ *  grain — a by-the-bed building emits a by-unit export happily, and the
+ *  basis may never be inferred from it. But a by-unit arrangement of a
+ *  building that HAS rooms or beds stacks three row levels for one
+ *  physical bed, so no row set corresponds to what is rentable.
+ *
+ *  The totals checksum already caught that, as a bed-count mismatch —
+ *  a confusing way to tell somebody they exported the wrong report. This
+ *  says the actual thing and names the one-dropdown fix.
+ *
+ *  The discrimination is on the COLUMNS, not the property: the last two
+ *  cases are the ones that would make this gate worthless if it fired on
+ *  them.  */
+const csv = (lines) => Buffer.from(lines.join("\n"), "utf8");
+
+test("a by-bed building exported Summarize By = Unit is refused BY NAME", () => {
+  throwsCode(() => parseRentRollSource({ filename: "sky.csv", buffer: csv([
+    "Rent Roll,,,,,,,,,,,,,,,,",
+    "1417 - Skyline Apartments (crm1417),,,,,,,,,,,,,,,,",
+    "As Of = 08/31/2026,,,,,,,,,,,,,,,,",
+    "Summarize By = Unit,,,,,,,,,,,,,,,,",
+    "Unit,Room,Bed,Unit/Room Type,Resident,Total Rooms,Total Beds,Sq Ft,Market Rent," +
+      "Actual Rent,Resident Deposit,Other Deposit,Move In,Lease From,Lease To,Move Out,Balance",
+    "Current/Notice/Vacant Residents,,,,,,,,,,,,,,,,",
+    "1417-101,,,STU00015,VACANT,3.00,3.00,,2450.00,,,,,,,,0.00",
+  ]) }), "rent_roll_summarized_above_position");
+});
+
+test("the SAME building exported Summarize By = Room is accepted", () => {
+  const parsed = parseRentRollSource({ filename: "sky.csv", buffer: csv([
+    "Rent Roll,,,,,,,,,,,,,,,",
+    "1417 - Skyline Apartments (crm1417),,,,,,,,,,,,,,,",
+    "As Of = 08/31/2026,,,,,,,,,,,,,,,",
+    "Summarize By = Room,,,,,,,,,,,,,,,",
+    "Unit,Room,Unit/Room Type,Resident,Total Beds,Sq Ft,Market Rent,Actual Rent," +
+      "Resident Deposit,Other Deposit,Move In,Lease From,Lease To,Move Out,Balance",
+    "Current/Notice/Vacant Residents,,,,,,,,,,,,,,",
+    "1417-103,Room1,STU00016,Molly Rueckel (s0006378),1.00,0.00,875.00,815.00,815.00," +
+      "0.00,08/03/2026,08/03/2026,07/26/2027,,-815.00",
+  ]) });
+  assert.equal(parsed.rows.length, 1);
+  assert.equal(parsed.source_summarize_by, "room");
+});
+
+test("a GENUINELY by-the-unit property is not refused for saying so", () => {
+  //  4233 Chestnut leases by the door and has no Room or Bed column.
+  //  Summarize By = Unit is the correct export for it. A gate that fired
+  //  here would be worse than no gate: it would block correct files and
+  //  teach people to distrust the refusal.
+  const parsed = parseRentRollSource({ filename: "solo.csv", buffer: csv([
+    "Rent Roll,,,,,,,,,,",
+    "4233 - SOLO on Chestnut (4233),,,,,,,,,,",
+    "As Of = 08/31/2026,,,,,,,,,,",
+    "Summarize By = Unit,,,,,,,,,,",
+    "Unit,Unit Type,Sq Ft,Resident,Market Rent,Actual Rent,Resident Deposit," +
+      "Other Deposit,Move In,Lease To,Balance",
+    "Current/Notice/Vacant Residents,,,,,,,,,,",
+    "203,S.1UN_02,376,Sungmin Choi (t0005459),1395,1395,1395,0,08/01/2025,08/31/2026,0",
+  ]) });
+  assert.equal(parsed.rows.length, 1);
+  assert.equal(parsed.source_summarize_by, "unit");
+});
+
+test("a layout with no Summarize By line at all is unaffected", () => {
+  const parsed = parseRentRollSource({ filename: "g.csv", buffer: csv([
+    "Rent Roll,,,,,,",
+    "As Of = 08/31/2026,,,,,,",
+    "Unit,Room,Unit/Room Type,Resident,Market Rent,Actual Rent,Balance",
+    "Current/Notice/Vacant Residents,,,,,,",
+    "1325-101,Room1,STU00011,Zenia Mitchell (s0004577),950.00,1050.00,3945.00",
+  ]) });
+  assert.equal(parsed.rows.length, 1);
+  assert.equal(parsed.source_summarize_by, null);
+});
+
 process.on("exit", () => {
   if (!process.exitCode) console.log(`${passed} retained-byte adapter tests passed`);
 });
