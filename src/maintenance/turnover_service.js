@@ -245,7 +245,63 @@ function makeTurnoverService(deps) {
     };
   }
 
-  return { openTurnover, routeMoveOut, GATES };
+  /*  ── RE-STATE THE EXPECTED-READY DATE ON AN OPEN TURN ──────────────
+   *  Until row 152 `turnovers.ready_date` had no writer between move-out
+   *  and close, so a plan that slipped stayed `expected` on a date nobody
+   *  believed. This is the governed correction: the same management
+   *  authority that stated the date at move-out may re-state it, with a
+   *  reason, and the change is an event a reader can point at. Availability
+   *  treats a re-statement as the manager pricing in whatever the walk
+   *  found after the previous date (availability_read.turnPlanExceeded).
+   *
+   *  It does not close the turn, certify anything, or touch possession.
+   *  `ready_date` keeps ONE meaning per status by convention: expected
+   *  while `in_progress`, actual once closed.                          */
+  async function restateExpectedReady(client, {
+    property_id = null, unit_id, expected_ready_date, reason, actor_user_id = null,
+  } = {}) {
+    if (!client || typeof client.query !== "function") throw new Error("restateExpectedReady requires a database client");
+    if (!unit_id) throw serviceError(400, "UNIT_REQUIRED", "unit_id is required.");
+    const next = ymd(expected_ready_date, "expected_ready_date");
+    if (!next) throw serviceError(400, "EXPECTED_READY_DATE_REQUIRED", "expected_ready_date is required to re-state the turn target.");
+    if (!reason || !String(reason).trim()) throw serviceError(400, "REASON_REQUIRED", "Say why the turn target moved — the reason is the record.");
+    if (!actor_user_id) throw serviceError(400, "ACTOR_REQUIRED", "A staff actor is required to re-state a turn target.");
+
+    const unit = (await client.query("select id, property_id, unit_number from units where id=$1", [unit_id])).rows[0];
+    if (!unit) throw serviceError(404, "UNIT_NOT_FOUND", "unit not found");
+    if (property_id && String(unit.property_id) !== String(property_id)) {
+      throw serviceError(403, "WRONG_PROPERTY", "that unit is not at the property you are operating");
+    }
+    const turnover = (await client.query(
+      `select id, ready_date from turnovers
+        where unit_id=$1 and status='in_progress'
+        order by created_at desc limit 1 for update`, [unit_id])).rows[0];
+    if (!turnover) throw serviceError(409, "NO_ACTIVE_TURNOVER", "this unit has no turn in progress, so there is no target to re-state");
+    const previous = turnover.ready_date ? new Date(turnover.ready_date).toISOString().slice(0, 10) : null;
+
+    const updated = (await client.query(
+      "update turnovers set ready_date=$2, updated_at=now() where id=$1 returning *", [turnover.id, next])).rows[0];
+    const event = (await client.query(
+      `insert into events (property_id, unit_id, type, note) values ($1,$2,'turn_ready_date_restated',$3) returning *`,
+      [unit.property_id, unit_id, JSON.stringify({
+        turnover_id: turnover.id, previous_ready_date: previous, ready_date: next,
+        reason: String(reason).trim(), restated_by_user_id: actor_user_id,
+      })])).rows[0];
+    //  The move-out obligation was born due on the stated date; it moves with it.
+    await client.query(
+      `update obligations set due_at=$2, updated_at=now()
+        where module='turnover' and type='move_out' and related_id=$1 and status in ('open','in_progress')`,
+      [turnover.id, new Date(next + "T00:00:00Z")]);
+
+    return {
+      turnover: updated, event, previous_ready_date: previous, expected_ready_date: next,
+      note: previous
+        ? `Turn target moved from ${previous} to ${next}. Leasing reads the new date as expected from now on.`
+        : `Turn target set to ${next}. Leasing reads it as expected from now on.`,
+    };
+  }
+
+  return { openTurnover, restateExpectedReady, routeMoveOut, GATES };
 }
 
 module.exports = { makeTurnoverService, GATES };

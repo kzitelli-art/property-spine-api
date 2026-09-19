@@ -87,5 +87,45 @@ module.exports = function operatorTurnover(deps) {
     }
   );
 
+  //  The governed re-statement of an open turn's expected-ready date. Same
+  //  authority as the move-out that stated it (row 152).
+  router.post(
+    "/operator/units/:unitId/turn-target",
+    requireOperator,
+    requireManagement,
+    refuseClientAuthority,
+    async (req, res) => {
+      if (typeof turnoverService.restateExpectedReady !== "function") {
+        return res.status(503).json({ error: "turn target re-statement is not wired on this deploy" });
+      }
+      const body = req.body || {};
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const out = await turnoverService.restateExpectedReady(client, {
+          property_id: req.operator.property_id,
+          unit_id: req.params.unitId,
+          expected_ready_date: body.expected_ready_date || null,
+          reason: body.reason || null,
+          actor_user_id: req.operator.id,
+        });
+        await client.query("commit");
+        return res.status(200).json({
+          ...out,
+          authority: {
+            actor_user_id: req.operator.id,
+            property_id: req.operator.property_id,
+            basis: "active staff session with management module access",
+          },
+        });
+      } catch (error) {
+        await client.query("rollback").catch(() => {});
+        return res.status(error.httpStatus || 500).json({ error: error.message, code: error.code || null });
+      } finally {
+        client.release();
+      }
+    }
+  );
+
   return router;
 };
